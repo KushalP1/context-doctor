@@ -1,0 +1,53 @@
+{
+  "name": "context-doctor",
+  "version": "0.1.0",
+  "description": "Profile and optimize LLM context windows. See what's eating your tokens and fix it — works with Claude, GPT, Gemini, and any MCP-capable AI app.",
+  "keywords": [
+    "llm",
+    "context-window",
+    "tokens",
+    "prompt-engineering",
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "openai",
+    "context-management",
+    "prompt-caching"
+  ],
+  "license": "MIT",
+  "author": "Kushal P",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KushalP1/context-doctor.git"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "context-doctor": "dist/cli.js",
+    "ctx-doctor": "dist/cli.js",
+    "context-doctor-mcp": "dist/mcp.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
+    "dev": "tsc --watch",
+    "test": "npm run build && node --test \"dist/test/*.test.js\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}
