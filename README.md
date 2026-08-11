@@ -38,6 +38,31 @@ npx context-doctor optimize conversation.json --out slimmed.json
 
 Input is any of: OpenAI chat format, Anthropic messages format (with `system` and content blocks), or a bare `[{role, content}]` array. Use `-` to pipe from stdin.
 
+## Always-on: optimize every request automatically
+
+Run the proxy and every Anthropic/OpenAI API call your apps make gets optimized in flight — no code changes:
+
+```bash
+npx context-doctor proxy
+```
+
+Then point your app or SDK at it:
+
+```bash
+export ANTHROPIC_BASE_URL=http://localhost:8787      # Anthropic SDKs / tools
+export OPENAI_BASE_URL=http://localhost:8787/v1      # OpenAI SDKs / tools
+```
+
+The proxy dedupes repeated content, trims stale tool results, and strips base64 blobs from the message history of each request, then forwards it to the real API. Your API key passes through in headers untouched, streaming (SSE) works unchanged, and per-request savings are logged:
+
+```
+[context-doctor] POST /v1/messages → 200 | optimized 7.3k → 518 tokens (2 changes)
+```
+
+Because prompt caching matches byte-identical prefixes, deterministic strategies are chosen so repeated requests stay stable — but if you rely on aggressive cache prefixes, start with `--strategy strip-base64 --strategy dedupe` and add more as you verify.
+
+> **Note on desktop chat apps:** Claude Desktop and the ChatGPT app talk to their own backends — no tool can sit in that path. For those, use the MCP integration below and add a line to your custom instructions like: *"When a conversation gets long or includes large pasted content, proactively use context-doctor's profile_context tool and tell me what to trim."* The model will then invoke it on its own.
+
 ## Use it inside your AI app (MCP)
 
 `context-doctor` ships an MCP server, so the AI itself can profile and slim context on demand.
@@ -108,6 +133,7 @@ Exact counts require each provider's private tokenizer. `context-doctor` uses a 
 ## Roadmap
 
 - [ ] LLM-powered summarization strategy (bring your own key) for `prune-history` stubs
+- [ ] Proxy: per-route strategy config + response token accounting
 - [ ] `context-doctor watch` — live profiling of an agent's JSONL trace
 - [ ] Exact tokenizer adapters (tiktoken, Anthropic count-tokens API) as optional plugins
 - [ ] Session import from Claude Code / Cursor transcript formats

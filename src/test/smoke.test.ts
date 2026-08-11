@@ -65,6 +65,15 @@ test("optimizer output for Anthropic format keeps block structure valid", () => 
   for (const m of out.messages) {
     assert.ok(typeof m.content === "string" || Array.isArray(m.content));
   }
+  // The trimmed tool_result must KEEP its block type and tool_use_id — the
+  // Anthropic API rejects a tool_use with no matching tool_result.
+  const toolResultMsg = out.messages[2].content as Array<Record<string, unknown>>;
+  assert.equal(toolResultMsg[0].type, "tool_result");
+  assert.equal(toolResultMsg[0].tool_use_id, "t1");
+  assert.ok((toolResultMsg[0].content as string).length < 1000, "tool_result content was trimmed");
+  // And the tool_use block on the assistant side is untouched.
+  const assistantMsg = out.messages[1].content as Array<Record<string, unknown>>;
+  assert.equal(assistantMsg[0].type, "tool_use");
 });
 
 test("raw text input still profiles", () => {

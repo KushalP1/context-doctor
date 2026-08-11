@@ -13,5 +13,7 @@ export { optimizeConversation } from "./optimize.js";
 export type { OptimizeOptions, OptimizeResult, AppliedChange, StrategyId } from "./optimize.js";
 
 export { renderProfile } from "./report.js";
+export { startProxy } from "./proxy.js";
+export type { ProxyOptions } from "./proxy.js";
 export { estimateTokens, contextWindowFor, providerFor, formatTokens } from "./tokens.js";
 export type { Provider } from "./tokens.js";

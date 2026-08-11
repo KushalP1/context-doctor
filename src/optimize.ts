@@ -62,12 +62,34 @@ function textOf(content: unknown): string {
     .join("\n");
 }
 
-/** Replace the text of a message content value, preserving its shape. */
+/**
+ * Replace the text of a message content value, preserving block structure.
+ * tool_result blocks must keep their type and tool_use_id — the Anthropic API
+ * rejects conversations where a tool_use has no matching tool_result — so the
+ * replacement text goes INSIDE the first tool_result/text block rather than
+ * replacing the block itself. Later text blocks are dropped; other block types
+ * (tool_use, image) pass through untouched.
+ */
 function replaceText(content: unknown, newText: string): unknown {
   if (typeof content === "string" || !Array.isArray(content)) return newText;
-  // Collapse block arrays to a single text block carrying the replacement.
-  const nonText = content.filter((b: any) => b?.type && !["text", "tool_result"].includes(b.type));
-  return [...nonText, { type: "text", text: newText }];
+  let placed = false;
+  const out = content
+    .map((b: any) => {
+      if (b?.type === "tool_result") {
+        const replaced = { ...b, content: placed ? "[removed]" : newText };
+        placed = true;
+        return replaced;
+      }
+      if (b?.type === "text") {
+        if (placed) return null;
+        placed = true;
+        return { ...b, text: newText };
+      }
+      return b;
+    })
+    .filter(Boolean);
+  if (!placed) out.push({ type: "text", text: newText });
+  return out;
 }
 
 function truncateToTokens(text: string, maxTokens: number): string {

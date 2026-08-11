@@ -15,12 +15,15 @@ import { profileConversation } from "./profile.js";
 import { optimizeConversation, StrategyId } from "./optimize.js";
 import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
+import { startProxy } from "./proxy.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
 Usage:
   context-doctor analyze  <file|->  [options]   Show what's eating your tokens
   context-doctor optimize <file|->  [options]   Apply safe fixes, print slimmed conversation
+  context-doctor proxy              [options]   Always-on: local proxy that optimizes every
+                                                Anthropic/OpenAI API request in flight
 
 Input: a conversation JSON file (OpenAI or Anthropic message format, or a bare
 message array). Use "-" to read from stdin.
@@ -34,11 +37,17 @@ Options:
                           Default: dedupe, trim-tool-results, strip-base64 (lossless-ish set)
   --keep-recent <n>       (optimize) Messages at the tail to leave untouched (default 6)
   --max-tool-tokens <n>   (optimize) Token budget for trimmed tool results (default 300)
+  --port <n>              (proxy) Port to listen on (default 8787)
+  --upstream-anthropic <url>  (proxy) Override Anthropic upstream (testing)
+  --upstream-openai <url>     (proxy) Override OpenAI upstream (testing)
   -h, --help              Show this help
 
 Examples:
   context-doctor analyze chat.json --model claude-sonnet-5
   context-doctor optimize chat.json --strategy dedupe --strategy prune-history --out slim.json
+  context-doctor proxy --port 8787
+    then: export ANTHROPIC_BASE_URL=http://localhost:8787
+          export OPENAI_BASE_URL=http://localhost:8787/v1
 `;
 
 interface Args {
@@ -50,6 +59,9 @@ interface Args {
   strategies: StrategyId[];
   keepRecent?: number;
   maxToolTokens?: number;
+  port?: number;
+  upstreamAnthropic?: string;
+  upstreamOpenai?: string;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -65,6 +77,9 @@ function parseArgs(argv: string[]): Args {
       case "--strategy": args.strategies.push(argv[++i] as StrategyId); break;
       case "--keep-recent": args.keepRecent = Number(argv[++i]); break;
       case "--max-tool-tokens": args.maxToolTokens = Number(argv[++i]); break;
+      case "--port": args.port = Number(argv[++i]); break;
+      case "--upstream-anthropic": args.upstreamAnthropic = argv[++i]; break;
+      case "--upstream-openai": args.upstreamOpenai = argv[++i]; break;
       default: positional.push(a);
     }
   }
@@ -80,6 +95,18 @@ function readInput(file: string): string {
 
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
+
+  if (args.command === "proxy") {
+    startProxy({
+      port: args.port,
+      anthropicUpstream: args.upstreamAnthropic,
+      openaiUpstream: args.upstreamOpenai,
+      strategies: args.strategies.length > 0 ? args.strategies : undefined,
+      keepRecent: args.keepRecent,
+      maxToolResultTokens: args.maxToolTokens,
+    });
+    return; // server keeps the process alive
+  }
 
   if (!args.command || !args.file) {
     console.log(HELP);
