@@ -19,6 +19,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - name: Verify committed dist/ is in sync with src/
+        run: git diff --exit-code -- dist
       - name: Smoke-test CLI on the bundled example
         run: |
           node dist/cli.js analyze examples/sample-conversation.json --model claude-sonnet-5

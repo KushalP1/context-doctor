@@ -24,11 +24,19 @@ Findings (4)
 
 ## Quick start (30 seconds)
 
-**One command sets up everything** — detects Claude Desktop, Claude Code, and Cursor on your machine, wires in the MCP server, and installs the Agent Skill:
+**One command sets up everything** — detects Claude Desktop, Claude Code, and Cursor on your machine, wires in the MCP server, installs the Agent Skill, and registers the Claude Code every-prompt hook:
 
 ```bash
 npx context-doctor install
 ```
+
+Until the package lands on npm, install straight from GitHub instead (needs Node 18+):
+
+```bash
+npm install -g github:KushalP1/context-doctor && context-doctor install
+```
+
+That pair of commands is also all it takes to **set up context-doctor on anyone else's machine**.
 
 Restart your apps, then just ask Claude: *"what's eating my context?"* (`npx context-doctor uninstall` reverses it.)
 
@@ -41,6 +49,8 @@ Restart your apps, then just ask Claude: *"what's eating my context?"* (`npx con
 | Your own apps/agents (API) | `context-doctor proxy` rewrites every request in flight | **Every call, automatic** |
 | Claude Code | `install` registers a **UserPromptSubmit hook**: every query measures the session; heavy sessions get injected hygiene guidance (silent when lean, rate-limited, never blocks a prompt) | **Every query checked** |
 | Claude Desktop / claude.ai / ChatGPT | Agent Skill + MCP tools — the model manages context proactively and on request | Proactive, not guaranteed (these apps' traffic cannot be intercepted by any tool) |
+
+Nothing runs in the background for the Claude apps — the hook, skill, and MCP server are all invoked by the app itself at the right moment. The proxy is the only long-running piece, and only your API-calling apps need it.
 
 Or use the CLI directly, no install needed:
 

@@ -1,5 +1,6 @@
+# dist/ is committed on purpose: it lets `npm install github:KushalP1/context-doctor`
+# work on machines with no build step. CI verifies it stays in sync with src/.
 node_modules/
-dist/
 *.log
 .DS_Store
 .env
