@@ -14,6 +14,10 @@ export type { OptimizeOptions, OptimizeResult, AppliedChange, StrategyId } from 
 
 export { renderProfile } from "./report.js";
 export { startProxy } from "./proxy.js";
-export type { ProxyOptions } from "./proxy.js";
+export type { ProxyOptions, ProxyStats } from "./proxy.js";
+export { listSessions, parseSessionFile } from "./session.js";
+export type { SessionInfo, ParsedSession } from "./session.js";
+export { pricingFor, inputCostUsd, estimatedTtftSeconds, formatUsd } from "./pricing.js";
+export type { ModelPricing } from "./pricing.js";
 export { estimateTokens, contextWindowFor, providerFor, formatTokens } from "./tokens.js";
 export type { Provider } from "./tokens.js";

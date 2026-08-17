@@ -78,6 +78,14 @@ function flattenContent(content: unknown): { text: string; hasBinary: boolean; t
         hasBinary = true;
         text += `[${b.type}]`;
         break;
+      case "thinking":
+        // Count the thinking text but NOT the signature — it is an opaque
+        // base64 blob the API requires, not something the user can trim.
+        text += (b.thinking as string) ?? "";
+        break;
+      case "redacted_thinking":
+        text += "[redacted thinking]";
+        break;
       default:
         text += JSON.stringify(b);
     }

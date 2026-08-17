@@ -17,6 +17,7 @@ import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
 import { startProxy } from "./proxy.js";
 import { runInstall, runUninstall } from "./install.js";
+import { listSessions, parseSessionFile } from "./session.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -28,6 +29,8 @@ Usage:
   context-doctor install                        Wire the MCP server + skill into Claude Desktop,
                                                 Claude Code, and Cursor automatically
   context-doctor uninstall                      Undo install
+  context-doctor session [file]                 Profile a Claude Code session transcript
+                                                (default: the most recent session; --list to browse)
 
 Input: a conversation JSON file (OpenAI or Anthropic message format, or a bare
 message array). Use "-" to read from stdin.
@@ -66,16 +69,18 @@ interface Args {
   port?: number;
   upstreamAnthropic?: string;
   upstreamOpenai?: string;
+  list: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { json: false, strategies: [] };
+  const args: Args = { json: false, strategies: [], list: false };
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     switch (a) {
       case "-h": case "--help": console.log(HELP); process.exit(0);
       case "--json": args.json = true; break;
+      case "--list": args.list = true; break;
       case "--model": args.model = argv[++i]; break;
       case "--out": args.out = argv[++i]; break;
       case "--strategy": args.strategies.push(argv[++i] as StrategyId); break;
@@ -99,6 +104,40 @@ function readInput(file: string): string {
 
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
+
+  if (args.command === "session") {
+    if (args.list) {
+      const sessions = listSessions();
+      if (sessions.length === 0) {
+        console.log("No Claude Code sessions found under ~/.claude/projects.");
+        return;
+      }
+      for (const s of sessions) {
+        console.log(`${s.modifiedAt.toISOString().slice(0, 16)}  ${(s.sizeBytes / 1024).toFixed(0).padStart(6)}KB  ${s.path}`);
+      }
+      return;
+    }
+    const path = args.file ?? listSessions(1)[0]?.path;
+    if (!path) {
+      console.error("No session transcript found. Pass a .jsonl path or run inside a machine with Claude Code sessions.");
+      process.exit(1);
+    }
+    let parsed;
+    try {
+      parsed = parseSessionFile(path);
+    } catch (e) {
+      console.error(`Could not read session: ${(e as Error).message}`);
+      process.exit(1);
+    }
+    const profile = profileConversation(parseConversation(parsed.conversationJson), args.model ?? parsed.model);
+    if (args.json) {
+      console.log(JSON.stringify({ session: { path: parsed.path, title: parsed.title }, profile }, null, 2));
+    } else {
+      console.log(`Session: ${parsed.title ?? "(untitled)"}\nFile:    ${parsed.path}\n`);
+      console.log(renderProfile(profile));
+    }
+    return;
+  }
 
   if (args.command === "install") {
     runInstall();
