@@ -20,7 +20,7 @@ import { profileConversation } from "./profile.js";
 import { optimizeConversation } from "./optimize.js";
 import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
-const server = new McpServer({ name: "context-doctor", version: "0.2.0" });
+const server = new McpServer({ name: "context-doctor", version: "0.2.1" });
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "strip-base64", "prune-history"];
 server.tool("profile_context", "Profile an LLM conversation or prompt: token breakdown by category, largest messages, and actionable findings about wasted context (duplicates, oversized tool results, base64 blobs, cache-unfriendly ordering). Accepts OpenAI/Anthropic conversation JSON or raw text.", {
     conversation: z.string().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array) or raw prompt text"),
