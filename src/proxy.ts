@@ -15,6 +15,7 @@
 import http from "node:http";
 import { optimizeConversation, OptimizeOptions } from "./optimize.js";
 import { formatTokens } from "./tokens.js";
+import { formatUsd, inputCostUsd, pricingFor } from "./pricing.js";
 
 export interface ProxyOptions extends OptimizeOptions {
   port?: number;
@@ -34,8 +35,28 @@ function upstreamFor(url: string, opts: ProxyOptions): string | undefined {
   return undefined;
 }
 
+export interface ProxyStats {
+  startedAt: string;
+  requests: number;
+  optimizedRequests: number;
+  tokensBefore: number;
+  tokensAfter: number;
+  tokensSaved: number;
+  /** USD saved on input tokens, when the request's model has a known price. */
+  estUsdSaved: number;
+}
+
 export function startProxy(opts: ProxyOptions = {}): http.Server {
   const port = opts.port ?? 8787;
+  const stats: ProxyStats = {
+    startedAt: new Date().toISOString(),
+    requests: 0,
+    optimizedRequests: 0,
+    tokensBefore: 0,
+    tokensAfter: 0,
+    tokensSaved: 0,
+    estUsdSaved: 0,
+  };
 
   const server = http.createServer(async (req, res) => {
     const url = req.url ?? "/";
@@ -43,6 +64,11 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
       if (url === "/health") {
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify({ ok: true, service: "context-doctor-proxy" }));
+        return;
+      }
+      if (url === "/stats") {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ ...stats, estUsdSaved: Number(stats.estUsdSaved.toFixed(4)) }, null, 2));
         return;
       }
 
@@ -60,12 +86,21 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
 
       // Optimize the message history in flight. Anything unparseable (or with
       // no messages array, e.g. embeddings) passes through untouched.
+      stats.requests++;
       let note = "passthrough";
       if (req.method === "POST" && body) {
         try {
           const result = optimizeConversation(body, opts);
           const saved = result.tokensBefore - result.tokensAfter;
-          if (saved > 0) body = JSON.stringify(result.conversation);
+          stats.tokensBefore += result.tokensBefore;
+          stats.tokensAfter += result.tokensAfter;
+          if (saved > 0) {
+            body = JSON.stringify(result.conversation);
+            stats.optimizedRequests++;
+            stats.tokensSaved += saved;
+            const pricing = pricingFor((result.conversation as { model?: string })?.model);
+            if (pricing) stats.estUsdSaved += inputCostUsd(saved, pricing);
+          }
           note = saved > 0
             ? `optimized ${formatTokens(result.tokensBefore)} → ${formatTokens(result.tokensAfter)} tokens (${result.applied.length} changes)`
             : "clean (nothing to save)";
@@ -79,13 +114,17 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
         if (!SKIP_REQUEST_HEADERS.has(key.toLowerCase()) && typeof value === "string") headers[key] = value;
       }
 
+      const upstreamStart = Date.now();
       const upstream = await fetch(upstreamBase + url, {
         method: req.method ?? "POST",
         headers,
         body: req.method === "GET" || req.method === "HEAD" ? undefined : body,
       });
 
-      console.error(`[context-doctor] ${req.method} ${url} → ${upstream.status} | ${note}`);
+      console.error(
+        `[context-doctor] ${req.method} ${url} → ${upstream.status} in ${Date.now() - upstreamStart}ms | ${note}` +
+        (stats.tokensSaved > 0 ? ` | session total: ${formatTokens(stats.tokensSaved)} tokens ≈ ${formatUsd(stats.estUsdSaved)} saved` : "")
+      );
 
       res.statusCode = upstream.status;
       upstream.headers.forEach((value, key) => {
@@ -116,6 +155,7 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
     console.error(`  Anthropic apps/SDKs: export ANTHROPIC_BASE_URL=http://localhost:${port}`);
     console.error(`  OpenAI apps/SDKs:    export OPENAI_BASE_URL=http://localhost:${port}/v1`);
     console.error(`  Every request's context is optimized in flight; savings are logged here.`);
+    console.error(`  Cumulative savings: http://localhost:${port}/stats`);
   });
   return server;
 }
