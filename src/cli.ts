@@ -16,6 +16,7 @@ import { optimizeConversation, StrategyId } from "./optimize.js";
 import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
 import { startProxy } from "./proxy.js";
+import { runInstall, runUninstall } from "./install.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -24,6 +25,9 @@ Usage:
   context-doctor optimize <file|->  [options]   Apply safe fixes, print slimmed conversation
   context-doctor proxy              [options]   Always-on: local proxy that optimizes every
                                                 Anthropic/OpenAI API request in flight
+  context-doctor install                        Wire the MCP server + skill into Claude Desktop,
+                                                Claude Code, and Cursor automatically
+  context-doctor uninstall                      Undo install
 
 Input: a conversation JSON file (OpenAI or Anthropic message format, or a bare
 message array). Use "-" to read from stdin.
@@ -95,6 +99,15 @@ function readInput(file: string): string {
 
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
+
+  if (args.command === "install") {
+    runInstall();
+    return;
+  }
+  if (args.command === "uninstall") {
+    runUninstall();
+    return;
+  }
 
   if (args.command === "proxy") {
     startProxy({

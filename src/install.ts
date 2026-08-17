@@ -1,0 +1,132 @@
+/**
+ * One-command setup: `context-doctor install`
+ *
+ * Detects the AI apps present on this machine and wires the context-doctor
+ * MCP server into each, plus installs the Agent Skill for Claude Code.
+ * Every config edit is a careful JSON merge with a .backup file written first.
+ * `context-doctor uninstall` reverses it.
+ */
+
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, rmSync } from "node:fs";
+import { homedir, platform } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+interface Target {
+  name: string;
+  configPath: string;
+  /** Where the mcpServers map lives inside the JSON (all three apps use the same key). */
+  detect(): boolean;
+}
+
+function claudeDesktopConfigPath(): string {
+  switch (platform()) {
+    case "darwin": return join(homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
+    case "win32": return join(process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"), "Claude", "claude_desktop_config.json");
+    default: return join(homedir(), ".config", "Claude", "claude_desktop_config.json");
+  }
+}
+
+function targets(): Target[] {
+  const desktop = claudeDesktopConfigPath();
+  const claudeCode = join(homedir(), ".claude.json");
+  const cursor = join(homedir(), ".cursor", "mcp.json");
+  return [
+    { name: "Claude Desktop", configPath: desktop, detect: () => existsSync(dirname(desktop)) },
+    { name: "Claude Code", configPath: claudeCode, detect: () => existsSync(claudeCode) || existsSync(join(homedir(), ".claude")) },
+    { name: "Cursor", configPath: cursor, detect: () => existsSync(join(homedir(), ".cursor")) },
+  ];
+}
+
+/**
+ * The server command to write into configs. When running from a published
+ * install, npx keeps it auto-updating; from a local checkout, point at the
+ * built file directly so it works before the package is on npm.
+ */
+function serverEntry(): { command: string; args: string[] } {
+  const selfDir = dirname(fileURLToPath(import.meta.url));
+  const localMcp = join(selfDir, "mcp.js");
+  const runningFromNpx = (process.env.npm_execpath ?? "").includes("npx") || selfDir.includes("_npx");
+  if (!runningFromNpx && existsSync(localMcp)) {
+    return { command: process.execPath, args: [localMcp] };
+  }
+  return { command: "npx", args: ["-y", "context-doctor-mcp"] };
+}
+
+function readJson(path: string): Record<string, any> {
+  if (!existsSync(path)) return {};
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (e) {
+    throw new Error(`${path} exists but is not valid JSON — fix or remove it first (${(e as Error).message})`);
+  }
+}
+
+function writeJsonWithBackup(path: string, data: Record<string, any>): void {
+  mkdirSync(dirname(path), { recursive: true });
+  if (existsSync(path)) copyFileSync(path, path + ".context-doctor.backup");
+  writeFileSync(path, JSON.stringify(data, null, 2));
+}
+
+function installSkill(): string | null {
+  const selfDir = dirname(fileURLToPath(import.meta.url));
+  // dist/install.js → package root is one level up; skills/ ships in the package.
+  const skillSource = join(selfDir, "..", "skills", "context-doctor", "SKILL.md");
+  if (!existsSync(skillSource)) return null;
+  const skillDest = join(homedir(), ".claude", "skills", "context-doctor");
+  mkdirSync(skillDest, { recursive: true });
+  copyFileSync(skillSource, join(skillDest, "SKILL.md"));
+  return join(skillDest, "SKILL.md");
+}
+
+export function runInstall(): void {
+  const entry = serverEntry();
+  const found = targets().filter((t) => t.detect());
+
+  if (found.length === 0) {
+    console.log("No supported AI apps detected (Claude Desktop, Claude Code, Cursor).");
+    console.log("Manual setup — add to your app's MCP config:");
+    console.log(JSON.stringify({ mcpServers: { "context-doctor": entry } }, null, 2));
+    return;
+  }
+
+  for (const target of found) {
+    try {
+      const config = readJson(target.configPath);
+      config.mcpServers = config.mcpServers ?? {};
+      config.mcpServers["context-doctor"] = entry;
+      writeJsonWithBackup(target.configPath, config);
+      console.log(`✓ ${target.name}: MCP server added (${target.configPath})`);
+    } catch (e) {
+      console.error(`✗ ${target.name}: ${(e as Error).message}`);
+    }
+  }
+
+  const skillPath = installSkill();
+  if (skillPath) console.log(`✓ Agent Skill installed for Claude Code (${skillPath})`);
+
+  console.log("\nDone. Restart the apps to pick up the new tools, then try:");
+  console.log('  "What\'s eating my context?" — or paste a conversation and ask for a profile.');
+}
+
+export function runUninstall(): void {
+  for (const target of targets().filter((t) => t.detect())) {
+    try {
+      if (!existsSync(target.configPath)) continue;
+      const config = readJson(target.configPath);
+      if (config.mcpServers?.["context-doctor"]) {
+        delete config.mcpServers["context-doctor"];
+        writeJsonWithBackup(target.configPath, config);
+        console.log(`✓ ${target.name}: MCP server removed`);
+      }
+    } catch (e) {
+      console.error(`✗ ${target.name}: ${(e as Error).message}`);
+    }
+  }
+  const skillDir = join(homedir(), ".claude", "skills", "context-doctor");
+  if (existsSync(skillDir)) {
+    rmSync(skillDir, { recursive: true });
+    console.log("✓ Agent Skill removed");
+  }
+  console.log("Done.");
+}
