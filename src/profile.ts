@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 import { NormalizedConversation, NormalizedMessage } from "./parse.js";
 import { contextWindowFor, estimateTokens, MESSAGE_OVERHEAD_TOKENS, providerFor } from "./tokens.js";
+import { estimatedTtftSeconds, inputCostUsd, pricingFor } from "./pricing.js";
 
 export type Category = "system" | "user" | "assistant" | "tool_calls" | "tool_results" | "other";
 
@@ -39,6 +40,21 @@ export interface Finding {
   messages: number[];
 }
 
+export interface CostEstimate {
+  /** Input cost of sending this context once, USD (estimate). */
+  perCallUsd: number;
+  /** Input cost over 1,000 calls — the number that makes people act. */
+  per1kCallsUsd: number;
+  /** USD recoverable per call if all savings findings are applied. */
+  savingsPerCallUsd: number;
+  /** Same, over 1,000 calls. */
+  savingsPer1kCallsUsd: number;
+  /** Estimated seconds of time-to-first-token attributable to this input size. */
+  ttftSeconds: number;
+  /** TTFT seconds saved per call if savings are applied. */
+  ttftSavedSeconds: number;
+}
+
 export interface ContextProfile {
   totalTokens: number;
   model?: string;
@@ -50,6 +66,8 @@ export interface ContextProfile {
   findings: Finding[];
   /** Total estimated savings if all findings with savings are acted on. */
   totalEstSavings: number;
+  /** Present when the model has a known price. All figures are estimates. */
+  cost?: CostEstimate;
   sourceFormat: string;
 }
 
@@ -227,6 +245,22 @@ export function profileConversation(conv: NormalizedConversation, model?: string
   const severityRank = { high: 0, warn: 1, info: 2 };
   findings.sort((a, b) => severityRank[a.severity] - severityRank[b.severity] || b.estSavings - a.estSavings);
 
+  const totalEstSavings = findings.reduce((s, f) => s + f.estSavings, 0);
+  const pricing = pricingFor(model);
+  let cost: CostEstimate | undefined;
+  if (pricing) {
+    const perCallUsd = inputCostUsd(totalTokens, pricing);
+    const savingsPerCallUsd = inputCostUsd(totalEstSavings, pricing);
+    cost = {
+      perCallUsd,
+      per1kCallsUsd: perCallUsd * 1000,
+      savingsPerCallUsd,
+      savingsPer1kCallsUsd: savingsPerCallUsd * 1000,
+      ttftSeconds: estimatedTtftSeconds(totalTokens),
+      ttftSavedSeconds: estimatedTtftSeconds(totalEstSavings),
+    };
+  }
+
   return {
     totalTokens,
     model,
@@ -236,7 +270,8 @@ export function profileConversation(conv: NormalizedConversation, model?: string
     categories,
     largestMessages,
     findings,
-    totalEstSavings: findings.reduce((s, f) => s + f.estSavings, 0),
+    totalEstSavings,
+    cost,
     sourceFormat: conv.sourceFormat,
   };
 }

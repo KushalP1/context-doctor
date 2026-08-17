@@ -6,6 +6,7 @@
 
 import { ContextProfile, Category } from "./profile.js";
 import { formatTokens } from "./tokens.js";
+import { formatUsd } from "./pricing.js";
 
 const CATEGORY_LABELS: Record<Category, string> = {
   system: "System prompt",
@@ -35,6 +36,12 @@ export function renderProfile(profile: ContextProfile): string {
       ? ` of ${formatTokens(p.contextWindow)} window (${p.usagePct!.toFixed(1)}%)`
       : " (unknown window size)";
     lines.push(`Model: ${p.model}${windowNote}`);
+  }
+  if (p.cost) {
+    lines.push(
+      `Cost:  ~${formatUsd(p.cost.perCallUsd)} input per call · ~${formatUsd(p.cost.per1kCallsUsd)} per 1k calls · ` +
+      `~${p.cost.ttftSeconds.toFixed(1)}s of latency per call (estimates)`
+    );
   }
   lines.push("");
 
@@ -74,7 +81,11 @@ export function renderProfile(profile: ContextProfile): string {
     lines.push("");
     if (p.totalEstSavings > 0) {
       const pct = p.totalTokens > 0 ? Math.round((p.totalEstSavings / p.totalTokens) * 100) : 0;
-      lines.push(`Potential recovery: ~${formatTokens(p.totalEstSavings)} tokens (~${pct}% of context)`);
+      let recovery = `Potential recovery: ~${formatTokens(p.totalEstSavings)} tokens (~${pct}% of context)`;
+      if (p.cost && p.cost.savingsPerCallUsd > 0) {
+        recovery += ` ≈ ${formatUsd(p.cost.savingsPer1kCallsUsd)} per 1k calls, ${p.cost.ttftSavedSeconds.toFixed(1)}s faster per call`;
+      }
+      lines.push(recovery);
       lines.push(`Run \`context-doctor optimize <file>\` to apply the safe fixes automatically.`);
     }
   } else {
