@@ -18,6 +18,7 @@ import { formatTokens } from "./tokens.js";
 import { startProxy } from "./proxy.js";
 import { runInstall, runUninstall } from "./install.js";
 import { listSessions, parseSessionFile } from "./session.js";
+import { runHook } from "./hook.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -31,6 +32,8 @@ Usage:
   context-doctor uninstall                      Undo install
   context-doctor session [file]                 Profile a Claude Code session transcript
                                                 (default: the most recent session; --list to browse)
+  context-doctor hook                           Claude Code UserPromptSubmit hook (installed
+                                                automatically by \`install\`; reads hook JSON on stdin)
 
 Input: a conversation JSON file (OpenAI or Anthropic message format, or a bare
 message array). Use "-" to read from stdin.
@@ -104,6 +107,11 @@ function readInput(file: string): string {
 
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
+
+  if (args.command === "hook") {
+    void runHook();
+    return;
+  }
 
   if (args.command === "session") {
     if (args.list) {

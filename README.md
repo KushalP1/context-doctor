@@ -32,6 +32,16 @@ npx context-doctor install
 
 Restart your apps, then just ask Claude: *"what's eating my context?"* (`npx context-doctor uninstall` reverses it.)
 
+**No API keys, ever.** Everything is deterministic local code; when an LLM is needed (summarizing pruned history), the model already running in your app does it. The proxy forwards *your app's* credentials untouched — context-doctor itself holds nothing.
+
+## What "always-on" means, per surface
+
+| Where you run LLMs | Mechanism | Guarantee |
+|---|---|---|
+| Your own apps/agents (API) | `context-doctor proxy` rewrites every request in flight | **Every call, automatic** |
+| Claude Code | `install` registers a **UserPromptSubmit hook**: every query measures the session; heavy sessions get injected hygiene guidance (silent when lean, rate-limited, never blocks a prompt) | **Every query checked** |
+| Claude Desktop / claude.ai / ChatGPT | Agent Skill + MCP tools — the model manages context proactively and on request | Proactive, not guaranteed (these apps' traffic cannot be intercepted by any tool) |
+
 Or use the CLI directly, no install needed:
 
 ```bash

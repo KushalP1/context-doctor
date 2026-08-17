@@ -68,6 +68,53 @@ function writeJsonWithBackup(path: string, data: Record<string, any>): void {
   writeFileSync(path, JSON.stringify(data, null, 2));
 }
 
+/** Shell command used for the Claude Code every-prompt hook. */
+function hookCommand(): string {
+  const selfDir = dirname(fileURLToPath(import.meta.url));
+  const localCli = join(selfDir, "cli.js");
+  const runningFromNpx = (process.env.npm_execpath ?? "").includes("npx") || selfDir.includes("_npx");
+  if (!runningFromNpx && existsSync(localCli)) {
+    return `"${process.execPath}" "${localCli}" hook`;
+  }
+  return "npx -y context-doctor hook";
+}
+
+const HOOK_MARKER = "context-doctor";
+
+/**
+ * Register the UserPromptSubmit hook in ~/.claude/settings.json so EVERY
+ * Claude Code query gets a context-size check. Idempotent.
+ */
+function installHook(): string | null {
+  const settingsPath = join(homedir(), ".claude", "settings.json");
+  if (!existsSync(join(homedir(), ".claude"))) return null; // no Claude Code here
+  const settings = readJson(settingsPath);
+  settings.hooks = settings.hooks ?? {};
+  const entries: Array<Record<string, any>> = settings.hooks.UserPromptSubmit ?? [];
+  const already = entries.some((e) => JSON.stringify(e).includes(HOOK_MARKER));
+  if (!already) {
+    entries.push({ hooks: [{ type: "command", command: hookCommand() }] });
+    settings.hooks.UserPromptSubmit = entries;
+    writeJsonWithBackup(settingsPath, settings);
+  }
+  return settingsPath;
+}
+
+function uninstallHook(): void {
+  const settingsPath = join(homedir(), ".claude", "settings.json");
+  if (!existsSync(settingsPath)) return;
+  const settings = readJson(settingsPath);
+  const entries: Array<Record<string, any>> | undefined = settings.hooks?.UserPromptSubmit;
+  if (!entries) return;
+  const filtered = entries.filter((e) => !JSON.stringify(e).includes(HOOK_MARKER));
+  if (filtered.length !== entries.length) {
+    settings.hooks.UserPromptSubmit = filtered;
+    if (filtered.length === 0) delete settings.hooks.UserPromptSubmit;
+    writeJsonWithBackup(settingsPath, settings);
+    console.log("✓ Claude Code every-prompt hook removed");
+  }
+}
+
 function installSkill(): string | null {
   const selfDir = dirname(fileURLToPath(import.meta.url));
   // dist/install.js → package root is one level up; skills/ ships in the package.
@@ -105,6 +152,9 @@ export function runInstall(): void {
   const skillPath = installSkill();
   if (skillPath) console.log(`✓ Agent Skill installed for Claude Code (${skillPath})`);
 
+  const hookPath = installHook();
+  if (hookPath) console.log(`✓ Claude Code every-prompt hook installed (${hookPath}) — heavy sessions get automatic hygiene guidance`);
+
   console.log("\nDone. Restart the apps to pick up the new tools, then try:");
   console.log('  "What\'s eating my context?" — or paste a conversation and ask for a profile.');
 }
@@ -128,5 +178,6 @@ export function runUninstall(): void {
     rmSync(skillDir, { recursive: true });
     console.log("✓ Agent Skill removed");
   }
+  uninstallHook();
   console.log("Done.");
 }
