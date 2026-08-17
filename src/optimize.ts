@@ -33,6 +33,12 @@ export interface OptimizeResult {
   tokensBefore: number;
   tokensAfter: number;
   applied: AppliedChange[];
+  /**
+   * When prune-history ran: a compact digest of the pruned turns. A host LLM
+   * (e.g. the model running in Claude Desktop via MCP) can summarize this and
+   * replace the stub message — summarization without any API key.
+   */
+  prunedDigest?: string;
 }
 
 const DEFAULTS: Required<OptimizeOptions> = {
@@ -184,10 +190,16 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
 
   // -- prune-history: replace the older half with a stub ------------------------
   // Opt-in only: it is lossy, so it is not in the default strategy set.
+  let prunedDigest: string | undefined;
   if (opts.strategies.includes("prune-history") && messages.length > opts.keepRecent * 2) {
     const keepFrom = messages.length - opts.keepRecent;
     const pruned = messages.slice(0, keepFrom);
     const prunedTokens = pruned.reduce((s, m) => s + estimateTokens(textOf(m.content)), 0);
+    // Digest: first ~200 chars of each pruned turn — enough for a host LLM to
+    // write a faithful summary, small enough not to defeat the pruning.
+    prunedDigest = pruned
+      .map((m, i) => `[${i}:${m.role}] ${textOf(m.content).replace(/\s+/g, " ").slice(0, 200)}`)
+      .join("\n");
     const stub = {
       role: "user",
       content:
@@ -204,5 +216,5 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
   }
 
   const tokensAfter = messages.reduce((s, m) => s + estimateTokens(textOf(m.content)), 0);
-  return { conversation: data, tokensBefore, tokensAfter, applied };
+  return { conversation: data, tokensBefore, tokensAfter, applied, prunedDigest };
 }

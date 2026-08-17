@@ -60,12 +60,24 @@ server.tool(
       `Saved ~${formatTokens(saved)} tokens (${formatTokens(result.tokensBefore)} → ${formatTokens(result.tokensAfter)}) ` +
       `via ${result.applied.length} change(s):\n` +
       result.applied.map((c) => `- [${c.strategy}] message #${c.messageIndex}: ${c.note} (~${formatTokens(c.tokensSaved)})`).join("\n");
-    return {
-      content: [
-        { type: "text", text: summary },
-        { type: "text", text: JSON.stringify(result.conversation, null, 2) },
-      ],
-    };
+    const content: Array<{ type: "text"; text: string }> = [
+      { type: "text", text: summary },
+      { type: "text", text: JSON.stringify(result.conversation, null, 2) },
+    ];
+    // Host-model summarization: instead of calling an LLM ourselves (which would
+    // need an API key), hand the pruned material to the model that invoked this
+    // tool and ask IT to write the summary.
+    if (result.prunedDigest) {
+      content.push({
+        type: "text",
+        text:
+          "ACTION REQUIRED (you, the assistant calling this tool): the pruned turns are digested below. " +
+          "Write a dense factual summary of them (≤150 tokens: decisions, current state, open items, key identifiers) " +
+          "and replace the '[context-doctor: ... pruned]' stub message in the conversation above with your summary " +
+          "before presenting the result.\n\nPRUNED TURNS DIGEST:\n" + result.prunedDigest,
+      });
+    }
+    return { content };
   }
 );
 
