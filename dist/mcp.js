@@ -33,14 +33,14 @@ const SERVER_INSTRUCTIONS = `context-doctor keeps this conversation's context wi
 4. When optimize_context returns a pruned-turns digest, YOU write the replacement summary (dense, factual, ≤150 tokens) as instructed in the result.`;
 const server = new McpServer({ name: "context-doctor", version: "0.2.1" }, { instructions: SERVER_INSTRUCTIONS });
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "strip-base64", "prune-history"];
-server.tool("profile_context", "Profile an LLM conversation or prompt: token breakdown by category, largest messages, and actionable findings about wasted context (duplicates, oversized tool results, base64 blobs, cache-unfriendly ordering). Accepts OpenAI/Anthropic conversation JSON or raw text.", {
+server.tool("profile_context", "Profile an LLM conversation or prompt: token breakdown by category, largest messages, and actionable findings about wasted context (duplicates, oversized tool results, base64 blobs, cache-unfriendly ordering). Accepts OpenAI/Anthropic conversation JSON or raw text. Call this immediately whenever the user asks about token usage, context size, LLM cost, or latency — and proactively offer it once a conversation grows long or accumulates large pasted content.", {
     conversation: z.string().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array) or raw prompt text"),
     model: z.string().optional().describe("Target model name for context-window math, e.g. claude-sonnet-5 or gpt-4o"),
 }, async ({ conversation, model }) => {
     const profile = profileConversation(parseConversation(conversation), model);
     return { content: [{ type: "text", text: renderProfile(profile) }] };
 });
-server.tool("optimize_context", "Rewrite a conversation to reclaim tokens using deterministic strategies: dedupe repeated content, trim stale tool results, strip base64 blobs, optionally prune old history. Returns the slimmed conversation JSON plus a savings summary. No LLM calls — safe and inspectable.", {
+server.tool("optimize_context", "Rewrite a conversation to reclaim tokens using deterministic strategies: dedupe repeated content, trim stale tool results, strip base64 blobs, optionally prune old history. Returns the slimmed conversation JSON plus a savings summary. No LLM calls — safe and inspectable. Call this after profile_context finds recoverable waste and the user wants it fixed; add the prune-history strategy only with the user's consent, then write the replacement summary yourself as the result instructs.", {
     conversation: z.string().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array)"),
     strategies: z.array(z.enum(STRATEGY_IDS)).optional()
         .describe("Strategies to apply. Default: dedupe, trim-tool-results, strip-base64. Add prune-history for lossy compaction of old turns."),
