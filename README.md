@@ -47,10 +47,13 @@ Restart your apps, then just ask Claude: *"what's eating my context?"* (`npx con
 | Where you run LLMs | Mechanism | Guarantee |
 |---|---|---|
 | Your own apps/agents (API) | `context-doctor proxy` rewrites every request in flight | **Every call, automatic** |
-| Claude Code | `install` registers a **UserPromptSubmit hook**: every query measures the session; heavy sessions get injected hygiene guidance (silent when lean, rate-limited, never blocks a prompt) | **Every query checked** |
-| Claude Desktop / claude.ai / ChatGPT | Agent Skill + MCP tools — the model manages context proactively and on request | Proactive, not guaranteed (these apps' traffic cannot be intercepted by any tool) |
+| Claude Code / Cowork sessions | `install` registers a **UserPromptSubmit hook**: every query measures the session; heavy sessions get injected hygiene guidance (silent when lean, rate-limited, never blocks a prompt) | **Every query checked** |
+| Claude Desktop chat / Cursor | **MCP server instructions** — standing hygiene directives injected into every conversation where the server is enabled, plus prescriptive tool triggers | **Every conversation carries the rules** |
+| claude.ai (web) / ChatGPT app | Upload `skills/context-doctor/SKILL.md` in the app's Skills settings for the same standing behavior | Manual one-time upload |
 
-Nothing runs in the background for the Claude apps — the hook, skill, and MCP server are all invoked by the app itself at the right moment. The proxy is the only long-running piece, and only your API-calling apps need it.
+Nothing runs in the background for the Claude apps — the hook, skill, MCP server, and its instructions are all delivered by the app itself at the right moment. The proxy is the only long-running piece, and only your API-calling apps need it.
+
+Optional belt-and-braces for any chat app: add one line to your profile preferences — *"Practice context hygiene: summarize large content instead of re-quoting it, and use context-doctor's tools when conversations get heavy."*
 
 Or use the CLI directly, no install needed:
 
