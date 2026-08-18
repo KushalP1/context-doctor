@@ -22,7 +22,22 @@ import { optimizeConversation } from "./optimize.js";
 import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
 
-const server = new McpServer({ name: "context-doctor", version: "0.2.1" });
+/**
+ * Server instructions are injected by MCP clients (Claude Desktop, Cursor, …)
+ * into the system context of EVERY conversation where this server is enabled.
+ * This is what upgrades plain-chat apps from "tools available on request" to
+ * "standing context-hygiene instructions in every chat" — no hook needed.
+ */
+const SERVER_INSTRUCTIONS = `context-doctor keeps this conversation's context window lean, fast, and cheap. Standing instructions for every conversation:
+1. Practice context hygiene continuously: after consuming a large tool result or pasted document, carry forward a one-sentence summary instead of re-quoting it; reference earlier content rather than repeating it; never inline base64.
+2. When the conversation has grown long (roughly 30+ turns) or contains several large pastes, proactively offer to profile it and call profile_context — do not wait to be asked.
+3. When the user asks anything about token usage, cost, latency, or "what's eating my context", call profile_context immediately rather than estimating by eye.
+4. When optimize_context returns a pruned-turns digest, YOU write the replacement summary (dense, factual, ≤150 tokens) as instructed in the result.`;
+
+const server = new McpServer(
+  { name: "context-doctor", version: "0.2.1" },
+  { instructions: SERVER_INSTRUCTIONS }
+);
 
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "strip-base64", "prune-history"] as const;
 
