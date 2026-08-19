@@ -19,6 +19,12 @@ import { formatUsd, inputCostUsd, pricingFor } from "./pricing.js";
 
 export interface ProxyOptions extends OptimizeOptions {
   port?: number;
+  /**
+   * Bind address. Defaults to 127.0.0.1 — the proxy relays authenticated
+   * traffic and exposes /stats, so it must not listen on the network unless
+   * the user explicitly opts in (e.g. --host 0.0.0.0 inside a container).
+   */
+  host?: string;
   anthropicUpstream?: string;
   openaiUpstream?: string;
 }
@@ -86,9 +92,12 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
 
       // Optimize the message history in flight. Anything unparseable (or with
       // no messages array, e.g. embeddings) passes through untouched.
+      // count_tokens is measurement — optimizing it would silently change the
+      // number the caller is trying to read, so it always passes through.
       stats.requests++;
+      const isMeasurement = url.startsWith("/v1/messages/count_tokens");
       let note = "passthrough";
-      if (req.method === "POST" && body) {
+      if (req.method === "POST" && body && !isMeasurement) {
         try {
           const result = optimizeConversation(body, opts);
           const saved = result.tokensBefore - result.tokensAfter;
@@ -150,8 +159,9 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
     }
   });
 
-  server.listen(port, () => {
-    console.error(`context-doctor proxy listening on http://localhost:${port}`);
+  const host = opts.host ?? "127.0.0.1";
+  server.listen(port, host, () => {
+    console.error(`context-doctor proxy listening on http://${host}:${port}`);
     console.error(`  Anthropic apps/SDKs: export ANTHROPIC_BASE_URL=http://localhost:${port}`);
     console.error(`  OpenAI apps/SDKs:    export OPENAI_BASE_URL=http://localhost:${port}/v1`);
     console.error(`  Every request's context is optimized in flight; savings are logged here.`);

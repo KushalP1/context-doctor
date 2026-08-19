@@ -15,6 +15,12 @@ import http from "node:http";
 import { OptimizeOptions } from "./optimize.js";
 export interface ProxyOptions extends OptimizeOptions {
     port?: number;
+    /**
+     * Bind address. Defaults to 127.0.0.1 — the proxy relays authenticated
+     * traffic and exposes /stats, so it must not listen on the network unless
+     * the user explicitly opts in (e.g. --host 0.0.0.0 inside a container).
+     */
+    host?: string;
     anthropicUpstream?: string;
     openaiUpstream?: string;
 }

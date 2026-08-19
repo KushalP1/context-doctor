@@ -63,9 +63,12 @@ export function startProxy(opts = {}) {
             let body = Buffer.concat(chunks).toString("utf8");
             // Optimize the message history in flight. Anything unparseable (or with
             // no messages array, e.g. embeddings) passes through untouched.
+            // count_tokens is measurement — optimizing it would silently change the
+            // number the caller is trying to read, so it always passes through.
             stats.requests++;
+            const isMeasurement = url.startsWith("/v1/messages/count_tokens");
             let note = "passthrough";
-            if (req.method === "POST" && body) {
+            if (req.method === "POST" && body && !isMeasurement) {
                 try {
                     const result = optimizeConversation(body, opts);
                     const saved = result.tokensBefore - result.tokensAfter;
@@ -126,8 +129,9 @@ export function startProxy(opts = {}) {
             res.end(JSON.stringify({ error: `context-doctor proxy: ${e.message}` }));
         }
     });
-    server.listen(port, () => {
-        console.error(`context-doctor proxy listening on http://localhost:${port}`);
+    const host = opts.host ?? "127.0.0.1";
+    server.listen(port, host, () => {
+        console.error(`context-doctor proxy listening on http://${host}:${port}`);
         console.error(`  Anthropic apps/SDKs: export ANTHROPIC_BASE_URL=http://localhost:${port}`);
         console.error(`  OpenAI apps/SDKs:    export OPENAI_BASE_URL=http://localhost:${port}/v1`);
         console.error(`  Every request's context is optimized in flight; savings are logged here.`);
