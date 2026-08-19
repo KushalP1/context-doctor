@@ -111,7 +111,7 @@ Because prompt caching matches byte-identical prefixes, deterministic strategies
 
 > **Note on desktop chat apps:** Claude Desktop and the ChatGPT app talk to their own backends — no tool can sit in that path. For those, use the MCP integration below and add a line to your custom instructions like: *"When a conversation gets long or includes large pasted content, proactively use context-doctor's profile_context tool and tell me what to trim."* The model will then invoke it on its own.
 
-## Use it inside your AI app (MCP)
+## Use with the Claude & ChatGPT apps
 
 `context-doctor` ships an MCP server, so the AI itself can profile and slim context on demand.
 
@@ -130,7 +130,25 @@ Because prompt caching matches byte-identical prefixes, deterministic strategies
 
 **ChatGPT desktop** (developer mode), **Cursor**, **Claude Code** (`claude mcp add context-doctor -- npx -y context-doctor-mcp`), and any other MCP client: same command, their config syntax.
 
-Then just ask: *"profile this conversation with context-doctor"* or paste an exported chat and say *"what's eating my context?"*
+### How it works in Claude Desktop, step by step
+
+1. Run `npx context-doctor install` (writes the config above for you) and restart Claude Desktop.
+2. From then on, **every conversation automatically carries context-doctor's standing instructions** — the MCP server hands Claude hygiene rules on connect: summarize big pastes instead of re-quoting them, offer profiling when the chat gets long, never inline base64.
+3. Chat normally. When a conversation grows heavy, Claude proactively offers: *"this chat is getting large — want me to profile it?"* — or you ask *"what's eating my context?"* and it calls `profile_context` and shows the token/cost breakdown.
+4. Say *"optimize it"* and Claude applies the safe fixes; if you agree to pruning old history, **Claude itself writes the replacement summary** (that's the no-API-key summarization).
+
+### How it works in ChatGPT, step by step
+
+1. ChatGPT's desktop app supports MCP in **developer mode**: Settings → Connectors → Advanced → Developer mode, then add a local MCP server with command `npx` and args `-y context-doctor-mcp`.
+2. Enable the connector in a chat. GPT sees the same three tools with the same trigger guidance baked into their descriptions.
+3. Ask *"profile this conversation"* or paste an exported chat and ask *"what's eating my context?"* — GPT calls `profile_context` and reports the breakdown; *"optimize it"* works the same, including GPT writing the pruning summary itself.
+4. Caveat: how prominently standing server instructions surface varies by ChatGPT version — the tool descriptions carry the trigger rules regardless, so profiling still fires on the right questions.
+
+For ChatGPT on the web (no MCP): export the conversation and use the CLI — `npx context-doctor analyze chat.json --model gpt-5`.
+
+### claude.ai on the web
+
+Your local MCP server can't reach the website, but the behavior can: upload `skills/context-doctor/SKILL.md` under Settings → Capabilities → Skills, and web conversations gain the same standing context-hygiene habits (summarize-don't-requote, offer compaction when heavy).
 
 ### MCP tools
 
