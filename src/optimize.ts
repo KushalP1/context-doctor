@@ -192,27 +192,36 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
   // Opt-in only: it is lossy, so it is not in the default strategy set.
   let prunedDigest: string | undefined;
   if (opts.strategies.includes("prune-history") && messages.length > opts.keepRecent * 2) {
-    const keepFrom = messages.length - opts.keepRecent;
-    const pruned = messages.slice(0, keepFrom);
-    const prunedTokens = pruned.reduce((s, m) => s + estimateTokens(textOf(m.content)), 0);
-    // Digest: first ~200 chars of each pruned turn — enough for a host LLM to
-    // write a faithful summary, small enough not to defeat the pruning.
-    prunedDigest = pruned
-      .map((m, i) => `[${i}:${m.role}] ${textOf(m.content).replace(/\s+/g, " ").slice(0, 200)}`)
-      .join("\n");
-    const stub = {
-      role: "user",
-      content:
-        `[context-doctor: ${pruned.length} earlier messages (~${prunedTokens} tokens) pruned. ` +
-        `Replace this stub with an LLM-written summary of those turns for best results.]`,
-    };
-    messages.splice(0, keepFrom, stub);
-    applied.push({
-      strategy: "prune-history",
-      messageIndex: 0,
-      tokensSaved: prunedTokens - estimateTokens(stub.content),
-      note: `Pruned ${pruned.length} old messages`,
-    });
+    let keepFrom = messages.length - opts.keepRecent;
+    // Never let the kept tail START with a tool result: its matching tool_use
+    // would be pruned away and both the Anthropic and OpenAI APIs reject
+    // conversations with orphaned tool results. Advance past any leading tool
+    // messages (their calls are in the pruned half anyway).
+    while (keepFrom < messages.length && isToolResultMessage(messages[keepFrom])) keepFrom++;
+    // Boundary adjustment may leave too little tail to be worth keeping —
+    // in that case skip pruning entirely rather than gutting the conversation.
+    if (messages.length - keepFrom >= 2) {
+      const pruned = messages.slice(0, keepFrom);
+      const prunedTokens = pruned.reduce((s, m) => s + estimateTokens(textOf(m.content)), 0);
+      // Digest: first ~200 chars of each pruned turn — enough for a host LLM to
+      // write a faithful summary, small enough not to defeat the pruning.
+      prunedDigest = pruned
+        .map((m, i) => `[${i}:${m.role}] ${textOf(m.content).replace(/\s+/g, " ").slice(0, 200)}`)
+        .join("\n");
+      const stub = {
+        role: "user",
+        content:
+          `[context-doctor: ${pruned.length} earlier messages (~${prunedTokens} tokens) pruned. ` +
+          `Replace this stub with an LLM-written summary of those turns for best results.]`,
+      };
+      messages.splice(0, keepFrom, stub);
+      applied.push({
+        strategy: "prune-history",
+        messageIndex: 0,
+        tokensSaved: prunedTokens - estimateTokens(stub.content),
+        note: `Pruned ${pruned.length} old messages`,
+      });
+    }
   }
 
   const tokensAfter = messages.reduce((s, m) => s + estimateTokens(textOf(m.content)), 0);

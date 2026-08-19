@@ -66,6 +66,28 @@ test("optimizer output for Anthropic format keeps block structure valid", () => 
     const assistantMsg = out.messages[1].content;
     assert.equal(assistantMsg[0].type, "tool_use");
 });
+test("prune-history never leaves an orphaned tool result at the head of the tail", () => {
+    // Build a conversation where the naive prune boundary would land exactly on
+    // a tool-result message (its tool_use call falling in the pruned half).
+    const filler = "some earlier discussion that will be pruned away. ".repeat(20);
+    const conv = JSON.stringify({
+        messages: [
+            ...Array.from({ length: 8 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", content: `${i} ${filler}` })),
+            { role: "assistant", content: [{ type: "tool_use", id: "tX", name: "search", input: { q: "x" } }] },
+            { role: "user", content: [{ type: "tool_result", tool_use_id: "tX", content: "results here" }] }, // naive boundary lands HERE
+            { role: "assistant", content: "Summary of results." },
+            { role: "user", content: "thanks" },
+            { role: "assistant", content: "welcome" },
+        ],
+    });
+    const result = optimizeConversation(conv, { strategies: ["prune-history"], keepRecent: 4 });
+    const out = result.conversation;
+    // First kept message after the stub must NOT be a tool result.
+    const firstKept = out.messages[1].content;
+    const isToolResult = Array.isArray(firstKept) && firstKept.some((b) => b?.type === "tool_result");
+    assert.equal(isToolResult, false, "tail must not start with an orphaned tool_result");
+    assert.ok(result.applied.some((c) => c.strategy === "prune-history"), "pruning still happened");
+});
 test("raw text input still profiles", () => {
     const profile = profileConversation(parseConversation("just some prompt text"));
     assert.equal(profile.messageCount, 1);
