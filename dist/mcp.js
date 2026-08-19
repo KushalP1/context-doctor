@@ -31,7 +31,7 @@ const SERVER_INSTRUCTIONS = `context-doctor keeps this conversation's context wi
 2. When the conversation has grown long (roughly 30+ turns) or contains several large pastes, proactively offer to profile it and call profile_context — do not wait to be asked.
 3. When the user asks anything about token usage, cost, latency, or "what's eating my context", call profile_context immediately rather than estimating by eye.
 4. When optimize_context returns a pruned-turns digest, YOU write the replacement summary (dense, factual, ≤150 tokens) as instructed in the result.`;
-const server = new McpServer({ name: "context-doctor", version: "0.2.1" }, { instructions: SERVER_INSTRUCTIONS });
+const server = new McpServer({ name: "context-doctor", version: "0.3.0" }, { instructions: SERVER_INSTRUCTIONS });
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "strip-base64", "prune-history"];
 server.tool("profile_context", "Profile an LLM conversation or prompt: token breakdown by category, largest messages, and actionable findings about wasted context (duplicates, oversized tool results, base64 blobs, cache-unfriendly ordering). Accepts OpenAI/Anthropic conversation JSON or raw text. Call this immediately whenever the user asks about token usage, context size, LLM cost, or latency — and proactively offer it once a conversation grows long or accumulates large pasted content.", {
     conversation: z.string().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array) or raw prompt text"),
