@@ -66,6 +66,21 @@ One run of `npx context-doctor install` writes five things (each config edit mak
 
 **What it never does:** delete or rewrite your history without asking (pruning is consent-only, and the model writes the replacement summary so nothing is lost silently), send data anywhere (everything runs on your machine), or touch an API key.
 
+## Do you need MCP? Only sometimes — all the ways to use context-doctor
+
+MCP is just one of six delivery mechanisms. It's only required when you want the AI **inside a chat app** to run the tools itself. Everything else works without it:
+
+| How you use it | MCP needed? | What it requires |
+|---|---|---|
+| **CLI** — `analyze`, `optimize`, `session` on files/transcripts | ❌ No | Nothing but `npx` — works in any terminal, scripts, CI |
+| **Proxy** — always-on optimization of your API apps | ❌ No | `context-doctor proxy` + one env var in your app |
+| **Claude Code every-prompt hook** | ❌ No | Written by `install`; Claude Code invokes it directly |
+| **Agent Skill** — hygiene behavior in Claude Code / claude.ai | ❌ No | A markdown file; `install` places it (or upload to claude.ai) |
+| **Library** — `import { profileConversation } from "context-doctor"` | ❌ No | `npm install context-doctor` in your project |
+| **In-chat tools** — Claude Desktop, ChatGPT desktop, Cursor chat | ✅ Yes | This is the only MCP piece — so the model itself can call `profile_context` / `optimize_context` mid-conversation |
+
+Practical upshot: a developer who only wants cheaper, faster API calls never touches MCP (proxy + CLI). A Claude Code user gets the hook and skill without MCP either — the MCP server just adds in-chat tools on top. `install` sets up all of it at once precisely so you don't have to think about which mechanism is which.
+
 ## What "always-on" means, per surface
 
 | Where you run LLMs | Mechanism | Guarantee |
