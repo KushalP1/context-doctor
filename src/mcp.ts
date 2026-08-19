@@ -75,9 +75,21 @@ server.tool(
       `Saved ~${formatTokens(saved)} tokens (${formatTokens(result.tokensBefore)} → ${formatTokens(result.tokensAfter)}) ` +
       `via ${result.applied.length} change(s):\n` +
       result.applied.map((c) => `- [${c.strategy}] message #${c.messageIndex}: ${c.note} (~${formatTokens(c.tokensSaved)})`).join("\n");
+    // Echoing a huge optimized conversation back inline would flood the very
+    // context this tool exists to save. Above the cap, return the summary and
+    // point at the CLI (compact JSON keeps mid-size results affordable).
+    const ECHO_CAP_CHARS = 100_000;
+    const conversationJson = JSON.stringify(result.conversation);
     const content: Array<{ type: "text"; text: string }> = [
       { type: "text", text: summary },
-      { type: "text", text: JSON.stringify(result.conversation, null, 2) },
+      conversationJson.length <= ECHO_CAP_CHARS
+        ? { type: "text", text: conversationJson }
+        : {
+            type: "text",
+            text:
+              `[optimized conversation is ${conversationJson.length} chars — too large to echo into this context. ` +
+              `Tell the user the savings above and that \`npx context-doctor optimize <file> --out slim.json\` produces the file directly.]`,
+          },
     ];
     // Host-model summarization: instead of calling an LLM ourselves (which would
     // need an API key), hand the pruned material to the model that invoked this
