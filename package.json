@@ -1,6 +1,6 @@
 {
   "name": "context-doctor",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Profile and optimize LLM context windows. See what's eating your tokens and fix it — works with Claude, GPT, Gemini, and any MCP-capable AI app.",
   "keywords": [
     "llm",
@@ -15,7 +15,7 @@
     "prompt-caching"
   ],
   "license": "MIT",
-  "author": "Kushal P",
+  "author": "gAI Ventures (https://gai.ventures)",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/KushalP1/context-doctor.git"

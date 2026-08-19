@@ -35,7 +35,7 @@ const SERVER_INSTRUCTIONS = `context-doctor keeps this conversation's context wi
 4. When optimize_context returns a pruned-turns digest, YOU write the replacement summary (dense, factual, ≤150 tokens) as instructed in the result.`;
 
 const server = new McpServer(
-  { name: "context-doctor", version: "0.3.3" },
+  { name: "context-doctor", version: "0.3.4" },
   { instructions: SERVER_INSTRUCTIONS }
 );
 

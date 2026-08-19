@@ -6,6 +6,8 @@ Every long-running LLM conversation slowly fills up with junk: duplicated docume
 
 `context-doctor` is a zero-config profiler + optimizer for LLM contexts. It works with **Claude, GPT, Gemini** message formats, and plugs into **Claude Desktop, ChatGPT (developer mode), Cursor, Claude Code** — any MCP-capable app — or runs standalone from the terminal.
 
+Built and maintained by [gAI Ventures](https://gai.ventures).
+
 ```
 Where the tokens go
 ────────────────────────────────────────────────────────
@@ -274,4 +276,4 @@ Also keep the MCP server version in `src/mcp.ts` in sync with `package.json`, an
 
 ## License
 
-MIT
+MIT © [gAI Ventures](https://gai.ventures)
