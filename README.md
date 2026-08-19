@@ -115,7 +115,16 @@ Because prompt caching matches byte-identical prefixes, deterministic strategies
 
 `context-doctor` ships an MCP server, so the AI itself can profile and slim context on demand.
 
-**Claude Desktop** — add to `claude_desktop_config.json` (Settings → Developer → Edit Config):
+**Do you need to configure anything by hand? Usually no:**
+
+| App | Setup |
+|---|---|
+| Claude Desktop | `npx context-doctor install` writes the config — just restart the app |
+| Claude Code | Same command — MCP + skill + every-prompt hook, all automatic |
+| Cursor | Same command — writes `~/.cursor/mcp.json` |
+| ChatGPT desktop | **Manual, one time** (ChatGPT's connectors live inside its own settings): Settings → Connectors → Developer mode → add local server, command `npx`, args `-y context-doctor-mcp` |
+
+For any other MCP client, the server entry is:
 
 ```json
 {
@@ -127,8 +136,6 @@ Because prompt caching matches byte-identical prefixes, deterministic strategies
   }
 }
 ```
-
-**ChatGPT desktop** (developer mode), **Cursor**, **Claude Code** (`claude mcp add context-doctor -- npx -y context-doctor-mcp`), and any other MCP client: same command, their config syntax.
 
 ### How it works in Claude Desktop, step by step
 
