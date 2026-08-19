@@ -195,6 +195,19 @@ Exact counts require each provider's private tokenizer. `context-doctor` uses a 
 
 Contributions welcome — this project is small on purpose. Open an issue before a big PR.
 
+## Releasing (maintainers)
+
+```bash
+npm version patch        # or minor/major — bumps package.json + git tag
+npm test                 # 14 tests must pass; CI runs the same on 3 OSes
+npm publish              # prompts for the npm 2FA code
+git push --follow-tags
+```
+
+Known gotcha: if `npm publish` fails with **`404 Not Found - PUT …/context-doctor`** on a package that clearly exists, the real cause is an **expired npm login token** — npm reports unauthenticated publishes as a 404, not a 401. Check with `npm whoami`; if that errors, run `npm login` and publish again.
+
+Also keep the MCP server version in `src/mcp.ts` in sync with `package.json`, and remember `dist/` is committed — run `npm run build` before committing so the CI dist-sync check passes.
+
 ## License
 
 MIT
