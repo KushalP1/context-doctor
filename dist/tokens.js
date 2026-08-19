@@ -14,6 +14,7 @@ const MODEL_WINDOWS = [
     // Current-generation Claude (Fable/Mythos 5, Opus 4.6+, Sonnet 4.6+) is 1M.
     [/claude.*(fable|mythos)|claude.*opus-?(5|4-[678])|claude.*sonnet-?(5|4-6)/i, 1_000_000],
     [/claude.*sonnet|claude.*opus|claude-\d/i, 200_000],
+    [/gpt-5/i, 400_000],
     [/gpt-4o|gpt-4-turbo|gpt-4\.1|o[134](-|$)/i, 128_000],
     [/gpt-4(?!o|\.|-turbo)/i, 8_192],
     [/gpt-3\.5/i, 16_385],

@@ -11,6 +11,8 @@ const PRICING = [
     [/claude.*opus/i, { inputPerM: 5, outputPerM: 25, cacheReadPerM: 0.5 }],
     [/claude.*sonnet/i, { inputPerM: 3, outputPerM: 15, cacheReadPerM: 0.3 }],
     [/claude.*haiku/i, { inputPerM: 1, outputPerM: 5, cacheReadPerM: 0.1 }],
+    [/gpt-5.*(mini|nano)/i, { inputPerM: 0.25, outputPerM: 2, cacheReadPerM: 0.025 }],
+    [/gpt-5/i, { inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 }],
     [/gpt-4o-mini/i, { inputPerM: 0.15, outputPerM: 0.6, cacheReadPerM: 0.075 }],
     [/gpt-4o|gpt-4\.1/i, { inputPerM: 2.5, outputPerM: 10, cacheReadPerM: 1.25 }],
     [/gpt-4-turbo/i, { inputPerM: 10, outputPerM: 30, cacheReadPerM: 10 }],
