@@ -119,7 +119,7 @@ const BEST_PRACTICES: Record<string, string[]> = {
   ],
   anthropic: [
     "Use prompt caching with cache_control breakpoints after your stable prefix — cached reads cost ~10% of base input price.",
-    "Claude models have a 200k window, but quality degrades under heavy fill; aim to stay under ~70%.",
+    "Current Claude generations have a 1M-token window (Haiku 200k), but quality degrades under heavy fill; aim to stay under ~70%.",
     "For agents: prefer compact tool-result summaries in history and re-fetch details on demand.",
   ],
   openai: [
