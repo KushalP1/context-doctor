@@ -42,6 +42,30 @@ Restart your apps, then just ask Claude: *"what's eating my context?"* (`npx con
 
 **No API keys, ever.** Everything is deterministic local code; when an LLM is needed (summarizing pruned history), the model already running in your app does it. The proxy forwards *your app's* credentials untouched — context-doctor itself holds nothing.
 
+## What `install` actually does — and what happens in every session after
+
+One run of `npx context-doctor install` writes five things (each config edit makes a `.backup` first; `uninstall` reverses all of it):
+
+1. **Claude Desktop config** (`claude_desktop_config.json`) — registers the MCP server
+2. **Claude Code config** (`~/.claude.json`) — registers the MCP server
+3. **Cursor config** (`~/.cursor/mcp.json`) — registers the MCP server
+4. **Agent Skill** → `~/.claude/skills/context-doctor/` — context-hygiene playbook for Claude Code
+5. **Every-prompt hook** → `~/.claude/settings.json` — the per-query context check for Claude Code
+
+**In every chat afterward (Claude Desktop, Cursor):** when the conversation starts, the app launches the MCP server, which hands the model standing instructions that stay in force for the whole chat:
+
+- summarize large pastes and tool results instead of carrying them verbatim,
+- reference earlier content instead of re-quoting it, never inline base64,
+- once the chat passes ~30 turns or accumulates big pastes, *proactively offer to profile it*,
+- answer any "what's eating my context / cost / latency" question by calling `profile_context`, not by guessing.
+
+**In every Claude Code / Cowork session afterward:** all of the above via MCP, plus two more layers:
+
+- the **skill** loads whenever context work is relevant, and
+- the **hook runs on every single prompt you send**: it measures the session's real size in ~100ms. Under 80k tokens it stays completely silent. Above, it injects a note the model sees with your message — actual token count, cost per message, the single largest recoverable waste — with instructions to work leaner and offer you compaction. It re-fires only after ~40% further growth, and can never break a prompt (any failure exits silently).
+
+**What it never does:** delete or rewrite your history without asking (pruning is consent-only, and the model writes the replacement summary so nothing is lost silently), send data anywhere (everything runs on your machine), or touch an API key.
+
 ## What "always-on" means, per surface
 
 | Where you run LLMs | Mechanism | Guarantee |
