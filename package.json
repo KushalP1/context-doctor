@@ -41,7 +41,7 @@
     "build": "tsc",
     "prepublishOnly": "npm run build",
     "dev": "tsc --watch",
-    "test": "npm run build && node --test dist/test/*.test.js"
+    "test": "npm run build && node --test dist/test/smoke.test.js dist/test/proxy.test.js dist/test/hook.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
