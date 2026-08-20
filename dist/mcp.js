@@ -26,11 +26,9 @@ import { formatTokens } from "./tokens.js";
  * This is what upgrades plain-chat apps from "tools available on request" to
  * "standing context-hygiene instructions in every chat" — no hook needed.
  */
-const SERVER_INSTRUCTIONS = `context-doctor keeps this conversation's context window lean, fast, and cheap. Standing instructions for every conversation:
-1. Practice context hygiene continuously: after consuming a large tool result or pasted document, carry forward a one-sentence summary instead of re-quoting it; reference earlier content rather than repeating it; never inline base64.
-2. When the conversation has grown long (roughly 30+ turns) or contains several large pastes, proactively offer to profile it and call profile_context — do not wait to be asked.
-3. When the user asks anything about token usage, cost, latency, or "what's eating my context", call profile_context immediately rather than estimating by eye.
-4. When optimize_context returns a pruned-turns digest, YOU write the replacement summary (dense, factual, ≤150 tokens) as instructed in the result.`;
+// Kept deliberately terse: these ride in EVERY conversation's context, and a
+// context-saving tool must not itself be context overhead (~110 tokens).
+const SERVER_INSTRUCTIONS = `Context hygiene, always: summarize large pastes/tool results instead of carrying them verbatim; reference earlier content, don't re-quote; never inline base64. Past ~30 turns or several large pastes, proactively offer to run profile_context. Any question about tokens, cost, or latency: call profile_context, don't estimate. If optimize_context returns a pruned-turns digest, you write the ≤150-token replacement summary.`;
 const server = new McpServer({ name: "context-doctor", version: "0.3.4" }, { instructions: SERVER_INSTRUCTIONS });
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "strip-base64", "prune-history"];
 server.tool("profile_context", "Profile an LLM conversation or prompt: token breakdown by category, largest messages, and actionable findings about wasted context (duplicates, oversized tool results, base64 blobs, cache-unfriendly ordering). Accepts OpenAI/Anthropic conversation JSON or raw text. Call this immediately whenever the user asks about token usage, context size, LLM cost, or latency — and proactively offer it once a conversation grows long or accumulates large pasted content.", {
