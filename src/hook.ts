@@ -11,7 +11,7 @@
  * ~/.claude/settings.json; removed by `context-doctor uninstall`.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseConversation } from "./parse.js";
@@ -24,6 +24,19 @@ import { formatUsd } from "./pricing.js";
 const WARN_TOKENS = 80_000;
 /** Re-nudge only after the context grows another 40% — one reminder, not a nag. */
 const REGROWTH_FACTOR = 1.4;
+/**
+ * Fast-path gate: text tokens are at least ~4 bytes each and the transcript
+ * carries JSON overhead on top, so a file smaller than this cannot possibly
+ * hold WARN_TOKENS of context. Lean sessions cost one stat() call — the
+ * transcript is never even read.
+ */
+const MIN_BYTES_FOR_WARN = WARN_TOKENS * 4;
+
+/** Per-session state: last-warned token count + file size at last full parse. */
+interface SessionState {
+  t: number; // tokens at last warning (0 = parsed but never warned)
+  b: number; // transcript bytes at last full parse
+}
 
 function statePath(): string {
   return process.env.CONTEXT_DOCTOR_HOOK_STATE ?? join(homedir(), ".claude", ".context-doctor-hook-state.json");
@@ -42,23 +55,38 @@ export async function runHook(): Promise<void> {
     const transcriptPath = input.transcript_path;
     if (!transcriptPath || !existsSync(transcriptPath)) return;
 
-    const parsed = parseSessionFile(transcriptPath);
-    if (parsed.messageCount === 0) return;
-    const profile = profileConversation(parseConversation(parsed.conversationJson), parsed.model);
-    if (profile.totalTokens < WARN_TOKENS) return;
+    // Fast path 1: a small transcript cannot exceed the threshold — exit on a
+    // single stat() without reading the file. This is the every-prompt cost
+    // for lean sessions: ~1ms.
+    const sizeBytes = statSync(transcriptPath).size;
+    if (sizeBytes < MIN_BYTES_FOR_WARN) return;
 
-    // Per-session rate limit so the nudge fires on growth, not on every prompt.
+    // Fast path 2: growth gate BEFORE parsing. If the file hasn't grown ~40%
+    // since the last full parse, nothing new can trigger — exit without the
+    // expensive read. Heavy-but-quiet sessions cost one stat + tiny state read.
     const sessionId = input.session_id ?? transcriptPath;
-    let state: Record<string, number> = {};
+    let state: Record<string, SessionState | number> = {};
     try {
       state = JSON.parse(readFileSync(statePath(), "utf8"));
     } catch {
       /* first run */
     }
-    const lastWarnedAt = state[sessionId] ?? 0;
-    if (profile.totalTokens < lastWarnedAt * REGROWTH_FACTOR) return;
-    const entries = Object.entries({ ...state, [sessionId]: profile.totalTokens });
+    const rawPrev = state[sessionId];
+    // Migrate pre-0.3.5 numeric entries ({tokens only}) to the new shape.
+    const prev: SessionState = typeof rawPrev === "number" ? { t: rawPrev, b: 0 } : rawPrev ?? { t: 0, b: 0 };
+    if (prev.b > 0 && sizeBytes < prev.b * REGROWTH_FACTOR) return;
+
+    // Slow path (growth events only): full parse + profile.
+    const parsed = parseSessionFile(transcriptPath);
+    if (parsed.messageCount === 0) return;
+    const profile = profileConversation(parseConversation(parsed.conversationJson), parsed.model);
+
+    // Record this parse so the next prompts take fast path 2.
+    const shouldWarn = profile.totalTokens >= WARN_TOKENS && profile.totalTokens >= prev.t * REGROWTH_FACTOR;
+    const nextState: SessionState = { t: shouldWarn ? profile.totalTokens : prev.t, b: sizeBytes };
+    const entries = Object.entries({ ...state, [sessionId]: nextState });
     writeFileSync(statePath(), JSON.stringify(Object.fromEntries(entries.slice(-100))));
+    if (!shouldWarn) return;
 
     const lines: string[] = [
       `This session's context is at ~${formatTokens(profile.totalTokens)} tokens` +
