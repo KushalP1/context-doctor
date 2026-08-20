@@ -64,7 +64,7 @@ One run of `npx context-doctor install` writes five things (each config edit mak
 **In every Claude Code / Cowork session afterward:** all of the above via MCP, plus two more layers:
 
 - the **skill** loads whenever context work is relevant, and
-- the **hook runs on every single prompt you send**: it measures the session's real size in ~100ms. Under 80k tokens it stays completely silent. Above, it injects a note the model sees with your message — actual token count, cost per message, the single largest recoverable waste — with instructions to work leaner and offer you compaction. It re-fires only after ~40% further growth, and can never break a prompt (any failure exits silently).
+- the **hook runs on every single prompt you send**: lean sessions cost a ~1ms file-size check; once a session is heavy it profiles on growth events and injects a note the model sees with your message — actual token count, cost per message, the single largest recoverable waste — with instructions to work leaner and offer you compaction. It re-fires only after ~40% further growth, can never break a prompt (any failure exits silently), and logs each deep check to a small local ledger that feeds `context-doctor report`.
 
 **What it never does:** delete or rewrite your history without asking (pruning is consent-only, and the model writes the replacement summary so nothing is lost silently), send data anywhere (everything runs on your machine), or touch an API key.
 
@@ -82,6 +82,18 @@ MCP is just one of six delivery mechanisms. It's only required when you want the
 | **In-chat tools** — Claude Desktop, ChatGPT desktop, Cursor chat | ✅ Yes | This is the only MCP piece — so the model itself can call `profile_context` / `optimize_context` mid-conversation |
 
 Practical upshot: a developer who only wants cheaper, faster API calls never touches MCP (proxy + CLI). A Claude Code user gets the hook and skill without MCP either — the MCP server just adds in-chat tools on top. `install` sets up all of it at once precisely so you don't have to think about which mechanism is which.
+
+## All commands at a glance
+
+| Command | What it does |
+|---|---|
+| `context-doctor install` / `uninstall` | Wire (or remove) everything: MCP for Claude Desktop/Code/Cursor, the Agent Skill, the every-prompt hook |
+| `context-doctor analyze <file>` | Profile a conversation: token breakdown, findings, cost + latency estimates |
+| `context-doctor optimize <file>` | Apply the safe fixes; `--strategy prune-history` for consented lossy compaction |
+| `context-doctor session [file]` | Profile a Claude Code session transcript (defaults to your most recent; `--list` to browse) |
+| `context-doctor report` | Machine-wide impact report: exact proxy savings, hook activity, recoverable waste in recent sessions |
+| `context-doctor proxy` | Always-on local proxy that optimizes every Anthropic/OpenAI API request in flight (`/stats` for cumulative savings) |
+| `context-doctor hook` | The every-prompt Claude Code hook (registered by `install`; you never run this yourself) |
 
 ## What "always-on" means, per surface
 
