@@ -246,6 +246,20 @@ Everything the optimizer does is inspectable: it prints exactly which messages c
 
 `skills/context-doctor/SKILL.md` (installed by `npx context-doctor install`) teaches Claude to practice context hygiene proactively: summarize big tool results after consuming them, never re-paste duplicated content, keep stable content cache-friendly, and offer compaction when a session gets heavy — so sessions get inherently leaner without you asking.
 
+## Performance: what context-doctor itself costs
+
+A tool that promises speed must be near-free. Measured overhead per touchpoint:
+
+| Touchpoint | When it runs | Overhead |
+|---|---|---|
+| Every-prompt hook (Claude Code) | Every prompt | **~80ms** (Node startup; logic ~1ms). Lean sessions exit on a single `stat()` — the transcript is never read. Full profiling (~200ms on a 4MB session) happens only when the transcript has grown ~40% since last checked |
+| MCP server | Spawned once per app session | Tools run only when called; standing instructions cost **~110 tokens per conversation** — deliberately terse |
+| Proxy | Per API request | ~1–3ms of CPU (parse → optimize → re-serialize) against typical model latencies of hundreds of ms; responses stream through chunk-by-chunk, never buffered |
+| Skill | Loads only when relevant | ~1k tokens while active; its always-present description is ~60 tokens |
+| CLI / library | Only when you run it | Not in any hot path |
+
+Net effect is strongly negative overhead: the tokens these touchpoints save on every subsequent call dwarf what they cost.
+
 ## Why token counts are "~"
 
 Exact counts require each provider's private tokenizer. `context-doctor` uses a calibrated chars-per-token heuristic (denser for code/JSON) that lands within ~10% — plenty accurate for finding what's heavy and measuring savings, and it keeps the tool fully offline with zero configuration.
