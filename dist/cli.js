@@ -18,6 +18,7 @@ import { startProxy } from "./proxy.js";
 import { runInstall, runUninstall } from "./install.js";
 import { listSessions, parseSessionFile } from "./session.js";
 import { runHook } from "./hook.js";
+import { buildImpactReport } from "./impact.js";
 const HELP = `context-doctor — profile and optimize LLM context windows
 
 Usage:
@@ -32,6 +33,8 @@ Usage:
                                                 (default: the most recent session; --list to browse)
   context-doctor hook                           Claude Code UserPromptSubmit hook (installed
                                                 automatically by \`install\`; reads hook JSON on stdin)
+  context-doctor report                         Impact report: exact proxy savings, hook activity,
+                                                and remaining recoverable waste in recent sessions
 
 Input: a conversation JSON file (OpenAI or Anthropic message format, or a bare
 message array). Use "-" to read from stdin.
@@ -117,6 +120,10 @@ function main() {
     const args = parseArgs(process.argv.slice(2));
     if (args.command === "hook") {
         void runHook();
+        return;
+    }
+    if (args.command === "report") {
+        void buildImpactReport(args.port).then((r) => console.log(r));
         return;
     }
     if (args.command === "session") {
