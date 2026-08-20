@@ -20,6 +20,7 @@ import { runInstall, runUninstall } from "./install.js";
 import { listSessions, parseSessionFile } from "./session.js";
 import { runHook } from "./hook.js";
 import { buildImpactReport } from "./impact.js";
+import { recordLedger } from "./ledger.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -222,6 +223,9 @@ function main(): void {
     }
 
     const saved = result.tokensBefore - result.tokensAfter;
+    if (saved > 0) {
+      recordLedger({ ev: "optimize", src: "cli", saved, model: (result.conversation as { model?: string })?.model });
+    }
     const pct = result.tokensBefore > 0 ? Math.round((saved / result.tokensBefore) * 100) : 0;
     console.error(
       `\ncontext-doctor: ${formatTokens(result.tokensBefore)} → ${formatTokens(result.tokensAfter)} tokens ` +

@@ -10,6 +10,4 @@
  * Registered by `context-doctor install` under hooks.UserPromptSubmit in
  * ~/.claude/settings.json; removed by `context-doctor uninstall`.
  */
-/** Activity ledger consumed by `context-doctor report`; lives next to the state file. */
-export declare function ledgerPath(): string;
 export declare function runHook(): Promise<void>;

@@ -21,6 +21,7 @@ import { profileConversation } from "./profile.js";
 import { optimizeConversation } from "./optimize.js";
 import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
+import { recordLedger } from "./ledger.js";
 
 /**
  * Server instructions are injected by MCP clients (Claude Desktop, Cursor, …)
@@ -69,6 +70,9 @@ server.tool(
       maxToolResultTokens: max_tool_result_tokens,
     });
     const saved = result.tokensBefore - result.tokensAfter;
+    if (saved > 0) {
+      recordLedger({ ev: "optimize", src: "mcp", saved, model: (result.conversation as { model?: string })?.model });
+    }
     const summary =
       `Saved ~${formatTokens(saved)} tokens (${formatTokens(result.tokensBefore)} → ${formatTokens(result.tokensAfter)}) ` +
       `via ${result.applied.length} change(s):\n` +

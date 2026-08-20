@@ -8,13 +8,12 @@
  * session cannot be re-run without it. The report says so instead of inventing
  * a number.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { ledgerPath } from "./hook.js";
+import { readLedger } from "./ledger.js";
 import { listSessions, parseSessionFile } from "./session.js";
 import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
 import { formatTokens } from "./tokens.js";
-import { formatUsd } from "./pricing.js";
+import { formatUsd, inputCostUsd, pricingFor } from "./pricing.js";
 /** Sessions larger than this are skipped in the report (keeps it snappy). */
 const MAX_SESSION_BYTES = 30 * 1024 * 1024;
 async function fetchProxyStats(port) {
@@ -32,38 +31,70 @@ export async function buildImpactReport(proxyPort = 8787) {
     const lines = [];
     lines.push("CONTEXT DOCTOR — impact report");
     lines.push("═".repeat(56));
-    // -- Exact: proxy savings ----------------------------------------------------
-    lines.push("Measured savings (exact — every request counted)");
-    lines.push("─".repeat(56));
+    const ledger = readLedger();
+    const checks = ledger.filter((e) => e.ev === "check" || e.ev === undefined);
+    const optimizes = ledger.filter((e) => e.ev === "optimize");
+    // Observed per-session reductions: when a session SHRANK between two deep
+    // checks (compaction/cleanup after a warning), that drop is measured fact.
+    const bySession = new Map();
+    for (const c of checks) {
+        if (!c.sid || typeof c.tok !== "number")
+            continue;
+        const s = bySession.get(c.sid) ?? { toks: [], warns: 0 };
+        s.toks.push(c.tok);
+        if (c.warn)
+            s.warns++;
+        bySession.set(c.sid, s);
+    }
+    const reductionBySession = new Map();
+    for (const [sid, s] of bySession) {
+        let reduction = 0;
+        for (let i = 1; i < s.toks.length; i++) {
+            if (s.toks[i] < s.toks[i - 1])
+                reduction += s.toks[i - 1] - s.toks[i];
+        }
+        reductionBySession.set(sid, reduction);
+    }
+    const totalReduction = [...reductionBySession.values()].reduce((a, b) => a + b, 0);
+    // Optimize-event savings, split by model family (claude / gpt / other).
+    const optimizeSaved = optimizes.reduce((s, e) => s + (e.saved ?? 0), 0);
+    const savedByFamily = new Map();
+    let optimizeUsd = 0;
+    for (const e of optimizes) {
+        const family = /claude/i.test(e.model ?? "") ? "claude" : /gpt|^o\d/i.test(e.model ?? "") ? "gpt" : "other";
+        savedByFamily.set(family, (savedByFamily.get(family) ?? 0) + (e.saved ?? 0));
+        const pricing = pricingFor(e.model);
+        if (pricing && e.saved)
+            optimizeUsd += inputCostUsd(e.saved, pricing);
+    }
     const proxy = await fetchProxyStats(proxyPort);
+    const proxySaved = proxy?.tokensSaved ?? 0;
+    // -- Headline: what context-doctor has saved ----------------------------------
+    const totalSaved = proxySaved + optimizeSaved + totalReduction;
+    lines.push("Tokens context-doctor saved (measured)");
+    lines.push("─".repeat(56));
+    lines.push(`TOTAL: ~${formatTokens(totalSaved)} tokens`);
     if (proxy) {
-        lines.push(`Proxy since ${String(proxy.startedAt ?? "start")}: ${proxy.optimizedRequests}/${proxy.requests} requests optimized, ` +
-            `${formatTokens(proxy.tokensSaved)} tokens ≈ ${formatUsd(proxy.estUsdSaved)} saved`);
+        lines.push(`  · proxy (exact, current run): ${formatTokens(proxySaved)} across ${proxy.optimizedRequests}/${proxy.requests} requests ≈ ${formatUsd(proxy.estUsdSaved)}`);
     }
     else {
-        lines.push(`Proxy not running on :${proxyPort} — exact per-request savings apply only to API apps routed through it.`);
+        lines.push(`  · proxy: not running on :${proxyPort} (its exact savings appear here while it runs)`);
     }
+    const familyNote = [...savedByFamily.entries()]
+        .filter(([, v]) => v > 0)
+        .map(([k, v]) => `${k}: ${formatTokens(v)}`)
+        .join(", ");
+    lines.push(`  · optimizations applied via CLI/chat tools (exact): ${formatTokens(optimizeSaved)} over ${optimizes.length} run(s)` +
+        (familyNote ? ` [${familyNote}]` : "") +
+        (optimizeUsd > 0 ? ` ≈ ${formatUsd(optimizeUsd)}` : ""));
+    lines.push(`  · observed session shrinkage after hygiene warnings: ${formatTokens(totalReduction)}`);
     lines.push("");
-    // -- Hook activity from the ledger -------------------------------------------
+    // -- Hook activity ------------------------------------------------------------
     lines.push("Hygiene activity (every-prompt hook)");
     lines.push("─".repeat(56));
-    const lp = ledgerPath();
-    if (existsSync(lp)) {
-        const entries = readFileSync(lp, "utf8")
-            .trimEnd()
-            .split("\n")
-            .flatMap((l) => {
-            try {
-                return [JSON.parse(l)];
-            }
-            catch {
-                return [];
-            }
-        });
-        const sessions = new Set(entries.map((e) => e.sid));
-        const warnings = entries.filter((e) => e.warn).length;
-        lines.push(`${entries.length} deep context checks across ${sessions.size} session(s); ` +
-            `${warnings} hygiene warning(s) delivered to the model.`);
+    if (checks.length > 0) {
+        const warnings = checks.filter((e) => e.warn).length;
+        lines.push(`${checks.length} deep context checks across ${bySession.size} session(s); ${warnings} warning(s) delivered to the model.`);
         lines.push("(Prompt-level fast checks are not logged — they cost ~1ms and leave no trace by design.)");
     }
     else {
@@ -92,8 +123,13 @@ export async function buildImpactReport(proxyPort = 8787) {
                 if (p.cost)
                     totalWasteUsd += p.cost.savingsPerCallUsd;
                 const wastePct = p.totalTokens > 0 ? Math.round((p.totalEstSavings / p.totalTokens) * 100) : 0;
-                lines.push(`  ${(parsed.title ?? s.path.split("/").pop() ?? "session").slice(0, 44).padEnd(46)} ` +
-                    `${formatTokens(p.totalTokens).padStart(6)} tokens · waste ${String(wastePct).padStart(2)}%`);
+                // Ledger sids are the session UUID's first 12 chars (= filename prefix).
+                const sid = (s.path.split("/").pop() ?? "").slice(0, 12);
+                const saved = reductionBySession.get(sid) ?? 0;
+                const warns = bySession.get(sid)?.warns ?? 0;
+                lines.push(`  ${(parsed.title ?? s.path.split("/").pop() ?? "session").slice(0, 40).padEnd(42)} ` +
+                    `${formatTokens(p.totalTokens).padStart(6)} tok · waste ${String(wastePct).padStart(2)}%` +
+                    (saved > 0 ? ` · saved ${formatTokens(saved)}` : warns > 0 ? ` · ${warns} warning(s)` : ""));
             }
             catch {
                 /* unreadable session — skip */

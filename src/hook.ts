@@ -11,9 +11,8 @@
  * ~/.claude/settings.json; removed by `context-doctor uninstall`.
  */
 
-import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { recordLedger, statePath } from "./ledger.js";
 import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
 import { parseSessionFile } from "./session.js";
@@ -36,30 +35,6 @@ const MIN_BYTES_FOR_WARN = WARN_TOKENS * 4;
 interface SessionState {
   t: number; // tokens at last warning (0 = parsed but never warned)
   b: number; // transcript bytes at last full parse
-}
-
-function statePath(): string {
-  return process.env.CONTEXT_DOCTOR_HOOK_STATE ?? join(homedir(), ".claude", ".context-doctor-hook-state.json");
-}
-
-/** Activity ledger consumed by `context-doctor report`; lives next to the state file. */
-export function ledgerPath(): string {
-  return join(dirname(statePath()), ".context-doctor-ledger.jsonl");
-}
-
-/** One line per full parse: when, which session, how big, whether we warned. */
-function recordLedger(sessionId: string, tokens: number, warned: boolean): void {
-  const path = ledgerPath();
-  try {
-    // Cap growth: past ~256KB keep the most recent 500 entries.
-    if (existsSync(path) && statSync(path).size > 256 * 1024) {
-      const lines = readFileSync(path, "utf8").trimEnd().split("\n");
-      writeFileSync(path, lines.slice(-500).join("\n") + "\n");
-    }
-    appendFileSync(path, JSON.stringify({ ts: Date.now(), sid: sessionId.slice(0, 12), tok: tokens, warn: warned }) + "\n");
-  } catch {
-    /* ledger is best-effort */
-  }
 }
 
 async function readStdin(): Promise<string> {
@@ -106,7 +81,7 @@ export async function runHook(): Promise<void> {
     const nextState: SessionState = { t: shouldWarn ? profile.totalTokens : prev.t, b: sizeBytes };
     const entries = Object.entries({ ...state, [sessionId]: nextState });
     writeFileSync(statePath(), JSON.stringify(Object.fromEntries(entries.slice(-100))));
-    recordLedger(sessionId, profile.totalTokens, shouldWarn);
+    recordLedger({ ev: "check", sid: sessionId.slice(0, 12), tok: profile.totalTokens, warn: shouldWarn });
     if (!shouldWarn) return;
 
     const lines: string[] = [
