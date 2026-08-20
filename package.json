@@ -38,7 +38,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node -e \"const fs=require('fs');['dist/cli.js','dist/mcp.js'].forEach(f=>fs.chmodSync(f,0o755))\"",
     "prepublishOnly": "npm run build",
     "dev": "tsc --watch",
     "test": "npm run build && node --test dist/test/smoke.test.js dist/test/proxy.test.js dist/test/hook.test.js"
