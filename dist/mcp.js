@@ -29,7 +29,7 @@ import { formatTokens } from "./tokens.js";
 // Kept deliberately terse: these ride in EVERY conversation's context, and a
 // context-saving tool must not itself be context overhead (~110 tokens).
 const SERVER_INSTRUCTIONS = `Context hygiene, always: summarize large pastes/tool results instead of carrying them verbatim; reference earlier content, don't re-quote; never inline base64. Past ~30 turns or several large pastes, proactively offer to run profile_context. Any question about tokens, cost, or latency: call profile_context, don't estimate. If optimize_context returns a pruned-turns digest, you write the ≤150-token replacement summary.`;
-const server = new McpServer({ name: "context-doctor", version: "0.3.5" }, { instructions: SERVER_INSTRUCTIONS });
+const server = new McpServer({ name: "context-doctor", version: "0.3.6" }, { instructions: SERVER_INSTRUCTIONS });
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "strip-base64", "prune-history"];
 server.tool("profile_context", "Profile an LLM conversation or prompt: token breakdown by category, largest messages, and actionable findings about wasted context (duplicates, oversized tool results, base64 blobs, cache-unfriendly ordering). Accepts OpenAI/Anthropic conversation JSON or raw text. Call this immediately whenever the user asks about token usage, context size, LLM cost, or latency — and proactively offer it once a conversation grows long or accumulates large pasted content.", {
     conversation: z.string().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array) or raw prompt text"),

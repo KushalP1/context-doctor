@@ -33,7 +33,7 @@ import { formatTokens } from "./tokens.js";
 const SERVER_INSTRUCTIONS = `Context hygiene, always: summarize large pastes/tool results instead of carrying them verbatim; reference earlier content, don't re-quote; never inline base64. Past ~30 turns or several large pastes, proactively offer to run profile_context. Any question about tokens, cost, or latency: call profile_context, don't estimate. If optimize_context returns a pruned-turns digest, you write the ≤150-token replacement summary.`;
 
 const server = new McpServer(
-  { name: "context-doctor", version: "0.3.5" },
+  { name: "context-doctor", version: "0.3.6" },
   { instructions: SERVER_INSTRUCTIONS }
 );
 

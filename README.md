@@ -246,6 +246,16 @@ Everything the optimizer does is inspectable: it prints exactly which messages c
 
 `skills/context-doctor/SKILL.md` (installed by `npx context-doctor install`) teaches Claude to practice context hygiene proactively: summarize big tool results after consuming them, never re-paste duplicated content, keep stable content cache-friendly, and offer compaction when a session gets heavy — so sessions get inherently leaner without you asking.
 
+## Measuring the impact: `context-doctor report`
+
+```bash
+npx context-doctor report
+```
+
+One report for your whole machine: **exact** proxy savings (real before/after on every request), hook activity (deep checks run, warnings delivered), and your recent sessions with the waste still recoverable today — in tokens and dollars.
+
+Honest measurement note: proxy numbers are exact. Session numbers are measured-now. What no tool can report is the counterfactual — tokens Claude *avoided* adding because of the hygiene guidance — since the same session can't be re-run without it. The report says so instead of inventing a number.
+
 ## Performance: what context-doctor itself costs
 
 A tool that promises speed must be near-free. Measured overhead per touchpoint:
