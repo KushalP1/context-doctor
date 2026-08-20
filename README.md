@@ -264,7 +264,11 @@ Everything the optimizer does is inspectable: it prints exactly which messages c
 npx context-doctor report
 ```
 
-One report for your whole machine: **exact** proxy savings (real before/after on every request), hook activity (deep checks run, warnings delivered), and your recent sessions with the waste still recoverable today — in tokens and dollars.
+One report for your whole machine, led by a headline of **tokens context-doctor saved**, built only from measured sources:
+
+- **exact** proxy savings (real before/after on every request),
+- **exact** savings from every optimization applied via the CLI or the in-chat tools — split by model family (Claude vs GPT), with dollar estimates,
+- **observed per-session shrinkage**: real context reductions recorded between the hook's deep checks after hygiene warnings — shown per session in the table alongside remaining waste.
 
 Honest measurement note: proxy numbers are exact. Session numbers are measured-now. What no tool can report is the counterfactual — tokens Claude *avoided* adding because of the hygiene guidance — since the same session can't be re-run without it. The report says so instead of inventing a number.
 
