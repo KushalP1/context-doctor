@@ -1,0 +1,34 @@
+name: Publish to npm
+
+# Any tag like v0.5.0 publishes that commit to npm — no OTP round-trips.
+# Requires the NPM_TOKEN repo secret: an npm *granular access token* scoped to
+# read/write only the context-doctor package (npmjs.com → Access Tokens →
+# Generate → Granular). Granular tokens bypass interactive 2FA by design.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance attestation
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm test
+      - name: Verify tag matches package.json version
+        run: |
+          PKG="v$(node -p "require('./package.json').version")"
+          if [ "$PKG" != "${GITHUB_REF_NAME}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} != package.json ${PKG}"; exit 1
+          fi
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
