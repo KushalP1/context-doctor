@@ -22,6 +22,7 @@ import { runHook } from "./hook.js";
 import { buildImpactReport } from "./impact.js";
 import { recordLedger } from "./ledger.js";
 import { runDoctor } from "./doctor.js";
+import { runWatch } from "./watch.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -41,6 +42,9 @@ Usage:
                                                 and remaining recoverable waste in recent sessions
   context-doctor doctor                         Self-check the installation (configs, hook, skill,
                                                 MCP handshake) with one pasteable diagnosis
+  context-doctor watch [file]                   Live-monitor a growing session/agent trace: running
+                                                token/cost line per change, new findings as they appear
+                                                (--interval-ms n, default 2000)
 
 Input: a conversation JSON file (OpenAI or Anthropic message format, or a bare
 message array). Use "-" to read from stdin.
@@ -79,6 +83,7 @@ interface Args {
   maxToolTokens?: number;
   port?: number;
   host?: string;
+  intervalMs?: number;
   upstreamAnthropic?: string;
   upstreamOpenai?: string;
   list: boolean;
@@ -99,6 +104,7 @@ function parseArgs(argv: string[]): Args {
       case "--keep-recent": args.keepRecent = Number(argv[++i]); break;
       case "--max-tool-tokens": args.maxToolTokens = Number(argv[++i]); break;
       case "--port": args.port = Number(argv[++i]); break;
+      case "--interval-ms": args.intervalMs = Number(argv[++i]); break;
       case "--host": args.host = argv[++i]; break;
       case "--upstream-anthropic": args.upstreamAnthropic = argv[++i]; break;
       case "--upstream-openai": args.upstreamOpenai = argv[++i]; break;
@@ -121,6 +127,11 @@ function main(): void {
   if (args.command === "hook") {
     void runHook();
     return;
+  }
+
+  if (args.command === "watch") {
+    runWatch({ file: args.file, intervalMs: args.intervalMs, model: args.model });
+    return; // interval keeps the process alive
   }
 
   if (args.command === "doctor") {
