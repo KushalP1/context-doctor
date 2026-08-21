@@ -296,12 +296,7 @@ Exact counts require each provider's private tokenizer. `context-doctor` uses a 
 
 ## Roadmap
 
-- [x] ~~Session import from Claude Code transcript formats~~ (`context-doctor session`)
-- [x] ~~LLM summarization for prune-history~~ (host-model summarization via MCP — no key needed)
-- [ ] Proxy: per-route strategy config + response token accounting
-- [ ] `context-doctor watch` — live profiling of a running agent's JSONL trace
-- [ ] Exact tokenizer adapters (tiktoken, Anthropic count-tokens API) as optional plugins
-- [ ] Cursor / ChatGPT-export transcript formats for `session`
+See [ROADMAP.md](./ROADMAP.md) for the full plan with rationale. Headlines: **v0.5** trust & automation (tag-based publishing, `doctor` self-check, live `watch`), **v0.6** accuracy (exact tokenizers, semantic dedupe, more session formats), **v0.7** proxy pro (response accounting, prompt-cache advisor), **v1.0** budgets + local dashboard. Non-goals, permanently: cloud services, telemetry, silent history rewriting, mandatory API keys.
 
 Contributions welcome — this project is small on purpose. Open an issue before a big PR.
 
