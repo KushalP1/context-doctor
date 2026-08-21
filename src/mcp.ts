@@ -33,14 +33,20 @@ import { recordLedger } from "./ledger.js";
 // context-saving tool must not itself be context overhead (~110 tokens).
 const SERVER_INSTRUCTIONS = `Context hygiene, always: summarize large pastes/tool results instead of carrying them verbatim; reference earlier content, don't re-quote; never inline base64. Past ~30 turns or several large pastes, proactively offer to run profile_context. Any question about tokens, cost, or latency: call profile_context, don't estimate. If optimize_context returns a pruned-turns digest, you write the ≤150-token replacement summary.`;
 
-const server = new McpServer(
-  { name: "context-doctor", version: "0.3.6" },
-  { instructions: SERVER_INSTRUCTIONS }
-);
-
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "strip-base64", "prune-history"] as const;
 
-server.tool(
+/**
+ * Build a fully-configured server instance. A factory (not a singleton) so the
+ * stateless HTTP mode can hand every request its own server, per the MCP SDK's
+ * recommended pattern.
+ */
+function createServer(): McpServer {
+  const server = new McpServer(
+    { name: "context-doctor", version: "0.3.6" },
+    { instructions: SERVER_INSTRUCTIONS }
+  );
+
+  server.tool(
   "profile_context",
   "Profile an LLM conversation or prompt: token breakdown by category, largest messages, and actionable findings about wasted context (duplicates, oversized tool results, base64 blobs, cache-unfriendly ordering). Accepts OpenAI/Anthropic conversation JSON or raw text. Call this immediately whenever the user asks about token usage, context size, LLM cost, or latency — and proactively offer it once a conversation grows long or accumulates large pasted content.",
   {
@@ -108,7 +114,22 @@ server.tool(
     }
     return { content };
   }
-);
+  );
+
+  server.tool(
+    "context_best_practices",
+    "Get a curated checklist of context-management best practices, optionally specialized for a provider (anthropic, openai).",
+    {
+      provider: z.enum(["general", "anthropic", "openai"]).optional().describe("Provider to specialize tips for (default: general)"),
+    },
+    async ({ provider }) => {
+      const tips = [...BEST_PRACTICES.general, ...(provider && provider !== "general" ? BEST_PRACTICES[provider] : [])];
+      return { content: [{ type: "text", text: tips.map((t, i) => `${i + 1}. ${t}`).join("\n") }] };
+    }
+  );
+
+  return server;
+}
 
 const BEST_PRACTICES: Record<string, string[]> = {
   general: [
@@ -130,17 +151,59 @@ const BEST_PRACTICES: Record<string, string[]> = {
   ],
 };
 
-server.tool(
-  "context_best_practices",
-  "Get a curated checklist of context-management best practices, optionally specialized for a provider (anthropic, openai).",
-  {
-    provider: z.enum(["general", "anthropic", "openai"]).optional().describe("Provider to specialize tips for (default: general)"),
-  },
-  async ({ provider }) => {
-    const tips = [...BEST_PRACTICES.general, ...(provider && provider !== "general" ? BEST_PRACTICES[provider] : [])];
-    return { content: [{ type: "text", text: tips.map((t, i) => `${i + 1}. ${t}`).join("\n") }] };
-  }
-);
+// -- Transport dispatch --------------------------------------------------------
+// Default: stdio (Claude Desktop, Claude Code, Cursor spawn us as a child).
+// --http [--port N] [--host H]: streamable-HTTP endpoint at /mcp for clients
+// that connect to a URL instead of spawning a process — ChatGPT developer-mode
+// connectors (which require a reachable URL), web MCP clients, remote setups.
+const argv = process.argv.slice(2);
+if (argv.includes("--http")) {
+  const argAfter = (flag: string): string | undefined => {
+    const i = argv.indexOf(flag);
+    return i >= 0 ? argv[i + 1] : undefined;
+  };
+  const port = Number(argAfter("--port")) > 0 ? Number(argAfter("--port")) : 8808;
+  const host = argAfter("--host") ?? "127.0.0.1";
+  const { createServer: createHttpServer } = await import("node:http");
+  const { StreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+  createHttpServer(async (req, res) => {
+    try {
+      if (req.url === "/health") {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ ok: true, service: "context-doctor-mcp" }));
+        return;
+      }
+      if (!(req.url ?? "").startsWith("/mcp")) {
+        res.statusCode = 404;
+        res.end(JSON.stringify({ error: "MCP endpoint is /mcp" }));
+        return;
+      }
+      if (req.method !== "POST") {
+        // Stateless mode: no standalone SSE stream, no sessions to delete.
+        res.statusCode = 405;
+        res.setHeader("allow", "POST");
+        res.end(JSON.stringify({ error: "Stateless server: POST /mcp only" }));
+        return;
+      }
+      // Fresh server + transport per request (stateless — nothing shared).
+      const server = createServer();
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      res.on("close", () => {
+        void transport.close();
+        void server.close();
+      });
+      await server.connect(transport);
+      await transport.handleRequest(req, res);
+    } catch (e) {
+      if (!res.headersSent) res.statusCode = 500;
+      res.end(JSON.stringify({ error: (e as Error).message }));
+    }
+  }).listen(port, host, () => {
+    console.error(`context-doctor MCP (streamable HTTP) on http://${host}:${port}/mcp`);
+    console.error(`ChatGPT developer-mode connectors need a URL their servers can reach — expose this via your host or a tunnel.`);
+  });
+} else {
+  const transport = new StdioServerTransport();
+  await createServer().connect(transport);
+}
