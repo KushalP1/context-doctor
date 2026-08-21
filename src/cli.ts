@@ -21,6 +21,7 @@ import { listSessions, parseSessionFile } from "./session.js";
 import { runHook } from "./hook.js";
 import { buildImpactReport } from "./impact.js";
 import { recordLedger } from "./ledger.js";
+import { runDoctor } from "./doctor.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -38,6 +39,8 @@ Usage:
                                                 automatically by \`install\`; reads hook JSON on stdin)
   context-doctor report                         Impact report: exact proxy savings, hook activity,
                                                 and remaining recoverable waste in recent sessions
+  context-doctor doctor                         Self-check the installation (configs, hook, skill,
+                                                MCP handshake) with one pasteable diagnosis
 
 Input: a conversation JSON file (OpenAI or Anthropic message format, or a bare
 message array). Use "-" to read from stdin.
@@ -117,6 +120,11 @@ function main(): void {
 
   if (args.command === "hook") {
     void runHook();
+    return;
+  }
+
+  if (args.command === "doctor") {
+    void runDoctor();
     return;
   }
 
