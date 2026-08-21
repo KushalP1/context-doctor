@@ -1,5 +1,7 @@
 # context-doctor 🩺
 
+[![CI](https://github.com/KushalP1/context-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/KushalP1/context-doctor/actions) [![npm](https://img.shields.io/npm/v/context-doctor)](https://www.npmjs.com/package/context-doctor)
+
 **See what's eating your LLM context window — and fix it.**
 
 Every long-running LLM conversation slowly fills up with junk: duplicated documents, 10k-token tool outputs nobody reads again, base64 blobs, stale history. You pay for those tokens on **every single call**, and model quality drops as the window fills.
@@ -175,7 +177,7 @@ Because prompt caching matches byte-identical prefixes, deterministic strategies
 | Claude Desktop | `npx context-doctor install` writes the config — just restart the app |
 | Claude Code | Same command — MCP + skill + every-prompt hook, all automatic |
 | Cursor | Same command — writes `~/.cursor/mcp.json` |
-| ChatGPT desktop | **Manual, one time** (ChatGPT's connectors live inside its own settings): Settings → Connectors → Developer mode → add local server, command `npx`, args `-y context-doctor-mcp` |
+| ChatGPT (developer mode) | **Manual + a reachable URL** — ChatGPT connects to servers over the internet, never local commands. Run `context-doctor-mcp --http` on a host/tunnel, then add the URL as a connector. Normal ChatGPT (no dev mode) has no MCP — use the CLI |
 
 For any other MCP client, the server entry is:
 
@@ -197,14 +199,15 @@ For any other MCP client, the server entry is:
 3. Chat normally. When a conversation grows heavy, Claude proactively offers: *"this chat is getting large — want me to profile it?"* — or you ask *"what's eating my context?"* and it calls `profile_context` and shows the token/cost breakdown.
 4. Say *"optimize it"* and Claude applies the safe fixes; if you agree to pruning old history, **Claude itself writes the replacement summary** (that's the no-API-key summarization).
 
-### How it works in ChatGPT, step by step
+### How it works in ChatGPT, step by step (honest version)
 
-1. ChatGPT's desktop app supports MCP in **developer mode**: Settings → Connectors → Advanced → Developer mode, then add a local MCP server with command `npx` and args `-y context-doctor-mcp`.
-2. Enable the connector in a chat. GPT sees the same three tools with the same trigger guidance baked into their descriptions.
-3. Ask *"profile this conversation"* or paste an exported chat and ask *"what's eating my context?"* — GPT calls `profile_context` and reports the breakdown; *"optimize it"* works the same, including GPT writing the pruning summary itself.
-4. Caveat: how prominently standing server instructions surface varies by ChatGPT version — the tool descriptions carry the trigger rules regardless, so profiling still fires on the right questions.
+ChatGPT's MCP support differs fundamentally from Claude Desktop's: **it never spawns local processes**. Its custom connectors (developer mode) have OpenAI's servers connect to a **URL** — so the MCP server must be reachable from the internet.
 
-For ChatGPT on the web (no MCP): export the conversation and use the CLI — `npx context-doctor analyze chat.json --model gpt-5`.
+1. **Normal ChatGPT (no developer mode): no MCP at all.** context-doctor still helps via the CLI: export the conversation and run `npx context-doctor analyze chat.json --model gpt-5` / `optimize` — no account settings required.
+2. **ChatGPT developer mode**: run our HTTP transport somewhere reachable — `context-doctor-mcp --http --port 8808` on a small host (bind `--host 0.0.0.0` there), or expose your machine temporarily with a tunnel (`ngrok http 8808`). Then Settings → Connectors → Advanced → Developer mode → add connector with URL `https://<your-host>/mcp`.
+3. Once connected, GPT gets the same three tools with the same trigger guidance: ask *"what's eating my context?"* → it calls `profile_context`; *"optimize it"* works the same, including GPT writing the pruning summary itself.
+
+Security note for step 2: the HTTP endpoint is unauthenticated — put it behind your tunnel's auth or a reverse proxy if it stays up long-term.
 
 ### claude.ai on the web
 
