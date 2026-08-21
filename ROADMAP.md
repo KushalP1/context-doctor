@@ -4,14 +4,14 @@ Guiding principles, in priority order: **dead simple for everyone** · **works a
 
 Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/issues).
 
-## v0.5 — Trust & automation (next up)
+## v0.5 — Trust & automation (shipped in 0.5.0 unless noted)
 
-| Item | Why | Size |
+| Item | Why | Status |
 |---|---|---|
-| **Tag-based auto-publish** (GitHub Actions + npm granular token) | Releases currently need a maintainer's 2FA round-trip; `git tag` → published removes the friction and speeds every future item below | S |
-| **`context-doctor doctor`** — self-check command | Verifies an install end to end: hook registered and firing, MCP reachable in each app config, versions in sync, ledger writable. Turns "it doesn't work" reports into one pasteable output | S |
-| **`context-doctor watch`** — live session monitor | Tail a running session/agent trace; print running token/cost totals and fire findings as they appear. The real-time counterpart to `session` | M |
-| Move repo to the **gAI-ventures org** | Attribution home; auto-redirects keep old links working | S |
+| **Tag-based auto-publish** (GitHub Actions + npm granular token) | Releases currently need a maintainer's 2FA round-trip; `git tag` → published removes the friction and speeds every future item below | ✅ workflow shipped; needs the `NPM_TOKEN` repo secret |
+| **`context-doctor doctor`** — self-check command | Verifies an install end to end: hook registered, MCP reachable in each app config, skill present, ledger writable, real stdio handshake. Turns "it doesn't work" reports into one pasteable output | ✅ |
+| **`context-doctor watch`** — live session monitor | Tail a running session/agent trace; status line per growth event, findings surfaced as they appear. The real-time counterpart to `session` | ✅ |
+| Move repo to the **gAI-ventures org** | Attribution home; auto-redirects keep old links working | ⏳ needs the org owner to transfer on GitHub |
 
 ## v0.6 — Accuracy
 

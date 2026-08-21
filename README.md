@@ -95,6 +95,8 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | `context-doctor session [file]` | Profile a Claude Code session transcript (defaults to your most recent; `--list` to browse) |
 | `context-doctor report` | Machine-wide impact report: exact proxy savings, hook activity, recoverable waste in recent sessions |
 | `context-doctor proxy` | Always-on local proxy that optimizes every Anthropic/OpenAI API request in flight (`/stats` for cumulative savings) |
+| `context-doctor watch [file]` | Live monitor of a growing session/agent trace: token/cost line per change, findings as they appear |
+| `context-doctor doctor` | Self-check the whole installation — one pasteable ✓/✗ diagnosis with fixes |
 | `context-doctor hook` | The every-prompt Claude Code hook (registered by `install`; you never run this yourself). Warning threshold tunable via `CONTEXT_DOCTOR_WARN_TOKENS` (default 80000) |
 | `context-doctor-mcp` | The MCP server itself — stdio by default (what the installer wires); `--http [--port 8808] [--host H]` serves streamable HTTP at `/mcp` for URL-based clients like ChatGPT developer-mode connectors |
 
