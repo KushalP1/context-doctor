@@ -179,5 +179,13 @@ export function runUninstall(): void {
     console.log("✓ Agent Skill removed");
   }
   uninstallHook();
+  // Remove our bookkeeping files too — uninstall means gone.
+  for (const file of [".context-doctor-hook-state.json", ".context-doctor-ledger.jsonl"]) {
+    const p = join(homedir(), ".claude", file);
+    if (existsSync(p)) {
+      rmSync(p);
+      console.log(`✓ Removed ${file}`);
+    }
+  }
   console.log("Done.");
 }

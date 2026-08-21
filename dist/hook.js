@@ -17,8 +17,8 @@ import { profileConversation } from "./profile.js";
 import { parseSessionFile } from "./session.js";
 import { formatTokens } from "./tokens.js";
 import { formatUsd } from "./pricing.js";
-/** Start nudging at 80k tokens of context. */
-const WARN_TOKENS = 80_000;
+/** Start nudging at 80k tokens of context (override: CONTEXT_DOCTOR_WARN_TOKENS). */
+const WARN_TOKENS = Number(process.env.CONTEXT_DOCTOR_WARN_TOKENS) > 0 ? Number(process.env.CONTEXT_DOCTOR_WARN_TOKENS) : 80_000;
 /** Re-nudge only after the context grows another 40% — one reminder, not a nag. */
 const REGROWTH_FACTOR = 1.4;
 /**

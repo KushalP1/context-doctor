@@ -8,7 +8,7 @@
  *              (pre-0.3.6 hook entries have no `ev` field; treated as checks)
  *   optimize — an optimization was applied  {ev: "optimize", src: "cli"|"mcp", saved, model?}
  */
-import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 export function statePath() {
@@ -20,6 +20,9 @@ export function ledgerPath() {
 export function recordLedger(entry) {
     const path = ledgerPath();
     try {
+        // Claude-Desktop-only machines have no ~/.claude — create it so their
+        // optimize events count in `context-doctor report` too.
+        mkdirSync(dirname(path), { recursive: true });
         // Cap growth: past ~256KB keep the most recent 500 entries.
         if (existsSync(path) && statSync(path).size > 256 * 1024) {
             const lines = readFileSync(path, "utf8").trimEnd().split("\n");
