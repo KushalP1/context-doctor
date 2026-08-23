@@ -12,7 +12,7 @@ export interface MessageProfile {
     preview: string;
     toolName?: string;
 }
-export type FindingId = "large_tool_result" | "duplicate_content" | "repeated_tool_call" | "base64_blob" | "long_history" | "large_system_prompt" | "cache_ordering" | "near_window_limit";
+export type FindingId = "large_tool_result" | "duplicate_content" | "near_duplicate" | "repeated_tool_call" | "base64_blob" | "long_history" | "large_system_prompt" | "cache_ordering" | "near_window_limit";
 export interface Finding {
     id: FindingId;
     severity: "info" | "warn" | "high";

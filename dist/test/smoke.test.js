@@ -88,6 +88,21 @@ test("prune-history never leaves an orphaned tool result at the head of the tail
     assert.equal(isToolResult, false, "tail must not start with an orphaned tool_result");
     assert.ok(result.applied.some((c) => c.strategy === "prune-history"), "pruning still happened");
 });
+test("near-duplicate detection catches same doc with different lead-ins", () => {
+    const doc = "The quarterly pricing policy allows refunds within thirty days of purchase with a valid receipt and original packaging intact. ".repeat(6);
+    const conv = JSON.stringify({
+        messages: [
+            { role: "user", content: "Here is our policy document for you to review:\n" + doc },
+            { role: "assistant", content: "Understood, thanks for sharing the policy." },
+            { role: "user", content: "Sharing the policy doc again with a totally different intro so exact hashing misses it:\n" + doc },
+        ],
+    });
+    const profile = profileConversation(parseConversation(conv));
+    const near = profile.findings.find((f) => f.id === "near_duplicate");
+    assert.ok(near, "near_duplicate finding expected");
+    assert.deepEqual(near.messages, [0, 2]);
+    assert.ok(near.estSavings > 50);
+});
 test("raw text input still profiles", () => {
     const profile = profileConversation(parseConversation("just some prompt text"));
     assert.equal(profile.messageCount, 1);

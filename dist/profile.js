@@ -23,6 +23,40 @@ function contentHash(text) {
     return createHash("sha1").update(text.replace(/\s+/g, " ").trim()).digest("hex");
 }
 const BASE64_RE = /(?:data:[\w/+.-]+;base64,|[A-Za-z0-9+/]{500,}={0,2})/;
+/** FNV-1a — cheap deterministic hash for shingle sampling. */
+function fnv1a(s) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+    }
+    return h >>> 0;
+}
+/**
+ * Sampled 8-word shingle set for near-duplicate detection. Keeping only
+ * ~1/8th of shingles (by hash) shrinks sets ~8x while preserving the Jaccard
+ * estimate — pairwise comparison stays cheap even on large sessions.
+ */
+function sampledShingles(text) {
+    const words = text.toLowerCase().replace(/\s+/g, " ").trim().split(" ");
+    const out = new Set();
+    for (let i = 0; i + 8 <= words.length; i++) {
+        const h = fnv1a(words.slice(i, i + 8).join(" "));
+        if (h % 8 === 0)
+            out.add(h);
+    }
+    return out;
+}
+function jaccard(a, b) {
+    if (a.size === 0 || b.size === 0)
+        return 0;
+    let inter = 0;
+    const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+    for (const v of small)
+        if (large.has(v))
+            inter++;
+    return inter / (a.size + b.size - inter);
+}
 export function profileConversation(conv, model) {
     const perMessage = conv.messages.map((m) => ({
         msg: m,
@@ -67,6 +101,37 @@ export function profileConversation(conv, model) {
         }
         else {
             seen.set(h, p.msg.index);
+        }
+    }
+    // -- Near-duplicates: same content wrapped in different lead-ins -------------
+    // Exact hashing (above) misses "here's the doc again: <doc>"; sampled-shingle
+    // Jaccard catches it. Capped to the 150 largest 300+-char messages.
+    {
+        const candidates = perMessage
+            .filter((p) => p.msg.text.length >= 300)
+            .sort((a, b) => b.tokens - a.tokens)
+            .slice(0, 150);
+        const shingleSets = candidates.map((p) => sampledShingles(p.msg.text));
+        const exactDup = new Set(findings.filter((f) => f.id === "duplicate_content").flatMap((f) => f.messages));
+        for (let i = 0; i < candidates.length; i++) {
+            for (let j = i + 1; j < candidates.length; j++) {
+                const a = candidates[i];
+                const b = candidates[j];
+                if (exactDup.has(a.msg.index) && exactDup.has(b.msg.index))
+                    continue; // already flagged exactly
+                const sim = jaccard(shingleSets[i], shingleSets[j]);
+                if (sim >= 0.6) {
+                    const smaller = Math.min(a.tokens, b.tokens);
+                    findings.push({
+                        id: "near_duplicate",
+                        severity: "warn",
+                        estSavings: Math.round(smaller * sim * 0.9),
+                        message: `Messages #${a.msg.index} and #${b.msg.index} are ~${Math.round(sim * 100)}% similar (~${smaller} tokens repeated with different framing).`,
+                        suggestion: "Replace the later copy with a short reference to the first — repeats survive even when the surrounding words differ.",
+                        messages: [a.msg.index, b.msg.index],
+                    });
+                }
+            }
         }
     }
     // -- Repeated identical tool calls ------------------------------------------
