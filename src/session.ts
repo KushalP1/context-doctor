@@ -56,8 +56,56 @@ export function listSessions(limit = 20): SessionInfo[] {
   return sessions.sort((a, b) => b.modifiedAt.getTime() - a.modifiedAt.getTime()).slice(0, limit);
 }
 
+/**
+ * ChatGPT data export (chatgpt.com → Settings → Data controls → Export):
+ * conversations.json is an array of conversations, each holding a `mapping`
+ * tree of nodes. We profile the most recently updated conversation.
+ */
+function parseChatGPTExport(data: Array<Record<string, any>>, path: string): ParsedSession {
+  const conversations = data
+    .filter((c) => c && typeof c.mapping === "object")
+    .sort((a, b) => (b.update_time ?? 0) - (a.update_time ?? 0));
+  const conv = conversations[0];
+  if (!conv) return { conversationJson: JSON.stringify({ messages: [] }), messageCount: 0, path };
+
+  const nodes = Object.values(conv.mapping as Record<string, any>)
+    .filter((n) => {
+      const m = n?.message;
+      if (!m?.author?.role || !["user", "assistant", "system"].includes(m.author.role)) return false;
+      const parts = m.content?.parts;
+      return Array.isArray(parts) && parts.some((p: unknown) => typeof p === "string" && p.length > 0);
+    })
+    .sort((a, b) => (a.message.create_time ?? 0) - (b.message.create_time ?? 0));
+
+  const messages = nodes.map((n) => ({
+    role: n.message.author.role,
+    content: (n.message.content.parts as unknown[]).filter((p) => typeof p === "string").join("\n"),
+  }));
+
+  return {
+    conversationJson: JSON.stringify({ messages }),
+    title: typeof conv.title === "string" ? conv.title : undefined,
+    model: typeof conv.default_model_slug === "string" ? conv.default_model_slug : "gpt-5",
+    messageCount: messages.length,
+    path,
+  };
+}
+
 export function parseSessionFile(path: string): ParsedSession {
   const raw = readFileSync(path, "utf8");
+
+  // ChatGPT exports are one big JSON array, not JSONL.
+  if (raw.trimStart().startsWith("[")) {
+    try {
+      const data = JSON.parse(raw);
+      if (Array.isArray(data) && data.some((c) => c && typeof c.mapping === "object")) {
+        return parseChatGPTExport(data, path);
+      }
+    } catch {
+      /* fall through to JSONL parsing */
+    }
+  }
+
   const messages: Array<Record<string, unknown>> = [];
   let title: string | undefined;
   let model: string | undefined;
