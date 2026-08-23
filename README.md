@@ -92,7 +92,7 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | `context-doctor install` / `uninstall` | Wire (or remove) everything: MCP for Claude Desktop/Code/Cursor, the Agent Skill, the every-prompt hook |
 | `context-doctor analyze <file>` | Profile a conversation: token breakdown, findings, cost + latency estimates |
 | `context-doctor optimize <file>` | Apply the safe fixes; `--strategy prune-history` for consented lossy compaction |
-| `context-doctor session [file]` | Profile a Claude Code session transcript (defaults to your most recent; `--list` to browse) |
+| `context-doctor session [file]` | Profile a Claude Code session transcript (defaults to your most recent; `--list` to browse) — also reads ChatGPT data exports (`conversations.json`) |
 | `context-doctor report` | Machine-wide impact report: exact proxy savings, hook activity, recoverable waste in recent sessions |
 | `context-doctor proxy` | Always-on local proxy that optimizes every Anthropic/OpenAI API request in flight (`/stats` for cumulative savings) |
 | `context-doctor watch [file]` | Live monitor of a growing session/agent trace: token/cost line per change, findings as they appear |
@@ -241,6 +241,7 @@ const { conversation, tokensBefore, tokensAfter } = optimizeConversation(chatJso
 
 - **Oversized tool results** — the #1 context killer in agent loops
 - **Duplicate content** — the same doc/result pasted twice
+- **Near-duplicates** — the same doc re-pasted with different surrounding words (shingle similarity, ≥60%)
 - **Repeated identical tool calls** — a signal your agent forgot earlier results
 - **Base64 / binary blobs** in text content
 - **Long history** past the point where models track the middle
@@ -292,7 +293,11 @@ A tool that promises speed must be near-free. Measured overhead per touchpoint:
 
 Net effect is strongly negative overhead: the tokens these touchpoints save on every subsequent call dwarf what they cost.
 
-## Why token counts are "~"
+## Why token counts are "~" (and how to make them exact)
+
+Want exact numbers? `analyze --exact` uses the **Anthropic count-tokens API** for Claude models (set `ANTHROPIC_API_KEY`; opt-in network call, key never stored) or **tiktoken** for GPT models (install it next to context-doctor) — and reports how far off the heuristic was.
+
+
 
 Exact counts require each provider's private tokenizer. `context-doctor` uses a calibrated chars-per-token heuristic (denser for code/JSON) that lands within ~10% — plenty accurate for finding what's heavy and measuring savings, and it keeps the tool fully offline with zero configuration.
 

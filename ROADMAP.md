@@ -13,13 +13,13 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 | **`context-doctor watch`** — live session monitor | Tail a running session/agent trace; status line per growth event, findings surfaced as they appear. The real-time counterpart to `session` | ✅ |
 | Move repo to the **gAI-ventures org** | Attribution home; auto-redirects keep old links working | ⏳ needs the org owner to transfer on GitHub |
 
-## v0.6 — Accuracy
+## v0.6 — Accuracy (shipped in 0.6.0 unless noted)
 
-| Item | Why | Size |
+| Item | Why | Status |
 |---|---|---|
-| **Exact tokenizer adapters** (optional) | tiktoken for GPT models and the Anthropic count-tokens API (BYO key, opt-in) replace the ~10% heuristic with exact counts where available; heuristic remains the zero-config default | M |
-| **Semantic near-duplicate detection** | Today's dedupe is exact-hash; shingle-based similarity catches the common "same doc pasted with a different lead-in" case | M |
-| **More session formats** — Cursor transcripts, ChatGPT data-export JSON | `session` and `report` should read whatever the user's tools write | M |
+| **Exact tokenizer adapters** (optional) | `analyze --exact`: Anthropic count-tokens API for Claude (BYO key, opt-in), tiktoken for GPT (when installed alongside); heuristic remains the zero-config default and reports its drift | ✅ |
+| **Semantic near-duplicate detection** | Exact-hash dedupe misses "same doc pasted with a different lead-in"; sampled-shingle Jaccard flags ≥60%-similar pairs with estimated savings | ✅ |
+| **More session formats** | ChatGPT data-export (conversations.json) ✅ — auto-detected by `session`. Cursor transcripts ⏳ (format undocumented; needs a sample) | partial |
 
 ## v0.7 — Proxy pro
 
