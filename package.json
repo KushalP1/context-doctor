@@ -1,6 +1,6 @@
 {
   "name": "context-doctor",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Profile and optimize LLM context windows. See what's eating your tokens and fix it — works with Claude, GPT, Gemini, and any MCP-capable AI app.",
   "keywords": [
     "llm",

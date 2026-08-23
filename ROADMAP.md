@@ -21,13 +21,13 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 | **Semantic near-duplicate detection** | Exact-hash dedupe misses "same doc pasted with a different lead-in"; sampled-shingle Jaccard flags ≥60%-similar pairs with estimated savings | ✅ |
 | **More session formats** | ChatGPT data-export (conversations.json) ✅ — auto-detected by `session`. Cursor transcripts ⏳ (format undocumented; needs a sample) | partial |
 
-## v0.7 — Proxy pro
+## v0.7 — Proxy pro (shipped in 0.7.0)
 
-| Item | Why | Size |
+| Item | Why | Status |
 |---|---|---|
-| **Response token accounting** | Read `usage` from responses flowing through, making `/stats` and `report` exact on both sides of every call | S |
-| **Prompt-cache advisor** | The proxy sees real request sequences — it can detect cache-hostile patterns (volatile prefixes, changed tool orders) and report the exact cache hits being lost, in dollars | M |
-| **Per-route/per-model strategy config** | e.g. aggressive trimming for a batch route, conservative for chat | S |
+| **Response token accounting** | `usage` read from responses flowing through (JSON + SSE, both providers) — `/stats` exact on both sides of every call | ✅ |
+| **Prompt-cache advisor** | Watches real Anthropic sequences: flags large stable prefixes without `cache_control` and prefix churn that silently re-bills the cache; advisories in `/stats.advice` + logs | ✅ |
+| **Per-route/per-model strategy config** | `proxy --config file.json` with `routes[]` (modelPrefix → strategies/keepRecent/maxToolResultTokens); first match wins | ✅ |
 
 ## v1.0 — Platform
 

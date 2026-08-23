@@ -163,7 +163,11 @@ The proxy dedupes repeated content, trims stale tool results, and strips base64 
 [context-doctor] POST /v1/messages → 200 in 842ms | optimized 7.3k → 518 tokens (2 changes) | session total: 6.9k tokens ≈ $0.021 saved
 ```
 
-`GET http://localhost:8787/stats` returns cumulative savings (requests, tokens, estimated USD) since launch.
+`GET http://localhost:8787/stats` returns cumulative savings (requests, tokens, estimated USD), **exact upstream usage** read from every response (JSON and SSE), and **prompt-cache advisories** — the proxy watches your real traffic and flags big stable prefixes missing `cache_control` or prefix churn that silently re-bills the cache. Per-model behavior via `--config`:
+
+```json
+{ "routes": [{ "modelPrefix": "gpt", "strategies": ["strip-base64"], "keepRecent": 4 }] }
+```
 
 Because prompt caching matches byte-identical prefixes, deterministic strategies are chosen so repeated requests stay stable — but if you rely on aggressive cache prefixes, start with `--strategy strip-base64 --strategy dedupe` and add more as you verify.
 
