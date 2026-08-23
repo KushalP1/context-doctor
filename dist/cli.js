@@ -22,6 +22,7 @@ import { buildImpactReport } from "./impact.js";
 import { recordLedger } from "./ledger.js";
 import { runDoctor } from "./doctor.js";
 import { runWatch } from "./watch.js";
+import { exactTokenCount } from "./exact.js";
 const HELP = `context-doctor — profile and optimize LLM context windows
 
 Usage:
@@ -49,6 +50,8 @@ message array). Use "-" to read from stdin.
 
 Options:
   --model <name>          Model name for window-size math (e.g. claude-sonnet-5, gpt-4o)
+  --exact                 (analyze) Add an exact token count: Anthropic count-tokens API for
+                          Claude models (needs ANTHROPIC_API_KEY), tiktoken for GPT (if installed)
   --json                  Machine-readable output
   --out <file>            (optimize) Write result to file instead of stdout
   --strategy <id>         (optimize) Strategy to run; repeatable.
@@ -70,7 +73,7 @@ Examples:
           export OPENAI_BASE_URL=http://localhost:8787/v1
 `;
 function parseArgs(argv) {
-    const args = { json: false, strategies: [], list: false };
+    const args = { json: false, strategies: [], list: false, exact: false };
     const positional = [];
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
@@ -84,6 +87,9 @@ function parseArgs(argv) {
                 break;
             case "--list":
                 args.list = true;
+                break;
+            case "--exact":
+                args.exact = true;
                 break;
             case "--model":
                 args.model = argv[++i];
@@ -215,6 +221,17 @@ function main() {
     if (args.command === "analyze") {
         const profile = profileConversation(parseConversation(input), args.model);
         console.log(args.json ? JSON.stringify(profile, null, 2) : renderProfile(profile));
+        if (args.exact) {
+            void exactTokenCount(input, args.model).then((exact) => {
+                if (exact.tokens !== undefined) {
+                    const drift = profile.totalTokens > 0 ? Math.round(((exact.tokens - profile.totalTokens) / exact.tokens) * 100) : 0;
+                    console.log(`\nExact input tokens: ${exact.tokens} (${exact.source}) — heuristic was off by ${drift}%`);
+                }
+                else {
+                    console.log(`\nExact count unavailable: ${exact.note}`);
+                }
+            });
+        }
         return;
     }
     if (args.command === "optimize") {
