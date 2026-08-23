@@ -39,10 +39,13 @@ function fnv1a(s) {
  */
 function sampledShingles(text) {
     const words = text.toLowerCase().replace(/\s+/g, " ").trim().split(" ");
+    // Sampling is a large-text optimization only: short texts keep every
+    // shingle (sampling them starves the Jaccard estimate), long ones keep ~1/8.
+    const sample = words.length > 1500;
     const out = new Set();
     for (let i = 0; i + 8 <= words.length; i++) {
         const h = fnv1a(words.slice(i, i + 8).join(" "));
-        if (h % 8 === 0)
+        if (!sample || h % 8 === 0)
             out.add(h);
     }
     return out;
@@ -122,13 +125,14 @@ export function profileConversation(conv, model) {
                 const sim = jaccard(shingleSets[i], shingleSets[j]);
                 if (sim >= 0.6) {
                     const smaller = Math.min(a.tokens, b.tokens);
+                    const [first, second] = a.msg.index <= b.msg.index ? [a, b] : [b, a];
                     findings.push({
                         id: "near_duplicate",
                         severity: "warn",
                         estSavings: Math.round(smaller * sim * 0.9),
-                        message: `Messages #${a.msg.index} and #${b.msg.index} are ~${Math.round(sim * 100)}% similar (~${smaller} tokens repeated with different framing).`,
+                        message: `Messages #${first.msg.index} and #${second.msg.index} are ~${Math.round(sim * 100)}% similar (~${smaller} tokens repeated with different framing).`,
                         suggestion: "Replace the later copy with a short reference to the first — repeats survive even when the surrounding words differ.",
-                        messages: [a.msg.index, b.msg.index],
+                        messages: [first.msg.index, second.msg.index],
                     });
                 }
             }

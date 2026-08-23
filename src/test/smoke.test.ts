@@ -100,7 +100,11 @@ test("prune-history never leaves an orphaned tool result at the head of the tail
 });
 
 test("near-duplicate detection catches same doc with different lead-ins", () => {
-  const doc = "The quarterly pricing policy allows refunds within thirty days of purchase with a valid receipt and original packaging intact. ".repeat(6);
+  // Varied clauses (not a repeated sentence) — like a real document.
+  const doc = Array.from(
+    { length: 30 },
+    (_, i) => `Clause ${i} of the pricing policy covers refund scenario ${i} where the customer holds receipt series ${i * 7} under regional rule ${i % 5}.`
+  ).join(" ");
   const conv = JSON.stringify({
     messages: [
       { role: "user", content: "Here is our policy document for you to review:\n" + doc },
