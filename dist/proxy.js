@@ -26,6 +26,29 @@ function upstreamFor(url, opts) {
     }
     return undefined;
 }
+/** Pull exact usage out of a response body — JSON or SSE, either provider. */
+function extractUsage(text) {
+    const last = (re) => {
+        let m;
+        let v = -1;
+        while ((m = re.exec(text)) !== null)
+            v = Number(m[1]);
+        return v;
+    };
+    const input = Math.max(last(/"input_tokens"\s*:\s*(\d+)/g), last(/"prompt_tokens"\s*:\s*(\d+)/g));
+    const output = Math.max(last(/"output_tokens"\s*:\s*(\d+)/g), last(/"completion_tokens"\s*:\s*(\d+)/g));
+    if (input < 0 && output < 0)
+        return null;
+    return { input: Math.max(input, 0), output: Math.max(output, 0) };
+}
+function fnv1a(s) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+    }
+    return h >>> 0;
+}
 export function startProxy(opts = {}) {
     const port = opts.port ?? 8787;
     const stats = {
@@ -36,6 +59,17 @@ export function startProxy(opts = {}) {
         tokensAfter: 0,
         tokensSaved: 0,
         estUsdSaved: 0,
+        upstreamInputTokens: 0,
+        upstreamOutputTokens: 0,
+        advice: [],
+    };
+    /** Last stable-prefix fingerprint per model, for cache-invalidation advice. */
+    const prefixFingerprints = new Map();
+    const advise = (msg) => {
+        if (stats.advice.includes(msg) || stats.advice.length >= 10)
+            return;
+        stats.advice.push(msg);
+        console.error(`[context-doctor] cache advisor: ${msg}`);
     };
     const server = http.createServer(async (req, res) => {
         const url = req.url ?? "/";
@@ -70,7 +104,39 @@ export function startProxy(opts = {}) {
             let note = "passthrough";
             if (req.method === "POST" && body && !isMeasurement) {
                 try {
-                    const result = optimizeConversation(body, opts);
+                    // Per-route overrides: first modelPrefix match wins.
+                    let effective = opts;
+                    let requestModel;
+                    try {
+                        const parsedBody = JSON.parse(body);
+                        requestModel = parsedBody.model;
+                        const route = requestModel ? opts.routes?.find((r) => requestModel.startsWith(r.modelPrefix)) : undefined;
+                        if (route) {
+                            effective = {
+                                strategies: route.strategies ?? opts.strategies,
+                                keepRecent: route.keepRecent ?? opts.keepRecent,
+                                maxToolResultTokens: route.maxToolResultTokens ?? opts.maxToolResultTokens,
+                            };
+                        }
+                        // Prompt-cache advisor (Anthropic requests): the proxy sees real
+                        // sequences, so cache-hostile patterns are observable facts here.
+                        if (url.startsWith("/v1/messages") && requestModel) {
+                            const stablePrefix = JSON.stringify(parsedBody.tools ?? null) + JSON.stringify(parsedBody.system ?? null);
+                            if (stablePrefix.length > 4000 && !body.includes("cache_control")) {
+                                advise(`~${Math.round(stablePrefix.length / 4)}+ tokens of stable system/tools on ${requestModel} without cache_control — adding a breakpoint would cut those to ~10% cost per call`);
+                            }
+                            const fp = fnv1a(stablePrefix);
+                            const prev = prefixFingerprints.get(requestModel);
+                            if (prev !== undefined && prev !== fp) {
+                                advise(`system/tools prefix changed between ${requestModel} requests — every change re-bills the whole cached prefix; keep it byte-stable`);
+                            }
+                            prefixFingerprints.set(requestModel, fp);
+                        }
+                    }
+                    catch {
+                        /* body isn't JSON — global opts apply */
+                    }
+                    const result = optimizeConversation(body, effective);
                     const saved = result.tokensBefore - result.tokensAfter;
                     stats.tokensBefore += result.tokensBefore;
                     stats.tokensAfter += result.tokensAfter;
@@ -109,13 +175,26 @@ export function startProxy(opts = {}) {
                     res.setHeader(key, value);
             });
             if (upstream.body) {
-                // Pipe through chunk-by-chunk so SSE streaming works unchanged.
+                // Pipe through chunk-by-chunk so SSE streaming works unchanged, while
+                // accumulating a bounded copy to read exact usage after the fact.
+                const USAGE_SCAN_CAP = 2 * 1024 * 1024;
+                let scanBuf = "";
+                const decoder = new TextDecoder();
                 const reader = upstream.body.getReader();
                 for (;;) {
                     const { done, value } = await reader.read();
                     if (done)
                         break;
                     res.write(value);
+                    if (scanBuf.length < USAGE_SCAN_CAP)
+                        scanBuf += decoder.decode(value, { stream: true });
+                }
+                if (upstream.ok && !isMeasurement) {
+                    const usage = extractUsage(scanBuf);
+                    if (usage) {
+                        stats.upstreamInputTokens += usage.input;
+                        stats.upstreamOutputTokens += usage.output;
+                    }
                 }
             }
             res.end();

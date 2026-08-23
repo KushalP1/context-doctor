@@ -61,6 +61,8 @@ Options:
   --max-tool-tokens <n>   (optimize) Token budget for trimmed tool results (default 300)
   --port <n>              (proxy) Port to listen on (default 8787)
   --host <addr>           (proxy) Bind address (default 127.0.0.1; use 0.0.0.0 to expose)
+  --config <file>         (proxy) Per-route overrides: {"routes":[{"modelPrefix":"gpt","strategies":[...],
+                          "keepRecent":n,"maxToolResultTokens":n}]} — first prefix match wins
   --upstream-anthropic <url>  (proxy) Override Anthropic upstream (testing)
   --upstream-openai <url>     (proxy) Override OpenAI upstream (testing)
   -h, --help              Show this help
@@ -114,6 +116,9 @@ function parseArgs(argv) {
                 break;
             case "--host":
                 args.host = argv[++i];
+                break;
+            case "--config":
+                args.config = argv[++i];
                 break;
             case "--upstream-anthropic":
                 args.upstreamAnthropic = argv[++i];
@@ -195,7 +200,18 @@ function main() {
         return;
     }
     if (args.command === "proxy") {
+        let routes;
+        if (args.config) {
+            try {
+                routes = JSON.parse(readFileSync(args.config, "utf8")).routes;
+            }
+            catch (e) {
+                console.error(`Could not read --config ${args.config}: ${e.message}`);
+                process.exit(1);
+            }
+        }
         startProxy({
+            routes: routes,
             port: args.port,
             host: args.host,
             anthropicUpstream: args.upstreamAnthropic,

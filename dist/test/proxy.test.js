@@ -32,6 +32,7 @@ const upstream = http.createServer((req, res) => {
         receivedApiKey = req.headers["x-api-key"];
         res.writeHead(200, { "content-type": "text/event-stream" });
         res.write("event: message_start\ndata: {}\n\n");
+        res.write('event: message_delta\ndata: {"usage":{"input_tokens":120,"output_tokens":45}}\n\n');
         res.write("event: message_stop\ndata: {}\n\n");
         res.end();
     });
@@ -68,6 +69,49 @@ test("/stats reports cumulative savings with dollar estimate", async () => {
     assert.equal(stats.optimizedRequests, 1);
     assert.ok(stats.tokensSaved > 1000, `saved tokens tracked (${stats.tokensSaved})`);
     assert.ok(stats.estUsdSaved > 0, "dollar savings estimated from the request's model");
+});
+test("response usage is captured from the SSE stream; cache advisor fires on prefix churn", async () => {
+    // Second request with a DIFFERENT system prompt on the same model → advisory.
+    const churned = JSON.parse(payload);
+    churned.system = "You are helpful. TODAY IS A NEW DAY."; // classic cache-buster
+    churned.tools = [{ name: "t", description: "x".repeat(5000), input_schema: { type: "object" } }];
+    const first = JSON.parse(payload);
+    first.tools = churned.tools;
+    for (const body of [first, churned]) {
+        await fetch(`http://localhost:${proxyPort}/v1/messages`, {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-api-key": "sk-test-not-real" },
+            body: JSON.stringify(body),
+        });
+    }
+    const stats = (await (await fetch(`http://localhost:${proxyPort}/stats`)).json());
+    // Mock upstream reports usage in its SSE close event (added below).
+    assert.ok(stats.upstreamInputTokens >= 100, `usage input captured: ${stats.upstreamInputTokens}`);
+    assert.ok(stats.upstreamOutputTokens >= 40, `usage output captured: ${stats.upstreamOutputTokens}`);
+    assert.ok(stats.advice.some((a) => a.includes("prefix changed")), `prefix-churn advisory expected, got: ${JSON.stringify(stats.advice)}`);
+    assert.ok(stats.advice.some((a) => a.includes("cache_control")), "missing-cache_control advisory expected");
+});
+test("per-route config: empty strategy list disables optimization for matching models", async () => {
+    const { startProxy } = await import("../proxy.js");
+    const routed = startProxy({
+        port: 0,
+        anthropicUpstream: `http://localhost:${upstreamPort}`,
+        routes: [{ modelPrefix: "claude-sonnet", strategies: [] }],
+    });
+    await new Promise((r) => routed.once("listening", () => r()));
+    const routedPort = routed.address().port;
+    try {
+        const sent = payload;
+        await fetch(`http://localhost:${routedPort}/v1/messages`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: sent,
+        });
+        assert.equal(received.length, sent.length, "route with no strategies must pass body through unmodified");
+    }
+    finally {
+        routed.close();
+    }
 });
 test("unsupported paths get a clear 404, health stays up", async () => {
     const notFound = await fetch(`http://localhost:${proxyPort}/v1/nope`, { method: "POST", body: "{}" });

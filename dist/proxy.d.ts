@@ -14,6 +14,8 @@
 import http from "node:http";
 import { OptimizeOptions } from "./optimize.js";
 export interface ProxyOptions extends OptimizeOptions {
+    /** Per-model-prefix overrides; first match wins, global options otherwise. */
+    routes?: RouteConfig[];
     port?: number;
     /**
      * Bind address. Defaults to 127.0.0.1 — the proxy relays authenticated
@@ -33,5 +35,18 @@ export interface ProxyStats {
     tokensSaved: number;
     /** USD saved on input tokens, when the request's model has a known price. */
     estUsdSaved: number;
+    /** Exact usage reported by upstream responses (both providers, incl. SSE). */
+    upstreamInputTokens: number;
+    upstreamOutputTokens: number;
+    /** Prompt-cache advisories observed on live traffic (unique, capped). */
+    advice: string[];
+}
+/** Per-model-prefix strategy overrides for the proxy (`--config`). */
+export interface RouteConfig {
+    /** Applies when the request body's model starts with this prefix. */
+    modelPrefix: string;
+    strategies?: OptimizeOptions["strategies"];
+    keepRecent?: number;
+    maxToolResultTokens?: number;
 }
 export declare function startProxy(opts?: ProxyOptions): http.Server;
