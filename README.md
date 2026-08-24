@@ -34,13 +34,11 @@ Findings (4)
 npx context-doctor install
 ```
 
-Until the package lands on npm, install straight from GitHub instead (needs Node 18+):
+That single command is also all it takes to **set up context-doctor on anyone else's machine**. Prefer a global install, or want the unreleased `main`? Both work (Node 18+):
 
 ```bash
-npm install -g github:KushalP1/context-doctor && context-doctor install
+npm install -g context-doctor && context-doctor install
 ```
-
-That pair of commands is also all it takes to **set up context-doctor on anyone else's machine**.
 
 Restart your apps, then just ask Claude: *"what's eating my context?"* (`npx context-doctor uninstall` reverses it.)
 
@@ -97,6 +95,7 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | `context-doctor proxy` | Always-on local proxy that optimizes every Anthropic/OpenAI API request in flight (`/stats` for cumulative savings) |
 | `context-doctor watch [file]` | Live monitor of a growing session/agent trace: token/cost line per change, findings as they appear |
 | `context-doctor doctor` | Self-check the whole installation — one pasteable ✓/✗ diagnosis with fixes |
+| `context-doctor dashboard` | Local savings dashboard on 127.0.0.1: tokens saved per day, sessions by context in use vs recoverable, budget status |
 | `context-doctor hook` | The every-prompt Claude Code hook (registered by `install`; you never run this yourself). Warning threshold tunable via `CONTEXT_DOCTOR_WARN_TOKENS` (default 80000) |
 | `context-doctor-mcp` | The MCP server itself — stdio by default (what the installer wires); `--http [--port 8808] [--host H]` serves streamable HTTP at `/mcp` for URL-based clients like ChatGPT developer-mode connectors |
 
@@ -282,6 +281,20 @@ One report for your whole machine, led by a headline of **tokens context-doctor 
 - **observed per-session shrinkage**: real context reductions recorded between the hook's deep checks after hygiene warnings — shown per session in the table alongside remaining waste.
 
 Honest measurement note: proxy numbers are exact. Session numbers are measured-now. What no tool can report is the counterfactual — tokens Claude *avoided* adding because of the hygiene guidance — since the same session can't be re-run without it. The report says so instead of inventing a number.
+
+## Context budgets (`.contextdoctorrc`)
+
+Drop a `.contextdoctorrc` in a project (or your home directory) and context-doctor enforces your limits instead of its defaults:
+
+```json
+{
+  "budget": { "maxTokens": 120000, "maxCostPerMessageUsd": 0.5, "maxWindowPct": 60 },
+  "strategies": ["dedupe", "trim-tool-results"],
+  "keepRecent": 6
+}
+```
+
+The nearest file wins (walking up from the working directory, then `~`). `analyze` and `session` print a budget verdict, the every-prompt hook uses `maxTokens` as its warning threshold and names the breach to the model, and `optimize`/`proxy` pick up the defaults when you do not pass flags.
 
 ## Performance: what context-doctor itself costs
 

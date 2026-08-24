@@ -29,13 +29,17 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 | **Prompt-cache advisor** | Watches real Anthropic sequences: flags large stable prefixes without `cache_control` and prefix churn that silently re-bills the cache; advisories in `/stats.advice` + logs | ✅ |
 | **Per-route/per-model strategy config** | `proxy --config file.json` with `routes[]` (modelPrefix → strategies/keepRecent/maxToolResultTokens); first match wins | ✅ |
 
-## v1.0 — Platform
+## v1.0 — Platform (code shipped in 0.8.0)
 
-| Item | Why | Size |
+| Item | Why | Status |
 |---|---|---|
-| **Context budgets** (`.contextdoctorrc`) | Per-project thresholds and policies; the hook and proxy enforce/warn against the budget you set | M |
-| **Local dashboard** (`context-doctor dashboard`) | The ledger + sessions already hold the data; a localhost page with savings-over-time charts makes the value visible daily | L |
-| **Launch** | CONTRIBUTING.md, good-first-issues, demo GIF, Show HN / r/LocalLLaMA posts | M |
+| **Context budgets** (`.contextdoctorrc`) | Per-project thresholds; nearest-file discovery, enforced by the hook, reported by analyze/session, defaults feeding optimize/proxy | ✅ |
+| **Local dashboard** (`context-doctor dashboard`) | Loopback-only page: tokens saved per day, sessions split into in-use vs recoverable, budget banner, proxy stats | ✅ |
+| **Launch** | CONTRIBUTING.md + good-first-issues ✅ · demo GIF and the Show HN / r/LocalLLaMA posts ⏳ (owner's call on timing) | partial |
+
+The **1.0.0 version tag is deliberately not taken yet**: it should mean "the CLI
+surface and rc schema are stable and we will not break them", and that promise is
+worth making after real-world use, not on the day the features land.
 
 ## Non-goals
 
