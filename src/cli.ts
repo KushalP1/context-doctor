@@ -25,6 +25,7 @@ import { runDoctor } from "./doctor.js";
 import { runWatch } from "./watch.js";
 import { exactTokenCount } from "./exact.js";
 import { checkBudget, loadConfig } from "./config.js";
+import { startDashboard } from "./dashboard.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -44,6 +45,8 @@ Usage:
                                                 and remaining recoverable waste in recent sessions
   context-doctor doctor                         Self-check the installation (configs, hook, skill,
                                                 MCP handshake) with one pasteable diagnosis
+  context-doctor dashboard                      Local savings dashboard on 127.0.0.1 (--port n,
+                                                default 8790) — charts from your own machine only
   context-doctor watch [file]                   Live-monitor a growing session/agent trace: running
                                                 token/cost line per change, new findings as they appear
                                                 (--interval-ms n, default 2000)
@@ -156,6 +159,11 @@ function main(): void {
   if (args.command === "hook") {
     void runHook();
     return;
+  }
+
+  if (args.command === "dashboard") {
+    startDashboard({ port: args.port, proxyPort: 8787 });
+    return; // server keeps the process alive
   }
 
   if (args.command === "watch") {
