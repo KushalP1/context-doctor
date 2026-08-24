@@ -4,3 +4,7 @@ node_modules/
 *.log
 .DS_Store
 .env
+assets/social/*.html
+
+# keep design source, not the compiled canvas
+!assets/social/Main.dc.html
