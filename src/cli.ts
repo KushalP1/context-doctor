@@ -24,6 +24,7 @@ import { recordLedger } from "./ledger.js";
 import { runDoctor } from "./doctor.js";
 import { runWatch } from "./watch.js";
 import { exactTokenCount } from "./exact.js";
+import { checkBudget, loadConfig } from "./config.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -46,6 +47,11 @@ Usage:
   context-doctor watch [file]                   Live-monitor a growing session/agent trace: running
                                                 token/cost line per change, new findings as they appear
                                                 (--interval-ms n, default 2000)
+
+Project config: an optional .contextdoctorrc (nearest, walking up from cwd, then
+~/.contextdoctorrc) can set a context budget and default strategies:
+  {"budget":{"maxTokens":120000,"maxCostPerMessageUsd":0.5,"maxWindowPct":60},
+   "strategies":["dedupe","trim-tool-results"],"routes":[...]}
 
 Input: a conversation JSON file (OpenAI or Anthropic message format, or a bare
 message array). Use "-" to read from stdin.
@@ -125,6 +131,20 @@ function parseArgs(argv: string[]): Args {
   return args;
 }
 
+/** Print budget status under a profile when a .contextdoctorrc defines one. */
+function printBudgetStatus(profile: Parameters<typeof checkBudget>[1], loaded: ReturnType<typeof loadConfig>): void {
+  const budget = loaded.config.budget;
+  if (!budget || !loaded.path) return;
+  const verdict = checkBudget(budget, profile);
+  console.log("");
+  if (verdict.overBudget) {
+    console.log(`OVER BUDGET (${loaded.path}):`);
+    for (const b of verdict.breaches) console.log(`  x ${b}`);
+  } else {
+    console.log(`Within budget (${loaded.path}).`);
+  }
+}
+
 function readInput(file: string): string {
   if (file === "-") return readFileSync(0, "utf8");
   return readFileSync(file, "utf8");
@@ -183,6 +203,7 @@ function main(): void {
     } else {
       console.log(`Session: ${parsed.title ?? "(untitled)"}\nFile:    ${parsed.path}\n`);
       console.log(renderProfile(profile));
+      printBudgetStatus(profile, loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`)));
     }
     return;
   }
@@ -197,10 +218,11 @@ function main(): void {
   }
 
   if (args.command === "proxy") {
-    let routes;
+    const loadedRc = loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`));
+    let routes = loadedRc.config.routes;
     if (args.config) {
       try {
-        routes = (JSON.parse(readFileSync(args.config, "utf8")) as { routes?: unknown }).routes;
+        routes = (JSON.parse(readFileSync(args.config, "utf8")) as { routes?: typeof routes }).routes;
       } catch (e) {
         console.error(`Could not read --config ${args.config}: ${(e as Error).message}`);
         process.exit(1);
@@ -212,9 +234,9 @@ function main(): void {
       host: args.host,
       anthropicUpstream: args.upstreamAnthropic,
       openaiUpstream: args.upstreamOpenai,
-      strategies: args.strategies.length > 0 ? args.strategies : undefined,
-      keepRecent: args.keepRecent,
-      maxToolResultTokens: args.maxToolTokens,
+      strategies: args.strategies.length > 0 ? args.strategies : loadedRc.config.strategies,
+      keepRecent: args.keepRecent ?? loadedRc.config.keepRecent,
+      maxToolResultTokens: args.maxToolTokens ?? loadedRc.config.maxToolResultTokens,
     });
     return; // server keeps the process alive
   }
@@ -233,8 +255,10 @@ function main(): void {
   }
 
   if (args.command === "analyze") {
-    const profile = profileConversation(parseConversation(input), args.model);
+    const loaded = loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`));
+    const profile = profileConversation(parseConversation(input), args.model ?? loaded.config.model);
     console.log(args.json ? JSON.stringify(profile, null, 2) : renderProfile(profile));
+    if (!args.json) printBudgetStatus(profile, loaded);
     if (args.exact) {
       void exactTokenCount(input, args.model).then((exact) => {
         if (exact.tokens !== undefined) {
@@ -251,10 +275,11 @@ function main(): void {
   if (args.command === "optimize") {
     let result;
     try {
+      const loaded = loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`));
       result = optimizeConversation(input, {
-        strategies: args.strategies.length > 0 ? args.strategies : undefined,
-        keepRecent: args.keepRecent,
-        maxToolResultTokens: args.maxToolTokens,
+        strategies: args.strategies.length > 0 ? args.strategies : loaded.config.strategies,
+        keepRecent: args.keepRecent ?? loaded.config.keepRecent,
+        maxToolResultTokens: args.maxToolTokens ?? loaded.config.maxToolResultTokens,
       });
     } catch (e) {
       console.error((e as Error).message);

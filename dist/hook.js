@@ -17,17 +17,32 @@ import { profileConversation } from "./profile.js";
 import { parseSessionFile } from "./session.js";
 import { formatTokens } from "./tokens.js";
 import { formatUsd } from "./pricing.js";
-/** Start nudging at 80k tokens of context (override: CONTEXT_DOCTOR_WARN_TOKENS). */
-const WARN_TOKENS = Number(process.env.CONTEXT_DOCTOR_WARN_TOKENS) > 0 ? Number(process.env.CONTEXT_DOCTOR_WARN_TOKENS) : 80_000;
+import { checkBudget, loadConfig } from "./config.js";
+/** Default nudge threshold; a project budget or env var can lower/raise it. */
+const DEFAULT_WARN_TOKENS = 80_000;
+/**
+ * Threshold precedence: CONTEXT_DOCTOR_WARN_TOKENS env var, then the project
+ * budget's maxTokens (.contextdoctorrc), then the default.
+ */
+function warnThreshold(budgetMaxTokens) {
+    const env = Number(process.env.CONTEXT_DOCTOR_WARN_TOKENS);
+    if (env > 0)
+        return env;
+    if (budgetMaxTokens !== undefined && budgetMaxTokens > 0)
+        return budgetMaxTokens;
+    return DEFAULT_WARN_TOKENS;
+}
 /** Re-nudge only after the context grows another 40% — one reminder, not a nag. */
 const REGROWTH_FACTOR = 1.4;
 /**
  * Fast-path gate: text tokens are at least ~4 bytes each and the transcript
  * carries JSON overhead on top, so a file smaller than this cannot possibly
- * hold WARN_TOKENS of context. Lean sessions cost one stat() call — the
+ * hold that many tokens of context. Lean sessions cost one stat() call — the
  * transcript is never even read.
  */
-const MIN_BYTES_FOR_WARN = WARN_TOKENS * 4;
+function minBytesForWarn(threshold) {
+    return threshold * 4;
+}
 async function readStdin() {
     const chunks = [];
     for await (const chunk of process.stdin)
@@ -44,8 +59,10 @@ export async function runHook() {
         // Fast path 1: a small transcript cannot exceed the threshold — exit on a
         // single stat() without reading the file. This is the every-prompt cost
         // for lean sessions: ~1ms.
+        const { config } = loadConfig(input.cwd ?? process.cwd());
+        const threshold = warnThreshold(config.budget?.maxTokens);
         const sizeBytes = statSync(transcriptPath).size;
-        if (sizeBytes < MIN_BYTES_FOR_WARN)
+        if (sizeBytes < minBytesForWarn(threshold))
             return;
         // Fast path 2: growth gate BEFORE parsing. If the file hasn't grown ~40%
         // since the last full parse, nothing new can trigger — exit without the
@@ -69,7 +86,7 @@ export async function runHook() {
             return;
         const profile = profileConversation(parseConversation(parsed.conversationJson), parsed.model);
         // Record this parse so the next prompts take fast path 2.
-        const shouldWarn = profile.totalTokens >= WARN_TOKENS && profile.totalTokens >= prev.t * REGROWTH_FACTOR;
+        const shouldWarn = profile.totalTokens >= threshold && profile.totalTokens >= prev.t * REGROWTH_FACTOR;
         const nextState = { t: shouldWarn ? profile.totalTokens : prev.t, b: sizeBytes };
         const entries = Object.entries({ ...state, [sessionId]: nextState });
         writeFileSync(statePath(), JSON.stringify(Object.fromEntries(entries.slice(-100))));
@@ -83,11 +100,16 @@ export async function runHook() {
                 ".",
             "Practice context hygiene from here on: summarize large tool results instead of keeping them verbatim, reference earlier content rather than re-reading or re-quoting it, and keep responses lean.",
         ];
+        // A configured budget is the user's own limit — say so first and by name.
+        const verdict = checkBudget(config.budget, profile);
+        if (verdict.overBudget) {
+            lines.splice(1, 0, `This project's context budget is exceeded: ${verdict.breaches.join("; ")}. Treat compaction as a priority, not an option.`);
+        }
         const topFinding = profile.findings.find((f) => f.estSavings > 0);
         if (topFinding) {
             lines.push(`Largest recoverable waste: ${topFinding.message} (${topFinding.suggestion})`);
         }
-        if (profile.totalTokens > WARN_TOKENS * 2) {
+        if (profile.totalTokens > threshold * 2) {
             lines.push("If it fits the flow, offer the user a compaction of the older history.");
         }
         console.log(JSON.stringify({
