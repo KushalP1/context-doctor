@@ -172,3 +172,32 @@ test("a session without compaction keeps every message", async () => {
   assert.equal(parsed.compactedAway, 0);
   assert.equal(parsed.messageCount, 2);
 });
+
+test("savings are a union, never a double-counted sum", () => {
+  // One message is simultaneously an oversized tool result AND a duplicate of
+  // an earlier one: two findings, but the tokens can only be saved once.
+  const bulk = "row of data ".repeat(1200);
+  const conv = JSON.stringify({
+    messages: [
+      { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "query", input: {} }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: bulk }] },
+      { role: "assistant", content: [{ type: "tool_use", id: "t2", name: "query", input: {} }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "t2", content: bulk }] },
+    ],
+  });
+  const profile = profileConversation(parseConversation(conv));
+  const naiveSum = profile.findings.reduce((a, f) => a + f.estSavings, 0);
+
+  assert.ok(profile.findings.length >= 2, "several findings touch the same tokens");
+  assert.ok(profile.totalEstSavings < naiveSum, "union is smaller than the naive sum");
+  assert.ok(profile.totalEstSavings <= profile.totalTokens, "never claims more than exists");
+});
+
+test("reported savings never exceed 90% of the context", () => {
+  const dupe = "identical block of policy text that repeats verbatim. ".repeat(30);
+  const conv = JSON.stringify({
+    messages: Array.from({ length: 10 }, () => ({ role: "user", content: dupe })),
+  });
+  const profile = profileConversation(parseConversation(conv));
+  assert.ok(profile.totalEstSavings <= Math.round(profile.totalTokens * 0.9) + 1);
+});

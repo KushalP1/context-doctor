@@ -83,6 +83,42 @@ function categoryOf(m: NormalizedMessage): Category {
   }
 }
 
+/**
+ * Total recoverable tokens, counted as a UNION rather than a sum.
+ *
+ * Findings legitimately overlap: an oversized tool result can also be a
+ * near-duplicate, and a long history contains both. Adding their estimates
+ * would promise savings the same tokens can only deliver once. Each
+ * message-scoped finding is attributed to the message that would actually be
+ * removed (the LAST index — for a duplicate pair, the later copy), keeping the
+ * largest claim per message; whole-conversation findings then take only what
+ * is left unclaimed. The result is capped below the total, since no
+ * optimization reclaims an entire context.
+ */
+function unionSavings(findings: Finding[], totalTokens: number): number {
+  const perMessage = new Map<number, number>();
+  let unscoped = 0;
+
+  for (const f of findings) {
+    if (f.estSavings <= 0) continue;
+    if (f.messages.length === 0) {
+      unscoped += f.estSavings;
+      continue;
+    }
+    const target = f.messages[f.messages.length - 1];
+    perMessage.set(target, Math.max(perMessage.get(target) ?? 0, f.estSavings));
+  }
+
+  const scoped = [...perMessage.values()].reduce((a, b) => a + b, 0);
+  // Whole-conversation findings can only claim tokens no message-scoped
+  // finding already claimed.
+  const headroom = Math.max(0, totalTokens - scoped);
+  const total = scoped + Math.min(unscoped, headroom);
+  // A context can never be optimized away entirely; 90% is the ceiling any
+  // strategy set could plausibly reach.
+  return Math.min(total, Math.round(totalTokens * 0.9));
+}
+
 function preview(text: string, len = 90): string {
   const clean = text.replace(/\s+/g, " ").trim();
   return clean.length > len ? clean.slice(0, len) + "…" : clean;
@@ -316,7 +352,7 @@ export function profileConversation(conv: NormalizedConversation, model?: string
   const severityRank = { high: 0, warn: 1, info: 2 };
   findings.sort((a, b) => severityRank[a.severity] - severityRank[b.severity] || b.estSavings - a.estSavings);
 
-  const totalEstSavings = findings.reduce((s, f) => s + f.estSavings, 0);
+  const totalEstSavings = unionSavings(findings, totalTokens);
   const pricing = pricingFor(model);
   let cost: CostEstimate | undefined;
   if (pricing) {
