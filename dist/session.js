@@ -91,6 +91,8 @@ export function parseSessionFile(path) {
     let model;
     /** Index in `messages` of the newest compaction summary, or -1. */
     let lastCompactIndex = -1;
+    /** Newest API-reported input size, if the transcript carries usage. */
+    let reportedInputTokens;
     for (const line of raw.split("\n")) {
         if (!line.trim())
             continue;
@@ -115,6 +117,12 @@ export function parseSessionFile(path) {
             continue;
         if (typeof message.model === "string")
             model = message.model;
+        const usage = message.usage;
+        if (entry.type === "assistant" && usage) {
+            const total = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+            if (total > 0)
+                reportedInputTokens = total;
+        }
         if (entry.isCompactSummary)
             lastCompactIndex = messages.length;
         messages.push({ role: message.role, content: message.content });
@@ -130,6 +138,7 @@ export function parseSessionFile(path) {
         model,
         messageCount: live.length,
         compactedAway,
+        reportedInputTokens,
         path,
     };
 }

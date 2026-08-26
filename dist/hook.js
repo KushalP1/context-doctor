@@ -85,23 +85,31 @@ export async function runHook() {
         if (parsed.messageCount === 0)
             return;
         const profile = profileConversation(parseConversation(parsed.conversationJson), parsed.model);
+        // Prefer the API's own figure when the transcript carries it: it includes
+        // the system prompt and tool schemas the transcript omits, so it is the
+        // real context size rather than a message-only estimate.
+        const liveTokens = parsed.reportedInputTokens ?? profile.totalTokens;
         // Record this parse so the next prompts take fast path 2.
-        const shouldWarn = profile.totalTokens >= threshold && profile.totalTokens >= prev.t * REGROWTH_FACTOR;
-        const nextState = { t: shouldWarn ? profile.totalTokens : prev.t, b: sizeBytes };
+        const shouldWarn = liveTokens >= threshold && liveTokens >= prev.t * REGROWTH_FACTOR;
+        const nextState = { t: shouldWarn ? liveTokens : prev.t, b: sizeBytes };
         const entries = Object.entries({ ...state, [sessionId]: nextState });
         writeFileSync(statePath(), JSON.stringify(Object.fromEntries(entries.slice(-100))));
-        recordLedger({ ev: "check", sid: sessionId.slice(0, 12), tok: profile.totalTokens, warn: shouldWarn });
+        recordLedger({ ev: "check", sid: sessionId.slice(0, 12), tok: liveTokens, warn: shouldWarn });
         if (!shouldWarn)
             return;
+        const windowPct = profile.contextWindow ? (liveTokens / profile.contextWindow) * 100 : undefined;
+        const costPerCall = profile.cost && profile.totalTokens > 0
+            ? (profile.cost.perCallUsd * liveTokens) / profile.totalTokens
+            : undefined;
         const lines = [
-            `This session's context is at ~${formatTokens(profile.totalTokens)} tokens` +
-                (profile.usagePct ? ` (${profile.usagePct.toFixed(0)}% of the window)` : "") +
-                (profile.cost ? `, costing ~${formatUsd(profile.cost.perCallUsd)} of input per message` : "") +
+            `This session's context is at ~${formatTokens(liveTokens)} tokens` +
+                (windowPct !== undefined ? ` (${windowPct.toFixed(0)}% of the window)` : "") +
+                (costPerCall !== undefined ? `, costing ~${formatUsd(costPerCall)} of input per message` : "") +
                 ".",
             "Practice context hygiene from here on: summarize large tool results instead of keeping them verbatim, reference earlier content rather than re-reading or re-quoting it, and keep responses lean.",
         ];
         // A configured budget is the user's own limit — say so first and by name.
-        const verdict = checkBudget(config.budget, profile);
+        const verdict = checkBudget(config.budget, { ...profile, totalTokens: liveTokens, usagePct: windowPct });
         if (verdict.overBudget) {
             lines.splice(1, 0, `This project's context budget is exceeded: ${verdict.breaches.join("; ")}. Treat compaction as a priority, not an option.`);
         }
@@ -109,7 +117,7 @@ export async function runHook() {
         if (topFinding) {
             lines.push(`Largest recoverable waste: ${topFinding.message} (${topFinding.suggestion})`);
         }
-        if (profile.totalTokens > threshold * 2) {
+        if (liveTokens > threshold * 2) {
             lines.push("If it fits the flow, offer the user a compaction of the older history.");
         }
         console.log(JSON.stringify({

@@ -209,6 +209,15 @@ function main(): void {
     } else {
       console.log(`Cursor chat: ${chat.title ?? "(untitled)"}\nId:          ${chat.composerId}\n`);
       console.log(renderProfile(profile));
+      if (parsed.reportedInputTokens) {
+        console.log("");
+        console.log(
+          `Measured context (reported by the API on the last request): ${parsed.reportedInputTokens} tokens.\n` +
+            "That figure includes the harness's system prompt, tool schemas and skills, which the\n" +
+            "transcript does not record — so it is larger than the breakdown above, which covers\n" +
+            "conversation messages only. Findings and savings apply to the messages."
+        );
+      }
       printBudgetStatus(profile, loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`)));
     }
     return;
@@ -248,6 +257,15 @@ function main(): void {
       }
       console.log("");
       console.log(renderProfile(profile));
+      if (parsed.reportedInputTokens) {
+        console.log("");
+        console.log(
+          `Measured context (reported by the API on the last request): ${parsed.reportedInputTokens} tokens.\n` +
+            "That figure includes the harness's system prompt, tool schemas and skills, which the\n" +
+            "transcript does not record — so it is larger than the breakdown above, which covers\n" +
+            "conversation messages only. Findings and savings apply to the messages."
+        );
+      }
       printBudgetStatus(profile, loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`)));
     }
     return;

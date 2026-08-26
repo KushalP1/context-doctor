@@ -310,9 +310,16 @@ A tool that promises speed must be near-free. Measured overhead per touchpoint:
 
 Net effect is strongly negative overhead: the tokens these touchpoints save on every subsequent call dwarf what they cost.
 
-## Why token counts are "~" (and how to make them exact)
+## Why token counts are "~" (and where they are exact)
 
-Want exact numbers? `analyze --exact` uses the **Anthropic count-tokens API** for Claude models (set `ANTHROPIC_API_KEY`; opt-in network call, key never stored) or **tiktoken** for GPT models (install it next to context-doctor) — and reports how far off the heuristic was.
+Counting exactly needs each provider's tokenizer, so the default is a calibrated chars-per-token heuristic (denser for code and JSON). It is good enough to rank what is heavy and to measure the effect of a fix, and it keeps the tool offline and zero-config.
+
+Two ways to get real numbers instead:
+
+- **`analyze --exact`** uses the Anthropic count-tokens API for Claude models (set `ANTHROPIC_API_KEY`; opt-in network call, key never stored) or tiktoken for GPT models (install it alongside), and reports how far the heuristic drifted.
+- **Sessions report measured tokens automatically.** Claude Code transcripts record what the API actually charged, so `session`, the hook and the reports use that figure when it is present — no key, no estimate.
+
+One honest caveat worth knowing: a transcript stores the conversation, **not** the harness's system prompt, tool schemas or skills. Measured against the API's own numbers here, a message-only estimate undercounts the true context by roughly 60%. That is why sessions prefer the reported figure, and why the message breakdown is labelled as covering messages only.
 
 
 

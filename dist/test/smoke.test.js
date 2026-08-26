@@ -170,3 +170,35 @@ test("reported savings never exceed 90% of the context", () => {
     const profile = profileConversation(parseConversation(conv));
     assert.ok(profile.totalEstSavings <= Math.round(profile.totalTokens * 0.9) + 1);
 });
+test("API-reported token counts are captured as ground truth", async () => {
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { parseSessionFile } = await import("../session.js");
+    const dir = mkdtempSync(join(tmpdir(), "ctxdoc-usage-"));
+    const file = join(dir, "s.jsonl");
+    writeFileSync(file, JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }) + "\n" +
+        JSON.stringify({
+            type: "assistant",
+            message: {
+                role: "assistant",
+                content: "hello",
+                model: "claude-sonnet-5",
+                // The real request was mostly cache reads — all three fields count.
+                usage: { input_tokens: 1200, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 800 },
+            },
+        }) + "\n");
+    const parsed = parseSessionFile(file);
+    assert.equal(parsed.reportedInputTokens, 42_000, "sums input + cache read + cache creation");
+    assert.equal(parsed.model, "claude-sonnet-5");
+});
+test("a transcript without usage reports no measured figure", async () => {
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { parseSessionFile } = await import("../session.js");
+    const dir = mkdtempSync(join(tmpdir(), "ctxdoc-nousage-"));
+    const file = join(dir, "s.jsonl");
+    writeFileSync(file, JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }) + "\n");
+    assert.equal(parseSessionFile(file).reportedInputTokens, undefined);
+});

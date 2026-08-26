@@ -16,6 +16,15 @@ export interface SessionInfo {
 }
 export interface ParsedSession {
     /**
+     * The real input size of the most recent request, as reported by the API
+     * (input + cache-read + cache-creation tokens). Transcripts do not contain
+     * the harness's system prompt, tool schemas or skills, so an estimate over
+     * transcript messages alone undercounts badly — measured against these
+     * figures, by roughly 60%. When this is present, prefer it: it is ground
+     * truth rather than an estimate.
+     */
+    reportedInputTokens?: number;
+    /**
      * Messages dropped because a compaction replaced them. Reporting live
      * context means counting only what the model still sees; this records what
      * was compacted away so the difference can be shown rather than hidden.

@@ -22,6 +22,15 @@ export interface SessionInfo {
 
 export interface ParsedSession {
   /**
+   * The real input size of the most recent request, as reported by the API
+   * (input + cache-read + cache-creation tokens). Transcripts do not contain
+   * the harness's system prompt, tool schemas or skills, so an estimate over
+   * transcript messages alone undercounts badly — measured against these
+   * figures, by roughly 60%. When this is present, prefer it: it is ground
+   * truth rather than an estimate.
+   */
+  reportedInputTokens?: number;
+  /**
    * Messages dropped because a compaction replaced them. Reporting live
    * context means counting only what the model still sees; this records what
    * was compacted away so the difference can be shown rather than hidden.
@@ -117,6 +126,8 @@ export function parseSessionFile(path: string): ParsedSession {
   let model: string | undefined;
   /** Index in `messages` of the newest compaction summary, or -1. */
   let lastCompactIndex = -1;
+  /** Newest API-reported input size, if the transcript carries usage. */
+  let reportedInputTokens: number | undefined;
 
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
@@ -135,6 +146,12 @@ export function parseSessionFile(path: string): ParsedSession {
     const message = entry.message as Record<string, unknown>;
     if (!message.role || message.content == null) continue;
     if (typeof message.model === "string") model = message.model;
+    const usage = message.usage as Record<string, number> | undefined;
+    if (entry.type === "assistant" && usage) {
+      const total =
+        (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+      if (total > 0) reportedInputTokens = total;
+    }
     if (entry.isCompactSummary) lastCompactIndex = messages.length;
     messages.push({ role: message.role, content: message.content });
   }
@@ -151,6 +168,7 @@ export function parseSessionFile(path: string): ParsedSession {
     model,
     messageCount: live.length,
     compactedAway,
+    reportedInputTokens,
     path,
   };
 }
