@@ -109,3 +109,38 @@ test("raw text input still profiles", () => {
     assert.equal(profile.messageCount, 1);
     assert.ok(profile.totalTokens > 0);
 });
+test("compacted history is excluded from live context", async () => {
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { parseSessionFile } = await import("../session.js");
+    const dir = mkdtempSync(join(tmpdir(), "ctxdoc-compact-"));
+    const file = join(dir, "s.jsonl");
+    const line = (role, content, extra = {}) => JSON.stringify({ type: role, message: { role, content }, ...extra }) + "\n";
+    writeFileSync(file, line("user", "old question one") +
+        line("assistant", "old answer one") +
+        line("user", "old question two") +
+        // Compaction boundary: everything above is replaced by this summary.
+        line("user", "Summary of the earlier conversation.", { isCompactSummary: true }) +
+        line("assistant", "continuing after compaction") +
+        line("user", "a live follow-up"));
+    const parsed = parseSessionFile(file);
+    assert.equal(parsed.compactedAway, 3, "three pre-compaction messages dropped");
+    assert.equal(parsed.messageCount, 3, "summary + the two live turns remain");
+    const conv = JSON.parse(parsed.conversationJson);
+    assert.match(conv.messages[0].content, /Summary of the earlier/);
+    assert.ok(!parsed.conversationJson.includes("old question one"), "pre-compaction turns are not counted");
+});
+test("a session without compaction keeps every message", async () => {
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { parseSessionFile } = await import("../session.js");
+    const dir = mkdtempSync(join(tmpdir(), "ctxdoc-nocompact-"));
+    const file = join(dir, "s.jsonl");
+    writeFileSync(file, JSON.stringify({ type: "user", message: { role: "user", content: "one" } }) + "\n" +
+        JSON.stringify({ type: "assistant", message: { role: "assistant", content: "two" } }) + "\n");
+    const parsed = parseSessionFile(file);
+    assert.equal(parsed.compactedAway, 0);
+    assert.equal(parsed.messageCount, 2);
+});

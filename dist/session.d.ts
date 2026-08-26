@@ -15,6 +15,12 @@ export interface SessionInfo {
     sizeBytes: number;
 }
 export interface ParsedSession {
+    /**
+     * Messages dropped because a compaction replaced them. Reporting live
+     * context means counting only what the model still sees; this records what
+     * was compacted away so the difference can be shown rather than hidden.
+     */
+    compactedAway?: number;
     /** Conversation JSON string in Anthropic-ish format, ready for parseConversation(). */
     conversationJson: string;
     title?: string;

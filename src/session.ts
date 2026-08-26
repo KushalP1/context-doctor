@@ -21,6 +21,12 @@ export interface SessionInfo {
 }
 
 export interface ParsedSession {
+  /**
+   * Messages dropped because a compaction replaced them. Reporting live
+   * context means counting only what the model still sees; this records what
+   * was compacted away so the difference can be shown rather than hidden.
+   */
+  compactedAway?: number;
   /** Conversation JSON string in Anthropic-ish format, ready for parseConversation(). */
   conversationJson: string;
   title?: string;
@@ -109,6 +115,8 @@ export function parseSessionFile(path: string): ParsedSession {
   const messages: Array<Record<string, unknown>> = [];
   let title: string | undefined;
   let model: string | undefined;
+  /** Index in `messages` of the newest compaction summary, or -1. */
+  let lastCompactIndex = -1;
 
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
@@ -127,14 +135,22 @@ export function parseSessionFile(path: string): ParsedSession {
     const message = entry.message as Record<string, unknown>;
     if (!message.role || message.content == null) continue;
     if (typeof message.model === "string") model = message.model;
+    if (entry.isCompactSummary) lastCompactIndex = messages.length;
     messages.push({ role: message.role, content: message.content });
   }
 
+  // A compaction replaces everything before it: the summary entry IS the live
+  // history from that point on. Counting the pre-compaction turns would
+  // overstate context, cost per message and window fill — sometimes hugely.
+  const compactedAway = lastCompactIndex >= 0 ? lastCompactIndex : 0;
+  const live = lastCompactIndex >= 0 ? messages.slice(lastCompactIndex) : messages;
+
   return {
-    conversationJson: JSON.stringify({ messages }),
+    conversationJson: JSON.stringify({ messages: live }),
     title,
     model,
-    messageCount: messages.length,
+    messageCount: live.length,
+    compactedAway,
     path,
   };
 }

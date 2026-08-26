@@ -102,7 +102,7 @@ export async function buildImpactReport(proxyPort = 8787) {
     }
     lines.push("");
     // -- Measured-now: recent session profiles ------------------------------------
-    lines.push("Your recent sessions — waste still recoverable today");
+    lines.push("Your recent sessions — live context and waste still recoverable");
     lines.push("─".repeat(56));
     const sessions = listSessions(8).filter((s) => s.sizeBytes <= MAX_SESSION_BYTES);
     if (sessions.length === 0) {

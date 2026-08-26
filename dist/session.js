@@ -89,6 +89,8 @@ export function parseSessionFile(path) {
     const messages = [];
     let title;
     let model;
+    /** Index in `messages` of the newest compaction summary, or -1. */
+    let lastCompactIndex = -1;
     for (const line of raw.split("\n")) {
         if (!line.trim())
             continue;
@@ -113,13 +115,21 @@ export function parseSessionFile(path) {
             continue;
         if (typeof message.model === "string")
             model = message.model;
+        if (entry.isCompactSummary)
+            lastCompactIndex = messages.length;
         messages.push({ role: message.role, content: message.content });
     }
+    // A compaction replaces everything before it: the summary entry IS the live
+    // history from that point on. Counting the pre-compaction turns would
+    // overstate context, cost per message and window fill — sometimes hugely.
+    const compactedAway = lastCompactIndex >= 0 ? lastCompactIndex : 0;
+    const live = lastCompactIndex >= 0 ? messages.slice(lastCompactIndex) : messages;
     return {
-        conversationJson: JSON.stringify({ messages }),
+        conversationJson: JSON.stringify({ messages: live }),
         title,
         model,
-        messageCount: messages.length,
+        messageCount: live.length,
+        compactedAway,
         path,
     };
 }

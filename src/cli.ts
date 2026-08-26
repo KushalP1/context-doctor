@@ -242,7 +242,11 @@ function main(): void {
     if (args.json) {
       console.log(JSON.stringify({ session: { path: parsed.path, title: parsed.title }, profile }, null, 2));
     } else {
-      console.log(`Session: ${parsed.title ?? "(untitled)"}\nFile:    ${parsed.path}\n`);
+      console.log(`Session: ${parsed.title ?? "(untitled)"}\nFile:    ${parsed.path}`);
+      if (parsed.compactedAway) {
+        console.log(`Note:    ${parsed.compactedAway} earlier message(s) were compacted away and are NOT counted below — this is the live context the model still sees.`);
+      }
+      console.log("");
       console.log(renderProfile(profile));
       printBudgetStatus(profile, loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`)));
     }
