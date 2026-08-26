@@ -23,10 +23,21 @@ test("watch reports growth and new findings live", async () => {
   let out = "";
   child.stdout.on("data", (d: Buffer) => (out += d.toString()));
 
+  // Wait for a condition rather than sleeping a fixed time: fixed sleeps make
+  // this test flaky under parallel load (it fails in the full suite while
+  // passing alone), and a deadline is both faster and deterministic.
+  const waitFor = async (predicate: () => boolean, what: string, deadlineMs = 10_000): Promise<void> => {
+    const start = Date.now();
+    while (Date.now() - start < deadlineMs) {
+      if (predicate()) return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error(`timed out waiting for ${what}; output so far:\n${out}`);
+  };
+
   try {
     // First tick: initial line.
-    await new Promise((r) => setTimeout(r, 500));
-    assert.ok(/tokens/.test(out), `initial status line expected, got: ${out}`);
+    await waitFor(() => /tokens/.test(out), "the initial status line");
 
     // Grow the file with an oversized tool result → new status + a finding.
     appendFileSync(
@@ -35,10 +46,8 @@ test("watch reports growth and new findings live", async () => {
         JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "data ".repeat(3000) }] } }) +
         "\n"
     );
-    await new Promise((r) => setTimeout(r, 700));
-    const statusLines = out.split("\n").filter((l) => l.includes("tokens"));
-    assert.ok(statusLines.length >= 2, `expected a second status line after growth: ${out}`);
-    assert.ok(out.includes("⚠"), `expected a finding to surface: ${out}`);
+    await waitFor(() => out.split("\n").filter((l) => l.includes("tokens")).length >= 2, "a second status line after growth");
+    await waitFor(() => out.includes("⚠"), "a finding to surface");
   } finally {
     child.kill();
   }
