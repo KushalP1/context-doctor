@@ -26,6 +26,7 @@ import { runWatch } from "./watch.js";
 import { exactTokenCount } from "./exact.js";
 import { checkBudget, loadConfig } from "./config.js";
 import { startDashboard } from "./dashboard.js";
+import { listCursorChats, parseCursorChat } from "./cursor.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -37,8 +38,9 @@ Usage:
   context-doctor install                        Wire the MCP server + skill into Claude Desktop,
                                                 Claude Code, and Cursor automatically
   context-doctor uninstall                      Undo install
-  context-doctor session [file]                 Profile a Claude Code session transcript
-                                                (default: the most recent session; --list to browse)
+  context-doctor session [file]                 Profile a Claude Code session transcript or a
+                                                ChatGPT export (default: most recent; --list to browse)
+  context-doctor cursor [--list]                Profile a Cursor chat from its local history
   context-doctor hook                           Claude Code UserPromptSubmit hook (installed
                                                 automatically by \`install\`; reads hook JSON on stdin)
   context-doctor report                         Impact report: exact proxy savings, hook activity,
@@ -178,6 +180,37 @@ function main(): void {
 
   if (args.command === "report") {
     void buildImpactReport(args.port).then((r) => console.log(r));
+    return;
+  }
+
+  if (args.command === "cursor") {
+    let chats;
+    try {
+      chats = listCursorChats();
+    } catch (e) {
+      console.error(`Could not read Cursor history: ${(e as Error).message}`);
+      process.exit(1);
+    }
+    if (chats.length === 0) {
+      console.error("No Cursor chats found (looked in Cursor's global and workspace storage).");
+      process.exit(1);
+    }
+    if (args.list) {
+      for (const c of chats) {
+        console.log(`${String(c.messageCount).padStart(5)} msgs  ${(c.title ?? "(untitled)").slice(0, 48).padEnd(50)} ${c.composerId}`);
+      }
+      return;
+    }
+    const chat = args.file ? chats.find((c) => c.composerId === args.file) ?? chats[0] : chats[0];
+    const parsed = parseCursorChat(chat);
+    const profile = profileConversation(parseConversation(parsed.conversationJson), args.model ?? parsed.model);
+    if (args.json) {
+      console.log(JSON.stringify({ chat: { id: chat.composerId, title: chat.title }, profile }, null, 2));
+    } else {
+      console.log(`Cursor chat: ${chat.title ?? "(untitled)"}\nId:          ${chat.composerId}\n`);
+      console.log(renderProfile(profile));
+      printBudgetStatus(profile, loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`)));
+    }
     return;
   }
 

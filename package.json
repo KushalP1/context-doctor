@@ -41,7 +41,7 @@
     "build": "tsc && node -e \"const fs=require('fs');['dist/cli.js','dist/mcp.js'].forEach(f=>fs.chmodSync(f,0o755))\"",
     "prepublishOnly": "npm run build",
     "dev": "tsc --watch",
-    "test": "npm run build && node --test dist/test/smoke.test.js dist/test/proxy.test.js dist/test/hook.test.js dist/test/mcp-http.test.js dist/test/doctor.test.js dist/test/watch.test.js dist/test/chatgpt-export.test.js dist/test/config.test.js dist/test/dashboard.test.js"
+    "test": "npm run build && node --test dist/test/smoke.test.js dist/test/proxy.test.js dist/test/hook.test.js dist/test/mcp-http.test.js dist/test/doctor.test.js dist/test/watch.test.js dist/test/chatgpt-export.test.js dist/test/config.test.js dist/test/dashboard.test.js dist/test/cursor.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
