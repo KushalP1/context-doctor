@@ -19,7 +19,7 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 |---|---|---|
 | **Exact tokenizer adapters** (optional) | `analyze --exact`: Anthropic count-tokens API for Claude (BYO key, opt-in), tiktoken for GPT (when installed alongside); heuristic remains the zero-config default and reports its drift | ✅ |
 | **Semantic near-duplicate detection** | Exact-hash dedupe misses "same doc pasted with a different lead-in"; sampled-shingle Jaccard flags ≥60%-similar pairs with estimated savings | ✅ |
-| **More session formats** | ChatGPT data-export (conversations.json) ✅ — auto-detected by `session`. Cursor transcripts ⏳ (format undocumented; needs a sample) | partial |
+| **More session formats** | ChatGPT data-export (conversations.json) ✅ and Cursor chat history (`context-doctor cursor`, both SQLite shapes) ✅ | ✅ |
 
 ## v0.7 — Proxy pro (shipped in 0.7.0)
 
