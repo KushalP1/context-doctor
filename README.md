@@ -90,7 +90,8 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | `context-doctor install` / `uninstall` | Wire (or remove) everything: MCP for Claude Desktop/Code/Cursor, the Agent Skill, the every-prompt hook |
 | `context-doctor analyze <file>` | Profile a conversation: token breakdown, findings, cost + latency estimates |
 | `context-doctor optimize <file>` | Apply the safe fixes; `--strategy prune-history` for consented lossy compaction |
-| `context-doctor session [file]` | Profile a Claude Code session transcript (defaults to your most recent; `--list` to browse) — also reads ChatGPT data exports (`conversations.json`) |
+| `context-doctor session [file]` | Profile a Claude Code session: live context, findings, **measured tokens and prompt-cache economics**. Also reads ChatGPT data exports (`conversations.json`) |
+| `context-doctor cursor [--list]` | Profile a chat from Cursor's local history (both storage formats) |
 | `context-doctor report` | Machine-wide impact report: exact proxy savings, hook activity, recoverable waste in recent sessions |
 | `context-doctor proxy` | Always-on local proxy that optimizes every Anthropic/OpenAI API request in flight (`/stats` for cumulative savings) |
 | `context-doctor watch [file]` | Live monitor of a growing session/agent trace: token/cost line per change, findings as they appear |
@@ -245,6 +246,8 @@ const { conversation, tokensBefore, tokensAfter } = optimizeConversation(chatJso
 - **Oversized tool results** — the #1 context killer in agent loops
 - **Duplicate content** — the same doc/result pasted twice
 - **Near-duplicates** — the same doc re-pasted with different surrounding words (shingle similarity, ≥60%)
+- **Repeated file reads** — the same file pulled in three or more times, every copy still in context
+- **Retained error output** — stack traces and failed commands kept verbatim long after the fix landed
 - **Repeated identical tool calls** — a signal your agent forgot earlier results
 - **Base64 / binary blobs** in text content
 - **Long history** past the point where models track the middle
@@ -295,6 +298,26 @@ Drop a `.contextdoctorrc` in a project (or your home directory) and context-doct
 ```
 
 The nearest file wins (walking up from the working directory, then `~`). `analyze` and `session` print a budget verdict, the every-prompt hook uses `maxTokens` as its warning threshold and names the breach to the model, and `optimize`/`proxy` pick up the defaults when you do not pass flags.
+
+## Prompt-cache economics (Claude Code sessions)
+
+Caching is the largest lever on LLM cost, and transcripts record exactly how it went — so `session` reports it as fact rather than estimate:
+
+```
+Prompt cache: 95.6% of input served from cache across 1117 requests
+  read 558.6M · written 25.5M · uncached 2k
+  input cost $438.88 — caching saved $2481.89 against $2920.76 uncached (list prices)
+```
+
+A cache read bills at ~10% of input while a write bills at ~125%, so a session that keeps invalidating its prefix can cost *more* than one with no caching at all. context-doctor warns on the two failure modes: a **low hit rate** (something early in the prompt changes every request) and **cache churn** (writes rivalling reads).
+
+## Enforce a budget in CI
+
+```bash
+npx context-doctor analyze conversation.json --fail-over-budget
+```
+
+Exits 1 when the `.contextdoctorrc` budget is breached, so a pull request can be gated on context size the same way it is gated on tests.
 
 ## Performance: what context-doctor itself costs
 

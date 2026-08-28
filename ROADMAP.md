@@ -41,6 +41,26 @@ The **1.0.0 version tag is deliberately not taken yet**: it should mean "the CLI
 surface and rc schema are stable and we will not break them", and that promise is
 worth making after real-world use, not on the day the features land.
 
+## Shipped since v1.0 planning (0.9.x)
+
+| Item | Why |
+|---|---|
+| **Prompt-cache economics** | Transcripts record cache reads/writes per request; `session` reports hit rate, real input cost against the uncached counterfactual, and warns on low hit rate or cache churn |
+| **Agent-waste detectors** | Repeated file reads and retained error output — the two patterns that dominate tool-heavy transcripts |
+| **Measured tokens over estimates** | Sessions use the API's own counts; the heuristic was measured to undercount by ~64% because transcripts omit system prompt and tool schemas |
+| **Live-context accuracy** | Compacted-away history no longer counted; savings reported as a union rather than a double-counted sum |
+| **Cursor support** | `context-doctor cursor` reads Cursor's SQLite history (both shapes) |
+| **CI gate** | `--fail-over-budget` exits 1 so pull requests can be gated on context size |
+
+## Next candidates
+
+| Item | Why | Size |
+|---|---|---|
+| **`context-doctor accuracy`** | Turn the ground-truth audit into a command: compare the heuristic against recorded API counts on local transcripts and report drift, so accuracy regressions surface automatically | S |
+| **Calibrate the heuristic from ground truth** | Those same recorded counts can fit chars-per-token per content type, replacing a hand-picked constant with a measured one | M |
+| **Cache-aware optimize** | Optimization currently ignores cache boundaries; rewriting a cached prefix can cost more than it saves. Teach the optimizer to leave stable prefixes alone | M |
+| **Bash-based file reads** | The repeated-read detector sees explicit read tools; `cat`/`sed` inside shell commands are invisible to it | S |
+
 ## Non-goals
 
 - **Cloud service / accounts / telemetry** — everything stays on the user's machine, permanently.
