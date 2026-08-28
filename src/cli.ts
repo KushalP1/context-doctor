@@ -67,6 +67,8 @@ Options:
   --exact                 (analyze) Add an exact token count: Anthropic count-tokens API for
                           Claude models (needs ANTHROPIC_API_KEY), tiktoken for GPT (if installed)
   --json                  Machine-readable output
+  --fail-over-budget      (analyze/session) Exit 1 when the .contextdoctorrc budget is
+                          exceeded — lets CI gate a pull request on context size
   --out <file>            (optimize) Write result to file instead of stdout
   --strategy <id>         (optimize) Strategy to run; repeatable.
                           Available: dedupe, trim-tool-results, strip-base64, prune-history
@@ -105,11 +107,12 @@ interface Args {
   upstreamOpenai?: string;
   list: boolean;
   exact: boolean;
+  failOverBudget: boolean;
   config?: string;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { json: false, strategies: [], list: false, exact: false };
+  const args: Args = { json: false, strategies: [], list: false, exact: false, failOverBudget: false };
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -118,6 +121,7 @@ function parseArgs(argv: string[]): Args {
       case "--json": args.json = true; break;
       case "--list": args.list = true; break;
       case "--exact": args.exact = true; break;
+      case "--fail-over-budget": args.failOverBudget = true; break;
       case "--model": args.model = argv[++i]; break;
       case "--out": args.out = argv[++i]; break;
       case "--strategy": args.strategies.push(argv[++i] as StrategyId); break;
@@ -138,9 +142,9 @@ function parseArgs(argv: string[]): Args {
 }
 
 /** Print budget status under a profile when a .contextdoctorrc defines one. */
-function printBudgetStatus(profile: Parameters<typeof checkBudget>[1], loaded: ReturnType<typeof loadConfig>): void {
+function printBudgetStatus(profile: Parameters<typeof checkBudget>[1], loaded: ReturnType<typeof loadConfig>): boolean {
   const budget = loaded.config.budget;
-  if (!budget || !loaded.path) return;
+  if (!budget || !loaded.path) return false;
   const verdict = checkBudget(budget, profile);
   console.log("");
   if (verdict.overBudget) {
@@ -148,6 +152,15 @@ function printBudgetStatus(profile: Parameters<typeof checkBudget>[1], loaded: R
     for (const b of verdict.breaches) console.log(`  x ${b}`);
   } else {
     console.log(`Within budget (${loaded.path}).`);
+  }
+  return verdict.overBudget;
+}
+
+/** Exit 1 when the caller asked CI to fail on a breach. */
+function applyBudgetGate(overBudget: boolean, failOverBudget: boolean): void {
+  if (overBudget && failOverBudget) {
+    console.error("context-doctor: over budget (--fail-over-budget)");
+    process.exitCode = 1;
   }
 }
 
@@ -272,7 +285,10 @@ function main(): void {
         console.log("");
         console.log(cache);
       }
-      printBudgetStatus(profile, loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`)));
+      applyBudgetGate(
+        printBudgetStatus(profile, loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`))),
+        args.failOverBudget
+      );
     }
     return;
   }
@@ -327,7 +343,8 @@ function main(): void {
     const loaded = loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`));
     const profile = profileConversation(parseConversation(input), args.model ?? loaded.config.model);
     console.log(args.json ? JSON.stringify(profile, null, 2) : renderProfile(profile));
-    if (!args.json) printBudgetStatus(profile, loaded);
+    if (!args.json) applyBudgetGate(printBudgetStatus(profile, loaded), args.failOverBudget);
+    else applyBudgetGate(checkBudget(loaded.config.budget, profile).overBudget, args.failOverBudget);
     if (args.exact) {
       void exactTokenCount(input, args.model).then((exact) => {
         if (exact.tokens !== undefined) {

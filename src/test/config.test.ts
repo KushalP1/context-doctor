@@ -84,3 +84,22 @@ test("analyze stays quiet about budgets when no rc exists", async () => {
   });
   assert.ok(!out.includes("BUDGET"), "no budget chatter without an rc");
 });
+
+test("--fail-over-budget exits 1 on a breach and 0 otherwise", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ctxdoc-gate-"));
+  const chat = join(root, "chat.json");
+  writeFileSync(chat, JSON.stringify({ messages: [{ role: "user", content: "a long message ".repeat(60) }] }));
+
+  const run = (): Promise<number> =>
+    new Promise((resolve) => {
+      execFile(process.execPath, [cliPath, "analyze", chat, "--fail-over-budget"], { cwd: root }, (err) =>
+        resolve(err ? ((err as NodeJS.ErrnoException & { code?: number }).code ?? 1) : 0)
+      );
+    });
+
+  writeFileSync(join(root, RC_FILENAME), JSON.stringify({ budget: { maxTokens: 10 } }));
+  assert.equal(await run(), 1, "over budget must fail the build");
+
+  writeFileSync(join(root, RC_FILENAME), JSON.stringify({ budget: { maxTokens: 10_000_000 } }));
+  assert.equal(await run(), 0, "within budget must pass");
+});

@@ -65,6 +65,8 @@ Options:
   --exact                 (analyze) Add an exact token count: Anthropic count-tokens API for
                           Claude models (needs ANTHROPIC_API_KEY), tiktoken for GPT (if installed)
   --json                  Machine-readable output
+  --fail-over-budget      (analyze/session) Exit 1 when the .contextdoctorrc budget is
+                          exceeded — lets CI gate a pull request on context size
   --out <file>            (optimize) Write result to file instead of stdout
   --strategy <id>         (optimize) Strategy to run; repeatable.
                           Available: dedupe, trim-tool-results, strip-base64, prune-history
@@ -87,7 +89,7 @@ Examples:
           export OPENAI_BASE_URL=http://localhost:8787/v1
 `;
 function parseArgs(argv) {
-    const args = { json: false, strategies: [], list: false, exact: false };
+    const args = { json: false, strategies: [], list: false, exact: false, failOverBudget: false };
     const positional = [];
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
@@ -104,6 +106,9 @@ function parseArgs(argv) {
                 break;
             case "--exact":
                 args.exact = true;
+                break;
+            case "--fail-over-budget":
+                args.failOverBudget = true;
                 break;
             case "--model":
                 args.model = argv[++i];
@@ -149,7 +154,7 @@ function parseArgs(argv) {
 function printBudgetStatus(profile, loaded) {
     const budget = loaded.config.budget;
     if (!budget || !loaded.path)
-        return;
+        return false;
     const verdict = checkBudget(budget, profile);
     console.log("");
     if (verdict.overBudget) {
@@ -159,6 +164,14 @@ function printBudgetStatus(profile, loaded) {
     }
     else {
         console.log(`Within budget (${loaded.path}).`);
+    }
+    return verdict.overBudget;
+}
+/** Exit 1 when the caller asked CI to fail on a breach. */
+function applyBudgetGate(overBudget, failOverBudget) {
+    if (overBudget && failOverBudget) {
+        console.error("context-doctor: over budget (--fail-over-budget)");
+        process.exitCode = 1;
     }
 }
 function readInput(file) {
@@ -275,7 +288,7 @@ function main() {
                 console.log("");
                 console.log(cache);
             }
-            printBudgetStatus(profile, loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`)));
+            applyBudgetGate(printBudgetStatus(profile, loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`))), args.failOverBudget);
         }
         return;
     }
@@ -328,7 +341,9 @@ function main() {
         const profile = profileConversation(parseConversation(input), args.model ?? loaded.config.model);
         console.log(args.json ? JSON.stringify(profile, null, 2) : renderProfile(profile));
         if (!args.json)
-            printBudgetStatus(profile, loaded);
+            applyBudgetGate(printBudgetStatus(profile, loaded), args.failOverBudget);
+        else
+            applyBudgetGate(checkBudget(loaded.config.budget, profile).overBudget, args.failOverBudget);
         if (args.exact) {
             void exactTokenCount(input, args.model).then((exact) => {
                 if (exact.tokens !== undefined) {
