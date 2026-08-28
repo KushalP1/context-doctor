@@ -241,3 +241,53 @@ test("a transcript without usage reports no measured figure", async () => {
   writeFileSync(file, JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }) + "\n");
   assert.equal(parseSessionFile(file).reportedInputTokens, undefined);
 });
+
+test("flags a file read repeatedly, each copy still in context", () => {
+  const fileBody = "export function handler() { /* body */ }\n".repeat(200);
+  const messages: unknown[] = [];
+  for (let i = 0; i < 3; i++) {
+    messages.push({ role: "assistant", content: [{ type: "tool_use", id: `r${i}`, name: "Read", input: { file_path: "/src/api/handler.ts" } }] });
+    messages.push({ role: "user", content: [{ type: "tool_result", tool_use_id: `r${i}`, content: fileBody }] });
+  }
+  const profile = profileConversation(parseConversation(JSON.stringify({ messages })));
+  const finding = profile.findings.find((f) => f.id === "repeated_file_read");
+  assert.ok(finding, "repeated read should be flagged");
+  assert.match(finding!.message, /handler\.ts was read 3 times/);
+  assert.ok(finding!.estSavings > 0);
+});
+
+test("a file read once is not flagged", () => {
+  const conv = JSON.stringify({
+    messages: [
+      { role: "assistant", content: [{ type: "tool_use", id: "r1", name: "Read", input: { file_path: "/src/a.ts" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "r1", content: "contents ".repeat(400) }] },
+    ],
+  });
+  const profile = profileConversation(parseConversation(conv));
+  assert.equal(profile.findings.some((f) => f.id === "repeated_file_read"), false);
+});
+
+test("flags large failed tool output retained verbatim", () => {
+  const trace = "Traceback (most recent call last):\n  File \"app.py\", line 42, in handler\n" + "    frame detail\n".repeat(400);
+  const conv = JSON.stringify({
+    messages: [
+      { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "python app.py" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: trace }] },
+    ],
+  });
+  const profile = profileConversation(parseConversation(conv));
+  const finding = profile.findings.find((f) => f.id === "retained_error_output");
+  assert.ok(finding, "failed output should be flagged");
+  assert.match(finding!.suggestion, /one line that identifies the failure/);
+});
+
+test("successful tool output is not mistaken for an error", () => {
+  const conv = JSON.stringify({
+    messages: [
+      { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "file listing line\n".repeat(400) }] },
+    ],
+  });
+  const profile = profileConversation(parseConversation(conv));
+  assert.equal(profile.findings.some((f) => f.id === "retained_error_output"), false);
+});

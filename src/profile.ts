@@ -24,6 +24,8 @@ export type FindingId =
   | "duplicate_content"
   | "near_duplicate"
   | "repeated_tool_call"
+  | "repeated_file_read"
+  | "retained_error_output"
   | "base64_blob"
   | "long_history"
   | "large_system_prompt"
@@ -268,6 +270,57 @@ export function profileConversation(conv: NormalizedConversation, model?: string
         messages: idxs,
       });
     }
+  }
+
+  // -- Same file read again and again -----------------------------------------
+  // The dominant waste in agent loops: a file re-read because its earlier
+  // contents scrolled out of attention, leaving several full copies in context.
+  {
+    const readsByPath = new Map<string, number[]>();
+    for (const p of perMessage) {
+      if (p.msg.kind !== "tool_call" || !p.msg.toolCallText) continue;
+      if (!/read|open|cat|view|get_file/i.test(p.msg.toolName ?? "")) continue;
+      const match = /"(?:file_path|filePath|path|file)"\s*:\s*"([^"]{3,})"/.exec(p.msg.toolCallText);
+      if (!match) continue;
+      const path = match[1];
+      readsByPath.set(path, [...(readsByPath.get(path) ?? []), p.msg.index]);
+    }
+    for (const [path, indexes] of readsByPath) {
+      if (indexes.length < 3) continue;
+      // Each re-read pulls the file in again; all but the last are recoverable.
+      const resultTokens = perMessage
+        .filter((p) => p.msg.kind === "tool_result" && indexes.some((i) => p.msg.index === i + 1))
+        .reduce((sum, p) => sum + p.tokens, 0);
+      const savings = Math.round((resultTokens * (indexes.length - 1)) / indexes.length);
+      findings.push({
+        id: "repeated_file_read",
+        severity: savings > 4000 ? "high" : "warn",
+        estSavings: savings,
+        message: `${path.split("/").pop()} was read ${indexes.length} times (messages #${indexes.join(", #")}), keeping ${indexes.length} copies in context.`,
+        suggestion: "Re-read a file only after it changes; otherwise refer back to the copy already in context.",
+        messages: indexes,
+      });
+    }
+  }
+
+  // -- Failed tool output kept verbatim ---------------------------------------
+  // Stack traces and command failures are read once and never again, yet they
+  // are often the largest blocks in an agent transcript.
+  for (const p of perMessage) {
+    if (p.msg.kind !== "tool_result" || p.tokens < 500) continue;
+    const looksFailed =
+      /Traceback \(most recent call last\)|command not found|npm error|ERR!|\bexit code [1-9]|Exception in thread|FAILED|error TS\d+/i.test(
+        p.msg.text
+      );
+    if (!looksFailed) continue;
+    findings.push({
+      id: "retained_error_output",
+      severity: "warn",
+      estSavings: Math.round(p.tokens * 0.85),
+      message: `Message #${p.msg.index} holds ~${p.tokens} tokens of failed tool output (errors, stack trace or non-zero exit).`,
+      suggestion: "Keep the one line that identifies the failure and drop the rest — a full trace has no value once the fix is understood.",
+      messages: [p.msg.index],
+    });
   }
 
   // -- Base64 / binary blobs ---------------------------------------------------
