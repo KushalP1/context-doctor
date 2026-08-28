@@ -26,6 +26,7 @@ import { exactTokenCount } from "./exact.js";
 import { checkBudget, loadConfig } from "./config.js";
 import { startDashboard } from "./dashboard.js";
 import { listCursorChats, parseCursorChat } from "./cursor.js";
+import { analyzeCacheUsage, renderCacheReport } from "./cache.js";
 const HELP = `context-doctor — profile and optimize LLM context windows
 
 Usage:
@@ -268,6 +269,11 @@ function main() {
                     "That figure includes the harness's system prompt, tool schemas and skills, which the\n" +
                     "transcript does not record — so it is larger than the breakdown above, which covers\n" +
                     "conversation messages only. Findings and savings apply to the messages.");
+            }
+            const cache = renderCacheReport(analyzeCacheUsage(path));
+            if (cache) {
+                console.log("");
+                console.log(cache);
             }
             printBudgetStatus(profile, loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`)));
         }
