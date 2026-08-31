@@ -88,10 +88,11 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | Command | What it does |
 |---|---|
 | `context-doctor install` / `uninstall` | Wire (or remove) everything: MCP for Claude Desktop/Code/Cursor, the Agent Skill, the every-prompt hook |
-| `context-doctor analyze <file>` | Profile a conversation: token breakdown, findings, cost + latency estimates |
+| `context-doctor analyze <file>` | Profile a conversation: token breakdown, findings, cost + latency estimates. `--fail-over-budget` exits 1 on a breach, for CI |
 | `context-doctor optimize <file>` | Apply the safe fixes; `--strategy prune-history` for consented lossy compaction |
 | `context-doctor session [file]` | Profile a Claude Code session: live context, findings, **measured tokens and prompt-cache economics**. Also reads ChatGPT data exports (`conversations.json`) |
 | `context-doctor cursor [--list]` | Profile a chat from Cursor's local history (both storage formats) |
+| `context-doctor cursor [--list]` | Profile a Cursor chat from its local history (reads Cursor's SQLite store in place) |
 | `context-doctor report` | Machine-wide impact report: exact proxy savings, hook activity, recoverable waste in recent sessions |
 | `context-doctor proxy` | Always-on local proxy that optimizes every Anthropic/OpenAI API request in flight (`/stats` for cumulative savings) |
 | `context-doctor watch [file]` | Live monitor of a growing session/agent trace: token/cost line per change, findings as they appear |
@@ -366,6 +367,10 @@ git push --follow-tags
 Known gotcha: if `npm publish` fails with **`404 Not Found - PUT …/context-doctor`** on a package that clearly exists, the real cause is an **expired npm login token** — npm reports unauthenticated publishes as a 404, not a 401. Check with `npm whoami`; if that errors, run `npm login` and publish again.
 
 Also keep the MCP server version in `src/mcp.ts` in sync with `package.json`, and remember `dist/` is committed — run `npm run build` before committing so the CI dist-sync check passes.
+
+## Contributing
+
+Issues and PRs welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for the six rules that keep this tool trustworthy (no API keys, nothing leaves the machine, no silent data loss, measurements not guesses, the hot path stays cheap, tests with every change) and a list of good first issues. What is planned next lives in [ROADMAP.md](./ROADMAP.md).
 
 ## License
 

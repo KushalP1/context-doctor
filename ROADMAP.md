@@ -54,12 +54,34 @@ worth making after real-world use, not on the day the features land.
 
 ## Next candidates
 
+Grouped by the question each one answers. Sizes are S/M/L; nothing here is
+committed until it ships.
+
+### Make the numbers trustworthy
+
 | Item | Why | Size |
 |---|---|---|
-| **`context-doctor accuracy`** | Turn the ground-truth audit into a command: compare the heuristic against recorded API counts on local transcripts and report drift, so accuracy regressions surface automatically | S |
+| **`context-doctor accuracy`** | Turn the ground-truth audit into a command: compare the heuristic against recorded API counts on local transcripts and report drift, so accuracy regressions surface automatically instead of by inspection | S |
 | **Calibrate the heuristic from ground truth** | Those same recorded counts can fit chars-per-token per content type, replacing a hand-picked constant with a measured one | M |
-| **Cache-aware optimize** | Optimization currently ignores cache boundaries; rewriting a cached prefix can cost more than it saves. Teach the optimizer to leave stable prefixes alone | M |
-| **Bash-based file reads** | The repeated-read detector sees explicit read tools; `cat`/`sed` inside shell commands are invisible to it | S |
+| **Bash-based file reads** | The repeated-read detector sees explicit read tools; `cat`/`sed`/`head` inside shell commands are invisible to it, so agent sessions that read via the shell look cleaner than they are | S |
+| **Subagent accounting** | Sidechain traffic is excluded from session profiles because it has its own window — but it still costs money, and nothing currently reports what subagents spent | M |
+
+### Turn advice into action
+
+| Item | Why | Size |
+|---|---|---|
+| **Cache-aware optimize** | Optimization ignores cache boundaries today; rewriting a cached prefix can cost more than it saves. The optimizer should leave stable prefixes alone | M |
+| **Cache breakpoint suggestions** | The proxy advisor says the cache is churning; the useful next step is saying *where* to place `cache_control` given the observed traffic | M |
+| **`context-doctor diff`** | Compare two profiles — before/after an optimization, or two sessions — so an improvement can be demonstrated rather than asserted | S |
+
+### Fit into how people actually work
+
+| Item | Why | Size |
+|---|---|---|
+| **Persist proxy stats** | `/stats` lives in memory, so every proxy restart resets the savings history the dashboard and report draw on. Appending to the ledger makes the record durable | S |
+| **`--redact` for shareable output** | Profiles quote message previews. Anyone pasting a profile into an issue is pasting fragments of their conversation; a redacted mode makes bug reports safe by default | S |
+| **Editor status bar** | A VS Code / Cursor extension showing live context health where the work happens, rather than in a separate terminal | L |
+| **Config presets** | `.contextdoctorrc` starts empty; shipping sensible presets (chat app, coding agent, batch pipeline) would make budgets adoptable without tuning | S |
 
 ## Non-goals
 
