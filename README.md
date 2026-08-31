@@ -92,7 +92,6 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | `context-doctor optimize <file>` | Apply the safe fixes; `--strategy prune-history` for consented lossy compaction |
 | `context-doctor session [file]` | Profile a Claude Code session: live context, findings, **measured tokens and prompt-cache economics**. Also reads ChatGPT data exports (`conversations.json`) |
 | `context-doctor cursor [--list]` | Profile a chat from Cursor's local history (both storage formats) |
-| `context-doctor cursor [--list]` | Profile a Cursor chat from its local history (reads Cursor's SQLite store in place) |
 | `context-doctor report` | Machine-wide impact report: exact proxy savings, hook activity, recoverable waste in recent sessions |
 | `context-doctor proxy` | Always-on local proxy that optimizes every Anthropic/OpenAI API request in flight (`/stats` for cumulative savings) |
 | `context-doctor watch [file]` | Live monitor of a growing session/agent trace: token/cost line per change, findings as they appear |
