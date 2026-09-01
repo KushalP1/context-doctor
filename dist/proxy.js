@@ -15,6 +15,7 @@ import http from "node:http";
 import { optimizeConversation } from "./optimize.js";
 import { formatTokens } from "./tokens.js";
 import { formatUsd, inputCostUsd, pricingFor } from "./pricing.js";
+import { recordLedger } from "./ledger.js";
 /** Connection-level headers that must not be forwarded. */
 const SKIP_REQUEST_HEADERS = new Set(["host", "content-length", "connection", "transfer-encoding", "accept-encoding", "expect"]);
 const SKIP_RESPONSE_HEADERS = new Set(["content-length", "content-encoding", "transfer-encoding", "connection"]);
@@ -208,6 +209,36 @@ export function startProxy(opts = {}) {
             res.end(JSON.stringify({ error: `context-doctor proxy: ${e.message}` }));
         }
     });
+    // Savings live in memory, so a restart would erase the record the dashboard
+    // and report draw on. Checkpoint the delta to the ledger periodically and on
+    // shutdown, so the history survives the process.
+    let checkpointedTokens = 0;
+    let checkpointedUsd = 0;
+    let checkpointedRequests = 0;
+    const checkpoint = () => {
+        const savedDelta = stats.tokensSaved - checkpointedTokens;
+        if (savedDelta <= 0)
+            return;
+        recordLedger({
+            ev: "proxy",
+            src: "proxy",
+            saved: savedDelta,
+            usd: Number((stats.estUsdSaved - checkpointedUsd).toFixed(6)),
+            requests: stats.optimizedRequests - checkpointedRequests,
+        });
+        checkpointedTokens = stats.tokensSaved;
+        checkpointedUsd = stats.estUsdSaved;
+        checkpointedRequests = stats.optimizedRequests;
+    };
+    const checkpointTimer = setInterval(checkpoint, 60_000);
+    checkpointTimer.unref?.(); // never hold the process open on our account
+    for (const signal of ["SIGINT", "SIGTERM"]) {
+        process.once(signal, () => {
+            checkpoint();
+            process.exit(0);
+        });
+    }
+    server.on("close", checkpoint);
     const host = opts.host ?? "127.0.0.1";
     server.listen(port, host, () => {
         console.error(`context-doctor proxy listening on http://${host}:${port}`);

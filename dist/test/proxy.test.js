@@ -119,3 +119,40 @@ test("unsupported paths get a clear 404, health stays up", async () => {
     const health = await (await fetch(`http://localhost:${proxyPort}/health`)).json();
     assert.equal(health.ok, true);
 });
+test("savings are checkpointed to the ledger so they survive a restart", async () => {
+    const { mkdtempSync, existsSync, readFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { startProxy } = await import("../proxy.js");
+    // Point the ledger at a scratch dir so the developer's real one is untouched.
+    const dir = mkdtempSync(join(tmpdir(), "ctxdoc-proxyledger-"));
+    const prevState = process.env.CONTEXT_DOCTOR_HOOK_STATE;
+    process.env.CONTEXT_DOCTOR_HOOK_STATE = join(dir, "state.json");
+    const p = startProxy({ port: 0, anthropicUpstream: `http://localhost:${upstreamPort}` });
+    await new Promise((r) => p.once("listening", () => r()));
+    const pPort = p.address().port;
+    try {
+        await fetch(`http://localhost:${pPort}/v1/messages`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: payload,
+        });
+        // Closing the server checkpoints whatever has not been written yet.
+        await new Promise((r) => p.close(() => r()));
+        const ledgerFile = join(dir, ".context-doctor-ledger.jsonl");
+        assert.ok(existsSync(ledgerFile), "ledger written on shutdown");
+        const entries = readFileSync(ledgerFile, "utf8")
+            .trim()
+            .split("\n")
+            .map((l) => JSON.parse(l));
+        const proxyEntry = entries.find((e) => e.ev === "proxy");
+        assert.ok(proxyEntry, "a proxy checkpoint was recorded");
+        assert.ok(proxyEntry.saved > 0, "checkpoint carries the tokens saved");
+    }
+    finally {
+        if (prevState === undefined)
+            delete process.env.CONTEXT_DOCTOR_HOOK_STATE;
+        else
+            process.env.CONTEXT_DOCTOR_HOOK_STATE = prevState;
+    }
+});

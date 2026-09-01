@@ -68,17 +68,24 @@ export async function buildImpactReport(proxyPort = 8787) {
             optimizeUsd += inputCostUsd(e.saved, pricing);
     }
     const proxy = await fetchProxyStats(proxyPort);
-    const proxySaved = proxy?.tokensSaved ?? 0;
+    // Persisted checkpoints cover proxy runs that have since exited; the live
+    // process reports whatever it has not checkpointed yet.
+    const proxyEvents = ledger.filter((e) => e.ev === "proxy");
+    const proxyHistoric = proxyEvents.reduce((s, e) => s + (e.saved ?? 0), 0);
+    const proxySaved = proxyHistoric + (proxy?.tokensSaved ?? 0);
     // -- Headline: what context-doctor has saved ----------------------------------
     const totalSaved = proxySaved + optimizeSaved + totalReduction;
     lines.push("Tokens context-doctor saved (measured)");
     lines.push("─".repeat(56));
     lines.push(`TOTAL: ~${formatTokens(totalSaved)} tokens`);
     if (proxy) {
-        lines.push(`  · proxy (exact, current run): ${formatTokens(proxySaved)} across ${proxy.optimizedRequests}/${proxy.requests} requests ≈ ${formatUsd(proxy.estUsdSaved)}`);
+        lines.push(`  · proxy (exact): ${formatTokens(proxySaved)} — ${formatTokens(proxyHistoric)} from earlier runs, ` +
+            `${formatTokens(proxy.tokensSaved)} live across ${proxy.optimizedRequests}/${proxy.requests} requests ≈ ${formatUsd(proxy.estUsdSaved)}`);
     }
     else {
-        lines.push(`  · proxy: not running on :${proxyPort} (its exact savings appear here while it runs)`);
+        lines.push(proxyHistoric > 0
+            ? `  · proxy (exact, from ${proxyEvents.length} earlier run checkpoint(s)): ${formatTokens(proxyHistoric)} — not running now`
+            : `  · proxy: not running on :${proxyPort} (its exact savings appear here once it runs)`);
     }
     const familyNote = [...savedByFamily.entries()]
         .filter(([, v]) => v > 0)

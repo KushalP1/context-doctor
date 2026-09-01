@@ -7,6 +7,7 @@
  *   check    — hook deep-parsed a session   {ev?: undefined|"check", sid, tok, warn}
  *              (pre-0.3.6 hook entries have no `ev` field; treated as checks)
  *   optimize — an optimization was applied  {ev: "optimize", src: "cli"|"mcp", saved, model?}
+ *   proxy    — proxy savings checkpoint      {ev: "proxy", saved, usd?, requests?}
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
