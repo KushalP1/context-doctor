@@ -92,7 +92,7 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | `context-doctor optimize <file>` | Apply the safe fixes; `--strategy prune-history` for consented lossy compaction |
 | `context-doctor session [file]` | Profile a Claude Code session: live context, findings, **measured tokens and prompt-cache economics**. Also reads ChatGPT data exports (`conversations.json`) |
 | `context-doctor cursor [--list]` | Profile a chat from Cursor's local history (both storage formats) |
-| `context-doctor report` | Machine-wide impact report: exact proxy savings, hook activity, recoverable waste in recent sessions |
+| `context-doctor report` | Machine-wide impact report (proxy savings persist across restarts): exact proxy savings, hook activity, recoverable waste in recent sessions |
 | `context-doctor proxy` | Always-on local proxy that optimizes every Anthropic/OpenAI API request in flight (`/stats` for cumulative savings) |
 | `context-doctor watch [file]` | Live monitor of a growing session/agent trace: token/cost line per change, findings as they appear |
 | `context-doctor doctor` | Self-check the whole installation — one pasteable ✓/✗ diagnosis with fixes |
@@ -319,6 +319,16 @@ npx context-doctor analyze conversation.json --fail-over-budget
 
 Exits 1 when the `.contextdoctorrc` budget is breached, so a pull request can be gated on context size the same way it is gated on tests.
 
+## Sharing a profile safely
+
+A profile quotes message previews and file paths, so pasting one into an issue pastes fragments of real work. `--redact` keeps every number and the finding structure but replaces content with `[redacted]` and masks paths:
+
+```bash
+npx context-doctor session --redact
+```
+
+`context-doctor doctor` is safe to paste as-is: it reports integration status, never conversation content.
+
 ## Performance: what context-doctor itself costs
 
 A tool that promises speed must be near-free. Measured overhead per touchpoint:
@@ -329,6 +339,7 @@ A tool that promises speed must be near-free. Measured overhead per touchpoint:
 | MCP server | Spawned once per app session | Tools run only when called; standing instructions cost **~110 tokens per conversation** — deliberately terse |
 | Proxy | Per API request | ~1–3ms of CPU (parse → optimize → re-serialize) against typical model latencies of hundreds of ms; responses stream through chunk-by-chunk, never buffered |
 | Skill | Loads only when relevant | ~1k tokens while active; its always-present description is ~60 tokens |
+| Profiling a session | On demand, and on hook growth events | ~160ms for an 8.5MB / 1,855-message transcript (near-duplicate pairs that cannot clear the similarity bar are skipped without comparison) |
 | CLI / library | Only when you run it | Not in any hot path |
 
 Net effect is strongly negative overhead: the tokens these touchpoints save on every subsequent call dwarf what they cost.

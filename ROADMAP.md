@@ -51,6 +51,9 @@ worth making after real-world use, not on the day the features land.
 | **Live-context accuracy** | Compacted-away history no longer counted; savings reported as a union rather than a double-counted sum |
 | **Cursor support** | `context-doctor cursor` reads Cursor's SQLite history (both shapes) |
 | **CI gate** | `--fail-over-budget` exits 1 so pull requests can be gated on context size |
+| **Durable proxy savings** | `/stats` was memory-only, so every restart erased the record; the proxy now checkpoints to the ledger and the report separates persisted runs from live ones |
+| **`--redact`** | Profiles can be pasted into issues with content and paths masked and the numbers intact |
+| **Faster profiling** | Near-duplicate pairs whose shingle-set sizes make the threshold unreachable are skipped: 271ms → 160ms on an 8.5MB session, identical findings |
 
 ## Next candidates
 
@@ -78,8 +81,6 @@ committed until it ships.
 
 | Item | Why | Size |
 |---|---|---|
-| **Persist proxy stats** | `/stats` lives in memory, so every proxy restart resets the savings history the dashboard and report draw on. Appending to the ledger makes the record durable | S |
-| **`--redact` for shareable output** | Profiles quote message previews. Anyone pasting a profile into an issue is pasting fragments of their conversation; a redacted mode makes bug reports safe by default | S |
 | **Editor status bar** | A VS Code / Cursor extension showing live context health where the work happens, rather than in a separate terminal | L |
 | **Config presets** | `.contextdoctorrc` starts empty; shipping sensible presets (chat app, coding agent, batch pipeline) would make budgets adoptable without tuning | S |
 
