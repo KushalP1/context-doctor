@@ -160,6 +160,9 @@ function sampledShingles(text: string): Set<number> {
   return out;
 }
 
+/** Similarity at or above which two messages count as near-duplicates. */
+const SIMILARITY_THRESHOLD = 0.6;
+
 function jaccard(a: Set<number>, b: Set<number>): number {
   if (a.size === 0 || b.size === 0) return 0;
   let inter = 0;
@@ -225,6 +228,11 @@ export function profileConversation(conv: NormalizedConversation, model?: string
       .sort((a, b) => b.tokens - a.tokens)
       .slice(0, 150);
     const shingleSets = candidates.map((p) => sampledShingles(p.msg.text));
+    // Jaccard has a hard ceiling of |smaller| / |larger|: two shingle sets of
+    // very different sizes CANNOT reach the threshold, so those pairs are
+    // skipped without intersecting them. Exact, not heuristic — it changes
+    // runtime, never results.
+    const sizes = shingleSets.map((set) => set.size);
     const exactDup = new Set(
       findings.filter((f) => f.id === "duplicate_content").flatMap((f) => f.messages)
     );
@@ -233,8 +241,11 @@ export function profileConversation(conv: NormalizedConversation, model?: string
         const a = candidates[i];
         const b = candidates[j];
         if (exactDup.has(a.msg.index) && exactDup.has(b.msg.index)) continue; // already flagged exactly
+        const small = Math.min(sizes[i], sizes[j]);
+        const large = Math.max(sizes[i], sizes[j]);
+        if (large === 0 || small / large < SIMILARITY_THRESHOLD) continue; // cannot clear the bar
         const sim = jaccard(shingleSets[i], shingleSets[j]);
-        if (sim >= 0.6) {
+        if (sim >= SIMILARITY_THRESHOLD) {
           const smaller = Math.min(a.tokens, b.tokens);
           const [first, second] = a.msg.index <= b.msg.index ? [a, b] : [b, a];
           findings.push({
