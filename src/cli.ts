@@ -66,6 +66,8 @@ Options:
   --model <name>          Model name for window-size math (e.g. claude-sonnet-5, gpt-4o)
   --exact                 (analyze) Add an exact token count: Anthropic count-tokens API for
                           Claude models (needs ANTHROPIC_API_KEY), tiktoken for GPT (if installed)
+  --redact                Mask message previews and file paths in the report, so it can be
+                          shared in a bug report without leaking conversation content
   --json                  Machine-readable output
   --fail-over-budget      (analyze/session) Exit 1 when the .contextdoctorrc budget is
                           exceeded — lets CI gate a pull request on context size
@@ -107,12 +109,13 @@ interface Args {
   upstreamOpenai?: string;
   list: boolean;
   exact: boolean;
+  redact: boolean;
   failOverBudget: boolean;
   config?: string;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { json: false, strategies: [], list: false, exact: false, failOverBudget: false };
+  const args: Args = { json: false, strategies: [], list: false, exact: false, redact: false, failOverBudget: false };
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -121,6 +124,7 @@ function parseArgs(argv: string[]): Args {
       case "--json": args.json = true; break;
       case "--list": args.list = true; break;
       case "--exact": args.exact = true; break;
+      case "--redact": args.redact = true; break;
       case "--fail-over-budget": args.failOverBudget = true; break;
       case "--model": args.model = argv[++i]; break;
       case "--out": args.out = argv[++i]; break;
@@ -222,7 +226,7 @@ function main(): void {
       console.log(JSON.stringify({ chat: { id: chat.composerId, title: chat.title }, profile }, null, 2));
     } else {
       console.log(`Cursor chat: ${chat.title ?? "(untitled)"}\nId:          ${chat.composerId}\n`);
-      console.log(renderProfile(profile));
+      console.log(renderProfile(profile, { redact: args.redact }));
       if (parsed.reportedInputTokens) {
         console.log("");
         console.log(
@@ -270,7 +274,7 @@ function main(): void {
         console.log(`Note:    ${parsed.compactedAway} earlier message(s) were compacted away and are NOT counted below — this is the live context the model still sees.`);
       }
       console.log("");
-      console.log(renderProfile(profile));
+      console.log(renderProfile(profile, { redact: args.redact }));
       if (parsed.reportedInputTokens) {
         console.log("");
         console.log(
@@ -342,7 +346,7 @@ function main(): void {
   if (args.command === "analyze") {
     const loaded = loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`));
     const profile = profileConversation(parseConversation(input), args.model ?? loaded.config.model);
-    console.log(args.json ? JSON.stringify(profile, null, 2) : renderProfile(profile));
+    console.log(args.json ? JSON.stringify(profile, null, 2) : renderProfile(profile, { redact: args.redact }));
     if (!args.json) applyBudgetGate(printBudgetStatus(profile, loaded), args.failOverBudget);
     else applyBudgetGate(checkBudget(loaded.config.budget, profile).overBudget, args.failOverBudget);
     if (args.exact) {

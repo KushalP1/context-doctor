@@ -291,3 +291,26 @@ test("successful tool output is not mistaken for an error", () => {
   const profile = profileConversation(parseConversation(conv));
   assert.equal(profile.findings.some((f) => f.id === "retained_error_output"), false);
 });
+
+test("--redact hides conversation content but keeps the numbers", async () => {
+  const { renderProfile } = await import("../report.js");
+  const secret = "PROJECT NIGHTFALL launches on the 14th with pricing at 4999 per seat. ".repeat(20);
+  const conv = JSON.stringify({
+    messages: [
+      { role: "assistant", content: [{ type: "tool_use", id: "r1", name: "Read", input: { file_path: "/srv/secrets/plan.ts" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "r1", content: secret }] },
+    ],
+  });
+  const profile = profileConversation(parseConversation(conv), "claude-sonnet-5");
+
+  const plain = renderProfile(profile);
+  const redacted = renderProfile(profile, { redact: true });
+
+  assert.ok(plain.includes("NIGHTFALL"), "plain output quotes the content");
+  assert.ok(!redacted.includes("NIGHTFALL"), "redacted output must not leak message text");
+  assert.ok(!redacted.includes("/srv/secrets"), "redacted output must not leak paths");
+  assert.ok(redacted.includes("[redacted]"));
+  // The useful parts survive: totals, categories and finding structure.
+  assert.ok(redacted.includes("CONTEXT DOCTOR — profile"));
+  assert.ok(redacted.includes("Tool results"));
+});

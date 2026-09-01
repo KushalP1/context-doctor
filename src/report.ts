@@ -24,7 +24,23 @@ function bar(fraction: number, width = 28): string {
   return "█".repeat(filled) + "░".repeat(width - filled);
 }
 
-export function renderProfile(profile: ContextProfile): string {
+export interface RenderOptions {
+  /**
+   * Replace anything quoted from the conversation with a placeholder, so a
+   * profile can be pasted into a bug report without leaking content. Numbers
+   * and structure — the parts that make a report useful — are kept.
+   */
+  redact?: boolean;
+}
+
+/** Mask filesystem paths and quoted fragments inside a finding's text. */
+function redactText(text: string): string {
+  return text
+    .replace(/(?:\/[\w.@ -]+){2,}/g, "[path]")
+    .replace(/\b[\w.-]+\.(ts|tsx|js|jsx|py|go|rs|java|rb|md|json|ya?ml|sql|sh)\b/gi, "[file]");
+}
+
+export function renderProfile(profile: ContextProfile, options: RenderOptions = {}): string {
   const lines: string[] = [];
   const p = profile;
 
@@ -65,7 +81,9 @@ export function renderProfile(profile: ContextProfile): string {
   lines.push("─".repeat(56));
   for (const m of p.largestMessages) {
     const label = m.toolName ? `${m.kind}:${m.toolName}` : m.kind;
-    lines.push(`  #${m.index} [${label}] ~${formatTokens(m.tokens)}  ${m.preview}`);
+    // The preview is the only place raw conversation text reaches the report.
+    const body = options.redact ? "[redacted]" : m.preview;
+    lines.push(`  #${m.index} [${label}] ~${formatTokens(m.tokens)}  ${body}`);
   }
   lines.push("");
 
@@ -75,7 +93,7 @@ export function renderProfile(profile: ContextProfile): string {
     lines.push("─".repeat(56));
     for (const f of p.findings) {
       const savings = f.estSavings > 0 ? ` [save ~${formatTokens(f.estSavings)}]` : "";
-      lines.push(`${SEVERITY_MARK[f.severity]} ${f.message}${savings}`);
+      lines.push(`${SEVERITY_MARK[f.severity]} ${options.redact ? redactText(f.message) : f.message}${savings}`);
       lines.push(`   → ${f.suggestion}`);
     }
     lines.push("");
