@@ -33,7 +33,7 @@ import { recordLedger } from "./ledger.js";
 // context-saving tool must not itself be context overhead (~110 tokens).
 const SERVER_INSTRUCTIONS = `Context hygiene, always: summarize large pastes/tool results instead of carrying them verbatim; reference earlier content, don't re-quote; never inline base64. Past ~30 turns or several large pastes, proactively offer to run profile_context. Any question about tokens, cost, or latency: call profile_context, don't estimate. If optimize_context returns a pruned-turns digest, you write the ≤150-token replacement summary.`;
 
-const STRATEGY_IDS = ["dedupe", "trim-tool-results", "strip-base64", "prune-history"] as const;
+const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"] as const;
 
 /**
  * Build a fully-configured server instance. A factory (not a singleton) so the
@@ -65,7 +65,7 @@ server.tool(
   {
     conversation: z.string().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array)"),
     strategies: z.array(z.enum(STRATEGY_IDS)).optional()
-      .describe("Strategies to apply. Default: dedupe, trim-tool-results, strip-base64. Add prune-history for lossy compaction of old turns."),
+      .describe("Strategies to apply. Default: dedupe, trim-tool-results, strip-base64. Add trim-tool-calls to shrink big inline file writes, or prune-history for lossy compaction of old turns."),
     keep_recent: z.number().int().positive().optional().describe("Messages at the tail to leave untouched (default 6)"),
     max_tool_result_tokens: z.number().int().positive().optional().describe("Token budget for trimmed tool results (default 300)"),
   },

@@ -98,10 +98,30 @@ export function renderProfile(profile: ContextProfile, options: RenderOptions = 
   if (p.findings.length > 0) {
     lines.push(`Findings (${p.findings.length})`);
     lines.push("─".repeat(56));
+    // A file-heavy session can produce a dozen findings of one kind, each with
+    // the same advice. Printing them all buries the other kinds, so show the
+    // worst few per kind and total the rest into one line.
+    const MAX_PER_KIND = 3;
+    const shownPerKind = new Map<string, number>();
+    const heldPerKind = new Map<string, { count: number; savings: number }>();
     for (const f of p.findings) {
+      const shown = shownPerKind.get(f.id) ?? 0;
+      if (shown >= MAX_PER_KIND) {
+        const held = heldPerKind.get(f.id) ?? { count: 0, savings: 0 };
+        heldPerKind.set(f.id, { count: held.count + 1, savings: held.savings + f.estSavings });
+        continue;
+      }
+      shownPerKind.set(f.id, shown + 1);
       const savings = f.estSavings > 0 ? ` [save ~${formatTokens(f.estSavings)}]` : "";
       lines.push(`${SEVERITY_MARK[f.severity]} ${options.redact ? redactText(f.message) : f.message}${savings}`);
       lines.push(`   → ${f.suggestion}`);
+      const held = heldPerKind.get(f.id);
+      if (shown + 1 === MAX_PER_KIND && held === undefined) heldPerKind.set(f.id, { count: 0, savings: 0 });
+    }
+    for (const [id, held] of heldPerKind) {
+      if (held.count === 0) continue;
+      const more = held.savings > 0 ? `, ~${formatTokens(held.savings)} more recoverable` : "";
+      lines.push(`  … and ${held.count} more of the same kind (${id})${more}. Use --json for the full list.`);
     }
     lines.push("");
     if (p.totalEstSavings > 0) {

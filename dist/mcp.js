@@ -30,7 +30,7 @@ import { recordLedger } from "./ledger.js";
 // Kept deliberately terse: these ride in EVERY conversation's context, and a
 // context-saving tool must not itself be context overhead (~110 tokens).
 const SERVER_INSTRUCTIONS = `Context hygiene, always: summarize large pastes/tool results instead of carrying them verbatim; reference earlier content, don't re-quote; never inline base64. Past ~30 turns or several large pastes, proactively offer to run profile_context. Any question about tokens, cost, or latency: call profile_context, don't estimate. If optimize_context returns a pruned-turns digest, you write the ≤150-token replacement summary.`;
-const STRATEGY_IDS = ["dedupe", "trim-tool-results", "strip-base64", "prune-history"];
+const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"];
 /**
  * Build a fully-configured server instance. A factory (not a singleton) so the
  * stateless HTTP mode can hand every request its own server, per the MCP SDK's
@@ -48,7 +48,7 @@ function createServer() {
     server.tool("optimize_context", "Rewrite a conversation to reclaim tokens using deterministic strategies: dedupe repeated content, trim stale tool results, strip base64 blobs, optionally prune old history. Returns the slimmed conversation JSON plus a savings summary. No LLM calls — safe and inspectable. Call this after profile_context finds recoverable waste and the user wants it fixed; add the prune-history strategy only with the user's consent, then write the replacement summary yourself as the result instructs.", {
         conversation: z.string().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array)"),
         strategies: z.array(z.enum(STRATEGY_IDS)).optional()
-            .describe("Strategies to apply. Default: dedupe, trim-tool-results, strip-base64. Add prune-history for lossy compaction of old turns."),
+            .describe("Strategies to apply. Default: dedupe, trim-tool-results, strip-base64. Add trim-tool-calls to shrink big inline file writes, or prune-history for lossy compaction of old turns."),
         keep_recent: z.number().int().positive().optional().describe("Messages at the tail to leave untouched (default 6)"),
         max_tool_result_tokens: z.number().int().positive().optional().describe("Token budget for trimmed tool results (default 300)"),
     }, async ({ conversation, strategies, keep_recent, max_tool_result_tokens }) => {

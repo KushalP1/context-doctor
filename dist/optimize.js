@@ -14,6 +14,30 @@ const DEFAULTS = {
     keepRecent: 6,
     maxToolResultTokens: 300,
 };
+/**
+ * Shrink the arguments of a tool call that has already run.
+ *
+ * In file-heavy agent sessions the biggest single items in context are not
+ * tool RESULTS but tool CALLS: a Write or a `cat > file <<EOF` carries the
+ * whole file inline, forever. Once the call has returned, the live context
+ * only needs enough of the arguments to identify what was done.
+ *
+ * Keys are preserved (so the call still reads as itself) and only long string
+ * values are cut, with an explicit marker so nothing looks silently complete.
+ */
+function trimCallArguments(input, maxTokens) {
+    const budgetChars = maxTokens * 4;
+    const out = {};
+    for (const [key, value] of Object.entries(input)) {
+        if (typeof value === "string" && value.length > budgetChars) {
+            out[key] = value.slice(0, budgetChars) + `\n[context-doctor: ${value.length - budgetChars} more chars trimmed — this call already ran]`;
+        }
+        else {
+            out[key] = value;
+        }
+    }
+    return out;
+}
 function hash(text) {
     return createHash("sha1").update(text.replace(/\s+/g, " ").trim()).digest("hex");
 }
@@ -156,6 +180,46 @@ export function optimizeConversation(input, options = {}) {
                 tokensSaved: before - estimateTokens(trimmed),
                 note: "Stale tool result truncated",
             });
+        });
+    }
+    // -- trim-tool-calls: shrink the arguments of calls that already ran ----------
+    if (opts.strategies.includes("trim-tool-calls")) {
+        const cutoff = messages.length - opts.keepRecent;
+        messages.forEach((m, i) => {
+            if (i >= cutoff)
+                return;
+            let saved = 0;
+            // Anthropic shape: tool_use blocks with a structured `input`.
+            if (Array.isArray(m.content)) {
+                for (const b of m.content) {
+                    if (b?.type !== "tool_use" || b.input == null || typeof b.input !== "object")
+                        continue;
+                    const before = estimateTokens(JSON.stringify(b.input));
+                    if (before <= opts.maxToolResultTokens)
+                        continue;
+                    b.input = trimCallArguments(b.input, opts.maxToolResultTokens);
+                    saved += before - estimateTokens(JSON.stringify(b.input));
+                }
+            }
+            // OpenAI shape: tool_calls[].function.arguments is a JSON string.
+            for (const tc of m.tool_calls ?? []) {
+                const args = tc?.function?.arguments;
+                if (typeof args !== "string")
+                    continue;
+                const before = estimateTokens(args);
+                if (before <= opts.maxToolResultTokens)
+                    continue;
+                tc.function.arguments = truncateToTokens(args, opts.maxToolResultTokens);
+                saved += before - estimateTokens(tc.function.arguments);
+            }
+            if (saved > 0) {
+                applied.push({
+                    strategy: "trim-tool-calls",
+                    messageIndex: i,
+                    tokensSaved: saved,
+                    note: "Arguments of a completed tool call truncated",
+                });
+            }
         });
     }
     // -- prune-history: replace the older half with a stub ------------------------

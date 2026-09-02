@@ -121,6 +121,24 @@ export function profileConversation(conv, model) {
             });
         }
     }
+    // -- Large individual tool calls --------------------------------------------
+    // Writing a file through a tool call puts the ENTIRE file contents in the
+    // context permanently, and in file-heavy agent sessions these outweigh every
+    // tool result put together. Unlike a result, the argument cannot be trimmed
+    // before the call — but once the call has returned, the live context only
+    // needs a reference to what was written.
+    for (const p of perMessage) {
+        if (p.msg.kind === "tool_call" && p.tokens > 2000) {
+            findings.push({
+                id: "large_tool_call",
+                severity: p.tokens > 8000 ? "high" : "warn",
+                estSavings: Math.round(p.tokens * 0.8),
+                message: `Tool call at message #${p.msg.index}${p.msg.toolName ? ` (${p.msg.toolName})` : ""} carries ~${p.tokens} tokens of arguments.`,
+                suggestion: "Usually a whole file being written inline. Once it has run, replace the arguments with a reference (\"wrote <path>\") — or write files in smaller pieces so no single call carries the entire content.",
+                messages: [p.msg.index],
+            });
+        }
+    }
     // -- Exact duplicate content ------------------------------------------------
     const seen = new Map();
     for (const p of perMessage) {

@@ -6,12 +6,12 @@
  * Strategies operate on the ORIGINAL JSON structure (not the normalized view)
  * so the output is a drop-in replacement for the input conversation.
  */
-export type StrategyId = "dedupe" | "trim-tool-results" | "prune-history" | "strip-base64";
+export type StrategyId = "dedupe" | "trim-tool-results" | "trim-tool-calls" | "prune-history" | "strip-base64";
 export interface OptimizeOptions {
     strategies?: StrategyId[];
     /** Tool results older than this many messages from the end get trimmed. */
     keepRecent?: number;
-    /** Max tokens a trimmed tool result keeps. */
+    /** Max tokens a trimmed tool result — or tool-call argument set — keeps. */
     maxToolResultTokens?: number;
 }
 export interface AppliedChange {

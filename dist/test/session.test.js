@@ -66,3 +66,26 @@ test("base64 detection does not fire on repetitive or hex-like text", async () =
     assert.equal(stripBase64Blobs("x".repeat(5000)).length, 5000, "lookalike content is left untouched");
     assert.ok(stripBase64Blobs(`prefix ${real} suffix`).includes("base64 blob removed"));
 });
+test("trim-tool-calls shrinks completed calls without breaking their shape", async () => {
+    const { optimizeConversation } = await import("../optimize.js");
+    const bigFile = "line of html\n".repeat(4000);
+    const conversation = JSON.stringify({
+        messages: [
+            { role: "assistant", content: [{ type: "tool_use", id: "tu_1", name: "Write", input: { file_path: "/tmp/a.html", content: bigFile } }] },
+            { role: "user", content: [{ type: "tool_result", tool_use_id: "tu_1", content: "ok" }] },
+            ...Array.from({ length: 8 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", content: `turn ${i}` })),
+        ],
+    });
+    const base = optimizeConversation(conversation, { strategies: ["dedupe"] });
+    const trimmed = optimizeConversation(conversation, { strategies: ["dedupe", "trim-tool-calls"] });
+    assert.ok(trimmed.tokensAfter < base.tokensAfter / 2, "the inline file is the bulk of the context and must shrink");
+    const block = trimmed.conversation.messages[0].content[0];
+    assert.equal(block.type, "tool_use");
+    assert.equal(block.id, "tu_1", "the tool_use id must survive — the API pairs results by it");
+    assert.equal(block.name, "Write");
+    assert.equal(block.input.file_path, "/tmp/a.html", "short arguments are kept intact");
+    assert.match(block.input.content, /chars trimmed/, "the cut is marked, not silent");
+    // It is opt-in: the default strategy set must leave calls alone.
+    const defaults = optimizeConversation(conversation, {});
+    assert.equal(defaults.conversation.messages[0].content[0].input.content.length, bigFile.length);
+});

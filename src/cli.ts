@@ -73,7 +73,8 @@ Options:
                           exceeded — lets CI gate a pull request on context size
   --out <file>            (optimize) Write result to file instead of stdout
   --strategy <id>         (optimize) Strategy to run; repeatable.
-                          Available: dedupe, trim-tool-results, strip-base64, prune-history
+                          Available: dedupe, trim-tool-results, trim-tool-calls, strip-base64,
+                          prune-history
                           Default: dedupe, trim-tool-results, strip-base64 (lossless-ish set)
   --keep-recent <n>       (optimize) Messages at the tail to leave untouched (default 6)
   --max-tool-tokens <n>   (optimize) Token budget for trimmed tool results (default 300)
