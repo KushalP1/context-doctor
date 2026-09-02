@@ -10,6 +10,8 @@
 import { createHash } from "node:crypto";
 import { estimateTokens } from "./tokens.js";
 
+import { hasBase64Blob, stripBase64Blobs } from "./blob.js";
+
 export type StrategyId = "dedupe" | "trim-tool-results" | "prune-history" | "strip-base64";
 
 export interface OptimizeOptions {
@@ -47,7 +49,6 @@ const DEFAULTS: Required<OptimizeOptions> = {
   maxToolResultTokens: 300,
 };
 
-const BASE64_RE = /(?:data:[\w/+.-]+;base64,)?[A-Za-z0-9+/]{500,}={0,2}/g;
 
 function hash(text: string): string {
   return createHash("sha1").update(text.replace(/\s+/g, " ").trim()).digest("hex");
@@ -139,10 +140,9 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
   if (opts.strategies.includes("strip-base64")) {
     messages.forEach((m, i) => {
       const text = textOf(m.content);
-      if (!BASE64_RE.test(text)) return;
-      BASE64_RE.lastIndex = 0;
+      if (!hasBase64Blob(text)) return;
       const before = estimateTokens(text);
-      const cleaned = text.replace(BASE64_RE, "[context-doctor: base64 blob removed — use file/image APIs instead]");
+      const cleaned = stripBase64Blobs(text);
       const saved = before - estimateTokens(cleaned);
       if (saved > 50) {
         m.content = replaceText(m.content, cleaned);

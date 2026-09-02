@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { NormalizedConversation, NormalizedMessage } from "./parse.js";
 import { contextWindowFor, estimateTokens, MESSAGE_OVERHEAD_TOKENS, providerFor } from "./tokens.js";
 import { estimatedTtftSeconds, inputCostUsd, pricingFor } from "./pricing.js";
+import { hasBase64Blob } from "./blob.js";
 
 export type Category = "system" | "user" | "assistant" | "tool_calls" | "tool_results" | "other";
 
@@ -132,7 +133,6 @@ function contentHash(text: string): string {
   return createHash("sha1").update(text.replace(/\s+/g, " ").trim()).digest("hex");
 }
 
-const BASE64_RE = /(?:data:[\w/+.-]+;base64,|[A-Za-z0-9+/]{500,}={0,2})/;
 
 /** FNV-1a — cheap deterministic hash for shingle sampling. */
 function fnv1a(s: string): number {
@@ -338,7 +338,7 @@ export function profileConversation(conv: NormalizedConversation, model?: string
 
   // -- Base64 / binary blobs ---------------------------------------------------
   for (const p of perMessage) {
-    if (BASE64_RE.test(p.msg.text)) {
+    if (hasBase64Blob(p.msg.text)) {
       findings.push({
         id: "base64_blob",
         severity: "high",

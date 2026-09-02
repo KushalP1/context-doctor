@@ -58,3 +58,22 @@ test("input that is not a conversation is flagged, not silently mis-profiled", a
   assert.equal(parseConversation('[{"role":"user","content":"hi"}]').parseWarning, undefined);
   assert.equal(parseConversation("just a raw prompt").parseWarning, undefined, "raw text is a supported input");
 });
+
+test("base64 detection does not fire on repetitive or hex-like text", async () => {
+  const { hasBase64Blob, stripBase64Blobs } = await import("../blob.js");
+
+  // The false positives that made `strip-base64` delete real content.
+  assert.equal(hasBase64Blob("a".repeat(5000)), false, "a repeated character is not base64");
+  assert.equal(hasBase64Blob("deadbeef".repeat(400)), false, "a long hex digest is not base64");
+  assert.equal(hasBase64Blob("ab".repeat(3000)), false, "two alternating characters are not base64");
+
+  // Genuine payloads still caught, and stripping leaves lookalikes alone.
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let real = "";
+  for (let i = 0; i < 1200; i++) real += alphabet[(i * 37 + (i % 7)) % 64];
+  assert.equal(hasBase64Blob(real), true, "a real base64 payload is still detected");
+  assert.equal(hasBase64Blob("data:image/png;base64," + "A".repeat(600)), true, "an explicit data: URI is definitive");
+
+  assert.equal(stripBase64Blobs("x".repeat(5000)).length, 5000, "lookalike content is left untouched");
+  assert.ok(stripBase64Blobs(`prefix ${real} suffix`).includes("base64 blob removed"));
+});
