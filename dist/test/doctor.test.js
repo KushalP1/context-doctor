@@ -48,7 +48,7 @@ test("re-running install repairs a stale hook instead of leaving it", async () =
     const home = mkdtempSync(join(tmpdir(), "ctxdoc-stale-"));
     mkdirSync(join(home, ".claude"), { recursive: true });
     // Simulate what an older version wrote: a pinned binary that no longer exists.
-    const stale = '"/opt/homebrew/Cellar/node/1.2.3/bin/node" "/gone/dist/cli.js" hook';
+    const stale = '"/opt/homebrew/Cellar/node/1.2.3/bin/node" "/gone/context-doctor/dist/cli.js" hook';
     writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: stale }] }] } }));
     const run = () => new Promise((resolve, reject) => {
         execFile(process.execPath, [cliPath, "install"], { env: { ...process.env, HOME: home } }, (err) => err ? reject(err) : resolve());
@@ -63,4 +63,24 @@ test("re-running install repairs a stale hook instead of leaving it", async () =
     await run();
     const again = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"));
     assert.equal(again.hooks.UserPromptSubmit.length, 1, "no duplicate entries on repeat installs");
+});
+test("a stale hook from a differently-named checkout is still repaired", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, readFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { execFile } = await import("node:child_process");
+    const home = mkdtempSync(join(tmpdir(), "ctxdoc-renamed-"));
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    // No "context-doctor" anywhere in the command — the repo was cloned as ctxdoc.
+    const stale = '"/opt/homebrew/Cellar/node/1.2.3/bin/node" "/Users/dev/ctxdoc/dist/cli.js" hook';
+    const foreign = { hooks: [{ type: "command", command: "echo unrelated-hook" }] };
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ hooks: { UserPromptSubmit: [foreign, { hooks: [{ type: "command", command: stale }] }] } }));
+    await new Promise((resolve, reject) => {
+        execFile(process.execPath, [cliPath, "install"], { env: { ...process.env, HOME: home } }, (err) => err ? reject(err) : resolve());
+    });
+    const entries = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8")).hooks.UserPromptSubmit;
+    const commands = entries.map((e) => e.hooks[0].command);
+    assert.ok(!commands.includes(stale), "the stale entry is gone");
+    assert.ok(commands.includes("echo unrelated-hook"), "somebody else's hook is left alone");
+    assert.equal(commands.filter((c) => c.includes("hook") && c.startsWith("node")).length, 1, "exactly one of ours");
 });

@@ -88,6 +88,21 @@ function hookCommand(): string {
 const HOOK_MARKER = "context-doctor";
 
 /**
+ * Is this settings.json hook entry ours?
+ *
+ * Usually the command contains "context-doctor" (npx form, or a path through
+ * the package directory). A repo cloned into a differently-named folder does
+ * not, so a command ending in `cli.js hook` counts too — specific enough not
+ * to claim an unrelated hook.
+ */
+function isOurHookEntry(entry: unknown): boolean {
+  const raw = JSON.stringify(entry ?? "");
+  if (raw.includes(HOOK_MARKER)) return true;
+  const command = String((entry as { hooks?: Array<{ command?: string }> })?.hooks?.[0]?.command ?? "");
+  return /cli\.js"?\s+hook\s*$/.test(command);
+}
+
+/**
  * Register the UserPromptSubmit hook in ~/.claude/settings.json so EVERY
  * Claude Code query gets a context-size check. Idempotent.
  */
@@ -102,13 +117,13 @@ function installHook(): string | null {
   // Re-running install must REPAIR a stale entry, not skip it. Earlier versions
   // wrote a version-pinned node binary; if we only checked "is it present?" an
   // upgrade would leave that broken command in place forever.
-  const ours = entries.filter((e) => JSON.stringify(e).includes(HOOK_MARKER));
+  const ours = entries.filter(isOurHookEntry);
   const current = ours[0]?.hooks?.[0]?.command;
   if (ours.length === 0) {
     entries.push({ hooks: [{ type: "command", command: want }] });
   } else if (current !== want) {
     // Replace every entry of ours with exactly one correct entry.
-    const others = entries.filter((e) => !JSON.stringify(e).includes(HOOK_MARKER));
+    const others = entries.filter((e) => !isOurHookEntry(e));
     others.push({ hooks: [{ type: "command", command: want }] });
     settings.hooks.UserPromptSubmit = others;
     writeJsonWithBackup(settingsPath, settings);
@@ -127,7 +142,7 @@ function uninstallHook(): void {
   const settings = readJson(settingsPath);
   const entries: Array<Record<string, any>> | undefined = settings.hooks?.UserPromptSubmit;
   if (!entries) return;
-  const filtered = entries.filter((e) => !JSON.stringify(e).includes(HOOK_MARKER));
+  const filtered = entries.filter((e) => !isOurHookEntry(e));
   if (filtered.length !== entries.length) {
     settings.hooks.UserPromptSubmit = filtered;
     if (filtered.length === 0) delete settings.hooks.UserPromptSubmit;
