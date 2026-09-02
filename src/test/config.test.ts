@@ -78,7 +78,7 @@ test("analyze stays quiet about budgets when no rc exists", async () => {
   writeFileSync(chat, JSON.stringify({ messages: [{ role: "user", content: "hello" }] }));
   const out = await new Promise<string>((resolve, reject) => {
     // HOME override keeps a real ~/.contextdoctorrc from leaking into the test.
-    execFile(process.execPath, [cliPath, "analyze", chat], { cwd: root, env: { ...process.env, HOME: root } }, (err, stdout) =>
+    execFile(process.execPath, [cliPath, "analyze", chat], { cwd: root, env: { ...process.env, HOME: root, USERPROFILE: root } }, (err, stdout) =>
       err ? reject(err) : resolve(stdout)
     );
   });

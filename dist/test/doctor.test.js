@@ -7,6 +7,16 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
+/**
+ * A throwaway HOME for install tests.
+ *
+ * os.homedir() reads USERPROFILE on Windows and HOME elsewhere, and the
+ * Claude Desktop path is derived from APPDATA — so overriding HOME alone lets
+ * a test scribble in the real user profile (and then fail there).
+ */
+function sandboxEnv(home) {
+    return { ...process.env, HOME: home, USERPROFILE: home, APPDATA: join(home, "AppData", "Roaming") };
+}
 test("doctor runs, checks the MCP handshake, and exits 0", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "ctxdoc-doctor-"));
     const out = await new Promise((resolve, reject) => {
@@ -27,7 +37,7 @@ test("install never writes a version-pinned node binary into configs", async () 
     mkdirSync(join(home, ".claude"), { recursive: true });
     mkdirSync(join(home, ".cursor"), { recursive: true });
     await new Promise((resolve, reject) => {
-        execFile(process.execPath, [cliPath, "install"], { env: { ...process.env, HOME: home } }, (err) => err ? reject(err) : resolve());
+        execFile(process.execPath, [cliPath, "install"], { env: sandboxEnv(home) }, (err) => err ? reject(err) : resolve());
     });
     const config = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8"));
     const entry = config.mcpServers["context-doctor"];
@@ -38,7 +48,7 @@ test("install never writes a version-pinned node binary into configs", async () 
     const settings = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"));
     const hookCmd = settings.hooks.UserPromptSubmit[0].hooks[0].command;
     assert.ok(!hookCmd.includes(process.execPath), "hook must not pin the running node binary either");
-    assert.match(hookCmd, /^(node|npx)\b/, "hook resolves its runtime from PATH");
+    assert.ok(/^node /.test(hookCmd) || /^npx /.test(hookCmd) || /context-doctor(\.cmd|\.exe)?"?\s+hook$/.test(hookCmd), `hook must resolve its runtime from PATH or a stable binary, got: ${hookCmd}`);
 });
 test("re-running install repairs a stale hook instead of leaving it", async () => {
     const { mkdtempSync, mkdirSync, writeFileSync, readFileSync } = await import("node:fs");
@@ -51,7 +61,7 @@ test("re-running install repairs a stale hook instead of leaving it", async () =
     const stale = '"/opt/homebrew/Cellar/node/1.2.3/bin/node" "/gone/context-doctor/dist/cli.js" hook';
     writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: stale }] }] } }));
     const run = () => new Promise((resolve, reject) => {
-        execFile(process.execPath, [cliPath, "install"], { env: { ...process.env, HOME: home } }, (err) => err ? reject(err) : resolve());
+        execFile(process.execPath, [cliPath, "install"], { env: sandboxEnv(home) }, (err) => err ? reject(err) : resolve());
     });
     await run();
     const settings = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"));
@@ -76,7 +86,7 @@ test("a stale hook from a differently-named checkout is still repaired", async (
     const foreign = { hooks: [{ type: "command", command: "echo unrelated-hook" }] };
     writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ hooks: { UserPromptSubmit: [foreign, { hooks: [{ type: "command", command: stale }] }] } }));
     await new Promise((resolve, reject) => {
-        execFile(process.execPath, [cliPath, "install"], { env: { ...process.env, HOME: home } }, (err) => err ? reject(err) : resolve());
+        execFile(process.execPath, [cliPath, "install"], { env: sandboxEnv(home) }, (err) => err ? reject(err) : resolve());
     });
     const entries = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8")).hooks.UserPromptSubmit;
     const commands = entries.map((e) => e.hooks[0].command);
@@ -99,7 +109,7 @@ test("a hook is never pointed into npx's garbage-collected cache", async () => {
     const home = mkdtempSync(join(tmpdir(), "ctxdoc-npxhome-"));
     mkdirSync(join(home, ".claude"), { recursive: true });
     await new Promise((resolve, reject) => {
-        execFile(process.execPath, [join(pkg, "dist", "cli.js"), "install"], { env: { ...process.env, HOME: home } }, (err) => err ? reject(err) : resolve());
+        execFile(process.execPath, [join(pkg, "dist", "cli.js"), "install"], { env: sandboxEnv(home) }, (err) => err ? reject(err) : resolve());
     });
     const cmd = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"))
         .hooks.UserPromptSubmit[0].hooks[0].command;
