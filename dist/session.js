@@ -8,7 +8,8 @@
  * where `message` is in Anthropic Messages format. Everything else
  * (titles, mode changes, hook records) is metadata and skipped.
  */
-import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, existsSync, openSync, readSync, closeSync } from "node:fs";
+import { StringDecoder } from "node:string_decoder";
 import { homedir } from "node:os";
 import { join } from "node:path";
 function projectsDir() {
@@ -72,12 +73,60 @@ function parseChatGPTExport(data, path) {
         path,
     };
 }
+/**
+ * Read a JSONL transcript line by line without ever materializing the whole
+ * file as one string.
+ *
+ * Agent sessions with large tool results reach hundreds of MB, and those are
+ * exactly the sessions that most need analysis — but V8 refuses to build a
+ * string past ~512MB, so readFileSync would throw on them (and in the hook,
+ * throw *silently*). Streaming has no such ceiling and keeps peak memory at
+ * one chunk. StringDecoder carries partial UTF-8 sequences across chunk
+ * boundaries so multi-byte characters are never corrupted.
+ */
+function forEachLine(path, onLine) {
+    const fd = openSync(path, "r");
+    const decoder = new StringDecoder("utf8");
+    const buf = Buffer.allocUnsafe(4 * 1024 * 1024);
+    let pending = "";
+    try {
+        for (;;) {
+            const bytes = readSync(fd, buf, 0, buf.length, null);
+            if (bytes === 0)
+                break;
+            pending += decoder.write(buf.subarray(0, bytes));
+            let nl;
+            while ((nl = pending.indexOf("\n")) !== -1) {
+                onLine(pending.slice(0, nl));
+                pending = pending.slice(nl + 1);
+            }
+        }
+        pending += decoder.end();
+        if (pending)
+            onLine(pending);
+    }
+    finally {
+        closeSync(fd);
+    }
+}
+/** Peek at the first bytes to tell a ChatGPT export (JSON array) from JSONL. */
+function startsWithArray(path) {
+    const fd = openSync(path, "r");
+    try {
+        const buf = Buffer.allocUnsafe(64);
+        const bytes = readSync(fd, buf, 0, 64, 0);
+        return buf.subarray(0, bytes).toString("utf8").trimStart().startsWith("[");
+    }
+    finally {
+        closeSync(fd);
+    }
+}
 export function parseSessionFile(path) {
-    const raw = readFileSync(path, "utf8");
-    // ChatGPT exports are one big JSON array, not JSONL.
-    if (raw.trimStart().startsWith("[")) {
+    // ChatGPT exports are one big JSON array, not JSONL — and small enough to
+    // read whole. Only peek first, so multi-hundred-MB JSONL is never slurped.
+    if (startsWithArray(path)) {
         try {
-            const data = JSON.parse(raw);
+            const data = JSON.parse(readFileSync(path, "utf8"));
             if (Array.isArray(data) && data.some((c) => c && typeof c.mapping === "object")) {
                 return parseChatGPTExport(data, path);
             }
@@ -93,15 +142,15 @@ export function parseSessionFile(path) {
     let lastCompactIndex = -1;
     /** Newest API-reported input size, if the transcript carries usage. */
     let reportedInputTokens;
-    for (const line of raw.split("\n")) {
+    forEachLine(path, (line) => {
         if (!line.trim())
-            continue;
+            return;
         let entry;
         try {
             entry = JSON.parse(line);
         }
         catch {
-            continue;
+            return;
         }
         // Titles are metadata lines; the last one wins.
         if (entry.type === "custom-title" && entry.customTitle)
@@ -109,12 +158,12 @@ export function parseSessionFile(path) {
         if (entry.type === "ai-title" && entry.aiTitle && !title)
             title = entry.aiTitle;
         if ((entry.type !== "user" && entry.type !== "assistant") || !entry.message)
-            continue;
+            return;
         if (entry.isSidechain)
-            continue; // subagent traffic has its own context window
+            return; // subagent traffic has its own context window
         const message = entry.message;
         if (!message.role || message.content == null)
-            continue;
+            return;
         if (typeof message.model === "string")
             model = message.model;
         const usage = message.usage;
@@ -126,7 +175,7 @@ export function parseSessionFile(path) {
         if (entry.isCompactSummary)
             lastCompactIndex = messages.length;
         messages.push({ role: message.role, content: message.content });
-    }
+    });
     // A compaction replaces everything before it: the summary entry IS the live
     // history from that point on. Counting the pre-compaction turns would
     // overstate context, cost per message and window fill — sometimes hugely.
