@@ -36,7 +36,7 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
     "build": "tsc && node -e \"const fs=require('fs');['dist/cli.js','dist/mcp.js'].forEach(f=>fs.chmodSync(f,0o755))\"",

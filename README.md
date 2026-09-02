@@ -34,7 +34,7 @@ Findings (4)
 npx context-doctor install
 ```
 
-That single command is also all it takes to **set up context-doctor on anyone else's machine**. Prefer a global install, or want the unreleased `main`? Both work (Node 18+):
+That single command is also all it takes to **set up context-doctor on anyone else's machine**. Prefer a global install, or want the unreleased `main`? Both work (Node 20+):
 
 ```bash
 npm install -g context-doctor && context-doctor install
