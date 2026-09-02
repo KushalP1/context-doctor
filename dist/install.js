@@ -43,9 +43,25 @@ function serverEntry() {
     const localMcp = join(selfDir, "mcp.js");
     const fromPackage = selfDir.includes(`${sep}node_modules${sep}`) || selfDir.includes("_npx");
     if (!fromPackage && existsSync(localMcp)) {
+        // `node` is node.exe on Windows — directly spawnable, no shell needed.
         return { command: "node", args: [localMcp] };
     }
-    return { command: "npx", args: ["-y", "context-doctor-mcp"] };
+    return npxLauncher(platform());
+}
+/**
+ * How to invoke the published package as an MCP server on a given platform.
+ *
+ * On Windows npx is `npx.cmd` — a batch script, not an executable. MCP clients
+ * spawn their server directly, without a shell, so a bare "npx" fails with
+ * ENOENT and the app simply shows no tools and no error. Hence the cmd /c
+ * wrapper that every working Windows MCP config uses.
+ *
+ * Exported so the platform branch is testable from any host OS.
+ */
+export function npxLauncher(platformName) {
+    return platformName === "win32"
+        ? { command: "cmd", args: ["/c", "npx", "-y", "context-doctor-mcp"] }
+        : { command: "npx", args: ["-y", "context-doctor-mcp"] };
 }
 function readJson(path) {
     if (!existsSync(path))

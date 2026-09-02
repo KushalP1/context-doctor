@@ -33,8 +33,10 @@ function checkMcpEntry(appName: string, configPath: string): Check {
     const config = JSON.parse(readFileSync(configPath, "utf8"));
     const entry = config.mcpServers?.["context-doctor"];
     if (!entry) return { label: appName, status: "fail", detail: `no context-doctor entry in ${configPath} — run: context-doctor install` };
-    // Absolute-path entries must point at a file that still exists.
-    const target = entry.command === "npx" ? null : entry.args?.[0];
+    // Absolute-path entries must point at a file that still exists. Launcher
+    // forms (npx, and Windows' cmd /c npx) resolve at spawn time, not now.
+    const launcher = entry.command === "npx" || entry.command === "cmd";
+    const target = launcher ? null : entry.args?.[0];
     if (target && !existsSync(target)) {
       return { label: appName, status: "fail", detail: `MCP entry points at missing file ${target} — re-run: context-doctor install` };
     }
@@ -48,7 +50,7 @@ function checkMcpEntry(appName: string, configPath: string): Check {
         detail: `MCP command ${cmd} no longer exists (a Node upgrade moves version-pinned paths) — re-run: context-doctor install`,
       };
     }
-    return { label: appName, status: "ok", detail: `MCP wired (${entry.command === "npx" ? "npx, tracks npm releases" : "local build"})` };
+    return { label: appName, status: "ok", detail: `MCP wired (${launcher ? "npx, tracks npm releases" : "local build"})` };
   } catch (e) {
     return { label: appName, status: "fail", detail: `${configPath} is not valid JSON (${(e as Error).message})` };
   }

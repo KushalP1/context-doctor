@@ -162,3 +162,13 @@ test("a hook is never pointed into npx's garbage-collected cache", async () => {
   assert.ok(!cmd.includes("_npx"), `hook must not live in the npx cache, got: ${cmd}`);
   assert.match(cmd, /\bhook\s*$/);
 });
+
+test("the published server is wrapped for Windows, bare everywhere else", async () => {
+  const { npxLauncher } = await import("../install.js");
+
+  // MCP clients spawn without a shell; npx.cmd is not directly executable.
+  assert.deepEqual(npxLauncher("win32"), { command: "cmd", args: ["/c", "npx", "-y", "context-doctor-mcp"] });
+  for (const os of ["darwin", "linux", "freebsd"]) {
+    assert.deepEqual(npxLauncher(os), { command: "npx", args: ["-y", "context-doctor-mcp"] }, `${os} needs no wrapper`);
+  }
+});
