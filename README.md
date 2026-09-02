@@ -89,7 +89,7 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 |---|---|
 | `context-doctor install` / `uninstall` | Wire (or remove) everything: MCP for Claude Desktop/Code/Cursor, the Agent Skill, the every-prompt hook |
 | `context-doctor analyze <file>` | Profile a conversation: token breakdown, findings, cost + latency estimates. `--fail-over-budget` exits 1 on a breach, for CI |
-| `context-doctor optimize <file>` | Apply the safe fixes; `--strategy prune-history` for consented lossy compaction |
+| `context-doctor optimize <file>` | Apply the safe fixes; add `--strategy trim-tool-calls` for big inline file writes, `--strategy prune-history` for consented lossy compaction |
 | `context-doctor session [file]` | Profile a Claude Code session: live context, findings, **measured tokens and prompt-cache economics**. Also reads ChatGPT data exports (`conversations.json`) |
 | `context-doctor cursor [--list]` | Profile a chat from Cursor's local history (both storage formats) |
 | `context-doctor report` | Machine-wide impact report (proxy savings persist across restarts): exact proxy savings, hook activity, recoverable waste in recent sessions |
@@ -261,7 +261,10 @@ const { conversation, tokensBefore, tokensAfter } = optimizeConversation(chatJso
 | `dedupe` — replace repeated content with a reference | No | ✅ |
 | `trim-tool-results` — truncate stale tool outputs | Mostly no | ✅ |
 | `strip-base64` — remove inline binary blobs | No (for the model) | ✅ |
+| `trim-tool-calls` — shrink the arguments of calls that already ran | Mostly no | opt-in |
 | `prune-history` — collapse old turns into a stub for summarization | Yes | opt-in |
+
+`trim-tool-calls` is the big one for agent sessions. Writing a file through a tool call puts the entire file in context permanently, so in file-heavy work the calls outweigh every tool result combined — on a real 278k-token session, the default set reached 248k and adding `trim-tool-calls` reached 102k. It is opt-in because it edits what the model itself wrote.
 
 Everything the optimizer does is inspectable: it prints exactly which messages changed and how many tokens each change saved.
 
