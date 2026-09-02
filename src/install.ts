@@ -9,7 +9,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, rmSync } from "node:fs";
 import { homedir, platform } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 interface Target {
@@ -39,16 +39,22 @@ function targets(): Target[] {
 }
 
 /**
- * The server command to write into configs. When running from a published
- * install, npx keeps it auto-updating; from a local checkout, point at the
- * built file directly so it works before the package is on npm.
+ * The server command to write into configs.
+ *
+ * Never write `process.execPath`: on Homebrew, nvm and asdf that is a
+ * VERSION-PINNED path (…/node/25.6.0/bin/node), so the next Node upgrade
+ * silently breaks every config we wrote — the apps simply stop showing the
+ * tools, with no error to explain why. `node` from PATH survives upgrades.
+ *
+ * Installed from npm → npx, which also picks up package updates. Local
+ * checkout → the built file, so the repo works before/without publishing.
  */
 function serverEntry(): { command: string; args: string[] } {
   const selfDir = dirname(fileURLToPath(import.meta.url));
   const localMcp = join(selfDir, "mcp.js");
-  const runningFromNpx = (process.env.npm_execpath ?? "").includes("npx") || selfDir.includes("_npx");
-  if (!runningFromNpx && existsSync(localMcp)) {
-    return { command: process.execPath, args: [localMcp] };
+  const fromPackage = selfDir.includes(`${sep}node_modules${sep}`) || selfDir.includes("_npx");
+  if (!fromPackage && existsSync(localMcp)) {
+    return { command: "node", args: [localMcp] };
   }
   return { command: "npx", args: ["-y", "context-doctor-mcp"] };
 }
@@ -72,10 +78,10 @@ function writeJsonWithBackup(path: string, data: Record<string, any>): void {
 function hookCommand(): string {
   const selfDir = dirname(fileURLToPath(import.meta.url));
   const localCli = join(selfDir, "cli.js");
-  const runningFromNpx = (process.env.npm_execpath ?? "").includes("npx") || selfDir.includes("_npx");
-  if (!runningFromNpx && existsSync(localCli)) {
-    return `"${process.execPath}" "${localCli}" hook`;
-  }
+  // The hook runs on EVERY prompt, so npx (which resolves a package each time)
+  // is too slow here. An absolute script path stays valid across package
+  // updates, and `node` from PATH stays valid across Node upgrades.
+  if (existsSync(localCli)) return `node "${localCli}" hook`;
   return "npx -y context-doctor hook";
 }
 

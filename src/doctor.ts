@@ -38,6 +38,16 @@ function checkMcpEntry(appName: string, configPath: string): Check {
     if (target && !existsSync(target)) {
       return { label: appName, status: "fail", detail: `MCP entry points at missing file ${target} — re-run: context-doctor install` };
     }
+    // Configs written before 0.12 pinned the exact node binary, which a Node
+    // upgrade removes; the app then silently loses the tools.
+    const cmd = String(entry.command ?? "");
+    if (cmd.includes("/") && !existsSync(cmd)) {
+      return {
+        label: appName,
+        status: "fail",
+        detail: `MCP command ${cmd} no longer exists (a Node upgrade moves version-pinned paths) — re-run: context-doctor install`,
+      };
+    }
     return { label: appName, status: "ok", detail: `MCP wired (${entry.command === "npx" ? "npx, tracks npm releases" : "local build"})` };
   } catch (e) {
     return { label: appName, status: "fail", detail: `${configPath} is not valid JSON (${(e as Error).message})` };
