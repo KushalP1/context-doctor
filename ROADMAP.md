@@ -89,7 +89,7 @@ committed until it ships.
 |---|---|---|
 | **Cache-aware optimize** | Optimization ignores cache boundaries today; rewriting a cached prefix can cost more than it saves. The optimizer should leave stable prefixes alone | M |
 | **Cache breakpoint suggestions** | The proxy advisor says the cache is churning; the useful next step is saying *where* to place `cache_control` given the observed traffic | M |
-| **`trim-tool-calls` in the proxy** | The new strategy is the biggest win in agent sessions but is CLI/MCP-only: the proxy applies its default set, so live traffic never benefits from it | S |
+| **`trim-tool-calls` on by default where it is safe** | The proxy can already run it per route via `--config`, but it is off unless someone asks for it — and in agent traffic it is where most of the waste is. Needs evidence that trimming a completed call never confuses a live agent | S |
 | **`context-doctor diff`** | Compare two profiles — before/after an optimization, or two sessions — so an improvement can be demonstrated rather than asserted | S |
 
 ### Fit into how people actually work
