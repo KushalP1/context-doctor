@@ -84,3 +84,25 @@ test("a stale hook from a differently-named checkout is still repaired", async (
     assert.ok(commands.includes("echo unrelated-hook"), "somebody else's hook is left alone");
     assert.equal(commands.filter((c) => c.includes("hook") && c.startsWith("node")).length, 1, "exactly one of ours");
 });
+test("a hook is never pointed into npx's garbage-collected cache", async () => {
+    const { mkdtempSync, mkdirSync, cpSync, readFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join, dirname } = await import("node:path");
+    const { execFile } = await import("node:child_process");
+    // Reproduce the `npx -y context-doctor install` layout: our dist living
+    // inside an `_npx` directory that npm may delete at any time.
+    const root = mkdtempSync(join(tmpdir(), "ctxdoc-npx-"));
+    const pkg = join(root, "_npx", "abc123", "node_modules", "context-doctor");
+    mkdirSync(pkg, { recursive: true });
+    cpSync(dirname(cliPath), join(pkg, "dist"), { recursive: true });
+    cpSync(join(dirname(cliPath), "..", "skills"), join(pkg, "skills"), { recursive: true });
+    const home = mkdtempSync(join(tmpdir(), "ctxdoc-npxhome-"));
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    await new Promise((resolve, reject) => {
+        execFile(process.execPath, [join(pkg, "dist", "cli.js"), "install"], { env: { ...process.env, HOME: home } }, (err) => err ? reject(err) : resolve());
+    });
+    const cmd = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"))
+        .hooks.UserPromptSubmit[0].hooks[0].command;
+    assert.ok(!cmd.includes("_npx"), `hook must not live in the npx cache, got: ${cmd}`);
+    assert.match(cmd, /\bhook\s*$/);
+});

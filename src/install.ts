@@ -9,7 +9,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, rmSync } from "node:fs";
 import { homedir, platform } from "node:os";
-import { dirname, join, sep } from "node:path";
+import { delimiter, dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 interface Target {
@@ -74,15 +74,49 @@ function writeJsonWithBackup(path: string, data: Record<string, any>): void {
   writeFileSync(path, JSON.stringify(data, null, 2));
 }
 
-/** Shell command used for the Claude Code every-prompt hook. */
+/**
+ * Find an executable on PATH without shelling out (works on Windows too).
+ * Used to prefer a global `context-doctor` install for the hook: a stable
+ * location that survives both package updates and Node upgrades.
+ */
+function binOnPath(name: string): string | null {
+  const exts = platform() === "win32" ? [".cmd", ".exe", ".bat", ""] : [""];
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      const candidate = join(dir, name + ext);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * Shell command used for the Claude Code every-prompt hook.
+ *
+ * The hook runs on EVERY prompt, so the command must be both fast and durable.
+ * In preference order:
+ *   1. a local checkout's built cli.js — absolute, stable, zero resolution cost;
+ *   2. a global `context-doctor` binary on PATH — same, for npm -g installs;
+ *   3. `npx -y context-doctor hook` — last resort.
+ *
+ * Critically, a path inside npx's `_npx` cache is NEVER written: npm garbage-
+ * collects that directory, and the hook would then fail silently on every
+ * prompt. `node` (not process.execPath) keeps it alive across Node upgrades.
+ */
 function hookCommand(): string {
   const selfDir = dirname(fileURLToPath(import.meta.url));
   const localCli = join(selfDir, "cli.js");
-  // The hook runs on EVERY prompt, so npx (which resolves a package each time)
-  // is too slow here. An absolute script path stays valid across package
-  // updates, and `node` from PATH stays valid across Node upgrades.
-  if (existsSync(localCli)) return `node "${localCli}" hook`;
+  const ephemeral = selfDir.includes("_npx");
+  if (!ephemeral && existsSync(localCli)) return `node "${localCli}" hook`;
+  const global = binOnPath("context-doctor");
+  if (global) return `"${global}" hook`;
   return "npx -y context-doctor hook";
+}
+
+/** True when the hook had to fall back to npx — worth telling the user. */
+function hookUsesNpx(): boolean {
+  return hookCommand().startsWith("npx ");
 }
 
 const HOOK_MARKER = "context-doctor";
@@ -99,7 +133,7 @@ function isOurHookEntry(entry: unknown): boolean {
   const raw = JSON.stringify(entry ?? "");
   if (raw.includes(HOOK_MARKER)) return true;
   const command = String((entry as { hooks?: Array<{ command?: string }> })?.hooks?.[0]?.command ?? "");
-  return /cli\.js"?\s+hook\s*$/.test(command);
+  return /(cli\.js|context-doctor(\.cmd|\.exe|\.bat)?)"?\s+hook\s*$/.test(command);
 }
 
 /**
@@ -190,7 +224,14 @@ export function runInstall(): void {
   if (skillPath) console.log(`✓ Agent Skill installed for Claude Code (${skillPath})`);
 
   const hookPath = installHook();
-  if (hookPath) console.log(`✓ Claude Code every-prompt hook installed (${hookPath}) — heavy sessions get automatic hygiene guidance`);
+  if (hookPath) {
+    console.log(`✓ Claude Code every-prompt hook installed (${hookPath}) — heavy sessions get automatic hygiene guidance`);
+    // npx resolves the package on every single prompt; a global install makes
+    // the hook a plain exec instead, which is both faster and update-proof.
+    if (hookUsesNpx()) {
+      console.log("  note: the hook falls back to npx. For a faster, permanent hook: npm i -g context-doctor && context-doctor install");
+    }
+  }
 
   console.log("\nDone. Restart the apps to pick up the new tools, then try:");
   console.log('  "What\'s eating my context?" — or paste a conversation and ask for a profile.');
