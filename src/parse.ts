@@ -37,6 +37,12 @@ export interface NormalizedConversation {
   messages: NormalizedMessage[];
   /** Format detected, for reporting. */
   sourceFormat: "openai" | "anthropic" | "array" | "text";
+  /**
+   * Set when the input could not be read as a conversation. Silently profiling
+   * a broken file as one big "user message" produces a confident, wrong report
+   * — the caller should show this instead.
+   */
+  parseWarning?: string;
 }
 
 function flattenContent(content: unknown): { text: string; hasBinary: boolean; toolName?: string; kind?: MessageKind; toolCallText?: string } {
@@ -123,17 +129,32 @@ export function parseConversation(input: string): NormalizedConversation {
   let data: unknown;
   try {
     data = JSON.parse(input);
-  } catch {
-    // Not JSON — treat the whole thing as one user message so profiling still works.
+  } catch (e) {
+    // Not JSON — treat the whole thing as one user message so profiling still
+    // works for raw prompts. But if it LOOKS like JSON, the user handed us a
+    // broken conversation file and deserves to be told, not given a report
+    // about a single 9-token "message".
+    const head = input.trimStart()[0];
+    const parseWarning =
+      input.trim() === ""
+        ? "Input is empty — nothing to profile."
+        : head === "{" || head === "["
+          ? `Input starts like JSON but does not parse (${(e as Error).message}). Profiling it as raw text, which is almost certainly not what you want.`
+          : undefined;
     return {
       sourceFormat: "text",
-      messages: [{ index: 0, role: "user", kind: "user", text: input, hasBinary: false }],
+      parseWarning,
+      // Empty input has no message: reporting "1 message, ~4 tokens" for it
+      // would be inventing content that is not there.
+      messages: input.trim() === "" ? [] : [{ index: 0, role: "user", kind: "user", text: input, hasBinary: false }],
     };
   }
 
   if (Array.isArray(data)) {
+    const looksLikeMessages = data.length === 0 || data.some((m) => m && typeof m === "object" && "role" in m);
     return {
       sourceFormat: "array",
+      parseWarning: looksLikeMessages ? undefined : "This is a JSON array, but no element has a `role` field — it does not look like a conversation.",
       messages: data.map((m, i) => normalizeMessage(m as Record<string, unknown>, i)),
     };
   }
@@ -153,5 +174,10 @@ export function parseConversation(input: string): NormalizedConversation {
     obj.system != null ||
     rawMessages.some((m) => Array.isArray(m.content) && (m.content as any[]).some((b) => b?.type === "tool_use" || b?.type === "tool_result"));
 
-  return { sourceFormat: isAnthropic ? "anthropic" : "openai", messages };
+  const parseWarning =
+    messages.length === 0
+      ? "This JSON has no `messages` array (and no `system`) — it does not look like a conversation. Expected {\"messages\":[{\"role\":…,\"content\":…}]}."
+      : undefined;
+
+  return { sourceFormat: isAnthropic ? "anthropic" : "openai", parseWarning, messages };
 }

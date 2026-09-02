@@ -27,5 +27,11 @@ export interface NormalizedConversation {
     messages: NormalizedMessage[];
     /** Format detected, for reporting. */
     sourceFormat: "openai" | "anthropic" | "array" | "text";
+    /**
+     * Set when the input could not be read as a conversation. Silently profiling
+     * a broken file as one big "user message" produces a confident, wrong report
+     * — the caller should show this instead.
+     */
+    parseWarning?: string;
 }
 export declare function parseConversation(input: string): NormalizedConversation;

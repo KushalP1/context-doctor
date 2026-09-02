@@ -359,5 +359,6 @@ export function profileConversation(conv, model) {
         totalEstSavings,
         cost,
         sourceFormat: conv.sourceFormat,
+        parseWarning: conv.parseWarning,
     };
 }

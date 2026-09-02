@@ -43,3 +43,18 @@ test("multi-byte characters split across chunks are not corrupted", () => {
   const conv = JSON.parse(parseSessionFile(path).conversationJson) as { messages: Array<{ content: string }> };
   assert.equal(conv.messages.at(-1)?.content, "héllo 🐢 wörld");
 });
+
+test("input that is not a conversation is flagged, not silently mis-profiled", async () => {
+  const { parseConversation } = await import("../parse.js");
+
+  assert.match(parseConversation("").parseWarning ?? "", /empty/i);
+  assert.equal(parseConversation("").messages.length, 0, "empty input has no messages");
+  assert.match(parseConversation('{"messages": [').parseWarning ?? "", /does not parse/i);
+  assert.match(parseConversation('{"foo":1}').parseWarning ?? "", /no `messages` array/i);
+  assert.match(parseConversation("[1,2,3]").parseWarning ?? "", /no element has a `role`/i);
+
+  // The things that ARE conversations stay clean.
+  assert.equal(parseConversation('{"messages":[{"role":"user","content":"hi"}]}').parseWarning, undefined);
+  assert.equal(parseConversation('[{"role":"user","content":"hi"}]').parseWarning, undefined);
+  assert.equal(parseConversation("just a raw prompt").parseWarning, undefined, "raw text is a supported input");
+});

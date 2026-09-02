@@ -46,6 +46,13 @@ export function renderProfile(profile: ContextProfile, options: RenderOptions = 
 
   lines.push("CONTEXT DOCTOR — profile");
   lines.push("═".repeat(56));
+  // A malformed or non-conversation input still profiles (as raw text), but a
+  // report that does not say so reads as a confident answer to the wrong
+  // question. Lead with the warning.
+  if (p.parseWarning) {
+    lines.push(`⚠ ${p.parseWarning}`);
+    lines.push("");
+  }
   lines.push(`Total: ~${formatTokens(p.totalTokens)} tokens across ${p.messageCount} messages (${p.sourceFormat} format)`);
   if (p.model) {
     const windowNote = p.contextWindow

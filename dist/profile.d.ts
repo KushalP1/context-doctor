@@ -51,5 +51,7 @@ export interface ContextProfile {
     /** Present when the model has a known price. All figures are estimates. */
     cost?: CostEstimate;
     sourceFormat: string;
+    /** Propagated from parsing: input could not be read as a conversation. */
+    parseWarning?: string;
 }
 export declare function profileConversation(conv: NormalizedConversation, model?: string): ContextProfile;
