@@ -86,12 +86,28 @@ function installHook() {
     const settings = readJson(settingsPath);
     settings.hooks = settings.hooks ?? {};
     const entries = settings.hooks.UserPromptSubmit ?? [];
-    const already = entries.some((e) => JSON.stringify(e).includes(HOOK_MARKER));
-    if (!already) {
-        entries.push({ hooks: [{ type: "command", command: hookCommand() }] });
-        settings.hooks.UserPromptSubmit = entries;
-        writeJsonWithBackup(settingsPath, settings);
+    const want = hookCommand();
+    // Re-running install must REPAIR a stale entry, not skip it. Earlier versions
+    // wrote a version-pinned node binary; if we only checked "is it present?" an
+    // upgrade would leave that broken command in place forever.
+    const ours = entries.filter((e) => JSON.stringify(e).includes(HOOK_MARKER));
+    const current = ours[0]?.hooks?.[0]?.command;
+    if (ours.length === 0) {
+        entries.push({ hooks: [{ type: "command", command: want }] });
     }
+    else if (current !== want) {
+        // Replace every entry of ours with exactly one correct entry.
+        const others = entries.filter((e) => !JSON.stringify(e).includes(HOOK_MARKER));
+        others.push({ hooks: [{ type: "command", command: want }] });
+        settings.hooks.UserPromptSubmit = others;
+        writeJsonWithBackup(settingsPath, settings);
+        return settingsPath;
+    }
+    else {
+        return settingsPath; // already correct — leave the file untouched
+    }
+    settings.hooks.UserPromptSubmit = entries;
+    writeJsonWithBackup(settingsPath, settings);
     return settingsPath;
 }
 function uninstallHook() {
@@ -135,6 +151,7 @@ export function runInstall() {
         try {
             const config = readJson(target.configPath);
             config.mcpServers = config.mcpServers ?? {};
+            // Always overwrite: re-running install is how a stale entry gets repaired.
             config.mcpServers["context-doctor"] = entry;
             writeJsonWithBackup(target.configPath, config);
             console.log(`✓ ${target.name}: MCP server added (${target.configPath})`);

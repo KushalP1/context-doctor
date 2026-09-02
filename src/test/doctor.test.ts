@@ -55,3 +55,39 @@ test("install never writes a version-pinned node binary into configs", async () 
   assert.ok(!hookCmd.includes(process.execPath), "hook must not pin the running node binary either");
   assert.match(hookCmd, /^(node|npx)\b/, "hook resolves its runtime from PATH");
 });
+
+test("re-running install repairs a stale hook instead of leaving it", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { execFile } = await import("node:child_process");
+
+  const home = mkdtempSync(join(tmpdir(), "ctxdoc-stale-"));
+  mkdirSync(join(home, ".claude"), { recursive: true });
+
+  // Simulate what an older version wrote: a pinned binary that no longer exists.
+  const stale = '"/opt/homebrew/Cellar/node/1.2.3/bin/node" "/gone/dist/cli.js" hook';
+  writeFileSync(
+    join(home, ".claude", "settings.json"),
+    JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: stale }] }] } })
+  );
+
+  const run = () =>
+    new Promise<void>((resolve, reject) => {
+      execFile(process.execPath, [cliPath, "install"], { env: { ...process.env, HOME: home } }, (err) =>
+        err ? reject(err) : resolve()
+      );
+    });
+  await run();
+
+  const settings = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"));
+  const entries = settings.hooks.UserPromptSubmit;
+  assert.equal(entries.length, 1, "the stale entry is replaced, not duplicated");
+  assert.notEqual(entries[0].hooks[0].command, stale, "stale command must be repaired");
+  assert.match(entries[0].hooks[0].command, /^node /);
+
+  // And a second run is a no-op: install stays idempotent.
+  await run();
+  const again = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"));
+  assert.equal(again.hooks.UserPromptSubmit.length, 1, "no duplicate entries on repeat installs");
+});
