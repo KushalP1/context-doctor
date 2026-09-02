@@ -37,7 +37,7 @@ const STRATEGY_IDS = ["dedupe", "trim-tool-results", "strip-base64", "prune-hist
  * recommended pattern.
  */
 function createServer() {
-    const server = new McpServer({ name: "context-doctor", version: "0.11.0" }, { instructions: SERVER_INSTRUCTIONS });
+    const server = new McpServer({ name: "context-doctor", version: "0.12.0" }, { instructions: SERVER_INSTRUCTIONS });
     server.tool("profile_context", "Profile an LLM conversation or prompt: token breakdown by category, largest messages, and actionable findings about wasted context (duplicates, oversized tool results, base64 blobs, cache-unfriendly ordering). Accepts OpenAI/Anthropic conversation JSON or raw text. Call this immediately whenever the user asks about token usage, context size, LLM cost, or latency — and proactively offer it once a conversation grows long or accumulates large pasted content.", {
         conversation: z.string().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array) or raw prompt text"),
         model: z.string().optional().describe("Target model name for context-window math, e.g. claude-sonnet-5 or gpt-4o"),
