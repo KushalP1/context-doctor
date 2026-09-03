@@ -174,6 +174,52 @@ function jaccard(a: Set<number>, b: Set<number>): number {
   return inter / (a.size + b.size - inter);
 }
 
+/**
+ * Shell commands that pull a file's contents into context. An agent that runs
+ * `cat config.json` has re-read that file just as surely as one that calls a
+ * Read tool — but the call looks like an opaque Bash invocation, so the
+ * repeated-read detector used to score shell-heavy sessions as clean when they
+ * were the worst offenders.
+ *
+ * Deliberately narrow: only commands whose whole purpose is to emit file
+ * contents, and only when the argument looks like a path rather than a flag or
+ * a glob. `grep` and `ls` are excluded — they summarize, they do not dump.
+ */
+const FILE_DUMPING_COMMANDS = /\b(?:cat|bat|head|tail|less|more|nl)\s+((?:-[^\s;|&]+\s+)*)([^\s|;&><'"`]{3,})/g;
+
+/**
+ * Does this token name a file, or is it the next shell word?
+ *
+ * `head -20; echo done` used to report a file called "echo": the flag pattern
+ * swallowed the separator and the following command became the target. A real
+ * path has a directory separator or an extension; a bare command word has
+ * neither.
+ */
+function looksLikePath(token: string): boolean {
+  if (/[*?$]/.test(token) || token.startsWith("-")) return false; // glob or flag
+  if (token === "EOF" || token === "<<") return false; // heredoc, which writes
+  if (!/^[\w./~@+-]+$/.test(token)) return false;
+  return token.includes("/") || /\.[A-Za-z0-9]{1,8}$/.test(token);
+}
+
+/** Extract every file path a tool call reads, whether by tool or by shell. */
+function filesReadBy(toolName: string | undefined, toolCallText: string): string[] {
+  // Explicit read-style tools name their target in a known argument.
+  if (/read|open|cat|view|get_file/i.test(toolName ?? "")) {
+    const match = /"(?:file_path|filePath|path|file)"\s*:\s*"([^"]{3,})"/.exec(toolCallText);
+    if (match) return [match[1]];
+  }
+  if (!/bash|shell|terminal|exec|run_command/i.test(toolName ?? "")) return [];
+
+  const paths = new Set<string>();
+  FILE_DUMPING_COMMANDS.lastIndex = 0;
+  for (const match of toolCallText.matchAll(FILE_DUMPING_COMMANDS)) {
+    const candidate = match[2].replace(/\\+$/, "");
+    if (looksLikePath(candidate)) paths.add(candidate);
+  }
+  return [...paths];
+}
+
 export function profileConversation(conv: NormalizedConversation, model?: string): ContextProfile {
   const perMessage = conv.messages.map((m) => ({
     msg: m,
@@ -312,11 +358,9 @@ export function profileConversation(conv: NormalizedConversation, model?: string
     const readsByPath = new Map<string, number[]>();
     for (const p of perMessage) {
       if (p.msg.kind !== "tool_call" || !p.msg.toolCallText) continue;
-      if (!/read|open|cat|view|get_file/i.test(p.msg.toolName ?? "")) continue;
-      const match = /"(?:file_path|filePath|path|file)"\s*:\s*"([^"]{3,})"/.exec(p.msg.toolCallText);
-      if (!match) continue;
-      const path = match[1];
-      readsByPath.set(path, [...(readsByPath.get(path) ?? []), p.msg.index]);
+      for (const path of filesReadBy(p.msg.toolName, p.msg.toolCallText)) {
+        readsByPath.set(path, [...(readsByPath.get(path) ?? []), p.msg.index]);
+      }
     }
     for (const [path, indexes] of readsByPath) {
       if (indexes.length < 3) continue;

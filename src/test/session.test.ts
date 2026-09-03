@@ -148,3 +148,41 @@ test("dropping malformed entries does not break prune-history", async () => {
   assert.match(String(out[0].content), /pruned/, "the stub replaces the pruned turns");
   assert.ok(result.tokensAfter < result.tokensBefore, "reported savings must reflect a real change");
 });
+
+test("files re-read through the shell are detected, command words are not", async () => {
+  const { profileConversation } = await import("../profile.js");
+  const { parseConversation } = await import("../parse.js");
+
+  const bash = (command: string, i: number) => ({
+    role: "assistant",
+    content: [{ type: "tool_use", id: `t${i}`, name: "Bash", input: { command } }],
+  });
+  const result = (i: number) => ({
+    role: "user",
+    content: [{ type: "tool_result", tool_use_id: `t${i}`, content: "file contents ".repeat(300) }],
+  });
+
+  const messages: unknown[] = [];
+  let i = 0;
+  // The same file dumped four times through the shell — invisible to a
+  // detector that only understands read-style tools.
+  for (; i < 4; i++) {
+    messages.push(bash("cat /Users/kp/app/config.json", i), result(i));
+  }
+  // None of these is a repeated read of one file.
+  messages.push(bash("cat > /tmp/out.txt << EOF\nhello\nEOF", i++));
+  messages.push(bash("grep -r TODO /Users/kp/app", i++));
+  messages.push(bash("cat /Users/kp/app/*.ts", i++));
+  // The regression that made "echo" look like a file.
+  for (let n = 0; n < 5; n++) messages.push(bash("head -20 /var/log/app.log; echo done", i++));
+
+  const findings = profileConversation(parseConversation(JSON.stringify({ messages })))
+    .findings.filter((f) => f.id === "repeated_file_read");
+  const named = findings.map((f) => f.message);
+
+  assert.equal(findings.length, 2, `expected config.json and app.log only, got: ${named.join(" | ")}`);
+  assert.ok(named.some((m) => m.includes("config.json")), "shell reads count as reads");
+  assert.ok(named.some((m) => m.includes("app.log")), "a path after flags is still the target");
+  assert.ok(!named.some((m) => m.includes("echo")), "the next shell word is not a file");
+  assert.ok(!named.some((m) => m.includes("*")), "a glob is not one repeated file");
+});
