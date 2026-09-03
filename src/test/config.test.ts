@@ -103,3 +103,23 @@ test("--fail-over-budget exits 1 on a breach and 0 otherwise", async () => {
   writeFileSync(join(root, RC_FILENAME), JSON.stringify({ budget: { maxTokens: 10_000_000 } }));
   assert.equal(await run(), 0, "within budget must pass");
 });
+
+test("every preset is valid config the loader actually understands", async () => {
+  const { PRESETS, findPreset, loadConfig, RC_FILENAME } = await import("../config.js");
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+
+  assert.ok(PRESETS.length >= 3, "presets exist");
+  for (const preset of PRESETS) {
+    // A preset that the loader silently discards is worse than no preset.
+    const dir = mkdtempSync(join(tmpdir(), `ctxdoc-preset-${preset.id}-`));
+    writeFileSync(join(dir, RC_FILENAME), JSON.stringify(preset.config, null, 2));
+    const { config, path } = loadConfig(dir);
+    assert.ok(path, `${preset.id}: rc file must be discovered`);
+    assert.deepEqual(config, preset.config, `${preset.id}: loads back unchanged`);
+    assert.ok((config.budget?.maxTokens ?? 0) > 0, `${preset.id}: has a real token budget`);
+    assert.ok((config.strategies ?? []).length > 0, `${preset.id}: names at least one strategy`);
+  }
+  assert.equal(findPreset("nope"), undefined, "an unknown id resolves to nothing");
+});

@@ -71,3 +71,43 @@ export function checkBudget(budget, profile) {
     }
     return { overBudget: breaches.length > 0, breaches, maxTokens: budget.maxTokens };
 }
+export const PRESETS = [
+    {
+        id: "chat",
+        summary: "Interactive chat product — short contexts, latency matters most",
+        config: {
+            // Chat turns are small; a context this large means history is not being
+            // summarized, and every extra token is felt directly as time-to-first-token.
+            budget: { maxTokens: 30_000, maxWindowPct: 40, maxCostPerMessageUsd: 0.15 },
+            strategies: ["dedupe", "strip-base64"],
+            keepRecent: 10,
+        },
+    },
+    {
+        id: "agent",
+        summary: "Coding or tool-using agent — long runs, tool output dominates",
+        config: {
+            // Agents legitimately hold a lot of context, so the budget is generous;
+            // the tight controls go on tool traffic, which is where the waste is.
+            budget: { maxTokens: 150_000, maxWindowPct: 70, maxCostPerMessageUsd: 1.5 },
+            strategies: ["dedupe", "trim-tool-results", "strip-base64"],
+            keepRecent: 6,
+            maxToolResultTokens: 300,
+        },
+    },
+    {
+        id: "batch",
+        summary: "Batch or pipeline jobs — cost per call is the whole story",
+        config: {
+            // Nothing is interactive, so aggressive trimming costs nothing in feel
+            // and everything is multiplied by the number of items in the run.
+            budget: { maxTokens: 60_000, maxCostPerMessageUsd: 0.05 },
+            strategies: ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64"],
+            keepRecent: 4,
+            maxToolResultTokens: 150,
+        },
+    },
+];
+export function findPreset(id) {
+    return PRESETS.find((p) => p.id === id);
+}

@@ -8,7 +8,8 @@
  * `-` reads from stdin, so you can pipe: `cat chat.json | context-doctor analyze -`
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import process from "node:process";
 import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
@@ -24,6 +25,7 @@ import { recordLedger } from "./ledger.js";
 import { runDoctor } from "./doctor.js";
 import { measureAccuracy, renderAccuracy } from "./accuracy.js";
 import { renderDiff } from "./diff.js";
+import { findPreset, PRESETS, RC_FILENAME } from "./config.js";
 import { runWatch } from "./watch.js";
 import { exactTokenCount } from "./exact.js";
 import { checkBudget, loadConfig } from "./config.js";
@@ -52,6 +54,8 @@ Usage:
                                                 MCP handshake) with one pasteable diagnosis
   context-doctor dashboard                      Local savings dashboard on 127.0.0.1 (--port n,
                                                 default 8790) — charts from your own machine only
+  context-doctor init [preset]                  Write a .contextdoctorrc from a preset
+                                                (chat, agent, batch; no argument lists them)
   context-doctor diff <before> <after>          Compare two profiles: what moved, which findings
                                                 were resolved, and what it saves
   context-doctor accuracy                       Measure the token heuristic against the API's own
@@ -206,6 +210,31 @@ function main(): void {
 
   if (args.command === "doctor") {
     void runDoctor();
+    return;
+  }
+
+  if (args.command === "init") {
+    const requested = args.positionals?.[0];
+    if (!requested || args.list) {
+      console.log("Presets for .contextdoctorrc — pick the one that matches your workload:\n");
+      for (const p of PRESETS) console.log(`  ${p.id.padEnd(7)} ${p.summary}`);
+      console.log("\nThen: context-doctor init <preset>");
+      return;
+    }
+    const preset = findPreset(requested);
+    if (!preset) {
+      console.error(`Unknown preset "${requested}". Available: ${PRESETS.map((p) => p.id).join(", ")}`);
+      process.exit(1);
+    }
+    const target = join(process.cwd(), RC_FILENAME);
+    if (existsSync(target)) {
+      console.error(`${target} already exists — edit it, or delete it first.`);
+      process.exit(1);
+    }
+    writeFileSync(target, JSON.stringify(preset.config, null, 2) + "\n");
+    console.log(`✓ Wrote ${target} (${preset.id}: ${preset.summary})`);
+    console.log("  Budgets are enforced by the every-prompt hook and reported by analyze/session.");
+    console.log("  Gate a pull request on it with: context-doctor analyze <file> --fail-over-budget");
     return;
   }
 

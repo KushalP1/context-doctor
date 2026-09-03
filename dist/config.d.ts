@@ -61,3 +61,19 @@ export declare function checkBudget(budget: ContextBudget | undefined, profile: 
         perCallUsd: number;
     };
 }): BudgetVerdict;
+/**
+ * Starting points for `.contextdoctorrc`.
+ *
+ * An empty rc file is technically valid and completely useless: nobody knows
+ * what a reasonable token budget is for their kind of work until they have
+ * blown through one. These encode the three shapes that actually differ —
+ * a chat product, a coding agent, and a batch pipeline — so a budget can be
+ * adopted in one command and tuned later.
+ */
+export interface Preset {
+    id: string;
+    summary: string;
+    config: ContextDoctorConfig;
+}
+export declare const PRESETS: Preset[];
+export declare function findPreset(id: string): Preset | undefined;
