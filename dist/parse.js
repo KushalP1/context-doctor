@@ -62,7 +62,10 @@ function flattenContent(content) {
     }
     return { text, hasBinary, toolName, kind, toolCallText: toolCallText || undefined };
 }
-function normalizeMessage(raw, index) {
+function normalizeMessage(rawInput, index) {
+    // A null or non-object entry appears in truncated and hand-edited files.
+    // Treat it as an empty message rather than throwing a stack at the user.
+    const raw = rawInput && typeof rawInput === "object" ? rawInput : {};
     const role = String(raw.role ?? "user");
     const flat = flattenContent(raw.content);
     let kind = flat.kind ?? (["system", "user", "assistant"].includes(role) ? role : "other");
@@ -73,8 +76,10 @@ function normalizeMessage(raw, index) {
     if (role === "tool") {
         kind = "tool_result";
     }
-    const toolCalls = raw.tool_calls;
-    if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+    const rawToolCalls = raw.tool_calls;
+    // Entries can be null or malformed in hand-edited or truncated exports.
+    const toolCalls = Array.isArray(rawToolCalls) ? rawToolCalls.filter((tc) => tc && typeof tc === "object") : undefined;
+    if (toolCalls && toolCalls.length > 0) {
         kind = "tool_call";
         toolName = toolCalls[0]?.function?.name ?? toolCalls[0]?.name;
         const calls = toolCalls
@@ -118,7 +123,12 @@ export function parseConversation(input) {
         };
     }
     const obj = data;
-    const rawMessages = obj.messages ?? [];
+    const rawField = obj.messages;
+    const rawMessages = Array.isArray(rawField)
+        ? rawField
+        : [];
+    // `messages` present but not an array is a malformed file, not an empty chat.
+    const malformedMessages = rawField != null && !Array.isArray(rawField);
     const messages = [];
     // Anthropic keeps the system prompt outside the messages array.
     if (obj.system != null) {
@@ -127,9 +137,11 @@ export function parseConversation(input) {
     }
     messages.push(...rawMessages.map((m, i) => normalizeMessage(m, i)));
     const isAnthropic = obj.system != null ||
-        rawMessages.some((m) => Array.isArray(m.content) && m.content.some((b) => b?.type === "tool_use" || b?.type === "tool_result"));
-    const parseWarning = messages.length === 0
-        ? "This JSON has no `messages` array (and no `system`) — it does not look like a conversation. Expected {\"messages\":[{\"role\":…,\"content\":…}]}."
-        : undefined;
+        rawMessages.some((m) => Array.isArray(m?.content) && m.content.some((b) => b?.type === "tool_use" || b?.type === "tool_result"));
+    const parseWarning = malformedMessages
+        ? `\`messages\` is a ${typeof rawField}, not an array — this file is malformed.`
+        : messages.length === 0
+            ? "This JSON has no `messages` array (and no `system`) — it does not look like a conversation. Expected {\"messages\":[{\"role\":…,\"content\":…}]}."
+            : undefined;
     return { sourceFormat: isAnthropic ? "anthropic" : "openai", parseWarning, messages };
 }

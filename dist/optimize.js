@@ -127,6 +127,14 @@ export function optimizeConversation(input, options = {}) {
     if (!Array.isArray(messages)) {
         throw new Error("No `messages` array found in input");
     }
+    // Null / non-object entries occur in truncated and hand-edited files; every
+    // strategy below would throw on them. Drop them IN PLACE rather than working
+    // on a copy — prune-history splices this same array, and the returned
+    // conversation is the caller's original object.
+    for (let i = messages.length - 1; i >= 0; i--) {
+        if (!messages[i] || typeof messages[i] !== "object")
+            messages.splice(i, 1);
+    }
     const tokensBefore = messages.reduce((s, m) => s + estimateTokens(textOf(m.content)), 0);
     const applied = [];
     // -- strip-base64: replace inline blobs with a placeholder --------------------

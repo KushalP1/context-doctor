@@ -99,7 +99,10 @@ function flattenContent(content: unknown): { text: string; hasBinary: boolean; t
   return { text, hasBinary, toolName, kind, toolCallText: toolCallText || undefined };
 }
 
-function normalizeMessage(raw: Record<string, unknown>, index: number): NormalizedMessage {
+function normalizeMessage(rawInput: Record<string, unknown> | null | undefined, index: number): NormalizedMessage {
+  // A null or non-object entry appears in truncated and hand-edited files.
+  // Treat it as an empty message rather than throwing a stack at the user.
+  const raw = rawInput && typeof rawInput === "object" ? rawInput : {};
   const role = String(raw.role ?? "user");
   const flat = flattenContent(raw.content);
   let kind: MessageKind = flat.kind ?? (["system", "user", "assistant"].includes(role) ? (role as MessageKind) : "other");
@@ -111,8 +114,10 @@ function normalizeMessage(raw: Record<string, unknown>, index: number): Normaliz
   if (role === "tool") {
     kind = "tool_result";
   }
-  const toolCalls = raw.tool_calls as Array<Record<string, any>> | undefined;
-  if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+  const rawToolCalls = raw.tool_calls as Array<Record<string, any>> | undefined;
+  // Entries can be null or malformed in hand-edited or truncated exports.
+  const toolCalls = Array.isArray(rawToolCalls) ? rawToolCalls.filter((tc) => tc && typeof tc === "object") : undefined;
+  if (toolCalls && toolCalls.length > 0) {
     kind = "tool_call";
     toolName = toolCalls[0]?.function?.name ?? toolCalls[0]?.name;
     const calls = toolCalls
@@ -160,7 +165,12 @@ export function parseConversation(input: string): NormalizedConversation {
   }
 
   const obj = data as Record<string, unknown>;
-  const rawMessages = (obj.messages as Array<Record<string, unknown>>) ?? [];
+  const rawField = obj.messages;
+  const rawMessages: Array<Record<string, unknown>> = Array.isArray(rawField)
+    ? (rawField as Array<Record<string, unknown>>)
+    : [];
+  // `messages` present but not an array is a malformed file, not an empty chat.
+  const malformedMessages = rawField != null && !Array.isArray(rawField);
   const messages: NormalizedMessage[] = [];
 
   // Anthropic keeps the system prompt outside the messages array.
@@ -172,10 +182,11 @@ export function parseConversation(input: string): NormalizedConversation {
 
   const isAnthropic =
     obj.system != null ||
-    rawMessages.some((m) => Array.isArray(m.content) && (m.content as any[]).some((b) => b?.type === "tool_use" || b?.type === "tool_result"));
+    rawMessages.some((m) => Array.isArray(m?.content) && (m.content as any[]).some((b) => b?.type === "tool_use" || b?.type === "tool_result"));
 
-  const parseWarning =
-    messages.length === 0
+  const parseWarning = malformedMessages
+    ? `\`messages\` is a ${typeof rawField}, not an array — this file is malformed.`
+    : messages.length === 0
       ? "This JSON has no `messages` array (and no `system`) — it does not look like a conversation. Expected {\"messages\":[{\"role\":…,\"content\":…}]}."
       : undefined;
 

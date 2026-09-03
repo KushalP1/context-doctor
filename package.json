@@ -1,6 +1,6 @@
 {
   "name": "context-doctor",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "description": "Profile and optimize LLM context windows. See what's eating your tokens and fix it — works with Claude, GPT, Gemini, and any MCP-capable AI app.",
   "keywords": [
     "llm",
@@ -42,7 +42,7 @@
     "build": "tsc && node -e \"const fs=require('fs');['dist/cli.js','dist/mcp.js'].forEach(f=>fs.chmodSync(f,0o755))\"",
     "prepublishOnly": "npm run build",
     "dev": "tsc --watch",
-    "test": "npm run build && node --test dist/test/smoke.test.js dist/test/proxy.test.js dist/test/hook.test.js dist/test/mcp-http.test.js dist/test/doctor.test.js dist/test/watch.test.js dist/test/chatgpt-export.test.js dist/test/config.test.js dist/test/dashboard.test.js dist/test/cursor.test.js dist/test/cache.test.js dist/test/session.test.js"
+    "test": "npm run build && node --test dist/test/smoke.test.js dist/test/proxy.test.js dist/test/proxy-abort.test.js dist/test/hook.test.js dist/test/mcp-http.test.js dist/test/doctor.test.js dist/test/watch.test.js dist/test/chatgpt-export.test.js dist/test/config.test.js dist/test/dashboard.test.js dist/test/cursor.test.js dist/test/cache.test.js dist/test/session.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

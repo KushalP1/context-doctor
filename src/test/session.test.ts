@@ -105,3 +105,46 @@ test("trim-tool-calls shrinks completed calls without breaking their shape", asy
   const defaults = optimizeConversation(conversation, {});
   assert.equal((defaults.conversation as any).messages[0].content[0].input.content.length, bigFile.length);
 });
+
+test("malformed conversations degrade to a warning, never a stack trace", async () => {
+  const { parseConversation } = await import("../parse.js");
+  const { profileConversation } = await import("../profile.js");
+  const { optimizeConversation } = await import("../optimize.js");
+
+  // Shapes seen in truncated, hand-edited and third-party-exported files.
+  const cases: Record<string, unknown> = {
+    "null entry in messages": { messages: [null, { role: "user", content: "hi" }] },
+    "messages is not an array": { messages: "nope" },
+    "message without a role": { messages: [{ content: "hi" }] },
+    "null tool_calls entry": { messages: [{ role: "assistant", tool_calls: [null] }] },
+    "block without a type": { messages: [{ role: "user", content: [{ foo: "bar" }] }] },
+    "numeric content": { messages: [{ role: "user", content: 42 }] },
+  };
+  for (const [name, value] of Object.entries(cases)) {
+    const json = JSON.stringify(value);
+    assert.doesNotThrow(() => profileConversation(parseConversation(json)), `profile: ${name}`);
+    if (Array.isArray((value as { messages?: unknown }).messages)) {
+      assert.doesNotThrow(
+        () => optimizeConversation(json, { strategies: ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64"] }),
+        `optimize: ${name}`
+      );
+    }
+  }
+  // A non-array `messages` is malformed, not an empty chat — say which.
+  assert.match(parseConversation('{"messages":"nope"}').parseWarning ?? "", /not an array/);
+});
+
+test("dropping malformed entries does not break prune-history", async () => {
+  const { optimizeConversation } = await import("../optimize.js");
+
+  // prune-history splices the messages array in place and the caller gets back
+  // its own object, so entries must be removed from THAT array, not a copy.
+  const messages: unknown[] = [null];
+  for (let i = 0; i < 30; i++) messages.push({ role: i % 2 ? "assistant" : "user", content: `turn ${i} ${"x".repeat(400)}` });
+  const result = optimizeConversation(JSON.stringify({ messages }), { strategies: ["prune-history"] });
+
+  const out = (result.conversation as { messages: Array<{ content: string }> }).messages;
+  assert.ok(out.length < 12, `history must actually shrink, got ${out.length}`);
+  assert.match(String(out[0].content), /pruned/, "the stub replaces the pruned turns");
+  assert.ok(result.tokensAfter < result.tokensBefore, "reported savings must reflect a real change");
+});
