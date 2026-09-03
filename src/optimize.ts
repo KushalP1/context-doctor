@@ -74,6 +74,34 @@ function trimCallArguments(input: Record<string, unknown>, maxTokens: number): R
   return out;
 }
 
+/**
+ * Where trimming stops — quantized so the prompt cache survives.
+ *
+ * The obvious boundary, `length - keepRecent`, advances by one on every turn.
+ * That rewrites the message that just aged out of the recent window, and since
+ * prompt caches only match a byte-identical prefix, editing anything in the
+ * middle invalidates the cache from that point on. Measured on a 25-turn agent
+ * conversation, the naive boundary invalidated the cached prefix on 24 of 24
+ * turns: paying the 1.25x cache-write price every turn to save a few hundred
+ * tokens, which is a straight loss on any sizeable context.
+ *
+ * Quantizing means the boundary holds still for STEP turns at a time, so the
+ * prefix stays byte-identical in between and the cache is rebuilt once per
+ * STEP turns instead of once per turn. Older content is trimmed slightly later
+ * than it otherwise would be; that is much cheaper than losing the cache.
+ */
+const TRIM_BOUNDARY_STEP = 10;
+
+function stableCutoff(messageCount: number, keepRecent: number): number {
+  const raw = messageCount - keepRecent;
+  if (raw <= 0) return 0;
+  // Below one step there is nothing to quantize to except zero, which would
+  // silently disable trimming on every short conversation. Such a conversation
+  // has no long stable prefix worth protecting anyway.
+  if (raw < TRIM_BOUNDARY_STEP) return raw;
+  return Math.floor(raw / TRIM_BOUNDARY_STEP) * TRIM_BOUNDARY_STEP;
+}
+
 function hash(text: string): string {
   return createHash("sha1").update(text.replace(/\s+/g, " ").trim()).digest("hex");
 }
@@ -202,7 +230,7 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
 
   // -- trim-tool-results: shrink stale tool output ------------------------------
   if (opts.strategies.includes("trim-tool-results")) {
-    const cutoff = messages.length - opts.keepRecent;
+    const cutoff = stableCutoff(messages.length, opts.keepRecent);
     messages.forEach((m, i) => {
       if (i >= cutoff || !isToolResultMessage(m)) return;
       const text = textOf(m.content);
@@ -221,7 +249,7 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
 
   // -- trim-tool-calls: shrink the arguments of calls that already ran ----------
   if (opts.strategies.includes("trim-tool-calls")) {
-    const cutoff = messages.length - opts.keepRecent;
+    const cutoff = stableCutoff(messages.length, opts.keepRecent);
     messages.forEach((m, i) => {
       if (i >= cutoff) return;
       let saved = 0;
