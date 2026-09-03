@@ -23,6 +23,7 @@ import { buildImpactReport } from "./impact.js";
 import { recordLedger } from "./ledger.js";
 import { runDoctor } from "./doctor.js";
 import { measureAccuracy, renderAccuracy } from "./accuracy.js";
+import { renderDiff } from "./diff.js";
 import { runWatch } from "./watch.js";
 import { exactTokenCount } from "./exact.js";
 import { checkBudget, loadConfig } from "./config.js";
@@ -51,6 +52,8 @@ Usage:
                                                 MCP handshake) with one pasteable diagnosis
   context-doctor dashboard                      Local savings dashboard on 127.0.0.1 (--port n,
                                                 default 8790) — charts from your own machine only
+  context-doctor diff <before> <after>          Compare two profiles: what moved, which findings
+                                                were resolved, and what it saves
   context-doctor accuracy                       Measure the token heuristic against the API's own
                                                 counts recorded in your transcripts (--limit n)
   context-doctor watch [file]                   Live-monitor a growing session/agent trace: running
@@ -111,6 +114,8 @@ interface Args {
   host?: string;
   intervalMs?: number;
   limit?: number;
+  /** Everything after the command name — `diff` needs two files, not one. */
+  positionals?: string[];
   upstreamAnthropic?: string;
   upstreamOpenai?: string;
   list: boolean;
@@ -149,6 +154,7 @@ function parseArgs(argv: string[]): Args {
   }
   args.command = positional[0];
   args.file = positional[1];
+  args.positionals = positional.slice(1);
   return args;
 }
 
@@ -200,6 +206,21 @@ function main(): void {
 
   if (args.command === "doctor") {
     void runDoctor();
+    return;
+  }
+
+  if (args.command === "diff") {
+    const [before, after] = args.positionals ?? [];
+    if (!before || !after) {
+      console.error("Usage: context-doctor diff <before> <after>");
+      process.exit(1);
+    }
+    try {
+      console.log(renderDiff(before, after, args.model));
+    } catch (e) {
+      console.error(`Could not diff: ${(e as Error).message}`);
+      process.exit(1);
+    }
     return;
   }
 

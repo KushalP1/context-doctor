@@ -159,3 +159,37 @@ test("files re-read through the shell are detected, command words are not", asyn
     assert.ok(!named.some((m) => m.includes("echo")), "the next shell word is not a file");
     assert.ok(!named.some((m) => m.includes("*")), "a glob is not one repeated file");
 });
+test("diff reports what moved between two profiles", async () => {
+    const { renderDiff } = await import("../diff.js");
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "ctxdoc-diff-"));
+    const heavy = join(dir, "before.json");
+    const light = join(dir, "after.json");
+    const bigResult = "row of data | ".repeat(2000);
+    writeFileSync(heavy, JSON.stringify({
+        model: "claude-sonnet-5",
+        messages: [
+            { role: "user", content: "run it" },
+            { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "q", input: { q: "select" } }] },
+            { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: bigResult }] },
+            ...Array.from({ length: 8 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", content: `turn ${i}` })),
+        ],
+    }));
+    const { optimizeConversation } = await import("../optimize.js");
+    const { readFileSync } = await import("node:fs");
+    const optimized = optimizeConversation(readFileSync(heavy, "utf8"), {
+        strategies: ["dedupe", "trim-tool-results"],
+    });
+    writeFileSync(light, JSON.stringify(optimized.conversation));
+    const out = renderDiff(heavy, light);
+    assert.match(out, /Total: .*→.*tokens/);
+    assert.match(out, /Net improvement/, "a real reduction must read as an improvement");
+    assert.match(out, /tool_results/, "the category that moved is named");
+    assert.match(out, /✓ resolved:/, "resolved findings are listed");
+    // Diffing a file against itself must be a clean no-op, not a false win.
+    const same = renderDiff(heavy, heavy);
+    assert.match(same, /No change in total context/);
+    assert.match(same, /\(no change in findings\)/);
+});
