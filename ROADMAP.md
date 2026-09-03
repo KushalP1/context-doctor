@@ -68,6 +68,28 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.13.0 — measurement, presets, and a cache bug
+
+| Item | Why |
+|---|---|
+| **`context-doctor accuracy`** | Answers "why is my bill bigger than the profile?" with evidence: the fixed harness baseline (~51k tokens here) and the per-turn injected content the transcript never records. The roadmap asked for a tokenizer benchmark instead; that turned out to be unbuildable from transcripts alone, and the note below says why |
+| **`context-doctor diff`** | Two profiles side by side — category movement, findings resolved or introduced, money and latency. Optimization no longer has to be taken on trust |
+| **`context-doctor init <preset>`** | `chat`, `agent`, `batch`. The budget feature went unused because an empty rc file is useless until you already know your numbers |
+| **Shell file reads** | `cat`/`head`/`tail`/`less` count as reads. 16 real findings across 6 local sessions that were previously invisible |
+| **Cache-aware trimming** | The trim boundary moved every turn, invalidating the prompt cache on 22 of 24 turns and paying the 1.25x write price to save a few hundred tokens. Quantized: 8 of 24, trimming undiminished |
+
+### One roadmap item did not survive contact with the data
+
+**"Calibrate the heuristic from ground truth"** assumed transcripts record what is
+sent. They do not. A turn with 5,595 characters of visible content is billed
+14,002 tokens, which would imply 0.4 characters per token — denser than any real
+tokenizer. Claude Code injects per-turn content (reminders, skill and file text)
+that never reaches the transcript, so transcript-derived calibration would fit
+the estimator to noise. Calibration needs a real tokenizer, not this data.
+
+**Subagent accounting** is unblocked only by a sample: none of the 39 local
+sessions contain sidechain traffic, so the field shapes would be guesswork.
+
 ## Next candidates
 
 Grouped by the question each one answers. Sizes are S/M/L; nothing here is
@@ -77,27 +99,23 @@ committed until it ships.
 
 | Item | Why | Size |
 |---|---|---|
-| **`context-doctor accuracy`** | Turn the ground-truth audit into a command: compare the heuristic against recorded API counts on local transcripts and report drift, so accuracy regressions surface automatically instead of by inspection | S |
-| **Calibrate the heuristic from ground truth** | Those same recorded counts can fit chars-per-token per content type, replacing a hand-picked constant with a measured one | M |
-| **Bash-based file reads** | The repeated-read detector sees explicit read tools; `cat`/`sed`/`head` inside shell commands are invisible to it, so agent sessions that read via the shell look cleaner than they are | S |
+| **Calibrate the heuristic with a real tokenizer** | Ship a small tokenizer (or lean on `--exact`) to fit chars-per-token per content type. Transcript deltas cannot do this — see above | M |
 | **Windows coverage that means something** | Windows CI failed for a day because tests overrode `HOME`, which `os.homedir()` ignores there. Fixed — but nothing stops the next test from sandboxing only the POSIX half | S |
-| **Subagent accounting** | Sidechain traffic is excluded from session profiles because it has its own window — but it still costs money, and nothing currently reports what subagents spent | M |
+| **Subagent accounting** | Sidechain traffic is excluded from session profiles because it has its own window — but it still costs money. Blocked on a transcript that actually contains some | M |
+| **Quantized-boundary tuning** | The trim boundary steps in tens, chosen by measurement on one fixture. The right step is probably a function of turn size and cache TTL | S |
 
 ### Turn advice into action
 
 | Item | Why | Size |
 |---|---|---|
-| **Cache-aware optimize** | Optimization ignores cache boundaries today; rewriting a cached prefix can cost more than it saves. The optimizer should leave stable prefixes alone | M |
 | **Cache breakpoint suggestions** | The proxy advisor says the cache is churning; the useful next step is saying *where* to place `cache_control` given the observed traffic | M |
 | **`trim-tool-calls` on by default where it is safe** | The proxy can already run it per route via `--config`, but it is off unless someone asks for it — and in agent traffic it is where most of the waste is. Needs evidence that trimming a completed call never confuses a live agent | S |
-| **`context-doctor diff`** | Compare two profiles — before/after an optimization, or two sessions — so an improvement can be demonstrated rather than asserted | S |
 
 ### Fit into how people actually work
 
 | Item | Why | Size |
 |---|---|---|
 | **Editor status bar** | A VS Code / Cursor extension showing live context health where the work happens, rather than in a separate terminal | L |
-| **Config presets** | `.contextdoctorrc` starts empty; shipping sensible presets (chat app, coding agent, batch pipeline) would make budgets adoptable without tuning | S |
 
 ## Non-goals
 

@@ -91,6 +91,9 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | `context-doctor analyze <file>` | Profile a conversation: token breakdown, findings, cost + latency estimates. `--fail-over-budget` exits 1 on a breach, for CI |
 | `context-doctor optimize <file>` | Apply the safe fixes; add `--strategy trim-tool-calls` for big inline file writes, `--strategy prune-history` for consented lossy compaction |
 | `context-doctor session [file]` | Profile a Claude Code session: live context, findings, **measured tokens and prompt-cache economics**. Also reads ChatGPT data exports (`conversations.json`) |
+| `context-doctor init [preset]` | Write a `.contextdoctorrc` from a preset (`chat`, `agent`, `batch`) — a budget you can adopt in one command and tune later |
+| `context-doctor diff <before> <after>` | Compare two profiles: what moved by category, which findings were resolved or introduced, and what it saves in money and latency |
+| `context-doctor accuracy` | How much of what you are billed for is visible in your transcript — the fixed harness baseline and the per-turn injected content neither you nor the profiler can see |
 | `context-doctor cursor [--list]` | Profile a chat from Cursor's local history (both storage formats) |
 | `context-doctor report` | Machine-wide impact report (proxy savings persist across restarts): exact proxy savings, hook activity, recoverable waste in recent sessions |
 | `context-doctor proxy` | Always-on local proxy that optimizes every Anthropic/OpenAI API request in flight (`/stats` for cumulative savings) |
@@ -244,12 +247,13 @@ const { conversation, tokensBefore, tokensAfter } = optimizeConversation(chatJso
 ## What it detects
 
 - **Oversized tool results** — the #1 context killer in agent loops
+- **Oversized tool calls** — a `Write` or a `cat > file <<EOF` puts the whole file in context permanently. In file-heavy agent work these outweigh every tool result combined, and `--strategy trim-tool-calls` reclaims them
 - **Duplicate content** — the same doc/result pasted twice
 - **Near-duplicates** — the same doc re-pasted with different surrounding words (shingle similarity, ≥60%)
-- **Repeated file reads** — the same file pulled in three or more times, every copy still in context
+- **Repeated file reads** — the same file pulled in three or more times, every copy still in context. Counts shell reads too (`cat`, `head`, `tail`, `less`), which is where most of them hide in agent sessions
 - **Retained error output** — stack traces and failed commands kept verbatim long after the fix landed
 - **Repeated identical tool calls** — a signal your agent forgot earlier results
-- **Base64 / binary blobs** in text content
+- **Base64 / binary blobs** in text content — checked by character distribution, not just alphabet, so hex digests and long identifiers are not mistaken for encoded binary
 - **Long history** past the point where models track the middle
 - **Cache-hostile ordering** — volatile content before stable content breaks prompt caching (Anthropic `cache_control`, OpenAI automatic prefix caching)
 - **Window pressure** — usage % against the target model's real context window
@@ -265,6 +269,8 @@ const { conversation, tokensBefore, tokensAfter } = optimizeConversation(chatJso
 | `prune-history` — collapse old turns into a stub for summarization | Yes | opt-in |
 
 `trim-tool-calls` is the big one for agent sessions. Writing a file through a tool call puts the entire file in context permanently, so in file-heavy work the calls outweigh every tool result combined — on a real 278k-token session, the default set reached 248k and adding `trim-tool-calls` reached 102k. It is opt-in because it edits what the model itself wrote.
+
+**Optimization is cache-aware.** Prompt caches match a byte-identical prefix, so editing a message in the middle invalidates everything after it — and the naive "trim everything older than the last N messages" boundary moves every single turn. On a 25-turn agent conversation that invalidated the cached prefix on 22 of 24 turns, paying the 1.25x cache-write price on the whole prefix to save a few hundred tokens. The trim boundary is quantized so it holds still between steps (8 of 24 on the same fixture), while still reaching 15 of 20 tool results.
 
 Everything the optimizer does is inspectable: it prints exactly which messages changed and how many tokens each change saved.
 
