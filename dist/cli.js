@@ -21,6 +21,7 @@ import { runHook } from "./hook.js";
 import { buildImpactReport } from "./impact.js";
 import { recordLedger } from "./ledger.js";
 import { runDoctor } from "./doctor.js";
+import { measureAccuracy, renderAccuracy } from "./accuracy.js";
 import { runWatch } from "./watch.js";
 import { exactTokenCount } from "./exact.js";
 import { checkBudget, loadConfig } from "./config.js";
@@ -48,6 +49,8 @@ Usage:
                                                 MCP handshake) with one pasteable diagnosis
   context-doctor dashboard                      Local savings dashboard on 127.0.0.1 (--port n,
                                                 default 8790) — charts from your own machine only
+  context-doctor accuracy                       Measure the token heuristic against the API's own
+                                                counts recorded in your transcripts (--limit n)
   context-doctor watch [file]                   Live-monitor a growing session/agent trace: running
                                                 token/cost line per change, new findings as they appear
                                                 (--interval-ms n, default 2000)
@@ -76,6 +79,7 @@ Options:
                           Default: dedupe, trim-tool-results, strip-base64 (lossless-ish set)
   --keep-recent <n>       (optimize) Messages at the tail to leave untouched (default 6)
   --max-tool-tokens <n>   (optimize) Token budget for trimmed tool results (default 300)
+  --limit <n>             (accuracy) Sessions to sample (default 20)
   --port <n>              (proxy) Port to listen on (default 8787)
   --host <addr>           (proxy) Bind address (default 127.0.0.1; use 0.0.0.0 to expose)
   --config <file>         (proxy) Per-route overrides: {"routes":[{"modelPrefix":"gpt","strategies":[...],
@@ -136,6 +140,9 @@ function parseArgs(argv) {
                 break;
             case "--interval-ms":
                 args.intervalMs = Number(argv[++i]);
+                break;
+            case "--limit":
+                args.limit = Number(argv[++i]);
                 break;
             case "--host":
                 args.host = argv[++i];
@@ -201,6 +208,11 @@ function main() {
     }
     if (args.command === "doctor") {
         void runDoctor();
+        return;
+    }
+    if (args.command === "accuracy") {
+        const report = measureAccuracy(args.limit ?? 20);
+        console.log(args.json ? JSON.stringify(report, null, 2) : renderAccuracy(report));
         return;
     }
     if (args.command === "report") {

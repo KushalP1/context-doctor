@@ -14,6 +14,13 @@ export interface SessionInfo {
     modifiedAt: Date;
     sizeBytes: number;
 }
+/** One API-reported input size, positioned in the message array. */
+export interface UsageSample {
+    /** Index into the live `messages` array of the assistant message reporting it. */
+    index: number;
+    /** input + cache-read + cache-creation tokens for that request. */
+    input: number;
+}
 export interface ParsedSession {
     /**
      * The real input size of the most recent request, as reported by the API
@@ -30,6 +37,15 @@ export interface ParsedSession {
      * was compacted away so the difference can be shown rather than hidden.
      */
     compactedAway?: number;
+    /**
+     * Every API-reported input size in the transcript, tagged with its position
+     * in the live message array. Consecutive samples are what make key-free
+     * accuracy measurement possible: the harness's system prompt and tool
+     * schemas are constant between two calls, so the DIFFERENCE between two
+     * reported figures is the cost of the messages in between — directly
+     * comparable to what the heuristic estimates for those same messages.
+     */
+    usageSamples?: UsageSample[];
     /** Conversation JSON string in Anthropic-ish format, ready for parseConversation(). */
     conversationJson: string;
     title?: string;

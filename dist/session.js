@@ -142,6 +142,8 @@ export function parseSessionFile(path) {
     let lastCompactIndex = -1;
     /** Newest API-reported input size, if the transcript carries usage. */
     let reportedInputTokens;
+    /** Every reported size, positioned — the basis for `context-doctor accuracy`. */
+    const usageSamples = [];
     forEachLine(path, (line) => {
         if (!line.trim())
             return;
@@ -169,8 +171,10 @@ export function parseSessionFile(path) {
         const usage = message.usage;
         if (entry.type === "assistant" && usage) {
             const total = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
-            if (total > 0)
+            if (total > 0) {
                 reportedInputTokens = total;
+                usageSamples.push({ index: messages.length, input: total });
+            }
         }
         if (entry.isCompactSummary)
             lastCompactIndex = messages.length;
@@ -188,6 +192,11 @@ export function parseSessionFile(path) {
         messageCount: live.length,
         compactedAway,
         reportedInputTokens,
+        // Samples before the compaction boundary describe a context that no longer
+        // exists; re-base the rest onto the live array.
+        usageSamples: usageSamples
+            .filter((u) => u.index >= compactedAway)
+            .map((u) => ({ index: u.index - compactedAway, input: u.input })),
         path,
     };
 }

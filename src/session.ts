@@ -21,6 +21,14 @@ export interface SessionInfo {
   sizeBytes: number;
 }
 
+/** One API-reported input size, positioned in the message array. */
+export interface UsageSample {
+  /** Index into the live `messages` array of the assistant message reporting it. */
+  index: number;
+  /** input + cache-read + cache-creation tokens for that request. */
+  input: number;
+}
+
 export interface ParsedSession {
   /**
    * The real input size of the most recent request, as reported by the API
@@ -37,6 +45,15 @@ export interface ParsedSession {
    * was compacted away so the difference can be shown rather than hidden.
    */
   compactedAway?: number;
+  /**
+   * Every API-reported input size in the transcript, tagged with its position
+   * in the live message array. Consecutive samples are what make key-free
+   * accuracy measurement possible: the harness's system prompt and tool
+   * schemas are constant between two calls, so the DIFFERENCE between two
+   * reported figures is the cost of the messages in between — directly
+   * comparable to what the heuristic estimates for those same messages.
+   */
+  usageSamples?: UsageSample[];
   /** Conversation JSON string in Anthropic-ish format, ready for parseConversation(). */
   conversationJson: string;
   title?: string;
@@ -174,6 +191,8 @@ export function parseSessionFile(path: string): ParsedSession {
   let lastCompactIndex = -1;
   /** Newest API-reported input size, if the transcript carries usage. */
   let reportedInputTokens: number | undefined;
+  /** Every reported size, positioned — the basis for `context-doctor accuracy`. */
+  const usageSamples: UsageSample[] = [];
 
   forEachLine(path, (line) => {
     if (!line.trim()) return;
@@ -196,7 +215,10 @@ export function parseSessionFile(path: string): ParsedSession {
     if (entry.type === "assistant" && usage) {
       const total =
         (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
-      if (total > 0) reportedInputTokens = total;
+      if (total > 0) {
+        reportedInputTokens = total;
+        usageSamples.push({ index: messages.length, input: total });
+      }
     }
     if (entry.isCompactSummary) lastCompactIndex = messages.length;
     messages.push({ role: message.role, content: message.content });
@@ -215,6 +237,11 @@ export function parseSessionFile(path: string): ParsedSession {
     messageCount: live.length,
     compactedAway,
     reportedInputTokens,
+    // Samples before the compaction boundary describe a context that no longer
+    // exists; re-base the rest onto the live array.
+    usageSamples: usageSamples
+      .filter((u) => u.index >= compactedAway)
+      .map((u) => ({ index: u.index - compactedAway, input: u.input })),
     path,
   };
 }
