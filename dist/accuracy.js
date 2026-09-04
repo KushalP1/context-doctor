@@ -28,12 +28,19 @@ function median(values) {
 }
 /** Below this, a turn is too small for the ratio to mean anything. */
 const MIN_DELTA_TOKENS = 200;
-export function measureAccuracy(limit = 20) {
+/**
+ * @param limit  How many recent sessions to sample.
+ * @param paths  Explicit transcripts to measure instead of discovering them.
+ *               Callers (and tests) that already know which files they mean
+ *               should not have to impersonate a home directory to say so.
+ */
+export function measureAccuracy(limit = 20, paths) {
     const coverages = [];
     const invisible = [];
     const baselines = [];
     let scanned = 0;
-    for (const info of listSessions(limit)) {
+    const targets = paths ? paths.map((path) => ({ path })) : listSessions(limit);
+    for (const info of targets) {
         let parsed;
         try {
             parsed = parseSessionFile(info.path);

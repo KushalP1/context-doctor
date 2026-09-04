@@ -6,8 +6,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir, homedir } from "node:os";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /** One Claude Code transcript line. */
@@ -40,15 +40,12 @@ test("usage samples are recorded per assistant turn, positioned in the message a
 
 test("coverage is the visible share of billed growth, and impossible turns are dropped", async () => {
   const { measureAccuracy } = await import("../accuracy.js");
-  const { parseSessionFile } = await import("../session.js");
 
-  // Build a transcript inside a fake Claude projects dir so listSessions finds it.
-  const home = mkdtempSync(join(tmpdir(), "ctxdoc-acchome-"));
-  const projects = join(home, ".claude", "projects", "proj");
-  mkdirSync(projects, { recursive: true });
+  const dir = mkdtempSync(join(tmpdir(), "ctxdoc-coverage-"));
+  const path = join(dir, "a.jsonl");
   const body = "word ".repeat(400); // ~2000 chars ≈ 500 estimated tokens
   writeFileSync(
-    join(projects, "a.jsonl"),
+    path,
     [
       userLine("start"),
       assistantLine("first", 10_000),
@@ -62,17 +59,11 @@ test("coverage is the visible share of billed growth, and impossible turns are d
     ].join("\n") + "\n"
   );
 
-  const original = process.env.HOME;
-  process.env.HOME = home;
-  try {
-    // parseSessionFile is exercised directly too, to keep the fixture honest.
-    assert.equal(parseSessionFile(join(projects, "a.jsonl")).usageSamples?.length, 3);
-    const report = measureAccuracy(10);
-    assert.equal(report.samples, 1, "the impossible turn is dropped, the real one kept");
-    assert.ok(report.medianCoverage > 0 && report.medianCoverage < 1, `coverage in range, got ${report.medianCoverage}`);
-    assert.ok(report.medianInvisiblePerTurn > 0, "invisible tokens are positive");
-  } finally {
-    if (original === undefined) delete process.env.HOME;
-    else process.env.HOME = original;
-  }
+  // Measured by path, so the test never has to fake a home directory — which
+  // is how this suite broke on Windows, where os.homedir() ignores $HOME.
+  const report = measureAccuracy(10, [path]);
+  assert.equal(report.samples, 1, "the impossible turn is dropped, the real one kept");
+  assert.ok(report.medianCoverage > 0 && report.medianCoverage < 1, `coverage in range, got ${report.medianCoverage}`);
+  assert.ok(report.medianInvisiblePerTurn > 0, "invisible tokens are positive");
+  assert.ok(report.medianBaseline && report.medianBaseline > 0, "the fixed baseline is reported");
 });

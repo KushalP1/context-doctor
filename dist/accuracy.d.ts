@@ -27,5 +27,11 @@ export interface AccuracyReport {
     /** Median fixed baseline: system prompt + tool schemas, before any turn. */
     medianBaseline?: number;
 }
-export declare function measureAccuracy(limit?: number): AccuracyReport;
+/**
+ * @param limit  How many recent sessions to sample.
+ * @param paths  Explicit transcripts to measure instead of discovering them.
+ *               Callers (and tests) that already know which files they mean
+ *               should not have to impersonate a home directory to say so.
+ */
+export declare function measureAccuracy(limit?: number, paths?: string[]): AccuracyReport;
 export declare function renderAccuracy(report: AccuracyReport): string;
