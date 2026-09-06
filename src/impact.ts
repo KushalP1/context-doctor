@@ -9,7 +9,7 @@
  * a number.
  */
 
-import { readLedger } from "./ledger.js";
+import { foldTotals, readLedger } from "./ledger.js";
 import { listSessions, parseSessionFile } from "./session.js";
 import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
@@ -35,6 +35,9 @@ export async function buildImpactReport(proxyPort = 8787): Promise<string> {
   lines.push("═".repeat(56));
 
   const ledger = readLedger();
+  // Rotation folds dropped entries into a rollup. Counting it is what keeps
+  // these lifetime totals from going backwards once the cap is hit.
+  const carried = foldTotals(ledger.filter((e) => e.ev === "rollup"));
   const checks = ledger.filter((e) => e.ev === "check" || e.ev === undefined);
   const optimizes = ledger.filter((e) => e.ev === "optimize");
 
@@ -56,10 +59,10 @@ export async function buildImpactReport(proxyPort = 8787): Promise<string> {
     }
     reductionBySession.set(sid, reduction);
   }
-  const totalReduction = [...reductionBySession.values()].reduce((a, b) => a + b, 0);
+  const totalReduction = [...reductionBySession.values()].reduce((a, b) => a + b, 0) + carried.shrinkage;
 
   // Optimize-event savings, split by model family (claude / gpt / other).
-  const optimizeSaved = optimizes.reduce((s, e) => s + (e.saved ?? 0), 0);
+  const optimizeSaved = optimizes.reduce((s, e) => s + (e.saved ?? 0), 0) + carried.optimizeSaved;
   const savedByFamily = new Map<string, number>();
   let optimizeUsd = 0;
   for (const e of optimizes) {
@@ -73,7 +76,7 @@ export async function buildImpactReport(proxyPort = 8787): Promise<string> {
   // Persisted checkpoints cover proxy runs that have since exited; the live
   // process reports whatever it has not checkpointed yet.
   const proxyEvents = ledger.filter((e) => e.ev === "proxy");
-  const proxyHistoric = proxyEvents.reduce((s, e) => s + (e.saved ?? 0), 0);
+  const proxyHistoric = proxyEvents.reduce((s, e) => s + (e.saved ?? 0), 0) + carried.proxySaved;
   const proxySaved = proxyHistoric + (proxy?.tokensSaved ?? 0);
 
   // -- Headline: what context-doctor has saved ----------------------------------
@@ -109,8 +112,8 @@ export async function buildImpactReport(proxyPort = 8787): Promise<string> {
   lines.push("Hygiene activity (every-prompt hook)");
   lines.push("─".repeat(56));
   if (checks.length > 0) {
-    const warnings = checks.filter((e) => e.warn).length;
-    lines.push(`${checks.length} deep context checks across ${bySession.size} session(s); ${warnings} warning(s) delivered to the model.`);
+    const warnings = checks.filter((e) => e.warn).length + carried.warnings;
+    lines.push(`${checks.length + carried.checks} deep context checks across ${bySession.size} session(s); ${warnings} warning(s) delivered to the model.`);
     lines.push("(Prompt-level fast checks are not logged — they cost ~1ms and leave no trace by design.)");
   } else {
     lines.push("No hook activity recorded yet (ledger appears after the first deep check of a heavy session).");

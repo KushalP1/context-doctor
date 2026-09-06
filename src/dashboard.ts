@@ -8,7 +8,7 @@
  */
 
 import http from "node:http";
-import { readLedger } from "./ledger.js";
+import { foldTotals, readLedger } from "./ledger.js";
 import { listSessions, parseSessionFile } from "./session.js";
 import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
@@ -39,6 +39,9 @@ async function fetchProxyStats(port: number): Promise<DashboardData["proxy"]> {
 
 export async function collectDashboardData(proxyPort = 8787): Promise<DashboardData> {
   const ledger = readLedger();
+  // Totals folded in when the ledger rotated; excluded from the daily series,
+  // which describes individual days rather than a carried-forward sum.
+  const carried = foldTotals(ledger.filter((e) => e.ev === "rollup"));
   const checks = ledger.filter((e) => e.ev === "check" || e.ev === undefined);
   const optimizes = ledger.filter((e) => e.ev === "optimize");
 
@@ -49,13 +52,13 @@ export async function collectDashboardData(proxyPort = 8787): Promise<DashboardD
     if (!c.sid || typeof c.tok !== "number") continue;
     perSession.set(c.sid, [...(perSession.get(c.sid) ?? []), c.tok]);
   }
-  let shrinkage = 0;
+  let shrinkage = carried.shrinkage;
   for (const toks of perSession.values()) {
     for (let i = 1; i < toks.length; i++) if (toks[i] < toks[i - 1]) shrinkage += toks[i - 1] - toks[i];
   }
 
-  const optimizeSaved = optimizes.reduce((s, e) => s + (e.saved ?? 0), 0);
-  let usdSaved = 0;
+  const optimizeSaved = optimizes.reduce((s, e) => s + (e.saved ?? 0), 0) + carried.optimizeSaved;
+  let usdSaved = carried.optimizeUsd;
   for (const e of optimizes) {
     const pricing = pricingFor(e.model);
     if (pricing && e.saved) usdSaved += inputCostUsd(e.saved, pricing);
@@ -102,8 +105,8 @@ export async function collectDashboardData(proxyPort = 8787): Promise<DashboardD
     totals: {
       tokensSaved: optimizeSaved + shrinkage + (proxy?.tokensSaved ?? 0),
       usdSaved: usdSaved + (proxy?.estUsdSaved ?? 0),
-      checks: checks.length,
-      warnings: checks.filter((c) => c.warn).length,
+      checks: checks.length + carried.checks,
+      warnings: checks.filter((c) => c.warn).length + carried.warnings,
       optimizeRuns: optimizes.length,
     },
     daily,
