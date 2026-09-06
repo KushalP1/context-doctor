@@ -11,7 +11,9 @@
  * ~/.claude/settings.json; removed by `context-doctor uninstall`.
  */
 
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { dirname, join } from "node:path";
 import { recordLedger, statePath } from "./ledger.js";
 import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
@@ -51,6 +53,67 @@ interface SessionState {
   b: number; // transcript bytes at last full parse
 }
 
+/**
+ * State lives in one small file per session, not one shared map.
+ *
+ * The hook runs once per prompt in every Claude Code window, and people keep
+ * several open. With a shared JSON map, concurrent hooks each read the whole
+ * map and wrote it back, so the last writer erased everyone else: measured,
+ * 12 simultaneous sessions left 4 surviving entries. The cost of losing an
+ * entry is a repeated warning the regrowth gate exists to prevent, plus a full
+ * re-parse of a transcript that can be hundreds of megabytes.
+ *
+ * A process that only ever writes its own session's file cannot race another.
+ */
+function stateDir(): string {
+  return statePath().replace(/\.json$/, "") + ".d";
+}
+
+function sessionStatePath(sessionId: string): string {
+  // Session ids are usually uuids, but the fallback id is a filesystem path.
+  // Hashing keeps the filename valid whatever the id looks like.
+  return join(stateDir(), createHash("sha1").update(sessionId).digest("hex").slice(0, 16) + ".json");
+}
+
+function readSessionState(sessionId: string): SessionState {
+  try {
+    const raw = JSON.parse(readFileSync(sessionStatePath(sessionId), "utf8")) as SessionState;
+    if (typeof raw?.t === "number" && typeof raw?.b === "number") return raw;
+  } catch {
+    /* absent or half-written: treat as a first run */
+  }
+  // Migration: entries written by the shared-map versions are still useful.
+  try {
+    const legacy = JSON.parse(readFileSync(statePath(), "utf8")) as Record<string, SessionState | number>;
+    const entry = legacy[sessionId];
+    if (typeof entry === "number") return { t: entry, b: 0 };
+    if (entry && typeof entry.t === "number") return { t: entry.t, b: entry.b ?? 0 };
+  } catch {
+    /* no legacy file */
+  }
+  return { t: 0, b: 0 };
+}
+
+/** Keep the directory from growing without bound as sessions come and go. */
+const MAX_STATE_FILES = 200;
+
+function writeSessionState(sessionId: string, state: SessionState): void {
+  const dir = stateDir();
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(sessionStatePath(sessionId), JSON.stringify(state));
+  try {
+    const files = readdirSync(dir);
+    if (files.length <= MAX_STATE_FILES) return;
+    const byAge = files
+      .map((f) => ({ f, t: statSync(join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t)
+      .slice(MAX_STATE_FILES);
+    for (const { f } of byAge) rmSync(join(dir, f), { force: true });
+  } catch {
+    /* pruning is housekeeping, never worth failing a prompt over */
+  }
+}
+
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
@@ -76,15 +139,7 @@ export async function runHook(): Promise<void> {
     // since the last full parse, nothing new can trigger — exit without the
     // expensive read. Heavy-but-quiet sessions cost one stat + tiny state read.
     const sessionId = input.session_id ?? transcriptPath;
-    let state: Record<string, SessionState | number> = {};
-    try {
-      state = JSON.parse(readFileSync(statePath(), "utf8"));
-    } catch {
-      /* first run */
-    }
-    const rawPrev = state[sessionId];
-    // Migrate pre-0.3.5 numeric entries ({tokens only}) to the new shape.
-    const prev: SessionState = typeof rawPrev === "number" ? { t: rawPrev, b: 0 } : rawPrev ?? { t: 0, b: 0 };
+    const prev = readSessionState(sessionId);
     if (prev.b > 0 && sizeBytes < prev.b * REGROWTH_FACTOR) return;
 
     // Slow path (growth events only): full parse + profile.
@@ -99,9 +154,7 @@ export async function runHook(): Promise<void> {
 
     // Record this parse so the next prompts take fast path 2.
     const shouldWarn = liveTokens >= threshold && liveTokens >= prev.t * REGROWTH_FACTOR;
-    const nextState: SessionState = { t: shouldWarn ? liveTokens : prev.t, b: sizeBytes };
-    const entries = Object.entries({ ...state, [sessionId]: nextState });
-    writeFileSync(statePath(), JSON.stringify(Object.fromEntries(entries.slice(-100))));
+    writeSessionState(sessionId, { t: shouldWarn ? liveTokens : prev.t, b: sizeBytes });
     recordLedger({ ev: "check", sid: sessionId.slice(0, 12), tok: liveTokens, warn: shouldWarn });
     if (!shouldWarn) return;
 

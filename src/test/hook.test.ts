@@ -72,3 +72,86 @@ test("hook never errors on malformed input", async () => {
   });
   assert.equal(out.trim(), "");
 });
+
+test("concurrent sessions do not erase each other's state", async () => {
+  const { mkdtempSync, writeFileSync, readdirSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join, dirname } = await import("node:path");
+  const { execFile } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+
+  const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
+  const dir = mkdtempSync(join(tmpdir(), "ctxdoc-cc-"));
+  const transcript = join(dir, "t.jsonl");
+  writeFileSync(
+    transcript,
+    [
+      JSON.stringify({ type: "user", message: { role: "user", content: "x".repeat(400_000) } }),
+      JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: "ok", model: "claude-sonnet-5", usage: { input_tokens: 300_000 } },
+      }),
+    ].join("\n") + "\n"
+  );
+
+  const statePath = join(dir, "state.json");
+  const runHook = (sessionId: string) =>
+    new Promise<string>((resolve, reject) => {
+      const child = execFile(
+        process.execPath,
+        [cli, "hook"],
+        { env: { ...process.env, CONTEXT_DOCTOR_HOOK_STATE: statePath } },
+        (err, stdout) => (err ? reject(err) : resolve(stdout))
+      );
+      child.stdin?.end(JSON.stringify({ session_id: sessionId, transcript_path: transcript, cwd: dir }));
+    });
+
+  // The hook runs once per prompt in every open window, and people keep several.
+  const sessions = Array.from({ length: 12 }, (_, i) => `s${i}`);
+  const outputs = await Promise.all(sessions.map(runHook));
+  assert.equal(outputs.filter((o) => o.includes("additionalContext")).length, 12, "every session gets its warning");
+
+  // A shared map left 4 of 12 entries; per-session files must keep all of them.
+  assert.equal(readdirSync(join(dir, "state.d")).length, 12, "no session's state may be clobbered");
+
+  // And the state must do its job: a second run over an unchanged transcript
+  // is gated out, which is what the lost entries used to cost.
+  assert.equal(await runHook("s0"), "", "an unchanged session re-warns nobody");
+});
+
+test("state written by the older shared-map format is still honoured", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join, dirname } = await import("node:path");
+  const { execFile } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+
+  const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
+  const dir = mkdtempSync(join(tmpdir(), "ctxdoc-mig-"));
+  const transcript = join(dir, "t.jsonl");
+  writeFileSync(
+    transcript,
+    [
+      JSON.stringify({ type: "user", message: { role: "user", content: "x".repeat(400_000) } }),
+      JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: "ok", model: "claude-sonnet-5", usage: { input_tokens: 300_000 } },
+      }),
+    ].join("\n") + "\n"
+  );
+  const statePath = join(dir, "state.json");
+  // The shape previous versions wrote: one map keyed by session id.
+  const { statSync } = await import("node:fs");
+  writeFileSync(statePath, JSON.stringify({ old: { t: 300_000, b: statSync(transcript).size } }));
+
+  const out = await new Promise<string>((resolve, reject) => {
+    const child = execFile(
+      process.execPath,
+      [cli, "hook"],
+      { env: { ...process.env, CONTEXT_DOCTOR_HOOK_STATE: statePath } },
+      (err, stdout) => (err ? reject(err) : resolve(stdout))
+    );
+    child.stdin?.end(JSON.stringify({ session_id: "old", transcript_path: transcript, cwd: dir }));
+  });
+  assert.equal(out, "", "an upgrade must not restart the nagging it had already suppressed");
+});
