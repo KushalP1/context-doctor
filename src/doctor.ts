@@ -12,6 +12,7 @@ import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ledgerPath, recordLedger } from "./ledger.js";
+import { loadConfig } from "./config.js";
 
 function claudeDesktopConfigPath(): string {
   switch (platform()) {
@@ -135,6 +136,20 @@ export async function runDoctor(): Promise<void> {
     checks.push({ label: "Ledger", status: "ok", detail: `writable at ${ledgerPath()}` });
   } catch {
     checks.push({ label: "Ledger", status: "fail", detail: `cannot write ${ledgerPath()}` });
+  }
+
+  // Project config: a setting that is silently ignored looks exactly like the
+  // feature being broken, so name it here rather than leaving it to be guessed.
+  const loaded = loadConfig(process.cwd());
+  if (loaded.path) {
+    const warnings = loaded.warnings ?? [];
+    checks.push(
+      warnings.length === 0
+        ? { label: "Project config", status: "ok", detail: `${loaded.path} — all settings understood` }
+        : { label: "Project config", status: "fail", detail: `${warnings.length} setting(s) will be ignored:\n` + warnings.map((w) => `    ${w}`).join("\n") }
+    );
+  } else {
+    checks.push({ label: "Project config", status: "skip", detail: "no .contextdoctorrc (optional; create one with: context-doctor init <preset>)" });
   }
 
   checks.push(await checkMcpHandshake());

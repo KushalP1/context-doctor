@@ -92,3 +92,30 @@ test("every preset is valid config the loader actually understands", async () =>
     }
     assert.equal(findPreset("nope"), undefined, "an unknown id resolves to nothing");
 });
+test("config that will be silently ignored is named instead", async () => {
+    const { validateConfig } = await import("../config.js");
+    const warnings = validateConfig({
+        budget: { maxTokens: "lots", maxWindowPct: 150, maxTokns: 5 },
+        strategies: ["trim-tool-result", "dedupe"],
+        keepRecent: -10,
+        colour: "blue",
+    }, "/x/.contextdoctorrc");
+    const joined = warnings.join("\n");
+    // Each of these fails quietly today and looks like a broken feature.
+    assert.match(joined, /maxTokens must be a positive number/, "a budget written as a string never triggers");
+    assert.match(joined, /maxTokns is not a known budget limit/, "a typo'd limit does nothing");
+    assert.match(joined, /maxWindowPct is above 100/, "a percentage over 100 can never be reached");
+    assert.match(joined, /"trim-tool-result" is not a strategy/, "a typo'd strategy trims nothing");
+    assert.match(joined, /keepRecent must be a positive whole number/, "a negative window disables trimming");
+    assert.match(joined, /colour is not a known setting/, "an unknown key is ignored");
+    // Valid config must stay silent, or the warnings become noise people skip.
+    assert.deepEqual(validateConfig({ budget: { maxTokens: 120000, maxWindowPct: 60 }, strategies: ["dedupe"], keepRecent: 6 }, "/x"), []);
+    // Arrays are objects in JavaScript; an rc file must still be a real object.
+    assert.equal(validateConfig([1, 2, 3], "/x").length, 1);
+});
+test("every shipped preset validates clean", async () => {
+    const { PRESETS, validateConfig } = await import("../config.js");
+    for (const preset of PRESETS) {
+        assert.deepEqual(validateConfig(preset.config, "/x"), [], `${preset.id} must not warn about itself`);
+    }
+});

@@ -39,11 +39,19 @@ export interface LoadedConfig {
     config: ContextDoctorConfig;
     /** Absolute path of the rc file, or undefined when none was found. */
     path?: string;
+    /** Settings that will be silently ignored, if any. */
+    warnings?: string[];
 }
 /**
- * Load the nearest config. Malformed rc files are reported (so a typo is not
- * silently ignored) but never throw — the tool keeps working with defaults.
+ * Report anything in an rc file that will be silently ignored.
+ *
+ * Every invalid value here fails quietly and looks like the feature not
+ * working: `"trim-tool-result"` (missing s) trims nothing, a negative
+ * keepRecent disables trimming entirely, and a budget written as a string is
+ * never compared against. For a tool whose whole job is measurement, silently
+ * doing nothing is the worst available behaviour.
  */
+export declare function validateConfig(config: unknown, path: string): string[];
 export declare function loadConfig(startDir?: string, onWarn?: (msg: string) => void): LoadedConfig;
 export interface BudgetVerdict {
     /** True when any configured limit is exceeded. */

@@ -47,6 +47,8 @@ export interface LoadedConfig {
   config: ContextDoctorConfig;
   /** Absolute path of the rc file, or undefined when none was found. */
   path?: string;
+  /** Settings that will be silently ignored, if any. */
+  warnings?: string[];
 }
 
 /** Candidate rc paths: cwd upwards, then the home directory. */
@@ -70,12 +72,89 @@ function candidatePaths(startDir: string): string[] {
  * Load the nearest config. Malformed rc files are reported (so a typo is not
  * silently ignored) but never throw — the tool keeps working with defaults.
  */
+/** Strategy ids the optimizer actually implements. */
+const KNOWN_STRATEGIES = new Set(["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"]);
+const KNOWN_KEYS = new Set(["budget", "strategies", "keepRecent", "maxToolResultTokens", "routes", "model"]);
+const KNOWN_BUDGET_KEYS = new Set(["maxTokens", "maxCostPerMessageUsd", "maxWindowPct"]);
+
+/**
+ * Report anything in an rc file that will be silently ignored.
+ *
+ * Every invalid value here fails quietly and looks like the feature not
+ * working: `"trim-tool-result"` (missing s) trims nothing, a negative
+ * keepRecent disables trimming entirely, and a budget written as a string is
+ * never compared against. For a tool whose whole job is measurement, silently
+ * doing nothing is the worst available behaviour.
+ */
+export function validateConfig(config: unknown, path: string): string[] {
+  const warnings: string[] = [];
+  const where = (key: string): string => `${path}: ${key}`;
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return [`${path}: expected a JSON object`];
+  }
+  const c = config as Record<string, unknown>;
+
+  for (const key of Object.keys(c)) {
+    if (!KNOWN_KEYS.has(key)) {
+      warnings.push(`${where(key)} is not a known setting — ignored (known: ${[...KNOWN_KEYS].join(", ")})`);
+    }
+  }
+
+  if (c.budget !== undefined) {
+    if (typeof c.budget !== "object" || c.budget === null || Array.isArray(c.budget)) {
+      warnings.push(`${where("budget")} must be an object — ignored`);
+    } else {
+      const budget = c.budget as Record<string, unknown>;
+      for (const [key, value] of Object.entries(budget)) {
+        if (!KNOWN_BUDGET_KEYS.has(key)) {
+          warnings.push(`${where(`budget.${key}`)} is not a known budget limit — ignored`);
+        } else if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+          warnings.push(`${where(`budget.${key}`)} must be a positive number, got ${JSON.stringify(value)} — this limit will never trigger`);
+        }
+      }
+      if (typeof budget.maxWindowPct === "number" && budget.maxWindowPct > 100) {
+        warnings.push(`${where("budget.maxWindowPct")} is above 100 — a percentage of the context window cannot exceed 100`);
+      }
+    }
+  }
+
+  if (c.strategies !== undefined) {
+    if (!Array.isArray(c.strategies)) {
+      warnings.push(`${where("strategies")} must be an array — ignored`);
+    } else {
+      for (const id of c.strategies) {
+        if (!KNOWN_STRATEGIES.has(String(id))) {
+          warnings.push(`${where("strategies")}: "${id}" is not a strategy — ignored (known: ${[...KNOWN_STRATEGIES].join(", ")})`);
+        }
+      }
+    }
+  }
+
+  for (const key of ["keepRecent", "maxToolResultTokens"] as const) {
+    const value = c[key];
+    if (value === undefined) continue;
+    if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+      warnings.push(`${where(key)} must be a positive whole number, got ${JSON.stringify(value)} — ignored`);
+    }
+  }
+
+  if (c.routes !== undefined && !Array.isArray(c.routes)) {
+    warnings.push(`${where("routes")} must be an array — ignored`);
+  }
+  return warnings;
+}
+
 export function loadConfig(startDir: string = process.cwd(), onWarn?: (msg: string) => void): LoadedConfig {
   for (const path of candidatePaths(startDir)) {
     if (!existsSync(path)) continue;
     try {
       const parsed = JSON.parse(readFileSync(path, "utf8")) as ContextDoctorConfig;
-      if (parsed && typeof parsed === "object") return { config: parsed, path };
+      // Arrays are objects too, hence the explicit check.
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const warnings = validateConfig(parsed, path);
+        for (const warning of warnings) onWarn?.(warning);
+        return { config: parsed, path, warnings };
+      }
       onWarn?.(`${path}: expected a JSON object — ignoring`);
     } catch (e) {
       onWarn?.(`${path}: ${(e as Error).message} — ignoring`);
