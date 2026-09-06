@@ -66,3 +66,35 @@ test("trimming still actually saves tokens", () => {
   assert.ok(result.applied.length >= 12, `expected most results trimmed, got ${result.applied.length}`);
   assert.ok(result.tokensAfter < result.tokensBefore * 0.6, "and the context must actually shrink");
 });
+
+test("dedupe never replaces the turn the model is answering", () => {
+  const doc = "Here is the contract text that matters. ".repeat(30);
+  const messages = [
+    { role: "user", content: doc },
+    ...Array.from({ length: 10 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", content: `turn ${i}` })),
+    { role: "user", content: doc }, // the question being asked right now
+  ];
+
+  const result = optimizeConversation(JSON.stringify({ model: "claude-sonnet-5", messages }), {
+    strategies: ["dedupe"],
+  });
+  const last = (result.conversation as { messages: Array<{ content: unknown }> }).messages.at(-1);
+  assert.ok(
+    !String(last?.content).includes("context-doctor"),
+    "the live turn must reach the model intact, not as a pointer to an older copy"
+  );
+});
+
+test("dedupe still removes duplicates once they are history", () => {
+  const doc = "Here is the contract text that matters. ".repeat(30);
+  const messages = [
+    { role: "user", content: doc },
+    { role: "assistant", content: "ok" },
+    { role: "user", content: doc }, // a genuine older duplicate
+    ...Array.from({ length: 20 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", content: `turn ${i}` })),
+  ];
+
+  const result = optimizeConversation(JSON.stringify({ messages }), { strategies: ["dedupe"] });
+  assert.equal(result.applied.length, 1, "protecting the tail must not disable dedupe entirely");
+  assert.ok(result.tokensAfter < result.tokensBefore, "and it must still save tokens");
+});

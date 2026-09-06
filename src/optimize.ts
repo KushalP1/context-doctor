@@ -212,10 +212,22 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
 
   // -- dedupe: identical content beyond the first occurrence --------------------
   if (opts.strategies.includes("dedupe")) {
+    // The recent tail is what the model is actually answering. Replacing a
+    // message there with "identical to #0" is technically true and practically
+    // awful: through the proxy, a user who pastes the same document twice has
+    // their CURRENT question swapped for a pointer to a message ten turns back,
+    // and just sees a worse answer with no explanation. Older copies are fair
+    // game; the live turn is not.
+    const cutoff = stableCutoff(messages.length, opts.keepRecent);
     const seen = new Map<string, number>();
     messages.forEach((m, i) => {
       const text = textOf(m.content);
       if (text.length < 300) return;
+      if (i >= cutoff) {
+        // Still record it, so a later duplicate can point back here.
+        if (!seen.has(hash(text))) seen.set(hash(text), i);
+        return;
+      }
       const h = hash(text);
       const first = seen.get(h);
       if (first === undefined) {
