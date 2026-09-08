@@ -151,6 +151,25 @@ const BEST_PRACTICES: Record<string, string[]> = {
   ],
 };
 
+/**
+ * Set a header on a Node request so every downstream reader sees it.
+ *
+ * `req.headers` is a parsed convenience copy; the MCP transport reconstructs a
+ * Web Request from `req.rawHeaders`, so a header written to only one of them is
+ * invisible to the other.
+ */
+function setHeader(req: import("node:http").IncomingMessage, name: string, value: string): void {
+  req.headers[name] = value;
+  const raw = req.rawHeaders;
+  for (let i = 0; i < raw.length; i += 2) {
+    if (raw[i].toLowerCase() === name) {
+      raw[i + 1] = value;
+      return;
+    }
+  }
+  raw.push(name, value);
+}
+
 // -- Transport dispatch --------------------------------------------------------
 // Default: stdio (Claude Desktop, Claude Code, Cursor spawn us as a child).
 // --http [--port N] [--host H]: streamable-HTTP endpoint at /mcp for clients
@@ -186,9 +205,27 @@ if (argv.includes("--http")) {
         res.end(JSON.stringify({ error: "Stateless server: POST /mcp only" }));
         return;
       }
+      // The streamable-HTTP spec says a client MUST accept both
+      // application/json and text/event-stream, and the SDK answers anything
+      // else with a 406. Plenty of real callers send only application/json, or
+      // `*/*`, or no Accept at all — and to them a 406 looks like the server
+      // being broken. Our replies are single JSON-RPC responses with nothing to
+      // stream, so those clients get a plain JSON body instead of a refusal.
+      const accept = String(req.headers.accept ?? "");
+      const askedForSse = accept.includes("text/event-stream");
+      if (!askedForSse || !accept.includes("application/json")) {
+        // The transport rebuilds the request from rawHeaders (via Hono), so
+        // setting req.headers alone changes nothing it will ever look at.
+        setHeader(req, "accept", "application/json, text/event-stream");
+      }
+
       // Fresh server + transport per request (stateless — nothing shared).
       const server = createServer();
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+        // A client that never asked for a stream gets plain JSON back.
+        enableJsonResponse: !askedForSse,
+      });
       res.on("close", () => {
         void transport.close();
         void server.close();

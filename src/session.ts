@@ -21,6 +21,19 @@ export interface SessionInfo {
   sizeBytes: number;
 }
 
+/**
+ * Read one usage field defensively.
+ *
+ * A numeric string plainly means that number, and discarding it would throw
+ * away ground truth and silently fall back to the heuristic — so it is parsed.
+ * Anything else unusable (objects, null, "abc", negatives) counts as nothing.
+ */
+function usageNumber(value: unknown): number {
+  const n =
+    typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : Number.NaN;
+  return Number.isFinite(n) && n >= 0 ? Math.round(n) : 0;
+}
+
 /** One API-reported input size, positioned in the message array. */
 export interface UsageSample {
   /** Index into the live `messages` array of the assistant message reporting it. */
@@ -213,8 +226,14 @@ export function parseSessionFile(path: string): ParsedSession {
     if (typeof message.model === "string") model = message.model;
     const usage = message.usage as Record<string, number> | undefined;
     if (entry.type === "assistant" && usage) {
+      // Coerce, do not trust: a transcript whose usage numbers are STRINGS
+      // turned `1200 + 300` into "12003000" through JavaScript concatenation,
+      // an 8000x overstatement that drives the hook, the cost figures and the
+      // window percentage. Anything not a finite non-negative number is 0.
       const total =
-        (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+        usageNumber(usage.input_tokens) +
+        usageNumber(usage.cache_read_input_tokens) +
+        usageNumber(usage.cache_creation_input_tokens);
       if (total > 0) {
         reportedInputTokens = total;
         usageSamples.push({ index: messages.length, input: total });

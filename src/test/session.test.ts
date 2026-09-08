@@ -227,3 +227,54 @@ test("diff reports what moved between two profiles", async () => {
   assert.match(same, /No change in total context/);
   assert.match(same, /\(no change in findings\)/);
 });
+
+test("usage numbers are coerced, not concatenated", async () => {
+  const { parseSessionFile } = await import("../session.js");
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+
+  const dir = mkdtempSync(join(tmpdir(), "ctxdoc-usage-"));
+  const write = (name: string, usage: unknown): string => {
+    const path = join(dir, `${name}.jsonl`);
+    writeFileSync(
+      path,
+      [
+        JSON.stringify({ type: "user", message: { role: "user", content: "hello" } }),
+        JSON.stringify({ type: "assistant", message: { role: "assistant", content: "hi", model: "claude-sonnet-5", usage } }),
+      ].join("\n") + "\n"
+    );
+    return path;
+  };
+
+  // The bug: JavaScript's + concatenated string usage values, so 1200 + 300
+  // reported as 12,003,000 — an 8000x overstatement driving the hook, the cost
+  // figures and the window percentage.
+  assert.equal(
+    parseSessionFile(write("strings", { input_tokens: "1200", cache_read_input_tokens: "300" })).reportedInputTokens,
+    1500,
+    "string usage values must be added, not concatenated"
+  );
+  assert.equal(parseSessionFile(write("negative", { input_tokens: -50 })).reportedInputTokens, undefined);
+  assert.equal(parseSessionFile(write("object", { input_tokens: { v: 5 } })).reportedInputTokens, undefined);
+  assert.equal(parseSessionFile(write("float", { input_tokens: 1200.7 })).reportedInputTokens, 1201, "rounded");
+  assert.equal(parseSessionFile(write("good", { input_tokens: 900, cache_read_input_tokens: 100 })).reportedInputTokens, 1000);
+});
+
+test("numbers that cannot be formatted show as zero, never NaN", async () => {
+  const { formatTokens, estimateTokens } = await import("../tokens.js");
+  const { formatUsd } = await import("../pricing.js");
+
+  // A NaN reaching a report renders literally as "NaN tokens" / "$NaN".
+  assert.equal(formatTokens(Number.NaN), "0");
+  assert.equal(formatTokens(Number.POSITIVE_INFINITY), "0");
+  assert.equal(formatUsd(Number.NaN), "$0.00");
+  assert.ok(!formatUsd(Number.POSITIVE_INFINITY).includes("Infinity"));
+
+  // estimateTokens is public API; a TypeError is never the useful answer.
+  for (const input of [null, undefined, 42, {}, []] as unknown[]) {
+    const n = estimateTokens(input as string);
+    assert.ok(Number.isFinite(n) && n >= 0, `estimateTokens(${JSON.stringify(input)}) -> ${n}`);
+  }
+  assert.equal(estimateTokens(""), 0);
+});

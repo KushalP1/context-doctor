@@ -42,6 +42,9 @@ export function estimatedTtftSeconds(inputTokens) {
     return inputTokens / 25_000;
 }
 export function formatUsd(amount) {
+    // Same reasoning as formatTokens: "$NaN" is worse than "$0.00".
+    if (!Number.isFinite(amount))
+        return "$0.00";
     if (amount >= 1)
         return `$${amount.toFixed(2)}`;
     if (amount >= 0.01)

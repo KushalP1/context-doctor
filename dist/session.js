@@ -12,6 +12,17 @@ import { readdirSync, readFileSync, statSync, existsSync, openSync, readSync, cl
 import { StringDecoder } from "node:string_decoder";
 import { homedir } from "node:os";
 import { join } from "node:path";
+/**
+ * Read one usage field defensively.
+ *
+ * A numeric string plainly means that number, and discarding it would throw
+ * away ground truth and silently fall back to the heuristic — so it is parsed.
+ * Anything else unusable (objects, null, "abc", negatives) counts as nothing.
+ */
+function usageNumber(value) {
+    const n = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : Number.NaN;
+    return Number.isFinite(n) && n >= 0 ? Math.round(n) : 0;
+}
 function projectsDir() {
     return join(homedir(), ".claude", "projects");
 }
@@ -170,7 +181,13 @@ export function parseSessionFile(path) {
             model = message.model;
         const usage = message.usage;
         if (entry.type === "assistant" && usage) {
-            const total = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+            // Coerce, do not trust: a transcript whose usage numbers are STRINGS
+            // turned `1200 + 300` into "12003000" through JavaScript concatenation,
+            // an 8000x overstatement that drives the hook, the cost figures and the
+            // window percentage. Anything not a finite non-negative number is 0.
+            const total = usageNumber(usage.input_tokens) +
+                usageNumber(usage.cache_read_input_tokens) +
+                usageNumber(usage.cache_creation_input_tokens);
             if (total > 0) {
                 reportedInputTokens = total;
                 usageSamples.push({ index: messages.length, input: total });

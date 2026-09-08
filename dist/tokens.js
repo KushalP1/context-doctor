@@ -50,6 +50,10 @@ function symbolDensity(text) {
     return (symbols?.length ?? 0) / text.length;
 }
 export function estimateTokens(text) {
+    // Public API: callers outside this package pass whatever they have, and a
+    // TypeError from a token estimator is never the useful answer.
+    if (typeof text !== "string")
+        text = String(text ?? "");
     if (!text)
         return 0;
     // Denser tokenization for code/JSON-like content, lighter for plain prose.
@@ -60,6 +64,10 @@ export function estimateTokens(text) {
 /** Per-message structural overhead (role markers, delimiters) is roughly constant. */
 export const MESSAGE_OVERHEAD_TOKENS = 4;
 export function formatTokens(n) {
+    // A NaN reaching a report renders literally as "NaN tokens"; show nothing
+    // rather than something false.
+    if (!Number.isFinite(n))
+        return "0";
     if (n >= 1_000_000)
         return `${(n / 1_000_000).toFixed(1)}M`;
     if (n >= 10_000)
