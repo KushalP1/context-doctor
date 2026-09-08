@@ -98,3 +98,51 @@ test("dedupe still removes duplicates once they are history", () => {
   assert.equal(result.applied.length, 1, "protecting the tail must not disable dedupe entirely");
   assert.ok(result.tokensAfter < result.tokensBefore, "and it must still save tokens");
 });
+
+test("optimization never makes a message bigger than it was", () => {
+  // A tool result only just over the budget: the truncation notice can weigh
+  // more than the text it replaces. Measured on a real session as 2,941 -> 2,947.
+  const justOver = "x".repeat(301 * 4);
+  const messages = [
+    ...Array.from({ length: 14 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", content: `turn ${i}` })),
+    { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/a" } }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: justOver }] },
+    ...Array.from({ length: 8 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", content: `later ${i}` })),
+  ];
+  const result = optimizeConversation(JSON.stringify({ messages }), {
+    strategies: ["trim-tool-results", "trim-tool-calls"],
+    maxToolResultTokens: 300,
+  });
+  assert.ok(
+    result.tokensAfter <= result.tokensBefore,
+    `optimizing grew the context: ${result.tokensBefore} -> ${result.tokensAfter}`
+  );
+});
+
+test("prune-history never leaves a tool result without its call", () => {
+  // The kept tail can contain a tool_result whose tool_use sits in the pruned
+  // half — not only at the boundary. Both APIs reject that conversation.
+  const messages: unknown[] = [];
+  for (let i = 0; i < 40; i++) {
+    messages.push({ role: "assistant", content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { file_path: `/f${i}` } }] });
+    messages.push({ role: "assistant", content: "some prose between the call and its result" });
+    messages.push({ role: "user", content: [{ type: "tool_result", tool_use_id: `t${i}`, content: `result ${i} ${"y".repeat(200)}` }] });
+  }
+  const result = optimizeConversation(JSON.stringify({ messages }), { strategies: ["prune-history"] });
+
+  const kept = (result.conversation as { messages: Array<{ content: unknown }> }).messages;
+  const calls = new Set<string>();
+  for (const m of kept) {
+    if (!Array.isArray(m.content)) continue;
+    for (const b of m.content as Array<{ type?: string; id?: string }>) if (b?.type === "tool_use" && b.id) calls.add(b.id);
+  }
+  for (const m of kept) {
+    if (!Array.isArray(m.content)) continue;
+    for (const b of m.content as Array<{ type?: string; tool_use_id?: string }>) {
+      if (b?.type === "tool_result") {
+        assert.ok(b.tool_use_id && calls.has(b.tool_use_id), `orphaned tool_result ${b.tool_use_id} survived pruning`);
+      }
+    }
+    assert.ok(!Array.isArray(m.content) || m.content.length > 0, "no message may be left with empty content");
+  }
+});

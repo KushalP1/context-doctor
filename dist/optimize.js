@@ -129,6 +129,34 @@ function truncateToTokens(text, maxTokens) {
     const omitted = text.length - approxChars;
     return `${head}\n…[context-doctor: trimmed ${omitted} chars of stale tool output]`;
 }
+/**
+ * Remove tool_result blocks whose matching tool_use is not in the same slice.
+ *
+ * Anthropic and OpenAI both reject a conversation where a tool result refers to
+ * a call that is not present, so anything that drops earlier turns has to clean
+ * up after itself. A message emptied by this keeps a short note rather than
+ * becoming an empty content array, which is also rejected.
+ */
+function dropOrphanedToolResults(kept) {
+    const availableCalls = new Set();
+    for (const m of kept) {
+        if (!Array.isArray(m?.content))
+            continue;
+        for (const b of m.content)
+            if (b?.type === "tool_use" && b.id)
+                availableCalls.add(b.id);
+    }
+    for (const m of kept) {
+        if (!Array.isArray(m?.content))
+            continue;
+        const surviving = m.content.filter((b) => b?.type !== "tool_result" || (b.tool_use_id && availableCalls.has(b.tool_use_id)));
+        if (surviving.length === m.content.length)
+            continue;
+        m.content = surviving.length > 0
+            ? surviving
+            : [{ type: "text", text: "[context-doctor: earlier tool result dropped with the pruned history]" }];
+    }
+}
 function isToolResultMessage(m) {
     if (m?.role === "tool")
         return true;
@@ -222,6 +250,11 @@ export function optimizeConversation(input, options = {}) {
             if (before <= opts.maxToolResultTokens)
                 return;
             const trimmed = truncateToTokens(text, opts.maxToolResultTokens);
+            // The truncation notice has a length of its own, so a result only just
+            // over the budget can come back LARGER than it went in. Measured on a
+            // real session: 2,941 tokens "optimized" to 2,947.
+            if (estimateTokens(trimmed) >= before)
+                return;
             m.content = replaceText(m.content, trimmed);
             applied.push({
                 strategy: "trim-tool-results",
@@ -246,8 +279,13 @@ export function optimizeConversation(input, options = {}) {
                     const before = estimateTokens(JSON.stringify(b.input));
                     if (before <= opts.maxToolResultTokens)
                         continue;
-                    b.input = trimCallArguments(b.input, opts.maxToolResultTokens);
-                    saved += before - estimateTokens(JSON.stringify(b.input));
+                    const trimmedInput = trimCallArguments(b.input, opts.maxToolResultTokens);
+                    // Same trap as tool results: the marker can outweigh what it replaces.
+                    const after = estimateTokens(JSON.stringify(trimmedInput));
+                    if (after >= before)
+                        continue;
+                    b.input = trimmedInput;
+                    saved += before - after;
                 }
             }
             // OpenAI shape: tool_calls[].function.arguments is a JSON string.
@@ -285,6 +323,11 @@ export function optimizeConversation(input, options = {}) {
         // Boundary adjustment may leave too little tail to be worth keeping —
         // in that case skip pruning entirely rather than gutting the conversation.
         if (messages.length - keepFrom >= 2) {
+            // Advancing past LEADING tool results is not enough: a tool_result can
+            // sit deeper in the kept tail while its tool_use was pruned, and both
+            // APIs reject a conversation containing an orphan. Measured on a real
+            // 1,011-message session, which pruned to 7 messages with one orphan.
+            dropOrphanedToolResults(messages.slice(keepFrom));
             const pruned = messages.slice(0, keepFrom);
             const prunedTokens = pruned.reduce((s, m) => s + estimateTokens(textOf(m.content)), 0);
             // Digest: first ~200 chars of each pruned turn — enough for a host LLM to
