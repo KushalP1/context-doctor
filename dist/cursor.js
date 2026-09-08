@@ -114,7 +114,12 @@ export function listCursorChats(limit = 20) {
             rows = queryRows(dbPath, "SELECT key, json_extract(value, '$.name') AS name, " +
                 "COALESCE(json_array_length(value, '$.fullConversationHeadersOnly'), " +
                 "json_array_length(value, '$.conversation'), 0) AS n " +
-                "FROM cursorDiskKV WHERE key LIKE 'composerData:%'");
+                // json_valid is not optional: SQLite's JSON functions raise on
+                // malformed input, and one non-JSON row under a composerData: key
+                // aborts the WHOLE query. cursorDiskKV is a general-purpose store,
+                // so that row exists sooner or later — and the user then sees
+                // "No Cursor chats found" with every real chat sitting right there.
+                "FROM cursorDiskKV WHERE key LIKE 'composerData:%' AND json_valid(value)");
         }
         catch {
             continue; // no composer table (older Cursor) or no SQLite — skip

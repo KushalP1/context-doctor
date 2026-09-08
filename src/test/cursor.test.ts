@@ -123,3 +123,40 @@ test("a database without the composer table is skipped, not fatal", { skip }, ()
   db.close();
   assert.throws(() => queryRows(dbPath, "SELECT key, value FROM cursorDiskKV"), /no such table|SQLite/i);
 });
+
+test("one malformed row does not hide every Cursor chat", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { mkdtempSync, mkdirSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { listCursorChats } = await import("../cursor.js");
+
+  const home = mkdtempSync(join(tmpdir(), "ctxdoc-cursorjson-"));
+  const dir = join(home, "Library", "Application Support", "Cursor", "User", "globalStorage");
+  mkdirSync(dir, { recursive: true });
+  const db = new DatabaseSync(join(dir, "state.vscdb"));
+  db.exec("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)");
+  const insert = db.prepare("INSERT INTO cursorDiskKV VALUES (?, ?)");
+  for (let i = 0; i < 5; i++) {
+    insert.run(
+      `composerData:good${i}`,
+      JSON.stringify({ name: `Chat ${i}`, fullConversationHeadersOnly: [{ bubbleId: "b1", type: 1 }, { bubbleId: "b2", type: 2 }] })
+    );
+  }
+  // cursorDiskKV is a general-purpose store; a non-JSON value under a
+  // composerData: key makes SQLite's JSON functions raise and abort the whole
+  // query, which used to report "No Cursor chats found" with five real chats
+  // sitting right there.
+  insert.run("composerData:junk", "{not json");
+  db.close();
+
+  const original = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const chats = listCursorChats();
+    assert.equal(chats.length, 5, "valid chats must survive a corrupt neighbour");
+  } finally {
+    if (original === undefined) delete process.env.HOME;
+    else process.env.HOME = original;
+  }
+});
