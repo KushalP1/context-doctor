@@ -124,17 +124,25 @@ test("a database without the composer table is skipped, not fatal", { skip }, ()
   assert.throws(() => queryRows(dbPath, "SELECT key, value FROM cursorDiskKV"), /no such table|SQLite/i);
 });
 
-test("one malformed row does not hide every Cursor chat", async () => {
-  const { DatabaseSync } = await import("node:sqlite");
-  const { mkdtempSync, mkdirSync } = await import("node:fs");
-  const { tmpdir } = await import("node:os");
-  const { join } = await import("node:path");
+test("one malformed row does not hide every Cursor chat", { skip }, async () => {
+  const { mkdirSync } = await import("node:fs");
+  const { platform } = await import("node:os");
   const { listCursorChats } = await import("../cursor.js");
 
+  // Cursor stores its database in a different place on every platform, and the
+  // point of this test is the real discovery + listing path, so build it where
+  // this platform actually looks.
   const home = mkdtempSync(join(tmpdir(), "ctxdoc-cursorjson-"));
-  const dir = join(home, "Library", "Application Support", "Cursor", "User", "globalStorage");
-  mkdirSync(dir, { recursive: true });
-  const db = new DatabaseSync(join(dir, "state.vscdb"));
+  const appData = join(home, "AppData", "Roaming");
+  const storage =
+    platform() === "darwin"
+      ? join(home, "Library", "Application Support", "Cursor", "User", "globalStorage")
+      : platform() === "win32"
+        ? join(appData, "Cursor", "User", "globalStorage")
+        : join(home, ".config", "Cursor", "User", "globalStorage");
+  mkdirSync(storage, { recursive: true });
+
+  const db = new DatabaseSync!(join(storage, "state.vscdb"));
   db.exec("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)");
   const insert = db.prepare("INSERT INTO cursorDiskKV VALUES (?, ?)");
   for (let i = 0; i < 5; i++) {
@@ -150,13 +158,17 @@ test("one malformed row does not hide every Cursor chat", async () => {
   insert.run("composerData:junk", "{not json");
   db.close();
 
-  const original = process.env.HOME;
+  // os.homedir() reads USERPROFILE on Windows and HOME elsewhere.
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, APPDATA: process.env.APPDATA };
   process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  process.env.APPDATA = appData;
   try {
-    const chats = listCursorChats();
-    assert.equal(chats.length, 5, "valid chats must survive a corrupt neighbour");
+    assert.equal(listCursorChats().length, 5, "valid chats must survive a corrupt neighbour");
   } finally {
-    if (original === undefined) delete process.env.HOME;
-    else process.env.HOME = original;
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });
