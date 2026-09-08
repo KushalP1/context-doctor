@@ -43,3 +43,52 @@ test("JSONL transcripts still parse (no regression)", () => {
     writeFileSync(file, JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }) + "\n");
     assert.equal(parseSessionFile(file).messageCount, 1);
 });
+test("turns containing images are not dropped from a ChatGPT export", async () => {
+    const { parseSessionFile } = await import("../session.js");
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "ctxdoc-gptmm-"));
+    const path = join(dir, "conversations.json");
+    // ChatGPT exports any turn with an attachment as multimodal_text, with the
+    // asset as an object among the string parts.
+    writeFileSync(path, JSON.stringify([
+        {
+            title: "With a screenshot",
+            default_model_slug: "gpt-4o",
+            mapping: {
+                a: {
+                    id: "a",
+                    message: {
+                        author: { role: "user" },
+                        create_time: 1,
+                        content: { content_type: "multimodal_text", parts: [{ asset_pointer: "file-service://x" }, "what is wrong here?"] },
+                    },
+                },
+                b: {
+                    id: "b",
+                    message: {
+                        author: { role: "assistant" },
+                        create_time: 2,
+                        content: { content_type: "text", parts: ["The margin is off."] },
+                    },
+                },
+                c: {
+                    id: "c",
+                    message: {
+                        author: { role: "user" },
+                        create_time: 3,
+                        // An image with no text at all still occupies context.
+                        content: { content_type: "multimodal_text", parts: [{ asset_pointer: "file-service://y" }] },
+                    },
+                },
+            },
+        },
+    ]));
+    const parsed = parseSessionFile(path);
+    assert.equal(parsed.messageCount, 3, "an image-only turn still counts");
+    const conversation = JSON.parse(parsed.conversationJson);
+    assert.match(conversation.messages[0].content, /what is wrong here\?/, "text alongside an image survives");
+    assert.match(conversation.messages[0].content, /\[image\]/, "and the attachment is marked as an image");
+    assert.ok(conversation.messages[2].content.length > 0, "an image-only turn is not empty");
+});

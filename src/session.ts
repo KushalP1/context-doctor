@@ -107,6 +107,20 @@ export function listSessions(limit = 20): SessionInfo[] {
  * conversations.json is an array of conversations, each holding a `mapping`
  * tree of nodes. We profile the most recently updated conversation.
  */
+/**
+ * A stand-in for a non-text export part.
+ *
+ * The bytes are not in the export, so the exact token cost is unknowable; what
+ * matters is that the turn stops being invisible and keeps its place in the
+ * conversation.
+ */
+function chatGptAttachmentLabel(part: unknown): string {
+  const kind = (part as { content_type?: string })?.content_type;
+  if (typeof kind === "string") return `[${kind}]`;
+  if ((part as { asset_pointer?: string })?.asset_pointer) return "[image]";
+  return "[attachment]";
+}
+
 function parseChatGPTExport(data: Array<Record<string, any>>, path: string): ParsedSession {
   const conversations = data
     .filter((c) => c && typeof c.mapping === "object")
@@ -119,13 +133,21 @@ function parseChatGPTExport(data: Array<Record<string, any>>, path: string): Par
       const m = n?.message;
       if (!m?.author?.role || !["user", "assistant", "system"].includes(m.author.role)) return false;
       const parts = m.content?.parts;
-      return Array.isArray(parts) && parts.some((p: unknown) => typeof p === "string" && p.length > 0);
+      if (!Array.isArray(parts)) return false;
+      // A turn containing an image is exported as multimodal_text, with the
+      // picture as an object among the string parts. Requiring a non-empty
+      // string dropped those turns entirely, so an image-heavy conversation
+      // profiled as smaller than it is.
+      return parts.some((p: unknown) => (typeof p === "string" && p.length > 0) || (p && typeof p === "object"));
     })
     .sort((a, b) => (a.message.create_time ?? 0) - (b.message.create_time ?? 0));
 
   const messages = nodes.map((n) => ({
     role: n.message.author.role,
-    content: (n.message.content.parts as unknown[]).filter((p) => typeof p === "string").join("\n"),
+    content: (n.message.content.parts as unknown[])
+      .map((p) => (typeof p === "string" ? p : chatGptAttachmentLabel(p)))
+      .filter((p) => p.length > 0)
+      .join("\n"),
   }));
 
   return {
