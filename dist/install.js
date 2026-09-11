@@ -89,6 +89,13 @@ function binOnPath(name) {
     for (const dir of (process.env.PATH ?? "").split(delimiter)) {
         if (!dir)
             continue;
+        // npx prepends its OWN cache's .bin to PATH while it runs the command. So
+        // during `npx -y context-doctor install`, the first "global binary" on
+        // PATH is inside _npx — the garbage-collected directory this lookup exists
+        // to avoid. That hole put a cache path in the hook of every user who
+        // followed the README's headline command.
+        if (isEphemeralPath(dir))
+            continue;
         for (const ext of exts) {
             const candidate = join(dir, name + ext);
             if (existsSync(candidate))
@@ -96,6 +103,10 @@ function binOnPath(name) {
         }
     }
     return null;
+}
+/** Paths npm may delete at any time: the npx cache and the npm cache itself. */
+function isEphemeralPath(path) {
+    return /[\\/]_npx[\\/]/.test(path) || /[\\/]\.npm[\\/]/.test(path) || /[\\/]npm-cache[\\/]/i.test(path);
 }
 /**
  * Shell command used for the Claude Code every-prompt hook.
@@ -113,8 +124,7 @@ function binOnPath(name) {
 function hookCommand() {
     const selfDir = dirname(fileURLToPath(import.meta.url));
     const localCli = join(selfDir, "cli.js");
-    const ephemeral = selfDir.includes("_npx");
-    if (!ephemeral && existsSync(localCli))
+    if (!isEphemeralPath(selfDir + sep) && existsSync(localCli))
         return `node "${localCli}" hook`;
     const global = binOnPath("context-doctor");
     if (global)

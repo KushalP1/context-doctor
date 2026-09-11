@@ -100,12 +100,23 @@ function binOnPath(name: string): string | null {
   const exts = platform() === "win32" ? [".cmd", ".exe", ".bat", ""] : [""];
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
     if (!dir) continue;
+    // npx prepends its OWN cache's .bin to PATH while it runs the command. So
+    // during `npx -y context-doctor install`, the first "global binary" on
+    // PATH is inside _npx — the garbage-collected directory this lookup exists
+    // to avoid. That hole put a cache path in the hook of every user who
+    // followed the README's headline command.
+    if (isEphemeralPath(dir)) continue;
     for (const ext of exts) {
       const candidate = join(dir, name + ext);
       if (existsSync(candidate)) return candidate;
     }
   }
   return null;
+}
+
+/** Paths npm may delete at any time: the npx cache and the npm cache itself. */
+function isEphemeralPath(path: string): boolean {
+  return /[\\/]_npx[\\/]/.test(path) || /[\\/]\.npm[\\/]/.test(path) || /[\\/]npm-cache[\\/]/i.test(path);
 }
 
 /**
@@ -124,8 +135,7 @@ function binOnPath(name: string): string | null {
 function hookCommand(): string {
   const selfDir = dirname(fileURLToPath(import.meta.url));
   const localCli = join(selfDir, "cli.js");
-  const ephemeral = selfDir.includes("_npx");
-  if (!ephemeral && existsSync(localCli)) return `node "${localCli}" hook`;
+  if (!isEphemeralPath(selfDir + sep) && existsSync(localCli)) return `node "${localCli}" hook`;
   const global = binOnPath("context-doctor");
   if (global) return `"${global}" hook`;
   return "npx -y context-doctor hook";

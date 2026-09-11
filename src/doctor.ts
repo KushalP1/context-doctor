@@ -57,6 +57,23 @@ function checkMcpEntry(appName: string, configPath: string): Check {
   }
 }
 
+/**
+ * For a hook command, the path that must exist for it to run — or null when it
+ * resolves through PATH (`node`, `npx`) and there is nothing to check here.
+ *
+ * Forms written by install: `node "<cli.js>" hook`, `"<binary>" hook`,
+ * `npx -y context-doctor hook`.
+ */
+function hookBinaryMissing(command: string): string | null {
+  const quoted = [...command.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  const first = command.trim().split(/\s+/)[0]?.replace(/^"|"$/g, "") ?? "";
+  const candidates = quoted.length > 0 ? quoted : /[\\/]/.test(first) ? [first] : [];
+  for (const path of candidates) {
+    if (!existsSync(path)) return path;
+  }
+  return null;
+}
+
 /** Spawn our own MCP server and run the initialize handshake over stdio. */
 function checkMcpHandshake(): Promise<Check> {
   const label = "MCP server handshake";
@@ -109,12 +126,21 @@ export async function runDoctor(): Promise<void> {
   if (existsSync(settingsPath)) {
     try {
       const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
-      const registered = JSON.stringify(settings.hooks?.UserPromptSubmit ?? []).includes("context-doctor");
-      checks.push(
-        registered
-          ? { label: "Every-prompt hook", status: "ok", detail: "registered in ~/.claude/settings.json" }
-          : { label: "Every-prompt hook", status: "fail", detail: "not registered — run: context-doctor install" }
-      );
+      const entries: Array<{ hooks?: Array<{ command?: string }> }> = settings.hooks?.UserPromptSubmit ?? [];
+      const ours = entries.map((e) => e.hooks?.[0]?.command ?? "").find((c) => /context-doctor|cli\.js"?\s+hook/.test(c));
+      if (!ours) {
+        checks.push({ label: "Every-prompt hook", status: "fail", detail: "not registered — run: context-doctor install" });
+      } else {
+        // "Registered" is not "working": a hook whose binary has been deleted
+        // (an npx cache sweep, a Node upgrade) fails silently on every prompt,
+        // and this check used to report it as fine.
+        const missing = hookBinaryMissing(ours);
+        checks.push(
+          missing
+            ? { label: "Every-prompt hook", status: "fail", detail: `registered, but ${missing} no longer exists — re-run: context-doctor install` }
+            : { label: "Every-prompt hook", status: "ok", detail: "registered in ~/.claude/settings.json; command resolves" }
+        );
+      }
     } catch (e) {
       checks.push({ label: "Every-prompt hook", status: "fail", detail: `settings.json unreadable (${(e as Error).message})` });
     }

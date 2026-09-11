@@ -172,3 +172,64 @@ test("the published server is wrapped for Windows, bare everywhere else", async 
     assert.deepEqual(npxLauncher(os), { command: "npx", args: ["-y", "context-doctor-mcp"] }, `${os} needs no wrapper`);
   }
 });
+
+test("npx putting its own cache .bin on PATH cannot smuggle a cache path into the hook", async () => {
+  const { mkdtempSync, mkdirSync, cpSync, writeFileSync, chmodSync, readFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join, dirname, delimiter } = await import("node:path");
+  const { execFile } = await import("node:child_process");
+
+  // `npx -y context-doctor install` runs our code from _npx/<hash>/node_modules
+  // AND prepends _npx/<hash>/node_modules/.bin to PATH. The first fix refused
+  // the cache path for cli.js, then looked for a "global binary" on PATH — and
+  // found the cache's .bin. That route put a garbage-collected path in the hook
+  // of every user who followed the README's first command.
+  const root = mkdtempSync(join(tmpdir(), "ctxdoc-npxpath-"));
+  const pkg = join(root, "_npx", "abc123", "node_modules", "context-doctor");
+  const bin = join(root, "_npx", "abc123", "node_modules", ".bin");
+  mkdirSync(pkg, { recursive: true });
+  mkdirSync(bin, { recursive: true });
+  cpSync(dirname(cliPath), join(pkg, "dist"), { recursive: true });
+  cpSync(join(dirname(cliPath), "..", "skills"), join(pkg, "skills"), { recursive: true });
+  writeFileSync(join(bin, "context-doctor"), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(bin, "context-doctor"), 0o755);
+
+  const home = mkdtempSync(join(tmpdir(), "ctxdoc-npxpathhome-"));
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  await new Promise<void>((resolve, reject) => {
+    execFile(
+      process.execPath,
+      [join(pkg, "dist", "cli.js"), "install"],
+      { env: { ...sandboxEnv(home), PATH: `${bin}${delimiter}${process.env.PATH ?? ""}` } },
+      (err) => (err ? reject(err) : resolve())
+    );
+  });
+
+  const cmd = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"))
+    .hooks.UserPromptSubmit[0].hooks[0].command as string;
+  assert.ok(!cmd.includes("_npx"), `hook must not live in the npx cache, got: ${cmd}`);
+});
+
+test("doctor reports a hook whose binary has been deleted", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { execFile } = await import("node:child_process");
+
+  const home = mkdtempSync(join(tmpdir(), "ctxdoc-deadhook-"));
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  // What an npx cache sweep or a Node upgrade leaves behind: a registered
+  // command pointing at nothing. It fails silently on every prompt.
+  writeFileSync(
+    join(home, ".claude", "settings.json"),
+    JSON.stringify({
+      hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: '"/gone/_npx/dead/node_modules/.bin/context-doctor" hook' }] }] },
+    })
+  );
+  const out = await new Promise<string>((resolve, reject) => {
+    execFile(process.execPath, [cliPath, "doctor"], { env: sandboxEnv(home), timeout: 20000 }, (err, stdout) =>
+      err ? reject(err) : resolve(stdout)
+    );
+  });
+  assert.match(out, /✗ Every-prompt hook.*no longer exists/, "a dead hook must not report as healthy");
+});
