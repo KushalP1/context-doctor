@@ -223,7 +223,23 @@ function installSkill(): string | null {
   return join(skillDest, "SKILL.md");
 }
 
-export function runInstall(): void {
+/** Outcome of an install run, so the CLI can set a truthful exit code. */
+export interface InstallResult {
+  /** Detected targets that could not be configured, with the reason. */
+  failures: string[];
+}
+
+/**
+ * Install into every detected app.
+ *
+ * A failure in one app must not stop the others: someone with a corrupt
+ * Claude Desktop config still wants Claude Code and Cursor wired. But it
+ * must not be reported as success either — automation (dotfiles, CI,
+ * onboarding scripts) reads the exit code, and a "Done." with exit 0 over a
+ * failed target is a lie that surfaces later as "the tools never showed up".
+ * So: keep going, summarize, and return the failures for a non-zero exit.
+ */
+export function runInstall(): InstallResult {
   const entry = serverEntry();
   const found = targets().filter((t) => t.detect());
 
@@ -231,9 +247,10 @@ export function runInstall(): void {
     console.log("No supported AI apps detected (Claude Desktop, Claude Code, Cursor).");
     console.log("Manual setup — add to your app's MCP config:");
     console.log(JSON.stringify({ mcpServers: { "context-doctor": entry } }, null, 2));
-    return;
+    return { failures: [] };
   }
 
+  const failures: string[] = [];
   for (const target of found) {
     try {
       const config = readJson(target.configPath);
@@ -244,24 +261,43 @@ export function runInstall(): void {
       console.log(`✓ ${target.name}: MCP server added (${target.configPath})`);
     } catch (e) {
       console.error(`✗ ${target.name}: ${(e as Error).message}`);
+      failures.push(target.name);
     }
   }
 
-  const skillPath = installSkill();
-  if (skillPath) console.log(`✓ Agent Skill installed for Claude Code (${skillPath})`);
-
-  const hookPath = installHook();
-  if (hookPath) {
-    console.log(`✓ Claude Code every-prompt hook installed (${hookPath}) — heavy sessions get automatic hygiene guidance`);
-    // npx resolves the package on every single prompt; a global install makes
-    // the hook a plain exec instead, which is both faster and update-proof.
-    if (hookUsesNpx()) {
-      console.log("  note: the hook falls back to npx. For a faster, permanent hook: npm i -g context-doctor && context-doctor install");
-    }
+  try {
+    const skillPath = installSkill();
+    if (skillPath) console.log(`✓ Agent Skill installed for Claude Code (${skillPath})`);
+  } catch (e) {
+    console.error(`✗ Agent Skill: ${(e as Error).message}`);
+    failures.push("Agent Skill");
   }
 
-  console.log("\nDone. Restart the apps to pick up the new tools, then try:");
-  console.log('  "What\'s eating my context?" — or paste a conversation and ask for a profile.');
+  try {
+    const hookPath = installHook();
+    if (hookPath) {
+      console.log(`✓ Claude Code every-prompt hook installed (${hookPath}) — heavy sessions get automatic hygiene guidance`);
+      // npx resolves the package on every single prompt; a global install makes
+      // the hook a plain exec instead, which is both faster and update-proof.
+      if (hookUsesNpx()) {
+        console.log("  note: the hook falls back to npx. For a faster, permanent hook: npm i -g context-doctor && context-doctor install");
+      }
+    }
+  } catch (e) {
+    // An unreadable settings.json used to escape as a stack trace and abort
+    // the run; it is a failed target like any other.
+    console.error(`✗ Claude Code every-prompt hook: ${(e as Error).message}`);
+    failures.push("Claude Code hook");
+  }
+
+  if (failures.length > 0) {
+    console.log(`\nDone with ${failures.length} problem(s): ${failures.join(", ")}. See the ✗ lines above.`);
+    console.log("Everything else was installed. Exit code is 1 so scripts can tell; fix the file(s) and re-run install.");
+  } else {
+    console.log("\nDone. Restart the apps to pick up the new tools, then try:");
+    console.log('  "What\'s eating my context?" — or paste a conversation and ask for a profile.');
+  }
+  return { failures };
 }
 
 export function runUninstall(): void {

@@ -169,3 +169,46 @@ test("doctor reports a hook whose binary has been deleted", async () => {
     });
     assert.match(out, /✗ Every-prompt hook.*no longer exists/, "a dead hook must not report as healthy");
 });
+test("install keeps going past a broken app config but exits non-zero", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } = await import("node:fs");
+    const { tmpdir, platform } = await import("node:os");
+    const { join } = await import("node:path");
+    const { execFile } = await import("node:child_process");
+    const home = mkdtempSync(join(tmpdir(), "ctxdoc-partial-"));
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    // Claude Desktop present, with a config that is not JSON.
+    const appData = join(home, "AppData", "Roaming");
+    const desktopDir = platform() === "darwin"
+        ? join(home, "Library", "Application Support", "Claude")
+        : platform() === "win32"
+            ? join(appData, "Claude")
+            : join(home, ".config", "Claude");
+    mkdirSync(desktopDir, { recursive: true });
+    writeFileSync(join(desktopDir, "claude_desktop_config.json"), "{ this is not json");
+    const result = await new Promise((resolve) => {
+        execFile(process.execPath, [cliPath, "install"], { env: sandboxEnv(home) }, (error, stdout, stderr) => resolve({ code: error ? error.code ?? 1 : 0, out: stdout, err: stderr }));
+    });
+    // A script must be able to tell that one target failed …
+    assert.equal(result.code, 1, "any failed target must produce a non-zero exit");
+    assert.match(result.err, /✗ Claude Desktop/, "the failing target is named");
+    assert.match(result.out, /Done with 1 problem/, "the summary says it was partial, not 'Done.'");
+    // … while the targets that could be installed still were.
+    const claudeCode = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8"));
+    assert.ok(claudeCode.mcpServers["context-doctor"], "Claude Code is still wired");
+    assert.ok(existsSync(join(home, ".claude", "skills", "context-doctor", "SKILL.md")), "skill still installed");
+    assert.ok(existsSync(join(home, ".claude", "settings.json")), "hook still installed");
+    // And the broken file was left exactly as it was, not overwritten.
+    assert.equal(readFileSync(join(desktopDir, "claude_desktop_config.json"), "utf8"), "{ this is not json");
+});
+test("a clean install still exits zero", async () => {
+    const { mkdtempSync, mkdirSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { execFile } = await import("node:child_process");
+    const home = mkdtempSync(join(tmpdir(), "ctxdoc-clean-"));
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    const code = await new Promise((resolve) => {
+        execFile(process.execPath, [cliPath, "install"], { env: sandboxEnv(home) }, (error) => resolve(error ? error.code ?? 1 : 0));
+    });
+    assert.equal(code, 0);
+});
