@@ -10,16 +10,7 @@ import { fileURLToPath } from "node:url";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
 
-/**
- * A throwaway HOME for install tests.
- *
- * os.homedir() reads USERPROFILE on Windows and HOME elsewhere, and the
- * Claude Desktop path is derived from APPDATA — so overriding HOME alone lets
- * a test scribble in the real user profile (and then fail there).
- */
-function sandboxEnv(home: string): NodeJS.ProcessEnv {
-  return { ...process.env, HOME: home, USERPROFILE: home, APPDATA: join(home, "AppData", "Roaming") };
-}
+import { sandboxEnv } from "./sandbox.js";
 
 test("doctor runs, checks the MCP handshake, and exits 0", async () => {
   const stateDir = mkdtempSync(join(tmpdir(), "ctxdoc-doctor-"));
