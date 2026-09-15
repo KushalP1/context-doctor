@@ -68,6 +68,12 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.13.7 — the advisor says where
+
+| Item | Why |
+|---|---|
+| **Cache breakpoint placement** | The proxy used to say a breakpoint was missing. It now says where: for a large system/tools prefix, the last tool definition (or last system block); for the conversation, it fingerprints each message across consecutive requests, finds the run that was byte-identical to the previous call, and names the exact message to mark along with the tokens that run re-bills each turn. Only when the run clears Anthropic's ~1024-token caching floor, and never for a request that already carries `cache_control` |
+
 ## Shipped in 0.13.6 — two small roadmap items, one measured
 
 | Item | Why |
@@ -126,7 +132,6 @@ committed until it ships.
 
 | Item | Why | Size |
 |---|---|---|
-| **Cache breakpoint suggestions** | The proxy advisor says the cache is churning; the useful next step is saying *where* to place `cache_control` given the observed traffic | M |
 | **`trim-tool-calls` on by default where it is safe** | The proxy can already run it per route via `--config`, but it is off unless someone asks for it — and in agent traffic it is where most of the waste is. Needs evidence that trimming a completed call never confuses a live agent | S |
 
 ### Fit into how people actually work

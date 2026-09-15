@@ -179,3 +179,81 @@ test("savings are checkpointed to the ledger so they survive a restart", async (
     else process.env.CONTEXT_DOCTOR_HOOK_STATE = prevState;
   }
 });
+
+test("the cache advisor says where to put the breakpoint, not just that one is missing", async () => {
+  const http = (await import("node:http")).default;
+  const { startProxy } = await import("../proxy.js");
+
+  const upstream = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ usage: { input_tokens: 10, output_tokens: 1 } }));
+    });
+  });
+  await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
+  const upPort = (upstream.address() as import("node:net").AddressInfo).port;
+  const proxy = startProxy({ port: 0, anthropicUpstream: `http://127.0.0.1:${upPort}` });
+  await new Promise<void>((r) => proxy.once("listening", r));
+  const port = (proxy.address() as import("node:net").AddressInfo).port;
+
+  try {
+    // A conversation that grows by one turn per request, with a big stable
+    // system prompt and a tool list: the two places a breakpoint belongs.
+    const system = "You are a careful assistant. ".repeat(300);
+    const tools = [{ name: "search", description: "Search the index. ".repeat(50), input_schema: { type: "object", properties: {} } }];
+    const history: Array<{ role: string; content: string }> = [];
+    for (let turn = 0; turn < 3; turn++) {
+      history.push({ role: turn % 2 ? "assistant" : "user", content: `turn ${turn} ${"detail ".repeat(400)}` });
+      await fetch(`http://127.0.0.1:${port}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": "k" },
+        body: JSON.stringify({ model: "claude-sonnet-5", system, tools, messages: history }),
+      });
+    }
+    const stats = (await fetch(`http://127.0.0.1:${port}/stats`).then((r) => r.json())) as { advice: string[] };
+    const advice = stats.advice.join("\n");
+
+    assert.match(advice, /Add \{"cache_control":\{"type":"ephemeral"\}\} to the last entry in "tools"/, "names the block for the system/tools breakpoint");
+    assert.match(advice, /messages #0-#\d+ \(~\d+ tokens\) were identical to the previous/, "names the stable message run");
+    assert.match(advice, /on the last content block of message #\d+/, "and the exact message to mark");
+  } finally {
+    proxy.close();
+    upstream.close();
+  }
+});
+
+test("a request that already carries cache_control gets no placement advice", async () => {
+  const http = (await import("node:http")).default;
+  const { startProxy } = await import("../proxy.js");
+
+  const upstream = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("{}");
+    });
+  });
+  await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
+  const upPort = (upstream.address() as import("node:net").AddressInfo).port;
+  const proxy = startProxy({ port: 0, anthropicUpstream: `http://127.0.0.1:${upPort}` });
+  await new Promise<void>((r) => proxy.once("listening", r));
+  const port = (proxy.address() as import("node:net").AddressInfo).port;
+  try {
+    const system = [{ type: "text", text: "Careful. ".repeat(1000), cache_control: { type: "ephemeral" } }];
+    const history: Array<{ role: string; content: string }> = [];
+    for (let turn = 0; turn < 3; turn++) {
+      history.push({ role: turn % 2 ? "assistant" : "user", content: `turn ${turn} ${"detail ".repeat(400)}` });
+      await fetch(`http://127.0.0.1:${port}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": "k" },
+        body: JSON.stringify({ model: "claude-sonnet-5", system, messages: history }),
+      });
+    }
+    const stats = (await fetch(`http://127.0.0.1:${port}/stats`).then((r) => r.json())) as { advice: string[] };
+    assert.ok(!stats.advice.some((a) => /Put \{"cache_control"|Add \{"cache_control"/.test(a)), "someone who already placed breakpoints is not nagged");
+  } finally {
+    proxy.close();
+    upstream.close();
+  }
+});

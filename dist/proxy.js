@@ -66,6 +66,8 @@ export function startProxy(opts = {}) {
     };
     /** Last stable-prefix fingerprint per model, for cache-invalidation advice. */
     const prefixFingerprints = new Map();
+    /** Per-message fingerprints of the previous request per model, for breakpoint placement. */
+    const messageFingerprints = new Map();
     const advise = (msg) => {
         if (stats.advice.includes(msg) || stats.advice.length >= 10)
             return;
@@ -124,8 +126,17 @@ export function startProxy(opts = {}) {
                         // sequences, so cache-hostile patterns are observable facts here.
                         if (url.startsWith("/v1/messages") && requestModel) {
                             const stablePrefix = JSON.stringify(parsedBody.tools ?? null) + JSON.stringify(parsedBody.system ?? null);
-                            if (stablePrefix.length > 4000 && !body.includes("cache_control")) {
-                                advise(`~${Math.round(stablePrefix.length / 4)}+ tokens of stable system/tools on ${requestModel} without cache_control — adding a breakpoint would cut those to ~10% cost per call`);
+                            const hasBreakpoint = body.includes("cache_control");
+                            if (stablePrefix.length > 4000 && !hasBreakpoint) {
+                                // Say WHERE, not just that. A breakpoint caches everything up
+                                // to and including the block it sits on, so it belongs on the
+                                // LAST stable block: the final tool definition if there are
+                                // tools, otherwise the final system block.
+                                const where = Array.isArray(parsedBody.tools) && parsedBody.tools.length > 0
+                                    ? `the last entry in "tools" (tools come before system in the cached prefix)`
+                                    : `the last block of "system"`;
+                                advise(`~${Math.round(stablePrefix.length / 4)}+ tokens of stable system/tools on ${requestModel} without cache_control. ` +
+                                    `Add {"cache_control":{"type":"ephemeral"}} to ${where}; everything before it then bills at ~10% on every call`);
                             }
                             const fp = fnv1a(stablePrefix);
                             const prev = prefixFingerprints.get(requestModel);
@@ -133,6 +144,31 @@ export function startProxy(opts = {}) {
                                 advise(`system/tools prefix changed between ${requestModel} requests — every change re-bills the whole cached prefix; keep it byte-stable`);
                             }
                             prefixFingerprints.set(requestModel, fp);
+                            // Second breakpoint: the conversation itself. Between two
+                            // consecutive requests the older messages are usually identical;
+                            // that run is cacheable too, and it is what re-bills every turn
+                            // when nothing marks it. Find the longest message prefix that
+                            // survived from the previous request and point at its last message.
+                            const msgs = Array.isArray(parsedBody.messages)
+                                ? parsedBody.messages
+                                : [];
+                            const hashes = msgs.map((m) => fnv1a(JSON.stringify(m)));
+                            const prevHashes = messageFingerprints.get(requestModel);
+                            if (prevHashes && !hasBreakpoint) {
+                                let stable = 0;
+                                while (stable < hashes.length && stable < prevHashes.length && hashes[stable] === prevHashes[stable])
+                                    stable++;
+                                if (stable >= 2) {
+                                    const stableChars = msgs.slice(0, stable).reduce((n, m) => n + JSON.stringify(m).length, 0);
+                                    const stableTokens = Math.round(stableChars / 4);
+                                    // Anthropic will not cache a prefix under ~1024 tokens (2048 on Haiku).
+                                    if (stableTokens >= 1024) {
+                                        advise(`messages #0-#${stable - 1} (~${stableTokens} tokens) were identical to the previous ${requestModel} request and carry no cache_control. ` +
+                                            `Put {"cache_control":{"type":"ephemeral"}} on the last content block of message #${stable - 1}; that run then reads from cache instead of re-billing each turn`);
+                                    }
+                                }
+                            }
+                            messageFingerprints.set(requestModel, hashes);
                         }
                     }
                     catch {
