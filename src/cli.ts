@@ -403,6 +403,7 @@ function main(): void {
       strategies: args.strategies.length > 0 ? args.strategies : loadedRc.config.strategies,
       keepRecent: args.keepRecent ?? loadedRc.config.keepRecent,
       maxToolResultTokens: args.maxToolTokens ?? loadedRc.config.maxToolResultTokens,
+      trimBoundaryStep: loadedRc.config.trimBoundaryStep,
     });
     return; // server keeps the process alive
   }
@@ -447,6 +448,7 @@ function main(): void {
         strategies: args.strategies.length > 0 ? args.strategies : loaded.config.strategies,
         keepRecent: args.keepRecent ?? loaded.config.keepRecent,
         maxToolResultTokens: args.maxToolTokens ?? loaded.config.maxToolResultTokens,
+        trimBoundaryStep: loaded.config.trimBoundaryStep,
       });
     } catch (e) {
       console.error((e as Error).message);

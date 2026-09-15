@@ -32,6 +32,8 @@ export interface ContextDoctorConfig {
   strategies?: StrategyId[];
   keepRecent?: number;
   maxToolResultTokens?: number;
+  /** Messages the trim boundary moves at a time; see OptimizeOptions. */
+  trimBoundaryStep?: number;
   /** Proxy per-model overrides, same shape as `proxy --config`. */
   routes?: Array<{
     modelPrefix: string;
@@ -74,7 +76,7 @@ function candidatePaths(startDir: string): string[] {
  */
 /** Strategy ids the optimizer actually implements. */
 const KNOWN_STRATEGIES = new Set(["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"]);
-const KNOWN_KEYS = new Set(["budget", "strategies", "keepRecent", "maxToolResultTokens", "routes", "model"]);
+const KNOWN_KEYS = new Set(["budget", "strategies", "keepRecent", "maxToolResultTokens", "trimBoundaryStep", "routes", "model"]);
 const KNOWN_BUDGET_KEYS = new Set(["maxTokens", "maxCostPerMessageUsd", "maxWindowPct"]);
 
 /**
@@ -130,7 +132,7 @@ export function validateConfig(config: unknown, path: string): string[] {
     }
   }
 
-  for (const key of ["keepRecent", "maxToolResultTokens"] as const) {
+  for (const key of ["keepRecent", "maxToolResultTokens", "trimBoundaryStep"] as const) {
     const value = c[key];
     if (value === undefined) continue;
     if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {

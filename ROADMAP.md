@@ -68,6 +68,13 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.13.6 — two small roadmap items, one measured
+
+| Item | Why |
+|---|---|
+| **Trim step is a documented knob, not a magic number** | Tried to find "the right" step as a function of conversation size. Measured instead: at 400 turns, step 10 → 21% of turns invalidate the cache with ~2 stale results waiting; 20 → 12% and ~4; 40 → 10% and ~9. Adaptive steps were worse everywhere because a changing step moves the boundary itself. So: default stays 10, `trimBoundaryStep` in `.contextdoctorrc` and `OptimizeOptions`, numbers in the README |
+| **Windows sandboxing is structural** | One shared `sandboxEnv`/`withSandboxHome` helper and a guard test that reads every test source and fails the suite if any sets HOME without USERPROFILE. Verified it bites by planting an offender |
+
 ## Shipped in 0.13.5 — the two things r/ClaudeCode asked for
 
 | Item | Why |
@@ -107,9 +114,7 @@ committed until it ships.
 | Item | Why | Size |
 |---|---|---|
 | **Calibrate the heuristic with a real tokenizer** | Ship a small tokenizer (or lean on `--exact`) to fit chars-per-token per content type. Transcript deltas cannot do this — see above | M |
-| **Windows coverage that means something** | Windows CI failed for a day because tests overrode `HOME`, which `os.homedir()` ignores there. Fixed — but nothing stops the next test from sandboxing only the POSIX half | S |
 | **Subagent accounting** | Sidechain traffic is excluded from session profiles because it has its own window — but it still costs money. Blocked on a transcript that actually contains some | M |
-| **Quantized-boundary tuning** | The trim boundary steps in tens, chosen by measurement on one fixture. The right step is probably a function of turn size and cache TTL | S |
 
 ### Asked for on Reddit (r/ClaudeCode, 2026-09-14)
 

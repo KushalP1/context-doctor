@@ -117,6 +117,7 @@ export function startProxy(opts = {}) {
                                 strategies: route.strategies ?? opts.strategies,
                                 keepRecent: route.keepRecent ?? opts.keepRecent,
                                 maxToolResultTokens: route.maxToolResultTokens ?? opts.maxToolResultTokens,
+                                trimBoundaryStep: opts.trimBoundaryStep,
                             };
                         }
                         // Prompt-cache advisor (Anthropic requests): the proxy sees real

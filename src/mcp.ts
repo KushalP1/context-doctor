@@ -42,7 +42,7 @@ const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-b
  */
 function createServer(): McpServer {
   const server = new McpServer(
-    { name: "context-doctor", version: "0.13.5" },
+    { name: "context-doctor", version: "0.13.6" },
     { instructions: SERVER_INSTRUCTIONS }
   );
 

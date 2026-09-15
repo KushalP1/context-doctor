@@ -161,3 +161,10 @@ test("every shipped preset validates clean", async () => {
     assert.deepEqual(validateConfig(preset.config, "/x"), [], `${preset.id} must not warn about itself`);
   }
 });
+
+test("trimBoundaryStep is a known, validated rc setting", async () => {
+  const { validateConfig } = await import("../config.js");
+  assert.deepEqual(validateConfig({ trimBoundaryStep: 20 }, "/x"), []);
+  assert.match(validateConfig({ trimBoundaryStep: 0 }, "/x").join("\n"), /trimBoundaryStep must be a positive whole number/);
+  assert.match(validateConfig({ trimBoundaryStep: "big" }, "/x").join("\n"), /trimBoundaryStep must be a positive whole number/);
+});

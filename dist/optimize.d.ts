@@ -13,6 +13,15 @@ export interface OptimizeOptions {
     keepRecent?: number;
     /** Max tokens a trimmed tool result — or tool-call argument set — keeps. */
     maxToolResultTokens?: number;
+    /**
+     * How many messages the trim boundary moves at a time. Bigger steps keep the
+     * prompt cache alive longer but leave stale results in place longer.
+     * Measured on a growing agent session: at 400 turns a step of 10 invalidated
+     * the cache on 21% of turns with ~2 stale results waiting on average; 20
+     * gave 12% and ~4; 40 gave 10% and ~9. Adaptive steps were worse everywhere,
+     * because a step that changes size moves the boundary by itself. Default 10.
+     */
+    trimBoundaryStep?: number;
 }
 export interface AppliedChange {
     strategy: StrategyId;

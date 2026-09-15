@@ -38,7 +38,7 @@ function candidatePaths(startDir) {
  */
 /** Strategy ids the optimizer actually implements. */
 const KNOWN_STRATEGIES = new Set(["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"]);
-const KNOWN_KEYS = new Set(["budget", "strategies", "keepRecent", "maxToolResultTokens", "routes", "model"]);
+const KNOWN_KEYS = new Set(["budget", "strategies", "keepRecent", "maxToolResultTokens", "trimBoundaryStep", "routes", "model"]);
 const KNOWN_BUDGET_KEYS = new Set(["maxTokens", "maxCostPerMessageUsd", "maxWindowPct"]);
 /**
  * Report anything in an rc file that will be silently ignored.
@@ -92,7 +92,7 @@ export function validateConfig(config, path) {
             }
         }
     }
-    for (const key of ["keepRecent", "maxToolResultTokens"]) {
+    for (const key of ["keepRecent", "maxToolResultTokens", "trimBoundaryStep"]) {
         const value = c[key];
         if (value === undefined)
             continue;
