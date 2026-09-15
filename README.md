@@ -246,6 +246,12 @@ const { conversation, tokensBefore, tokensAfter } = optimizeConversation(chatJso
 });
 ```
 
+## Exact counts, and what they teach the estimator
+
+The default token count is a chars-per-token heuristic so everything runs with no key and no tokenizer. Its error is content-dependent, and there is no honest way to fix that from transcripts alone (the billed number includes content the transcript never sees). `analyze --exact` fetches a true count for the exact bytes just estimated (Anthropic's count-tokens API with `ANTHROPIC_API_KEY`; tiktoken for GPT if installed) and prints the drift.
+
+Since 0.13.9 it also **remembers the comparison**, per model family, on this machine, and later estimates for that family are scaled by it. Nothing about this is silent: the profile header says `estimates calibrated +12% from 3 exact count(s) you ran on this machine`. No exact count ever run means no calibration and unchanged numbers; out-of-range samples are ignored; `CONTEXT_DOCTOR_NO_CALIBRATION=1` returns to the raw heuristic.
+
 ## What it detects
 
 - **Oversized tool results** — the #1 context killer in agent loops

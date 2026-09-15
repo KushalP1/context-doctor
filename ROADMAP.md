@@ -68,6 +68,12 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.13.9 — the estimator learns from your own exact counts
+
+| Item | Why |
+|---|---|
+| **Calibration from `--exact`** | Shipping a tokenizer would break the no-key, no-dependency default, and transcript deltas cannot calibrate anything (see 0.13.0). What can: the one clean comparison a user makes when they run `analyze --exact`, a true count for the exact bytes just estimated. That ratio is now remembered per model family on this machine and applied to later estimates, printed in the profile header so scaled numbers never pass as raw. Out-of-range samples are ignored; an env switch disables it. Tests run with it disabled by construction, via a runner script that also stops a new test file from being left out of the suite |
+
 ## Closed by measurement in 0.13.8 — `trim-tool-calls` stays opt-in
 
 The question was whether trimming a completed tool call can confuse a live agent.
@@ -129,7 +135,6 @@ committed until it ships.
 
 | Item | Why | Size |
 |---|---|---|
-| **Calibrate the heuristic with a real tokenizer** | Ship a small tokenizer (or lean on `--exact`) to fit chars-per-token per content type. Transcript deltas cannot do this — see above | M |
 | **Subagent accounting** | Sidechain traffic is excluded from session profiles because it has its own window — but it still costs money. Blocked on a transcript that actually contains some | M |
 
 ### Asked for on Reddit (r/ClaudeCode, 2026-09-14)

@@ -51,6 +51,14 @@ export interface ContextProfile {
     /** Present when the model has a known price. All figures are estimates. */
     cost?: CostEstimate;
     sourceFormat: string;
+    /**
+     * Present when estimates were scaled by a factor learned from this machine's
+     * own `--exact` counts for this model family. Absent means raw heuristic.
+     */
+    calibration?: {
+        factor: number;
+        samples: number;
+    };
     /** Propagated from parsing: input could not be read as a conversation. */
     parseWarning?: string;
 }
