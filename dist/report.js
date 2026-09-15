@@ -37,6 +37,11 @@ export function renderProfile(profile, options = {}) {
         lines.push("");
     }
     lines.push(`Total: ~${formatTokens(p.totalTokens)} tokens across ${p.messageCount} messages (${p.sourceFormat} format)`);
+    if (p.calibration) {
+        // Scaled numbers must say so, or they read as the raw heuristic.
+        const pct = Math.round((p.calibration.factor - 1) * 100);
+        lines.push(`       estimates calibrated ${pct >= 0 ? "+" : ""}${pct}% from ${p.calibration.samples} exact count(s) you ran on this machine (analyze --exact)`);
+    }
     if (p.model) {
         const windowNote = p.contextWindow
             ? ` of ${formatTokens(p.contextWindow)} window (${p.usagePct.toFixed(1)}%)`

@@ -8,6 +8,7 @@ import { NormalizedConversation, NormalizedMessage } from "./parse.js";
 import { contextWindowFor, estimateTokens, MESSAGE_OVERHEAD_TOKENS, providerFor } from "./tokens.js";
 import { estimatedTtftSeconds, inputCostUsd, pricingFor } from "./pricing.js";
 import { hasBase64Blob } from "./blob.js";
+import { calibrationFor } from "./calibration.js";
 
 export type Category = "system" | "user" | "assistant" | "tool_calls" | "tool_results" | "other";
 
@@ -75,6 +76,11 @@ export interface ContextProfile {
   /** Present when the model has a known price. All figures are estimates. */
   cost?: CostEstimate;
   sourceFormat: string;
+  /**
+   * Present when estimates were scaled by a factor learned from this machine's
+   * own `--exact` counts for this model family. Absent means raw heuristic.
+   */
+  calibration?: { factor: number; samples: number };
   /** Propagated from parsing: input could not be read as a conversation. */
   parseWarning?: string;
 }
@@ -222,9 +228,11 @@ function filesReadBy(toolName: string | undefined, toolCallText: string): string
 }
 
 export function profileConversation(conv: NormalizedConversation, model?: string): ContextProfile {
+  // Learned from the user's own exact counts, if they ever fetched any.
+  const calibration = calibrationFor(model);
   const perMessage = conv.messages.map((m) => ({
     msg: m,
-    tokens: estimateTokens(m.text) + MESSAGE_OVERHEAD_TOKENS,
+    tokens: Math.round(estimateTokens(m.text) * calibration.factor) + MESSAGE_OVERHEAD_TOKENS,
   }));
 
   const totalTokens = perMessage.reduce((sum, p) => sum + p.tokens, 0);
@@ -536,6 +544,7 @@ export function profileConversation(conv: NormalizedConversation, model?: string
     totalEstSavings,
     cost,
     sourceFormat: conv.sourceFormat,
+    calibration: calibration.samples > 0 ? calibration : undefined,
     parseWarning: conv.parseWarning,
   };
 }

@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { contextWindowFor, estimateTokens, MESSAGE_OVERHEAD_TOKENS, providerFor } from "./tokens.js";
 import { estimatedTtftSeconds, inputCostUsd, pricingFor } from "./pricing.js";
 import { hasBase64Blob } from "./blob.js";
+import { calibrationFor } from "./calibration.js";
 function categoryOf(m) {
     switch (m.kind) {
         case "system": return "system";
@@ -145,9 +146,11 @@ function filesReadBy(toolName, toolCallText) {
     return [...paths];
 }
 export function profileConversation(conv, model) {
+    // Learned from the user's own exact counts, if they ever fetched any.
+    const calibration = calibrationFor(model);
     const perMessage = conv.messages.map((m) => ({
         msg: m,
-        tokens: estimateTokens(m.text) + MESSAGE_OVERHEAD_TOKENS,
+        tokens: Math.round(estimateTokens(m.text) * calibration.factor) + MESSAGE_OVERHEAD_TOKENS,
     }));
     const totalTokens = perMessage.reduce((sum, p) => sum + p.tokens, 0);
     const categories = {
@@ -445,6 +448,7 @@ export function profileConversation(conv, model) {
         totalEstSavings,
         cost,
         sourceFormat: conv.sourceFormat,
+        calibration: calibration.samples > 0 ? calibration : undefined,
         parseWarning: conv.parseWarning,
     };
 }

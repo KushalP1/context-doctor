@@ -28,6 +28,7 @@ import { renderDiff } from "./diff.js";
 import { findPreset, PRESETS, RC_FILENAME } from "./config.js";
 import { runWatch } from "./watch.js";
 import { exactTokenCount } from "./exact.js";
+import { modelFamily, recordCalibration } from "./calibration.js";
 import { checkBudget, loadConfig } from "./config.js";
 import { startDashboard } from "./dashboard.js";
 import { listCursorChats, parseCursorChat } from "./cursor.js";
@@ -432,6 +433,11 @@ function main(): void {
         if (exact.tokens !== undefined) {
           const drift = profile.totalTokens > 0 ? Math.round(((exact.tokens - profile.totalTokens) / exact.tokens) * 100) : 0;
           console.log(`\nExact input tokens: ${exact.tokens} (${exact.source}) — heuristic was off by ${drift}%`);
+          // Remember the comparison so the next estimate for this model family
+          // starts from the user's own ground truth instead of a constant.
+          const raw = profile.calibration ? profile.totalTokens / profile.calibration.factor : profile.totalTokens;
+          recordCalibration(args.model ?? profile.model, exact.tokens, raw);
+          console.log(`Remembered: future ${modelFamily(args.model ?? profile.model)} estimates on this machine are calibrated from this (CONTEXT_DOCTOR_NO_CALIBRATION=1 to disable).`);
         } else {
           console.log(`\nExact count unavailable: ${exact.note}`);
         }
