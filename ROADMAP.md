@@ -104,6 +104,14 @@ committed until it ships.
 | **Subagent accounting** | Sidechain traffic is excluded from session profiles because it has its own window — but it still costs money. Blocked on a transcript that actually contains some | M |
 | **Quantized-boundary tuning** | The trim boundary steps in tens, chosen by measurement on one fixture. The right step is probably a function of turn size and cache TTL | S |
 
+### Asked for on Reddit (r/ClaudeCode, 2026-09-14)
+
+| Item | Why | Size |
+|---|---|---|
+| **Fresh vs existing session harness** | The profiler measures what is in the context, not whether the task succeeded, so a smaller transcript can be a cheaper *failure*. The honest experiment: same task, same starting commit, fresh session vs existing session, same model and tools, cache usage recorded, both outputs run through the same checks. That is a harness, not a profiler, and until it exists every number here is about context size only | L |
+| **Wall clock per tool call** | Every transcript entry carries a timestamp, so tool_use → tool_result latency is on disk already. Not built yet because that gap also contains the model generating its next turn; it has to be separated before any of it can be called "tool time" | M |
+| **Retry vs re-read** | The repeated-call detector catches identical calls with identical arguments, which mixes genuine retries with "the model forgot it already read this". The first call's result tells them apart: an error result followed by the same call is a retry, a success followed by the same call is a re-read | S |
+
 ### Turn advice into action
 
 | Item | Why | Size |
