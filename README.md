@@ -92,7 +92,7 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | `context-doctor install` / `uninstall` | Wire (or remove) everything: MCP for Claude Desktop/Code/Cursor, the Agent Skill, the every-prompt hook |
 | `context-doctor analyze <file>` | Profile a conversation: token breakdown, findings, cost + latency estimates. `--fail-over-budget` exits 1 on a breach, for CI |
 | `context-doctor optimize <file>` | Apply the safe fixes; add `--strategy trim-tool-calls` for big inline file writes, `--strategy prune-history` for consented lossy compaction |
-| `context-doctor session [file]` | Profile a Claude Code session: live context, findings, **measured tokens and prompt-cache economics**. Also reads ChatGPT data exports (`conversations.json`) |
+| `context-doctor session [file]` | Profile a Claude Code session: live context, findings, **measured tokens and prompt-cache economics**, and **where the wall clock went** per tool (from transcript timestamps, permission waits included and said so). Also reads ChatGPT data exports (`conversations.json`) |
 | `context-doctor init [preset]` | Write a `.contextdoctorrc` from a preset (`chat`, `agent`, `batch`) — a budget you can adopt in one command and tune later |
 | `context-doctor diff <before> <after>` | Compare two profiles: what moved by category, which findings were resolved or introduced, and what it saves in money and latency |
 | `context-doctor accuracy` | How much of what you are billed for is visible in your transcript — the fixed harness baseline and the per-turn injected content neither you nor the profiler can see |
@@ -254,7 +254,7 @@ const { conversation, tokensBefore, tokensAfter } = optimizeConversation(chatJso
 - **Near-duplicates** — the same doc re-pasted with different surrounding words (shingle similarity, ≥60%)
 - **Repeated file reads** — the same file pulled in three or more times, every copy still in context. Counts shell reads too (`cat`, `head`, `tail`, `less`), which is where most of them hide in agent sessions
 - **Retained error output** — stack traces and failed commands kept verbatim long after the fix landed
-- **Repeated identical tool calls** — a signal your agent forgot earlier results
+- **Repeated identical tool calls**, split into the two things they can mean: a **retry** (the same call after a failure, where the fix is in the error text, and three or more is a loop) and a **re-read** (the same call after a success, where the model forgot it already had the answer). Across 42 local sessions that was 15 retries against 151 re-reads, so the old combined advice was wrong for most of them
 - **Base64 / binary blobs** in text content — checked by character distribution, not just alphabet, so hex digests and long identifiers are not mistaken for encoded binary
 - **Long history** past the point where models track the middle
 - **Cache-hostile ordering** — volatile content before stable content breaks prompt caching (Anthropic `cache_control`, OpenAI automatic prefix caching)

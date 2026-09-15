@@ -18,6 +18,7 @@ function flattenContent(content) {
     let toolName;
     let kind;
     let toolCallText = "";
+    let isError;
     for (const block of content) {
         if (block == null || typeof block !== "object") {
             text += String(block ?? "");
@@ -41,6 +42,8 @@ function flattenContent(content) {
                 const inner = flattenContent(b.content);
                 hasBinary = hasBinary || inner.hasBinary;
                 text += inner.text;
+                if (b.is_error === true)
+                    isError = true;
                 break;
             }
             case "image":
@@ -60,7 +63,7 @@ function flattenContent(content) {
                 text += JSON.stringify(b);
         }
     }
-    return { text, hasBinary, toolName, kind, toolCallText: toolCallText || undefined };
+    return { text, hasBinary, toolName, kind, toolCallText: toolCallText || undefined, isError };
 }
 function normalizeMessage(rawInput, index) {
     // A null or non-object entry appears in truncated and hand-edited files.
@@ -88,7 +91,7 @@ function normalizeMessage(rawInput, index) {
         text += calls;
         toolCallText = (toolCallText ?? "") + calls;
     }
-    return { index, role, kind, text, toolName, toolCallText, hasBinary: flat.hasBinary };
+    return { index, role, kind, text, toolName, toolCallText, hasBinary: flat.hasBinary, isError: flat.isError };
 }
 export function parseConversation(input) {
     let data;

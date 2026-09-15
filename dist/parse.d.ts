@@ -22,6 +22,13 @@ export interface NormalizedMessage {
     toolCallText?: string;
     /** True when the content contained non-text blocks (images, documents). */
     hasBinary: boolean;
+    /**
+     * For tool results: the tool reported failure (Anthropic `is_error`).
+     * What separates a retry from a re-read: the same call after an error is
+     * the model trying again; the same call after a success is the model having
+     * forgotten it already had the answer. Different problems, different fixes.
+     */
+    isError?: boolean;
 }
 export interface NormalizedConversation {
     messages: NormalizedMessage[];

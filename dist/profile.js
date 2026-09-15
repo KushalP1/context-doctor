@@ -259,14 +259,38 @@ export function profileConversation(conv, model) {
         list.push(p.msg.index);
         callSeen.set(key, list);
     }
+    // Identical calls come in two kinds that look the same and mean the
+    // opposite. If the previous attempt FAILED, the repeat is a retry: the fix is
+    // in the error text, and hammering the same command is the waste. If the
+    // previous attempt SUCCEEDED, the repeat is a re-read: the model forgot it
+    // already had the answer, and the earlier result is what should have stayed
+    // in view. Lumping them together gave the wrong advice to both.
+    const resultAfter = (callIndex) => perMessage.find((p) => p.msg.index > callIndex && p.msg.kind === "tool_result")?.msg;
     for (const [, idxs] of callSeen) {
-        if (idxs.length > 1) {
+        if (idxs.length < 2)
+            continue;
+        // Each repeat is classified by what happened to the attempt just before it.
+        const retries = idxs.slice(1).filter((_, i) => resultAfter(idxs[i])?.isError === true).length;
+        const rereads = idxs.length - 1 - retries;
+        if (retries > 0) {
+            findings.push({
+                id: "retried_tool_call",
+                severity: retries >= 3 ? "warn" : "info",
+                estSavings: 0,
+                message: `The same tool call was retried ${retries} time(s) after it failed (messages #${idxs.join(", #")}).`,
+                suggestion: retries >= 3
+                    ? "Three or more identical retries of a failing command is a loop. Each attempt keeps its error output in context; the answer is in the first error, not in the fourth attempt."
+                    : "A retry after a failure is normal once. The failed attempt's output stays in context though, so once the fix is understood the earlier error can go.",
+                messages: idxs,
+            });
+        }
+        if (rereads > 0) {
             findings.push({
                 id: "repeated_tool_call",
                 severity: "info",
                 estSavings: 0,
-                message: `The same tool call (with identical arguments) appears ${idxs.length} times (messages #${idxs.join(", #")}).`,
-                suggestion: "Repeated identical calls usually mean the earlier result scrolled out of the model's attention — cache results or surface them in a compact recap instead of re-calling.",
+                message: `The same tool call (with identical arguments) was repeated ${rereads} time(s) after it had already succeeded (messages #${idxs.join(", #")}).`,
+                suggestion: "Repeating a call that already succeeded means the earlier result scrolled out of the model's attention — keep results in a compact recap instead of re-calling.",
                 messages: idxs,
             });
         }
