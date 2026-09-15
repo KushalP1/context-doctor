@@ -31,6 +31,7 @@ import { checkBudget, loadConfig } from "./config.js";
 import { startDashboard } from "./dashboard.js";
 import { listCursorChats, parseCursorChat } from "./cursor.js";
 import { analyzeCacheUsage, renderCacheReport } from "./cache.js";
+import { renderToolTimings } from "./timing.js";
 const HELP = `context-doctor — profile and optimize LLM context windows
 
 Usage:
@@ -333,7 +334,7 @@ function main() {
         }
         const profile = profileConversation(parseConversation(parsed.conversationJson), args.model ?? parsed.model);
         if (args.json) {
-            console.log(JSON.stringify({ session: { path: parsed.path, title: parsed.title }, profile }, null, 2));
+            console.log(JSON.stringify({ session: { path: parsed.path, title: parsed.title, toolTimings: parsed.toolTimings ?? [] }, profile }, null, 2));
         }
         else {
             console.log(`Session: ${parsed.title ?? "(untitled)"}\nFile:    ${parsed.path}`);
@@ -353,6 +354,11 @@ function main() {
             if (cache) {
                 console.log("");
                 console.log(cache);
+            }
+            const timing = renderToolTimings(parsed.toolTimings ?? []);
+            if (timing) {
+                console.log("");
+                console.log(timing);
             }
             applyBudgetGate(printBudgetStatus(profile, loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`))), args.failOverBudget);
         }

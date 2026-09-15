@@ -14,6 +14,14 @@ export interface SessionInfo {
     modifiedAt: Date;
     sizeBytes: number;
 }
+/** Wall-clock spent inside one tool, aggregated across a session. */
+export interface ToolTiming {
+    tool: string;
+    calls: number;
+    totalMs: number;
+    medianMs: number;
+    maxMs: number;
+}
 /** One API-reported input size, positioned in the message array. */
 export interface UsageSample {
     /** Index into the live `messages` array of the assistant message reporting it. */
@@ -46,6 +54,15 @@ export interface ParsedSession {
      * comparable to what the heuristic estimates for those same messages.
      */
     usageSamples?: UsageSample[];
+    /**
+     * Time between each tool_use and its tool_result, per tool, from the
+     * timestamps every transcript entry carries. This is the other half of the
+     * cost picture: tokens are what a call puts INTO context, this is how long
+     * it made you wait. Caveat that must travel with the number: the gap also
+     * contains any time spent waiting on a permission prompt, so an
+     * unattended run reads cleaner than an interactive one.
+     */
+    toolTimings?: ToolTiming[];
     /** Conversation JSON string in Anthropic-ish format, ready for parseConversation(). */
     conversationJson: string;
     title?: string;

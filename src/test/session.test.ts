@@ -278,3 +278,70 @@ test("numbers that cannot be formatted show as zero, never NaN", async () => {
   }
   assert.equal(estimateTokens(""), 0);
 });
+
+test("retries after a failure and re-reads after a success are told apart", async () => {
+  const { profileConversation } = await import("../profile.js");
+  const { parseConversation } = await import("../parse.js");
+
+  const call = (id: string) => ({
+    role: "assistant",
+    content: [{ type: "tool_use", id, name: "Bash", input: { command: "npm test" } }],
+  });
+  const result = (id: string, ok: boolean) => ({
+    role: "user",
+    content: [{ type: "tool_result", tool_use_id: id, content: ok ? "all green" : "Exit code 1\nassertion failed", is_error: !ok }],
+  });
+
+  // Fails three times, then the same command again: a retry loop.
+  const loop = { messages: [call("a"), result("a", false), call("b"), result("b", false), call("c"), result("c", false), call("d"), result("d", true)] };
+  const loopFindings = profileConversation(parseConversation(JSON.stringify(loop))).findings;
+  const retried = loopFindings.find((f) => f.id === "retried_tool_call");
+  assert.ok(retried, "identical calls after failures must be reported as retries");
+  assert.equal(retried?.severity, "warn", "three or more retries is a loop, not a one-off");
+  assert.match(retried?.message ?? "", /retried 3 time/);
+  assert.ok(!loopFindings.some((f) => f.id === "repeated_tool_call"), "a retry loop is not a re-read");
+
+  // Succeeds, then the same command again twice: the model forgot the answer.
+  const forgot = { messages: [call("x"), result("x", true), call("y"), result("y", true), call("z"), result("z", true)] };
+  const forgotFindings = profileConversation(parseConversation(JSON.stringify(forgot))).findings;
+  const reread = forgotFindings.find((f) => f.id === "repeated_tool_call");
+  assert.ok(reread, "identical calls after successes are re-reads");
+  assert.match(reread?.message ?? "", /repeated 2 time\(s\) after it had already succeeded/);
+  assert.ok(!forgotFindings.some((f) => f.id === "retried_tool_call"), "a re-read is not a retry");
+});
+
+test("tool wall clock is measured from tool_use to tool_result timestamps", async () => {
+  const { parseSessionFile } = await import("../session.js");
+  const { renderToolTimings } = await import("../timing.js");
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+
+  const t0 = Date.parse("2026-09-15T10:00:00.000Z");
+  const at = (ms: number) => new Date(t0 + ms).toISOString();
+  const lines = [
+    // A fast Read, then a slow Bash, then a Bash the transcript never resolves.
+    { type: "assistant", timestamp: at(0), message: { role: "assistant", content: [{ type: "tool_use", id: "r1", name: "Read", input: { file_path: "/a" } }] } },
+    { type: "user", timestamp: at(200), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "r1", content: "ok" }] } },
+    { type: "assistant", timestamp: at(1_000), message: { role: "assistant", content: [{ type: "tool_use", id: "b1", name: "Bash", input: { command: "npm test" } }] } },
+    { type: "user", timestamp: at(31_000), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "b1", content: "pass" }] } },
+    { type: "assistant", timestamp: at(40_000), message: { role: "assistant", content: [{ type: "tool_use", id: "b2", name: "Bash", input: { command: "sleep" } }] } },
+    // b2 has no result: must be ignored, not counted as zero or negative.
+  ];
+  const dir = mkdtempSync(join(tmpdir(), "ctxdoc-timing-"));
+  const path = join(dir, "t.jsonl");
+  writeFileSync(path, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+
+  const parsed = parseSessionFile(path);
+  const bash = parsed.toolTimings?.find((t) => t.tool === "Bash");
+  const read = parsed.toolTimings?.find((t) => t.tool === "Read");
+  assert.equal(bash?.calls, 1, "an unresolved call is not counted");
+  assert.equal(bash?.totalMs, 30_000);
+  assert.equal(read?.totalMs, 200);
+  assert.equal(parsed.toolTimings?.[0].tool, "Bash", "sorted by total time, slowest first");
+
+  const out = renderToolTimings(parsed.toolTimings ?? []) ?? "";
+  assert.match(out, /Bash\s+30\.0s\s+99%/, "the slow tool dominates the share");
+  assert.match(out, /permission prompt/, "the caveat travels with the number");
+  assert.equal(renderToolTimings([]), null, "nothing to say when there are no timings");
+});

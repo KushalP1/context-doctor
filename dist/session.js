@@ -179,6 +179,9 @@ export function parseSessionFile(path) {
     let reportedInputTokens;
     /** Every reported size, positioned — the basis for `context-doctor accuracy`. */
     const usageSamples = [];
+    /** Open tool calls awaiting their result, by tool_use id. */
+    const pendingCalls = new Map();
+    const latenciesByTool = new Map();
     forEachLine(path, (line) => {
         if (!line.trim())
             return;
@@ -219,8 +222,39 @@ export function parseSessionFile(path) {
         }
         if (entry.isCompactSummary)
             lastCompactIndex = messages.length;
+        // Pair every tool_use with its tool_result by id and record the gap.
+        const at = Date.parse(String(entry.timestamp ?? ""));
+        if (Number.isFinite(at) && Array.isArray(message.content)) {
+            for (const block of message.content) {
+                if (block?.type === "tool_use" && typeof block.id === "string") {
+                    pendingCalls.set(block.id, { tool: String(block.name ?? "unknown"), at });
+                }
+                else if (block?.type === "tool_result" && typeof block.tool_use_id === "string") {
+                    const call = pendingCalls.get(block.tool_use_id);
+                    if (call) {
+                        pendingCalls.delete(block.tool_use_id);
+                        const ms = at - call.at;
+                        if (ms >= 0)
+                            latenciesByTool.set(call.tool, [...(latenciesByTool.get(call.tool) ?? []), ms]);
+                    }
+                }
+            }
+        }
         messages.push({ role: message.role, content: message.content });
     });
+    const toolTimings = [...latenciesByTool.entries()]
+        .map(([tool, ms]) => {
+        const sorted = [...ms].sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        return {
+            tool,
+            calls: ms.length,
+            totalMs: ms.reduce((a, b) => a + b, 0),
+            medianMs: sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2,
+            maxMs: sorted[sorted.length - 1],
+        };
+    })
+        .sort((a, b) => b.totalMs - a.totalMs);
     // A compaction replaces everything before it: the summary entry IS the live
     // history from that point on. Counting the pre-compaction turns would
     // overstate context, cost per message and window fill — sometimes hugely.
@@ -238,6 +272,7 @@ export function parseSessionFile(path) {
         usageSamples: usageSamples
             .filter((u) => u.index >= compactedAway)
             .map((u) => ({ index: u.index - compactedAway, input: u.input })),
+        toolTimings,
         path,
     };
 }

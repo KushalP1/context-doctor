@@ -31,6 +31,13 @@ export interface NormalizedMessage {
   toolCallText?: string;
   /** True when the content contained non-text blocks (images, documents). */
   hasBinary: boolean;
+  /**
+   * For tool results: the tool reported failure (Anthropic `is_error`).
+   * What separates a retry from a re-read: the same call after an error is
+   * the model trying again; the same call after a success is the model having
+   * forgotten it already had the answer. Different problems, different fixes.
+   */
+  isError?: boolean;
 }
 
 export interface NormalizedConversation {
@@ -45,7 +52,7 @@ export interface NormalizedConversation {
   parseWarning?: string;
 }
 
-function flattenContent(content: unknown): { text: string; hasBinary: boolean; toolName?: string; kind?: MessageKind; toolCallText?: string } {
+function flattenContent(content: unknown): { text: string; hasBinary: boolean; toolName?: string; kind?: MessageKind; toolCallText?: string; isError?: boolean } {
   if (typeof content === "string") return { text: content, hasBinary: false };
   if (!Array.isArray(content)) return { text: JSON.stringify(content ?? ""), hasBinary: false };
 
@@ -54,6 +61,7 @@ function flattenContent(content: unknown): { text: string; hasBinary: boolean; t
   let toolName: string | undefined;
   let kind: MessageKind | undefined;
   let toolCallText = "";
+  let isError: boolean | undefined;
   for (const block of content) {
     if (block == null || typeof block !== "object") {
       text += String(block ?? "");
@@ -77,6 +85,7 @@ function flattenContent(content: unknown): { text: string; hasBinary: boolean; t
         const inner = flattenContent(b.content);
         hasBinary = hasBinary || inner.hasBinary;
         text += inner.text;
+        if (b.is_error === true) isError = true;
         break;
       }
       case "image":
@@ -96,7 +105,7 @@ function flattenContent(content: unknown): { text: string; hasBinary: boolean; t
         text += JSON.stringify(b);
     }
   }
-  return { text, hasBinary, toolName, kind, toolCallText: toolCallText || undefined };
+  return { text, hasBinary, toolName, kind, toolCallText: toolCallText || undefined, isError };
 }
 
 function normalizeMessage(rawInput: Record<string, unknown> | null | undefined, index: number): NormalizedMessage {
@@ -127,7 +136,7 @@ function normalizeMessage(rawInput: Record<string, unknown> | null | undefined, 
     toolCallText = (toolCallText ?? "") + calls;
   }
 
-  return { index, role, kind, text, toolName, toolCallText, hasBinary: flat.hasBinary };
+  return { index, role, kind, text, toolName, toolCallText, hasBinary: flat.hasBinary, isError: flat.isError };
 }
 
 export function parseConversation(input: string): NormalizedConversation {

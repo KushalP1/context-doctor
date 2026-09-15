@@ -34,6 +34,15 @@ function usageNumber(value: unknown): number {
   return Number.isFinite(n) && n >= 0 ? Math.round(n) : 0;
 }
 
+/** Wall-clock spent inside one tool, aggregated across a session. */
+export interface ToolTiming {
+  tool: string;
+  calls: number;
+  totalMs: number;
+  medianMs: number;
+  maxMs: number;
+}
+
 /** One API-reported input size, positioned in the message array. */
 export interface UsageSample {
   /** Index into the live `messages` array of the assistant message reporting it. */
@@ -67,6 +76,15 @@ export interface ParsedSession {
    * comparable to what the heuristic estimates for those same messages.
    */
   usageSamples?: UsageSample[];
+  /**
+   * Time between each tool_use and its tool_result, per tool, from the
+   * timestamps every transcript entry carries. This is the other half of the
+   * cost picture: tokens are what a call puts INTO context, this is how long
+   * it made you wait. Caveat that must travel with the number: the gap also
+   * contains any time spent waiting on a permission prompt, so an
+   * unattended run reads cleaner than an interactive one.
+   */
+  toolTimings?: ToolTiming[];
   /** Conversation JSON string in Anthropic-ish format, ready for parseConversation(). */
   conversationJson: string;
   title?: string;
@@ -228,6 +246,9 @@ export function parseSessionFile(path: string): ParsedSession {
   let reportedInputTokens: number | undefined;
   /** Every reported size, positioned — the basis for `context-doctor accuracy`. */
   const usageSamples: UsageSample[] = [];
+  /** Open tool calls awaiting their result, by tool_use id. */
+  const pendingCalls = new Map<string, { tool: string; at: number }>();
+  const latenciesByTool = new Map<string, number[]>();
 
   forEachLine(path, (line) => {
     if (!line.trim()) return;
@@ -262,8 +283,40 @@ export function parseSessionFile(path: string): ParsedSession {
       }
     }
     if (entry.isCompactSummary) lastCompactIndex = messages.length;
+
+    // Pair every tool_use with its tool_result by id and record the gap.
+    const at = Date.parse(String(entry.timestamp ?? ""));
+    if (Number.isFinite(at) && Array.isArray(message.content)) {
+      for (const block of message.content as Array<Record<string, unknown>>) {
+        if (block?.type === "tool_use" && typeof block.id === "string") {
+          pendingCalls.set(block.id, { tool: String(block.name ?? "unknown"), at });
+        } else if (block?.type === "tool_result" && typeof block.tool_use_id === "string") {
+          const call = pendingCalls.get(block.tool_use_id);
+          if (call) {
+            pendingCalls.delete(block.tool_use_id);
+            const ms = at - call.at;
+            if (ms >= 0) latenciesByTool.set(call.tool, [...(latenciesByTool.get(call.tool) ?? []), ms]);
+          }
+        }
+      }
+    }
+
     messages.push({ role: message.role, content: message.content });
   });
+
+  const toolTimings: ToolTiming[] = [...latenciesByTool.entries()]
+    .map(([tool, ms]) => {
+      const sorted = [...ms].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      return {
+        tool,
+        calls: ms.length,
+        totalMs: ms.reduce((a, b) => a + b, 0),
+        medianMs: sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2,
+        maxMs: sorted[sorted.length - 1],
+      };
+    })
+    .sort((a, b) => b.totalMs - a.totalMs);
 
   // A compaction replaces everything before it: the summary entry IS the live
   // history from that point on. Counting the pre-compaction turns would
@@ -283,6 +336,7 @@ export function parseSessionFile(path: string): ParsedSession {
     usageSamples: usageSamples
       .filter((u) => u.index >= compactedAway)
       .map((u) => ({ index: u.index - compactedAway, input: u.input })),
+    toolTimings,
     path,
   };
 }

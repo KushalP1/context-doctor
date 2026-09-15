@@ -68,6 +68,13 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.13.5 — the two things r/ClaudeCode asked for
+
+| Item | Why |
+|---|---|
+| **Where the time goes** | `session` now reports wall clock per tool from the timestamps on every transcript entry (tool_use → tool_result). On one real session: Bash was 87% of 146 minutes of waiting, median 1.3s, slowest 22.5m. The caveat travels with the number: the gap includes waiting on permission prompts. The concern that it would also contain model generation turned out not to apply: the model has finished emitting the call before the call's own timestamp is written, and its next turn starts after the result's |
+| **Retry vs re-read** | Identical tool calls split by what happened to the previous attempt. Measured across 42 sessions: 15 retries (1 loop of 3+) against 151 re-reads, so ~90% of "repeated calls" were the model forgetting it already had the answer, and the old advice ("cache results") was right for those and wrong for the retries, where the answer is in the first error |
+
 ## Shipped in 0.13.0 — measurement, presets, and a cache bug
 
 | Item | Why |
@@ -109,8 +116,6 @@ committed until it ships.
 | Item | Why | Size |
 |---|---|---|
 | **Fresh vs existing session harness** | The profiler measures what is in the context, not whether the task succeeded, so a smaller transcript can be a cheaper *failure*. The honest experiment: same task, same starting commit, fresh session vs existing session, same model and tools, cache usage recorded, both outputs run through the same checks. That is a harness, not a profiler, and until it exists every number here is about context size only | L |
-| **Wall clock per tool call** | Every transcript entry carries a timestamp, so tool_use → tool_result latency is on disk already. Not built yet because that gap also contains the model generating its next turn; it has to be separated before any of it can be called "tool time" | M |
-| **Retry vs re-read** | The repeated-call detector catches identical calls with identical arguments, which mixes genuine retries with "the model forgot it already read this". The first call's result tells them apart: an error result followed by the same call is a retry, a success followed by the same call is a re-read | S |
 
 ### Turn advice into action
 
