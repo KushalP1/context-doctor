@@ -181,3 +181,40 @@ test("a larger trim step trades stale content for fewer cache invalidations", ()
   );
   assert.ok(fallback.applied.length > 0, "a nonsense step must not silently turn trimming off");
 });
+
+test("trim-tool-calls leaves a Write alone when the model later Edits that file blind", () => {
+  const big = "line of code\n".repeat(1500);
+  const filler = Array.from({ length: 30 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", content: `turn ${i}` }));
+  const base = [
+    { role: "assistant", content: [{ type: "tool_use", id: "w1", name: "Write", input: { file_path: "/app/a.ts", content: big } }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "w1", content: "ok" }] },
+    { role: "assistant", content: [{ type: "tool_use", id: "w2", name: "Write", input: { file_path: "/app/b.ts", content: big } }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "w2", content: "ok" }] },
+    ...filler,
+  ];
+
+  // a.ts is Edited later with no Read in between: the model is relying on its
+  // own Write input. b.ts is never touched again.
+  const withBlindEdit = [
+    ...base,
+    { role: "assistant", content: [{ type: "tool_use", id: "e1", name: "Edit", input: { file_path: "/app/a.ts", old_string: "line of code", new_string: "changed" } }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "e1", content: "ok" }] },
+    ...filler,
+  ];
+  const r = optimizeConversation(JSON.stringify({ messages: withBlindEdit }), { strategies: ["trim-tool-calls"] });
+  const out = (r.conversation as { messages: any[] }).messages;
+  assert.equal(out[0].content[0].input.content.length, big.length, "the Write the Edit depends on is kept intact");
+  assert.ok(out[2].content[0].input.content.length < big.length, "the Write nobody touches again is trimmed");
+
+  // Same shape, but the model Reads a.ts before editing: now it is safe to trim.
+  const withRead = [
+    ...base,
+    { role: "assistant", content: [{ type: "tool_use", id: "r1", name: "Read", input: { file_path: "/app/a.ts" } }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "r1", content: big }] },
+    { role: "assistant", content: [{ type: "tool_use", id: "e1", name: "Edit", input: { file_path: "/app/a.ts", old_string: "line of code", new_string: "changed" } }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "e1", content: "ok" }] },
+    ...filler,
+  ];
+  const r2 = optimizeConversation(JSON.stringify({ messages: withRead }), { strategies: ["trim-tool-calls"] });
+  assert.ok((r2.conversation as { messages: any[] }).messages[0].content[0].input.content.length < big.length, "a Write that was re-read before editing is trimmed");
+});

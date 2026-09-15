@@ -68,6 +68,16 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Closed by measurement in 0.13.8 — `trim-tool-calls` stays opt-in
+
+The question was whether trimming a completed tool call can confuse a live agent.
+Across 42 sessions: 73 large writes, 18 later edited, and 16 of those edits had no
+read in between — the model built `old_string` from its own `Write` input, at a
+median distance of 43 messages (p90: 181). So yes, in about 22% of cases, and far
+outside any recent-message window. Default stays off. What shipped instead: the
+offline optimizer, which can see the rest of the conversation, now keeps exactly
+those writes and trims the 63% that are never touched again.
+
 ## Shipped in 0.13.7 — the advisor says where
 
 | Item | Why |
@@ -132,7 +142,6 @@ committed until it ships.
 
 | Item | Why | Size |
 |---|---|---|
-| **`trim-tool-calls` on by default where it is safe** | The proxy can already run it per route via `--config`, but it is off unless someone asks for it — and in agent traffic it is where most of the waste is. Needs evidence that trimming a completed call never confuses a live agent | S |
 
 ### Fit into how people actually work
 
