@@ -361,7 +361,9 @@ function main(): void {
   }
 
   if (args.command === "install") {
-    runInstall();
+    // Partial success is still installed, but not silent: any failed target
+    // makes the exit code non-zero so automation can react.
+    if (runInstall().failures.length > 0) process.exitCode = 1;
     return;
   }
   if (args.command === "uninstall") {

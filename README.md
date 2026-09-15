@@ -34,6 +34,8 @@ Findings (4)
 npx context-doctor install
 ```
 
+`install` configures every app it detects and does not stop at the first problem: a corrupt Claude Desktop config still gets you Claude Code and Cursor. It does not pretend either. Any target that failed is named with a ✗ line, the summary reads "Done with N problem(s)" instead of "Done.", and the **exit code is 1**, so dotfiles and onboarding scripts can react. A broken config file is never overwritten; fix it and re-run.
+
 That single command is also all it takes to **set up context-doctor on anyone else's machine**. Prefer a global install, or want the unreleased `main`? Both work (Node 20+):
 
 ```bash

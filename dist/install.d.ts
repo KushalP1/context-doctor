@@ -20,5 +20,20 @@ export declare function npxLauncher(platformName: string): {
     command: string;
     args: string[];
 };
-export declare function runInstall(): void;
+/** Outcome of an install run, so the CLI can set a truthful exit code. */
+export interface InstallResult {
+    /** Detected targets that could not be configured, with the reason. */
+    failures: string[];
+}
+/**
+ * Install into every detected app.
+ *
+ * A failure in one app must not stop the others: someone with a corrupt
+ * Claude Desktop config still wants Claude Code and Cursor wired. But it
+ * must not be reported as success either — automation (dotfiles, CI,
+ * onboarding scripts) reads the exit code, and a "Done." with exit 0 over a
+ * failed target is a lie that surfaces later as "the tools never showed up".
+ * So: keep going, summarize, and return the failures for a non-zero exit.
+ */
+export declare function runInstall(): InstallResult;
 export declare function runUninstall(): void;
