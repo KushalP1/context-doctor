@@ -25,6 +25,8 @@ export interface ContextDoctorConfig {
     strategies?: StrategyId[];
     keepRecent?: number;
     maxToolResultTokens?: number;
+    /** Messages the trim boundary moves at a time; see OptimizeOptions. */
+    trimBoundaryStep?: number;
     /** Proxy per-model overrides, same shape as `proxy --config`. */
     routes?: Array<{
         modelPrefix: string;

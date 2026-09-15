@@ -274,6 +274,8 @@ const { conversation, tokensBefore, tokensAfter } = optimizeConversation(chatJso
 
 **Optimization is cache-aware.** Prompt caches match a byte-identical prefix, so editing a message in the middle invalidates everything after it — and the naive "trim everything older than the last N messages" boundary moves every single turn. On a 25-turn agent conversation that invalidated the cached prefix on 22 of 24 turns, paying the 1.25x cache-write price on the whole prefix to save a few hundred tokens. The trim boundary is quantized so it holds still between steps (8 of 24 on the same fixture), while still reaching 15 of 20 tool results.
 
+The step size is a trade-off, not a formula, and it is yours to set: `"trimBoundaryStep": 20` in `.contextdoctorrc` (default 10). Measured on a growing agent session at 400 turns: a step of 10 invalidated the cache on 21% of turns with ~2 stale results waiting on average; 20 gave 12% and ~4; 40 gave 10% and ~9. Adaptive steps were worse everywhere, because a step that changes size moves the boundary by itself. Heavy API users who lean on caching want a bigger step; interactive users who want stale output gone promptly want a smaller one.
+
 Everything the optimizer does is inspectable: it prints exactly which messages changed and how many tokens each change saved.
 
 **Summarization without an API key:** when `prune-history` runs through the MCP tools, context-doctor hands a digest of the pruned turns back to the model that called it (the Claude/GPT already running in your app) and asks *it* to write the replacement summary — LLM-quality compaction, zero extra cost, no keys.

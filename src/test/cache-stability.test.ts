@@ -146,3 +146,38 @@ test("prune-history never leaves a tool result without its call", () => {
     assert.ok(!Array.isArray(m.content) || m.content.length > 0, "no message may be left with empty content");
   }
 });
+
+test("a larger trim step trades stale content for fewer cache invalidations", () => {
+  // The measured trade-off this option exists for, pinned so the default and
+  // the knob keep meaning what the docs say.
+  const invalidationsWithStep = (step: number, turns: number): number => {
+    const conversation: unknown[] = [];
+    let previous: string[] | null = null;
+    let invalidations = 0;
+    for (let i = 0; i < turns; i++) {
+      conversation.push(
+        { role: "assistant", content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { file_path: `/f${i}` } }] },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: `t${i}`, content: `line ${i} `.repeat(200) }] }
+      );
+      const result = optimizeConversation(JSON.stringify({ messages: JSON.parse(JSON.stringify(conversation)) }), {
+        strategies: ["trim-tool-results"],
+        trimBoundaryStep: step,
+      });
+      const current = (result.conversation as { messages: unknown[] }).messages.map((m) => JSON.stringify(m));
+      if (previous && previous.some((m, k) => m !== current[k])) invalidations++;
+      previous = current;
+    }
+    return invalidations;
+  };
+  const ten = invalidationsWithStep(10, 120);
+  const twenty = invalidationsWithStep(20, 120);
+  assert.ok(twenty < ten, `step 20 must invalidate less often than step 10 (got ${twenty} vs ${ten})`);
+  // An invalid step falls back to the default rather than disabling trimming.
+  const fallback = optimizeConversation(
+    JSON.stringify({ messages: Array.from({ length: 40 }, (_, i) => i % 2
+      ? { role: "user", content: [{ type: "tool_result", tool_use_id: `t${i}`, content: `p ${i} `.repeat(300) }] }
+      : { role: "assistant", content: [{ type: "tool_use", id: `t${i + 1}`, name: "Read", input: { file_path: "/x" } }] }) }),
+    { strategies: ["trim-tool-results"], trimBoundaryStep: -5 }
+  );
+  assert.ok(fallback.applied.length > 0, "a nonsense step must not silently turn trimming off");
+});
