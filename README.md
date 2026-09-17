@@ -94,6 +94,7 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | `context-doctor optimize <file>` | Apply the safe fixes; add `--strategy trim-tool-calls` for big inline file writes, `--strategy prune-history` for consented lossy compaction |
 | `context-doctor session [file]` | Profile a Claude Code session: live context, findings, **measured tokens and prompt-cache economics**, and **where the wall clock went** per tool (from transcript timestamps, permission waits included and said so). Also reads ChatGPT data exports (`conversations.json`) |
 | `context-doctor init [preset]` | Write a `.contextdoctorrc` from a preset (`chat`, `agent`, `batch`) — a budget you can adopt in one command and tune later |
+| `context-doctor experiment --task "…"` | Run one task twice from the same commit, in a fresh session and forked from an `--existing` one, same model and tools; compare bill, cache split, wall clock, and whether `--check` passed. The only command here that spends money, so it caps spend per arm and refuses a dirty tree |
 | `context-doctor diff <before> <after>` | Compare two profiles: what moved by category, which findings were resolved or introduced, and what it saves in money and latency |
 | `context-doctor accuracy` | How much of what you are billed for is visible in your transcript — the fixed harness baseline and the per-turn injected content neither you nor the profiler can see |
 | `context-doctor cursor [--list]` | Profile a chat from Cursor's local history (both storage formats) |
@@ -245,6 +246,35 @@ const { conversation, tokensBefore, tokensAfter } = optimizeConversation(chatJso
   strategies: ["dedupe", "trim-tool-results", "strip-base64"],
 });
 ```
+
+## Does a smaller context actually help? Measure it
+
+Everything else in this tool measures what is *in* the context. None of it can tell you whether the task succeeded, so a smaller transcript can be a cheaper failure. `experiment` is the honest test:
+
+```bash
+context-doctor experiment \
+  --task "Add a null check to parseHeader in src/parse.ts and make the tests pass" \
+  --check "npm test" \
+  --existing 9c6f9dc9-457b-4d09-bf6d-a499c2f2f919 \
+  --model sonnet --budget 1
+```
+
+It runs the task in a **fresh** session, resets the tree to the starting commit, then runs it again **forked from your existing session** (`--resume … --fork-session`, so your real session is never touched), same model, same tools. For each arm it records what you were billed (input, cache read, cache write, output), cost, wall clock, turns, and whether your `--check` command passed, then puts them side by side:
+
+```
+                               fresh      existing
+──────────────────────────────────────────────────
+billed input                     20k           65k
+  of which cache read              0           60k
+  of which cache write          8.0k          4.0k
+cost                          $0.110        $0.420
+wall clock                        4s            9s
+check                           PASS      FAIL (1)
+
+Verdict: fresh was cheaper AND passed; existing failed the check. Clear win for fresh.
+```
+
+The verdict line is the point: cheaper only counts if it also passed. Because this spends your Claude budget it caps spend per arm (`--budget`, default $1), refuses to start on a dirty tree (both arms must begin from one commit, and the tree is reset between them), and refuses to run from inside a Claude Code session, where the CLI cannot start. `--dry-run` shows the exact commands first.
 
 ## Exact counts, and what they teach the estimator
 

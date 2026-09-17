@@ -25,6 +25,7 @@ import { recordLedger } from "./ledger.js";
 import { runDoctor } from "./doctor.js";
 import { measureAccuracy, renderAccuracy } from "./accuracy.js";
 import { renderDiff } from "./diff.js";
+import { renderExperiment, runExperiment } from "./experiment.js";
 import { findPreset, PRESETS, RC_FILENAME } from "./config.js";
 import { runWatch } from "./watch.js";
 import { exactTokenCount } from "./exact.js";
@@ -58,6 +59,9 @@ Usage:
                                                 default 8790) — charts from your own machine only
   context-doctor init [preset]                  Write a .contextdoctorrc from a preset
                                                 (chat, agent, batch; no argument lists them)
+  context-doctor experiment --task "<t>"         Run one task twice from the same commit, in a fresh
+                                                session and forked from an --existing one; compare
+                                                bill, cache, time, and whether --check passed
   context-doctor diff <before> <after>          Compare two profiles: what moved, which findings
                                                 were resolved, and what it saves
   context-doctor accuracy                       Measure the token heuristic against the API's own
@@ -91,6 +95,11 @@ Options:
   --keep-recent <n>       (optimize) Messages at the tail to leave untouched (default 6)
   --max-tool-tokens <n>   (optimize) Token budget for trimmed tool results (default 300)
   --limit <n>             (accuracy) Sessions to sample (default 20)
+  --check <cmd>           (experiment) Command whose exit code is the pass/fail for each arm
+  --existing <id>         (experiment) Session id to fork the second arm from (never mutated)
+  --budget <usd>          (experiment) Spend cap per arm (default 1)
+  --dry-run               (experiment) Print the claude commands and stop
+  --allow-dirty           (experiment) Skip the clean-tree check (uncommitted changes will be lost)
   --port <n>              (proxy) Port to listen on (default 8787)
   --host <addr>           (proxy) Bind address (default 127.0.0.1; use 0.0.0.0 to expose)
   --config <file>         (proxy) Per-route overrides: {"routes":[{"modelPrefix":"gpt","strategies":[...],
@@ -120,6 +129,12 @@ interface Args {
   host?: string;
   intervalMs?: number;
   limit?: number;
+  task?: string;
+  check?: string;
+  existing?: string;
+  budgetUsd?: number;
+  dryRun: boolean;
+  allowDirty: boolean;
   /** Everything after the command name — `diff` needs two files, not one. */
   positionals?: string[];
   upstreamAnthropic?: string;
@@ -132,7 +147,7 @@ interface Args {
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { json: false, strategies: [], list: false, exact: false, redact: false, failOverBudget: false };
+  const args: Args = { json: false, strategies: [], list: false, exact: false, redact: false, failOverBudget: false, dryRun: false, allowDirty: false };
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -151,6 +166,12 @@ function parseArgs(argv: string[]): Args {
       case "--port": args.port = Number(argv[++i]); break;
       case "--interval-ms": args.intervalMs = Number(argv[++i]); break;
       case "--limit": args.limit = Number(argv[++i]); break;
+      case "--task": args.task = argv[++i]; break;
+      case "--check": args.check = argv[++i]; break;
+      case "--existing": args.existing = argv[++i]; break;
+      case "--budget": args.budgetUsd = Number(argv[++i]); break;
+      case "--dry-run": args.dryRun = true; break;
+      case "--allow-dirty": args.allowDirty = true; break;
       case "--host": args.host = argv[++i]; break;
       case "--config": args.config = argv[++i]; break;
       case "--upstream-anthropic": args.upstreamAnthropic = argv[++i]; break;
@@ -237,6 +258,18 @@ function main(): void {
     console.log(`✓ Wrote ${target} (${preset.id}: ${preset.summary})`);
     console.log("  Budgets are enforced by the every-prompt hook and reported by analyze/session.");
     console.log("  Gate a pull request on it with: context-doctor analyze <file> --fail-over-budget");
+    return;
+  }
+
+  if (args.command === "experiment") {
+    if (!args.task) {
+      console.error('Usage: context-doctor experiment --task "<what to do>" [--check "<cmd>"] [--existing <session-id>] [--model m] [--budget usd] [--dry-run]');
+      process.exit(1);
+    }
+    const opts = { task: args.task, check: args.check, existing: args.existing, model: args.model, budgetUsd: args.budgetUsd, dryRun: args.dryRun, allowDirty: args.allowDirty };
+    const result = runExperiment(opts);
+    console.log(args.json ? JSON.stringify(result, null, 2) : renderExperiment(result, opts));
+    if (result.refused) process.exitCode = 1;
     return;
   }
 
