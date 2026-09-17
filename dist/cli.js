@@ -25,6 +25,7 @@ import { runDoctor } from "./doctor.js";
 import { measureAccuracy, renderAccuracy } from "./accuracy.js";
 import { renderDiff } from "./diff.js";
 import { renderExperiment, runExperiment } from "./experiment.js";
+import { runStatusLine } from "./statusline.js";
 import { findPreset, PRESETS, RC_FILENAME } from "./config.js";
 import { runWatch } from "./watch.js";
 import { exactTokenCount } from "./exact.js";
@@ -47,6 +48,9 @@ Usage:
   context-doctor session [file]                 Profile a Claude Code session transcript or a
                                                 ChatGPT export (default: most recent; --list to browse)
   context-doctor cursor [--list]                Profile a Cursor chat from its local history
+  context-doctor statusline                     Claude Code status bar line: live context size, cache
+                                                share, cost (wired by \`install --statusline\`; reads
+                                                the status JSON on stdin)
   context-doctor hook                           Claude Code UserPromptSubmit hook (installed
                                                 automatically by \`install\`; reads hook JSON on stdin)
   context-doctor report                         Impact report: exact proxy savings, hook activity,
@@ -98,6 +102,8 @@ Options:
   --budget <usd>          (experiment) Spend cap per arm (default 1)
   --dry-run               (experiment) Print the claude commands and stop
   --allow-dirty           (experiment) Skip the clean-tree check (uncommitted changes will be lost)
+  --statusline            (install) Also set Claude Code's statusLine to context-doctor (never
+                          overwrites a statusLine you already have)
   --port <n>              (proxy) Port to listen on (default 8787)
   --host <addr>           (proxy) Bind address (default 127.0.0.1; use 0.0.0.0 to expose)
   --config <file>         (proxy) Per-route overrides: {"routes":[{"modelPrefix":"gpt","strategies":[...],
@@ -114,7 +120,7 @@ Examples:
           export OPENAI_BASE_URL=http://localhost:8787/v1
 `;
 function parseArgs(argv) {
-    const args = { json: false, strategies: [], list: false, exact: false, redact: false, failOverBudget: false, dryRun: false, allowDirty: false };
+    const args = { json: false, strategies: [], list: false, exact: false, redact: false, failOverBudget: false, dryRun: false, allowDirty: false, statusLine: false };
     const positional = [];
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
@@ -179,6 +185,9 @@ function parseArgs(argv) {
                 break;
             case "--allow-dirty":
                 args.allowDirty = true;
+                break;
+            case "--statusline":
+                args.statusLine = true;
                 break;
             case "--host":
                 args.host = argv[++i];
@@ -270,6 +279,10 @@ function main() {
         console.log(`✓ Wrote ${target} (${preset.id}: ${preset.summary})`);
         console.log("  Budgets are enforced by the every-prompt hook and reported by analyze/session.");
         console.log("  Gate a pull request on it with: context-doctor analyze <file> --fail-over-budget");
+        return;
+    }
+    if (args.command === "statusline") {
+        void runStatusLine();
         return;
     }
     if (args.command === "experiment") {
@@ -407,7 +420,7 @@ function main() {
     if (args.command === "install") {
         // Partial success is still installed, but not silent: any failed target
         // makes the exit code non-zero so automation can react.
-        if (runInstall().failures.length > 0)
+        if (runInstall({ statusLine: args.statusLine }).failures.length > 0)
             process.exitCode = 1;
         return;
     }

@@ -122,14 +122,54 @@ function isEphemeralPath(path) {
  * prompt. `node` (not process.execPath) keeps it alive across Node upgrades.
  */
 function hookCommand() {
+    return cliCommand("hook");
+}
+/** The same durable command resolution, for any subcommand Claude Code runs for us. */
+function cliCommand(subcommand) {
     const selfDir = dirname(fileURLToPath(import.meta.url));
     const localCli = join(selfDir, "cli.js");
     if (!isEphemeralPath(selfDir + sep) && existsSync(localCli))
-        return `node "${localCli}" hook`;
+        return `node "${localCli}" ${subcommand}`;
     const global = binOnPath("context-doctor");
     if (global)
-        return `"${global}" hook`;
-    return "npx -y context-doctor hook";
+        return `"${global}" ${subcommand}`;
+    return `npx -y context-doctor ${subcommand}`;
+}
+/**
+ * Claude Code's status bar: a `statusLine` command whose stdout is shown while
+ * the user types. Opt-in, because there is only one status line and it may
+ * already be someone's own — this never overwrites a statusLine that is not
+ * ours. Returns what happened so install can print the truth.
+ */
+export function installStatusLine() {
+    const settingsPath = join(homedir(), ".claude", "settings.json");
+    if (!existsSync(join(homedir(), ".claude")))
+        return "no-claude-code";
+    const settings = readJson(settingsPath);
+    const want = cliCommand("statusline");
+    const current = settings.statusLine?.command;
+    if (current === want)
+        return "already";
+    if (current && !isOurStatusLine(current))
+        return "kept-foreign";
+    settings.statusLine = { type: "command", command: want };
+    writeJsonWithBackup(settingsPath, settings);
+    return "installed";
+}
+function isOurStatusLine(command) {
+    return /context-doctor|cli\.js"?\s+statusline\s*$/.test(command);
+}
+function uninstallStatusLine() {
+    const settingsPath = join(homedir(), ".claude", "settings.json");
+    if (!existsSync(settingsPath))
+        return;
+    const settings = readJson(settingsPath);
+    const current = settings.statusLine?.command;
+    if (current && isOurStatusLine(current)) {
+        delete settings.statusLine;
+        writeJsonWithBackup(settingsPath, settings);
+        console.log("✓ Claude Code status line removed");
+    }
 }
 /** True when the hook had to fall back to npx — worth telling the user. */
 function hookUsesNpx() {
@@ -224,7 +264,7 @@ function installSkill() {
  * failed target is a lie that surfaces later as "the tools never showed up".
  * So: keep going, summarize, and return the failures for a non-zero exit.
  */
-export function runInstall() {
+export function runInstall(options = {}) {
     const entry = serverEntry();
     const found = targets().filter((t) => t.detect());
     if (found.length === 0) {
@@ -274,6 +314,28 @@ export function runInstall() {
         console.error(`✗ Claude Code every-prompt hook: ${e.message}`);
         failures.push("Claude Code hook");
     }
+    if (options.statusLine) {
+        try {
+            switch (installStatusLine()) {
+                case "installed":
+                    console.log("✓ Claude Code status line installed — live context size, cache share and cost while you type");
+                    break;
+                case "already":
+                    console.log("✓ Claude Code status line already installed");
+                    break;
+                case "kept-foreign":
+                    console.log("– Claude Code status line left alone: you already have your own statusLine command. Remove it first if you want ours.");
+                    break;
+                case "no-claude-code":
+                    console.log("– status line skipped: Claude Code not detected");
+                    break;
+            }
+        }
+        catch (e) {
+            console.error(`✗ Claude Code status line: ${e.message}`);
+            failures.push("Claude Code status line");
+        }
+    }
     if (failures.length > 0) {
         console.log(`\nDone with ${failures.length} problem(s): ${failures.join(", ")}. See the ✗ lines above.`);
         console.log("Everything else was installed. Exit code is 1 so scripts can tell; fix the file(s) and re-run install.");
@@ -306,6 +368,7 @@ export function runUninstall() {
         console.log("✓ Agent Skill removed");
     }
     uninstallHook();
+    uninstallStatusLine();
     // Remove our bookkeeping files too — uninstall means gone.
     for (const file of [".context-doctor-hook-state.json", ".context-doctor-ledger.jsonl"]) {
         const p = join(homedir(), ".claude", file);
