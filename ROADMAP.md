@@ -68,6 +68,12 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.14.1 — context health where the work happens
+
+| Item | Why |
+|---|---|
+| **Claude Code status line** | `install --statusline` wires `context-doctor statusline` into Claude Code's `statusLine`, so live context vs window, a warning from 70%, cache share and cost sit in the status bar while you type. Reads the status payload when Claude Code provides the size, else the last 256KB of the transcript (~1ms; 80ms end to end). Never overwrites a status line you already have; uninstall removes only its own; any failure prints nothing. The roadmap's "editor status bar", for the editor most users of this tool are in |
+
 ## Shipped in 0.14.0 — the experiment the critics asked for
 
 | Item | Why |
@@ -152,7 +158,7 @@ committed until it ships.
 
 | Item | Why | Size |
 |---|---|---|
-| **Editor status bar** | A VS Code / Cursor extension showing live context health where the work happens, rather than in a separate terminal | L |
+| **VS Code / Cursor extension** | The Claude Code status line ships in 0.14.1 (below). The same number inside VS Code and Cursor is a separate package with its own publish pipeline | L |
 
 ## Non-goals
 

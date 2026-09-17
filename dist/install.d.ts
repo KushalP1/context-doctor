@@ -20,6 +20,13 @@ export declare function npxLauncher(platformName: string): {
     command: string;
     args: string[];
 };
+/**
+ * Claude Code's status bar: a `statusLine` command whose stdout is shown while
+ * the user types. Opt-in, because there is only one status line and it may
+ * already be someone's own — this never overwrites a statusLine that is not
+ * ours. Returns what happened so install can print the truth.
+ */
+export declare function installStatusLine(): "installed" | "already" | "kept-foreign" | "no-claude-code";
 /** Outcome of an install run, so the CLI can set a truthful exit code. */
 export interface InstallResult {
     /** Detected targets that could not be configured, with the reason. */
@@ -35,5 +42,7 @@ export interface InstallResult {
  * failed target is a lie that surfaces later as "the tools never showed up".
  * So: keep going, summarize, and return the failures for a non-zero exit.
  */
-export declare function runInstall(): InstallResult;
+export declare function runInstall(options?: {
+    statusLine?: boolean;
+}): InstallResult;
 export declare function runUninstall(): void;

@@ -148,6 +148,26 @@ export async function runDoctor(): Promise<void> {
     checks.push({ label: "Every-prompt hook", status: "skip", detail: "Claude Code not detected" });
   }
 
+  // Status line (opt-in, so absence is a note, not a failure)
+  if (existsSync(settingsPath)) {
+    try {
+      const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+      const cmd = settings.statusLine?.command as string | undefined;
+      if (cmd && /context-doctor|cli\.js"?\s+statusline/.test(cmd)) {
+        const missing = hookBinaryMissing(cmd);
+        checks.push(
+          missing
+            ? { label: "Status line", status: "fail", detail: `configured, but ${missing} no longer exists — re-run: context-doctor install --statusline` }
+            : { label: "Status line", status: "ok", detail: "live context in Claude Code's status bar" }
+        );
+      } else {
+        checks.push({ label: "Status line", status: "skip", detail: cmd ? "you have your own statusLine (left alone)" : "not enabled (optional: context-doctor install --statusline)" });
+      }
+    } catch {
+      /* settings.json unreadable is already reported by the hook check */
+    }
+  }
+
   // Skill
   const skillPath = join(homedir(), ".claude", "skills", "context-doctor", "SKILL.md");
   checks.push(

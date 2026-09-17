@@ -103,6 +103,7 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | `context-doctor watch [file]` | Live monitor of a growing session/agent trace: token/cost line per change, findings as they appear |
 | `context-doctor doctor` | Self-check the whole installation — one pasteable ✓/✗ diagnosis with fixes |
 | `context-doctor dashboard` | Local savings dashboard on 127.0.0.1: tokens saved per day, sessions by context in use vs recoverable, budget status |
+| `context-doctor statusline` | Claude Code status bar: live context vs window, cache share, cost. Wired by `install --statusline`; never overwrites a statusLine you already have |
 | `context-doctor hook` | The every-prompt Claude Code hook (registered by `install`; you never run this yourself). Warning threshold tunable via `CONTEXT_DOCTOR_WARN_TOKENS` (default 80000) |
 | `context-doctor-mcp` | The MCP server itself — stdio by default (what the installer wires); `--http [--port 8808] [--host H]` serves streamable HTTP at `/mcp` for URL-based clients like ChatGPT developer-mode connectors |
 
@@ -246,6 +247,22 @@ const { conversation, tokensBefore, tokensAfter } = optimizeConversation(chatJso
   strategies: ["dedupe", "trim-tool-results", "strip-base64"],
 });
 ```
+
+## Context health in Claude Code's status bar
+
+```bash
+context-doctor install --statusline
+```
+
+Claude Code shows the first line a `statusLine` command prints, on every refresh, while you type. With this on, that line is the number that matters:
+
+```
+ctx 801k/1.0M ▮▮▮▮▮▮▮▮░░ 80% ⚠ · cache 100% · $12.34
+```
+
+Live context against the model's window, a warning mark from 70%, the share served from cache, and the session's cost. It reads the size from the status payload when Claude Code provides it, and otherwise from the last 256KB of the transcript (about 1ms on a 20MB file; 80ms end to end including Node startup). It is opt-in and polite: there is only one status line, so it never overwrites one you already have, and `uninstall` removes only its own. Any failure prints nothing rather than an error.
+
+This is the "editor status bar" roadmap item, delivered for the editor most users of this tool are actually in. A VS Code / Cursor extension for the same number remains future work.
 
 ## Does a smaller context actually help? Measure it
 
