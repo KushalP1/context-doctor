@@ -68,6 +68,12 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.14.0 — the experiment the critics asked for
+
+| Item | Why |
+|---|---|
+| **`context-doctor experiment`** | The one honest answer to "does a smaller context actually help": the same task, from the same commit, in a fresh session and forked from an existing one (`--resume --fork-session`, so the real session is untouched), same model and tools, with the bill, cache split, wall clock and a `--check` pass/fail side by side. The verdict weighs cost against passing, because a cheaper failure is not a saving. It is the only command that spends money, so it caps spend per arm, refuses a dirty tree, refuses to run inside Claude Code, and has a dry run. Tested end to end against a stub `claude` |
+
 ## Shipped in 0.13.9 — the estimator learns from your own exact counts
 
 | Item | Why |
@@ -136,12 +142,6 @@ committed until it ships.
 | Item | Why | Size |
 |---|---|---|
 | **Subagent accounting** | Sidechain traffic is excluded from session profiles because it has its own window — but it still costs money. Blocked on a transcript that actually contains some | M |
-
-### Asked for on Reddit (r/ClaudeCode, 2026-09-14)
-
-| Item | Why | Size |
-|---|---|---|
-| **Fresh vs existing session harness** | The profiler measures what is in the context, not whether the task succeeded, so a smaller transcript can be a cheaper *failure*. The honest experiment: same task, same starting commit, fresh session vs existing session, same model and tools, cache usage recorded, both outputs run through the same checks. That is a harness, not a profiler, and until it exists every number here is about context size only | L |
 
 ### Turn advice into action
 
