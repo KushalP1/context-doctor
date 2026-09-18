@@ -92,7 +92,7 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | `context-doctor install` / `uninstall` | Wire (or remove) everything: MCP for Claude Desktop/Code/Cursor, the Agent Skill, the every-prompt hook |
 | `context-doctor analyze <file>` | Profile a conversation: token breakdown, findings, cost + latency estimates. `--fail-over-budget` exits 1 on a breach, for CI |
 | `context-doctor optimize <file>` | Apply the safe fixes; add `--strategy trim-tool-calls` for big inline file writes, `--strategy prune-history` for consented lossy compaction |
-| `context-doctor session [file]` | Profile a Claude Code session: live context, findings, **measured tokens and prompt-cache economics**, and **where the wall clock went** per tool (from transcript timestamps, permission waits included and said so). Also reads ChatGPT data exports (`conversations.json`) |
+| `context-doctor session [file]` | Profile a Claude Code session: live context, findings, **measured tokens and prompt-cache economics**, **where the wall clock went** per tool, and **what its subagents cost** (their own windows, your bill; never in the parent's profile). Also reads ChatGPT data exports (`conversations.json`) |
 | `context-doctor init [preset]` | Write a `.contextdoctorrc` from a preset (`chat`, `agent`, `batch`) — a budget you can adopt in one command and tune later |
 | `context-doctor experiment --task "…"` | Run one task twice from the same commit, in a fresh session and forked from an `--existing` one, same model and tools; compare bill, cache split, wall clock, and whether `--check` passed. The only command here that spends money, so it caps spend per arm and refuses a dirty tree |
 | `context-doctor diff <before> <after>` | Compare two profiles: what moved by category, which findings were resolved or introduced, and what it saves in money and latency |
@@ -247,6 +247,23 @@ const { conversation, tokensBefore, tokensAfter } = optimizeConversation(chatJso
   strategies: ["dedupe", "trim-tool-results", "strip-base64"],
 });
 ```
+
+## Subagents: their own windows, your bill
+
+A subagent has its own context window, so its tokens are correctly absent from the parent's profile. They are not absent from the bill. Claude Code writes each one to `<session>/subagents/agent-<id>.jsonl`, and `session` now reads them:
+
+```
+Subagents (their own windows, your bill)
+────────────────────────────────────────────────────────
+49 subagent(s) made 4560 API calls: 626.0M input billed, 1.0M output, ~$608.51.
+That is 10% on top of the parent session's own input cost ($5846.45), and none of it appears in the profile above.
+    $42.52   51 calls  ctx   319k    6m  You are auditing part of a FastAPI backend at /Users/kp/tech
+    $37.48  107 calls  ctx   229k    6m  You are auditing the Turtle AI backend (FastAPI, Python) at
+  … and 44 more
+18 subagent(s) ended above 200k tokens of context. A subagent that big is doing a main session's job; give it a narrower brief, or split the task.
+```
+
+Per subagent: what it was asked, how many calls it made, the context it ended with, how long it ran, and its cost at list price with cache reads and writes priced correctly. Models without a price on file are counted but marked unpriced rather than costed at zero. On this machine that was 195 subagents across 19 sessions and about $1,844 at list price that no profile had ever shown.
 
 ## Context health in Claude Code's status bar
 

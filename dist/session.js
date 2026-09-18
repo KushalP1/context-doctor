@@ -119,7 +119,7 @@ function parseChatGPTExport(data, path) {
  * one chunk. StringDecoder carries partial UTF-8 sequences across chunk
  * boundaries so multi-byte characters are never corrupted.
  */
-function forEachLine(path, onLine) {
+export function forEachLine(path, onLine) {
     const fd = openSync(path, "r");
     const decoder = new StringDecoder("utf8");
     const buf = Buffer.allocUnsafe(4 * 1024 * 1024);
