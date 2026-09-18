@@ -26,6 +26,7 @@ import { measureAccuracy, renderAccuracy } from "./accuracy.js";
 import { renderDiff } from "./diff.js";
 import { renderExperiment, runExperiment } from "./experiment.js";
 import { runStatusLine } from "./statusline.js";
+import { renderSubagents, subagentReport } from "./subagents.js";
 import { findPreset, PRESETS, RC_FILENAME } from "./config.js";
 import { runWatch } from "./watch.js";
 import { exactTokenCount } from "./exact.js";
@@ -387,7 +388,7 @@ function main() {
         }
         const profile = profileConversation(parseConversation(parsed.conversationJson), args.model ?? parsed.model);
         if (args.json) {
-            console.log(JSON.stringify({ session: { path: parsed.path, title: parsed.title, toolTimings: parsed.toolTimings ?? [] }, profile }, null, 2));
+            console.log(JSON.stringify({ session: { path: parsed.path, title: parsed.title, toolTimings: parsed.toolTimings ?? [], subagents: subagentReport(path) }, profile }, null, 2));
         }
         else {
             console.log(`Session: ${parsed.title ?? "(untitled)"}\nFile:    ${parsed.path}`);
@@ -403,7 +404,8 @@ function main() {
                     "transcript does not record — so it is larger than the breakdown above, which covers\n" +
                     "conversation messages only. Findings and savings apply to the messages.");
             }
-            const cache = renderCacheReport(analyzeCacheUsage(path));
+            const cacheUsage = analyzeCacheUsage(path);
+            const cache = renderCacheReport(cacheUsage);
             if (cache) {
                 console.log("");
                 console.log(cache);
@@ -412,6 +414,11 @@ function main() {
             if (timing) {
                 console.log("");
                 console.log(timing);
+            }
+            const subs = renderSubagents(subagentReport(path), cacheUsage?.paidUsd);
+            if (subs) {
+                console.log("");
+                console.log(subs);
             }
             applyBudgetGate(printBudgetStatus(profile, loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`))), args.failOverBudget);
         }

@@ -68,6 +68,12 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.14.2 — subagents were never in the transcript
+
+| Item | Why |
+|---|---|
+| **Subagent accounting** | Blocked for weeks on "no sidechain entries in any transcript". Wrong place to look: Claude Code writes each subagent to its own file under `<session>/subagents/`. 195 of them on one machine, 19 sessions, final contexts summing to 28M tokens, about $1,844 at list price, none of it ever shown. `session` now lists them with task, calls, final context, duration and cache-aware cost, compares the total against the parent's own total input cost, and flags subagents that ended above 200k tokens |
+
 ## Shipped in 0.14.1 — context health where the work happens
 
 | Item | Why |
@@ -147,7 +153,6 @@ committed until it ships.
 
 | Item | Why | Size |
 |---|---|---|
-| **Subagent accounting** | Sidechain traffic is excluded from session profiles because it has its own window — but it still costs money. Blocked on a transcript that actually contains some | M |
 
 ### Turn advice into action
 

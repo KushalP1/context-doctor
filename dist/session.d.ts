@@ -72,4 +72,16 @@ export interface ParsedSession {
 }
 /** All session transcripts on this machine, newest first. */
 export declare function listSessions(limit?: number): SessionInfo[];
+/**
+ * Read a JSONL transcript line by line without ever materializing the whole
+ * file as one string.
+ *
+ * Agent sessions with large tool results reach hundreds of MB, and those are
+ * exactly the sessions that most need analysis — but V8 refuses to build a
+ * string past ~512MB, so readFileSync would throw on them (and in the hook,
+ * throw *silently*). Streaming has no such ceiling and keeps peak memory at
+ * one chunk. StringDecoder carries partial UTF-8 sequences across chunk
+ * boundaries so multi-byte characters are never corrupted.
+ */
+export declare function forEachLine(path: string, onLine: (line: string) => void): void;
 export declare function parseSessionFile(path: string): ParsedSession;

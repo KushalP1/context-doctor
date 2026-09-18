@@ -27,6 +27,7 @@ import { measureAccuracy, renderAccuracy } from "./accuracy.js";
 import { renderDiff } from "./diff.js";
 import { renderExperiment, runExperiment } from "./experiment.js";
 import { runStatusLine } from "./statusline.js";
+import { renderSubagents, subagentReport } from "./subagents.js";
 import { findPreset, PRESETS, RC_FILENAME } from "./config.js";
 import { runWatch } from "./watch.js";
 import { exactTokenCount } from "./exact.js";
@@ -380,7 +381,7 @@ function main(): void {
     if (args.json) {
       console.log(
         JSON.stringify(
-          { session: { path: parsed.path, title: parsed.title, toolTimings: parsed.toolTimings ?? [] }, profile },
+          { session: { path: parsed.path, title: parsed.title, toolTimings: parsed.toolTimings ?? [], subagents: subagentReport(path) }, profile },
           null,
           2
         )
@@ -401,7 +402,8 @@ function main(): void {
             "conversation messages only. Findings and savings apply to the messages."
         );
       }
-      const cache = renderCacheReport(analyzeCacheUsage(path));
+      const cacheUsage = analyzeCacheUsage(path);
+      const cache = renderCacheReport(cacheUsage);
       if (cache) {
         console.log("");
         console.log(cache);
@@ -410,6 +412,11 @@ function main(): void {
       if (timing) {
         console.log("");
         console.log(timing);
+      }
+      const subs = renderSubagents(subagentReport(path), cacheUsage?.paidUsd);
+      if (subs) {
+        console.log("");
+        console.log(subs);
       }
       applyBudgetGate(
         printBudgetStatus(profile, loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`))),
