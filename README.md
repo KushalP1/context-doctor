@@ -182,7 +182,17 @@ Because prompt caching matches byte-identical prefixes, deterministic strategies
 
 ## Use with the Claude & ChatGPT apps
 
-`context-doctor` ships an MCP server, so the AI itself can profile and slim context on demand.
+`context-doctor` ships an MCP server, so the AI itself can profile and slim context on demand. Before the setup table, the honest question: **on which surfaces does it act by itself, and on which does it only nudge?** MCP gives a server no way to see the conversation or intercept a turn; only a hook or a place in the data path can do that.
+
+| Surface | Runs by itself | What that means |
+|---|---|---|
+| **Claude Code** | Yes: hook on every prompt, status line on every refresh | Past ~80k tokens the model receives hygiene guidance naming the largest waste; compaction is offered. Measured: 115 automatic checks, 48 warnings, across 32 sessions on one machine |
+| **Cursor** | **Yes**, since 0.15: Cursor loads Claude Code's hook config (`~/.claude/settings.json`) and runs the same hook on every agent prompt, passing its own transcript. Output is accepted through Cursor's Claude-compat layer | Same guidance as Claude Code, inside Cursor's agent, for everyone who ran `install`. Before 0.15 the hook fired but could not read Cursor's transcript format, so it said nothing |
+| **API traffic through the proxy** | Yes: every request rewritten in flight | Fewer tokens, guaranteed, model not consulted |
+| **Claude Desktop** | Only the ~150-token standing instruction, plus a one-click `context_checkup` prompt in the + menu | The instruction now tells the model *when* to call `profile_context` (past ~30 turns, 3+ large pastes, any cost/speed question) rather than offering. It is a strong nudge, not enforcement: Desktop chat has no hook and no data path, and we checked the app bundle to be sure |
+| **ChatGPT** | No | Tools only via a developer-mode connector at a URL you host |
+
+So "every chat inherently better" is true for Claude Code, Cursor and the proxy, and an honest "reminded in every chat, tools one click away" for Claude Desktop.
 
 **Do you need to configure anything by hand? Usually no:**
 
@@ -367,7 +377,7 @@ Everything the optimizer does is inspectable: it prints exactly which messages c
 
 ## The Agent Skill
 
-`skills/context-doctor/SKILL.md` (installed by `npx context-doctor install`) teaches Claude to practice context hygiene proactively: summarize big tool results after consuming them, never re-paste duplicated content, keep stable content cache-friendly, and offer compaction when a session gets heavy — so sessions get inherently leaner without you asking.
+`skills/context-doctor/SKILL.md` (installed by `npx context-doctor install`) teaches Claude to practice context hygiene proactively: summarize big tool results after consuming them, never re-paste duplicated content, keep stable content cache-friendly, and offer compaction when a session gets heavy. In Claude Code and Cursor the every-prompt hook enforces the heavy-session part; the skill covers the habits in between.
 
 ## Measuring the impact: `context-doctor report`
 

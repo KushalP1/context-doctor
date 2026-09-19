@@ -68,6 +68,14 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.15.0 — what actually runs by itself, and one surface that now does
+
+| Item | Why |
+|---|---|
+| **Cursor inherent** | Cursor's Hooks Service loads `~/.claude/settings.json`, maps `UserPromptSubmit` onto `beforeSubmitPrompt`, passes a `transcript_path`, and accepts Claude's nested `additionalContext` (compat hard-coded on, 10k cap). Our hook had been firing on every Cursor prompt and returning nothing, because Cursor's `{role, message:{content}}` transcript shape did not parse. One parser addition: against a real 976KB Cursor transcript, 691 messages and guidance naming a 283k-token context |
+| **Desktop instruction is action-shaped** | From "offer to run profile_context" to "past ~30 turns / 3+ large pastes / any cost question, call profile_context BEFORE answering". Still ~150 tokens. Plus a `context_checkup` MCP prompt in Desktop's + menu |
+| **README says which surfaces are inherent** | Claude Code, Cursor and the proxy act without the model's cooperation; Claude Desktop is a strong nudge; ChatGPT is on-demand only. The previous "every chat inherently better" was true for fewer surfaces than it implied |
+
 ## Shipped in 0.14.3 — the editor extension
 
 | Item | Why |
@@ -164,6 +172,16 @@ committed until it ships.
 
 | Item | Why | Size |
 |---|---|---|
+
+### Make more surfaces inherent (2026-09-19 research)
+
+Research into the Claude Desktop and Cursor app bundles, looking for a hook or a data path on each. Claude Desktop chat has neither: the Bedrock/`ANTHROPIC_BASE_URL` strings belong to the embedded Claude Code, chat goes to claude.ai's backend, and the only "before send" is an Electron header handler. Cursor has both a hook (it loads Claude Code's hook config) and, for BYO-key users, an OpenAI base-URL override.
+
+| Item | Why | Size |
+|---|---|---|
+| **Cursor `beforeReadFile` trimming** | Cursor's hooks can rewrite file content before the agent sees it (that is how secret-redaction hooks work). Oversized reads are the second biggest drain; capping them at the hook is inherent, model-independent, and needs no new UI | M |
+| **Cursor BYO-key → proxy** | Cursor's "Override OpenAI Base URL" puts our proxy in the data path for OpenAI-compatible traffic. Document it; consider `install --cursor-proxy` to set it | S |
+| **`.mcpb` bundle for Claude Desktop** | One-click install through Desktop's extensions UI instead of `npx … install`. Adoption lever for non-technical users; the app supports `.mcpb`/`.dxt` | S |
 
 ### Fit into how people actually work
 
