@@ -120,3 +120,32 @@ test("clients that do not ask for SSE get JSON instead of a 406", async () => {
     child.kill();
   }
 });
+
+test("the standing instruction is action-shaped and small, and the checkup prompt is exposed", async () => {
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
+  const { join, dirname } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const mcp = join(dirname(fileURLToPath(import.meta.url)), "..", "mcp.js");
+
+  const client = new Client({ name: "t", version: "1" }, { capabilities: {} });
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: [mcp] }));
+  try {
+    const instructions = client.getInstructions() ?? "";
+    // On Claude Desktop this string is the only thing that reaches the model
+    // unprompted. It must tell the model WHEN to act, and stay cheap.
+    assert.match(instructions, /call profile_context .*BEFORE answering/i, "a condition-and-action, not an offer");
+    assert.match(instructions, /~30 turns/);
+    assert.match(instructions, /Do not estimate token counts yourself/);
+    assert.ok(instructions.length <= 700, `instructions ride in every chat; ${instructions.length} chars is too many`);
+
+    const { prompts } = await client.listPrompts();
+    assert.deepEqual(prompts.map((p) => p.name), ["context_checkup"]);
+    const got = await client.getPrompt({ name: "context_checkup", arguments: {} });
+    const text = (got.messages[0]?.content as { text?: string }).text ?? "";
+    assert.match(text, /profile_context/);
+    assert.match(text, /Do not re-quote/);
+  } finally {
+    await client.close();
+  }
+});
