@@ -123,9 +123,11 @@ export function profileSketch(sketch) {
     }
     const order = { high: 0, warn: 1, info: 2 };
     findings.sort((a, b) => order[a.severity] - order[b.severity] || b.estSavings - a.estSavings);
-    // Savings overlap (a duplicate block is also a large block); report the sum
-    // capped at what is actually there.
-    const totalEstSavings = Math.min(totalTokens, findings.reduce((n, f) => n + f.estSavings, 0));
+    // A handoff to a fresh chat subsumes every per-block fix, so "recoverable" is
+    // the larger of the two routes, not their sum, capped at what is there.
+    const handoff = findings.find((f) => f.id === "long_history")?.estSavings ?? 0;
+    const perBlock = findings.filter((f) => f.id !== "long_history").reduce((n, f) => n + f.estSavings, 0);
+    const totalEstSavings = Math.min(totalTokens, Math.max(handoff, perBlock));
     const pricing = pricingFor(sketch.model);
     return {
         totalTokens, baselineTokens, blockTokens: blockTotal, turns, model: sketch.model, contextWindow, usagePct,
