@@ -155,3 +155,50 @@ test("state written by the older shared-map format is still honoured", async () 
   });
   assert.equal(out, "", "an upgrade must not restart the nagging it had already suppressed");
 });
+
+test("Cursor's agent transcripts parse, and the hook answers Cursor's own payload", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join, dirname } = await import("node:path");
+  const { execFile } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const { parseSessionFile } = await import("../session.js");
+
+  // Cursor writes {role, message:{content}} per line — no type, no usage —
+  // to ~/.cursor/projects/<ws>/agent-transcripts/<id>/<id>.jsonl, and hands
+  // that path to hooks it loads from ~/.claude/settings.json. Until this shape
+  // parsed, the hook fired on every Cursor prompt and returned nothing.
+  const dir = mkdtempSync(join(tmpdir(), "ctxdoc-cursor-hook-"));
+  const transcript = join(dir, "conv.jsonl");
+  const big = "a large tool result that sits in context forever ".repeat(2500);
+  const lines = [
+    { role: "user", message: { content: [{ type: "text", text: "<user_query>read the repo</user_query>" }] } },
+    { role: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/a.ts" } }] } },
+    { role: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: big }] } },
+    { role: "assistant", message: { content: [{ type: "text", text: "Here is what I found." }] } },
+    ...Array.from({ length: 8 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", message: { content: [{ type: "text", text: `turn ${i}` }] } })),
+  ];
+  writeFileSync(transcript, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+
+  const parsed = parseSessionFile(transcript);
+  assert.equal(parsed.messageCount, lines.length, "every Cursor line is a message");
+  assert.equal(parsed.reportedInputTokens, undefined, "Cursor records no usage; the heuristic stands in");
+
+  const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
+  const out = await new Promise<string>((resolve, reject) => {
+    const child = execFile(
+      process.execPath,
+      [cli, "hook"],
+      { env: { ...process.env, CONTEXT_DOCTOR_HOOK_STATE: join(dir, "state.json"), CONTEXT_DOCTOR_WARN_TOKENS: "5000" } },
+      (err, stdout) => (err ? reject(err) : resolve(stdout))
+    );
+    // The payload shape Cursor builds: hook_event_name, session_id, transcript_path, workspace_roots, prompt.
+    child.stdin?.end(JSON.stringify({ hook_event_name: "beforeSubmitPrompt", session_id: "conv-1", transcript_path: transcript, workspace_roots: [dir], prompt: "next", cursor_version: "2.4" }));
+  });
+  const result = JSON.parse(out) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
+  // Claude's nested shape: Cursor's compat layer unwraps hookSpecificOutput and reads additionalContext.
+  assert.equal(result.hookSpecificOutput.hookEventName, "UserPromptSubmit");
+  assert.match(result.hookSpecificOutput.additionalContext, /context is at ~\d+k tokens/);
+  assert.match(result.hookSpecificOutput.additionalContext, /Tool result at message #2/, "the oversized result is named");
+  assert.ok(result.hookSpecificOutput.additionalContext.length < 10_000, "under Cursor's additional_context cap");
+});
