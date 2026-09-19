@@ -21,6 +21,7 @@ import { optimizeConversation } from "./optimize.js";
 import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
 import { recordLedger } from "./ledger.js";
+import { runSketch } from "./sketch.js";
 /**
  * Server instructions are injected by MCP clients (Claude Desktop, Cursor, …)
  * into the system context of EVERY conversation where this server is enabled.
@@ -39,7 +40,7 @@ import { recordLedger } from "./ledger.js";
 const SERVER_INSTRUCTIONS = `Context hygiene rules (always on):
 1. Summarize any paste or tool result over ~2k tokens into the points you will use, then work from the summary; never carry it verbatim.
 2. Reference earlier content by name; never re-quote it. Never inline base64.
-3. When the conversation passes ~30 turns, or holds 3+ large pastes, or the user asks about tokens, cost, speed or limits: call profile_context on the conversation BEFORE answering and act on its top finding. Do not estimate token counts yourself.
+3. When the conversation passes ~30 turns, or holds 3+ large pastes, or the user asks about tokens, cost, speed or limits: call profile_context BEFORE answering and act on its top finding. In a chat app pass a \`sketch\` (turn count + the large/repeated blocks, ~100 tokens), not the conversation. Do not estimate token counts yourself.
 4. If optimize_context returns a pruned-turns digest, you write the ≤150-token replacement summary.`;
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"];
 /**
@@ -49,10 +50,34 @@ const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-b
  */
 function createServer() {
     const server = new McpServer({ name: "context-doctor", version: "0.16.0" }, { instructions: SERVER_INSTRUCTIONS });
-    server.tool("profile_context", "Profile an LLM conversation or prompt: token breakdown by category, largest messages, and actionable findings about wasted context (duplicates, oversized tool results, base64 blobs, cache-unfriendly ordering). Accepts OpenAI/Anthropic conversation JSON or raw text. Call this immediately whenever the user asks about token usage, context size, LLM cost, or latency — and proactively offer it once a conversation grows long or accumulates large pasted content.", {
-        conversation: z.string().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array) or raw prompt text"),
+    server.tool("profile_context", "Profile an LLM conversation or prompt: token breakdown, largest blocks, and actionable findings about wasted context (duplicates, oversized pastes or tool results, base64 blobs, long history). Two inputs, pass ONE: `conversation` (full OpenAI/Anthropic JSON or raw text, for agents, files and proxies) or `sketch` (for chat apps such as Claude Desktop or ChatGPT where you cannot export the conversation: the turn count plus the few blocks that matter, ~100 tokens to write). Call it whenever the user asks about token usage, context size, cost, speed or limits, and on your own once the conversation passes ~30 turns or holds 3+ large pastes. Act on the top finding in your reply.", {
+        conversation: z.string().optional().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array) or raw prompt text. Omit in chat apps and pass `sketch`."),
+        sketch: z.object({
+            turns: z.number().int().nonnegative().describe("User+assistant exchanges so far"),
+            model: z.string().optional().describe("Model this chat runs as, e.g. claude-sonnet-5, gpt-5"),
+            blocks: z.array(z.object({
+                turn: z.number().int().positive().describe("1-based turn the block sits in"),
+                kind: z.enum(["paste", "code", "tool_result", "image", "base64", "text"]),
+                label: z.string().describe("Short name you can refer to later, e.g. 'the nginx config'"),
+                approx_tokens: z.number().positive().optional(),
+                approx_lines: z.number().positive().optional(),
+                approx_words: z.number().positive().optional(),
+                approx_chars: z.number().positive().optional(),
+                repeated: z.number().int().positive().optional().describe("Times this same content appears (2+ = duplicate)"),
+                stale: z.boolean().optional().describe("Already acted on; nothing in it is still needed"),
+            })).describe("Only the blocks over ~500 tokens, repeated, or images. Plain turns need not be listed."),
+        }).optional().describe("Coarse description of the conversation for chat apps. Give one size hint per block (lines, words, chars or tokens)."),
         model: z.string().optional().describe("Target model name for context-window math, e.g. claude-sonnet-5 or gpt-4o"),
-    }, async ({ conversation, model }) => {
+    }, async ({ conversation, sketch, model }) => {
+        if (sketch) {
+            return { content: [{ type: "text", text: runSketch({ ...sketch, model: sketch.model ?? model }) }] };
+        }
+        if (!conversation) {
+            return {
+                isError: true,
+                content: [{ type: "text", text: "Pass either `conversation` (full JSON or text) or `sketch` (turns + large/repeated blocks). In a chat app, use `sketch`." }],
+            };
+        }
         const profile = profileConversation(parseConversation(conversation), model);
         return { content: [{ type: "text", text: renderProfile(profile) }] };
     });
@@ -113,7 +138,7 @@ function createServer() {
                 role: "user",
                 content: {
                     type: "text",
-                    text: "Run profile_context on our conversation so far (model: the one you are running as). " +
+                    text: "Run profile_context on our conversation so far: pass a `sketch` (turn count, the model you are running as, and every block over ~500 tokens, repeated, or an image; one size hint each). " +
                         "Report the total, the top three findings, and the estimated recoverable tokens in under 120 words. " +
                         "Then, if the top finding is recoverable, apply it: summarize the offending content into the points still needed and tell me what you dropped. " +
                         "Do not re-quote the content you are summarizing.",
