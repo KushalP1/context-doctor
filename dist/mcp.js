@@ -28,8 +28,19 @@ import { recordLedger } from "./ledger.js";
  * "standing context-hygiene instructions in every chat" — no hook needed.
  */
 // Kept deliberately terse: these ride in EVERY conversation's context, and a
-// context-saving tool must not itself be context overhead (~110 tokens).
-const SERVER_INSTRUCTIONS = `Context hygiene, always: summarize large pastes/tool results instead of carrying them verbatim; reference earlier content, don't re-quote; never inline base64. Past ~30 turns or several large pastes, proactively offer to run profile_context. Any question about tokens, cost, or latency: call profile_context, don't estimate. If optimize_context returns a pruned-turns digest, you write the ≤150-token replacement summary.`;
+// context-saving tool must not itself be context overhead (~130 tokens).
+//
+// Written as conditions and actions, not offers. On Claude Desktop this string
+// is the only channel that reaches the model without the user asking — MCP has
+// no hook and no data path there — so "offer to run" leaves it to a model that
+// will usually not, while "when X, call Y before answering" is followed. The
+// thresholds keep it from firing on every turn, which would cost more context
+// than it saves.
+const SERVER_INSTRUCTIONS = `Context hygiene rules (always on):
+1. Summarize any paste or tool result over ~2k tokens into the points you will use, then work from the summary; never carry it verbatim.
+2. Reference earlier content by name; never re-quote it. Never inline base64.
+3. When the conversation passes ~30 turns, or holds 3+ large pastes, or the user asks about tokens, cost, speed or limits: call profile_context on the conversation BEFORE answering and act on its top finding. Do not estimate token counts yourself.
+4. If optimize_context returns a pruned-turns digest, you write the ≤150-token replacement summary.`;
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"];
 /**
  * Build a fully-configured server instance. A factory (not a singleton) so the
@@ -93,6 +104,23 @@ function createServer() {
         }
         return { content };
     });
+    // A prompt shows up in Claude Desktop's "+" menu, so a user can run a checkup
+    // with one click instead of typing a request. It is the only proactive
+    // surface MCP offers besides `instructions`.
+    server.prompt("context_checkup", "Profile this conversation's context and apply the top fix. One click, no typing.", async () => ({
+        messages: [
+            {
+                role: "user",
+                content: {
+                    type: "text",
+                    text: "Run profile_context on our conversation so far (model: the one you are running as). " +
+                        "Report the total, the top three findings, and the estimated recoverable tokens in under 120 words. " +
+                        "Then, if the top finding is recoverable, apply it: summarize the offending content into the points still needed and tell me what you dropped. " +
+                        "Do not re-quote the content you are summarizing.",
+                },
+            },
+        ],
+    }));
     server.tool("context_best_practices", "Get a curated checklist of context-management best practices, optionally specialized for a provider (anthropic, openai).", {
         provider: z.enum(["general", "anthropic", "openai"]).optional().describe("Provider to specialize tips for (default: general)"),
     }, async ({ provider }) => {
