@@ -197,6 +197,16 @@ export function parseSessionFile(path) {
             title = entry.customTitle;
         if (entry.type === "ai-title" && entry.aiTitle && !title)
             title = entry.aiTitle;
+        // Cursor's agent transcripts (~/.cursor/projects/*/agent-transcripts/) are
+        // one {role, message:{content}} per line: no `type`, no `message.role`, no
+        // usage. Cursor hands this path to hooks it loads from ~/.claude/settings.json,
+        // so until this shape parsed, our hook fired on every Cursor prompt and
+        // returned nothing.
+        if (!entry.type && (entry.role === "user" || entry.role === "assistant") && entry.message && entry.message.content != null) {
+            const message = entry.message;
+            messages.push({ role: entry.role, content: message.content });
+            return;
+        }
         if ((entry.type !== "user" && entry.type !== "assistant") || !entry.message)
             return;
         if (entry.isSidechain)
