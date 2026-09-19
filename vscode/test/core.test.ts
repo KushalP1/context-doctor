@@ -6,10 +6,15 @@ import { join } from "node:path";
 import { contextWindowFor, formatTokens, newestTranscript, projectDirFor, statusFor, statusForWorkspace, tailUsage } from "../src/core";
 
 test("workspace folder maps to Claude Code's project directory the way Claude Code names it", () => {
-  const home = "/home/u";
-  assert.equal(projectDirFor("/Users/kp/tech", home), "/home/u/.claude/projects/-Users-kp-tech");
-  assert.equal(projectDirFor("/Users/kp/tech/.claude/worktrees/x", home), "/home/u/.claude/projects/-Users-kp-tech--claude-worktrees-x", "dots become dashes too");
-  assert.equal(projectDirFor("/Users/kp/tech/Back-EndCRM", home), "/home/u/.claude/projects/-Users-kp-tech-Back-EndCRM", "existing dashes survive");
+  // Build the expected path with join: on Windows the separators are
+  // backslashes, and a hardcoded POSIX string failed all three Windows CI jobs.
+  const home = join("home", "u");
+  const expected = (name: string) => join(home, ".claude", "projects", name);
+  assert.equal(projectDirFor("/Users/kp/tech", home), expected("-Users-kp-tech"));
+  assert.equal(projectDirFor("/Users/kp/tech/.claude/worktrees/x", home), expected("-Users-kp-tech--claude-worktrees-x"), "dots become dashes too");
+  assert.equal(projectDirFor("/Users/kp/tech/Back-EndCRM", home), expected("-Users-kp-tech-Back-EndCRM"), "existing dashes survive");
+  // A Windows workspace path flattens the same way.
+  assert.equal(projectDirFor("C:\\Users\\kp\\tech", home), expected("C--Users-kp-tech"));
 });
 
 test("the newest transcript wins, and a folder with none reports why", () => {
