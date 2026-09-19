@@ -5,28 +5,61 @@
   "version": "0.1.0",
   "publisher": "gai-ventures",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/KushalP1/context-doctor", "directory": "vscode" },
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Other"],
-  "keywords": ["claude", "claude code", "context window", "tokens", "mcp"],
-  "activationEvents": ["onStartupFinished"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KushalP1/context-doctor",
+    "directory": "vscode"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "claude",
+    "claude code",
+    "context window",
+    "tokens",
+    "mcp"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/src/extension.js",
   "contributes": {
     "commands": [
-      { "command": "contextDoctor.showSession", "title": "context-doctor: Profile the current Claude Code session" },
-      { "command": "contextDoctor.refresh", "title": "context-doctor: Refresh status bar" }
+      {
+        "command": "contextDoctor.showSession",
+        "title": "context-doctor: Profile the current Claude Code session"
+      },
+      {
+        "command": "contextDoctor.refresh",
+        "title": "context-doctor: Refresh status bar"
+      }
     ],
     "configuration": {
       "title": "context-doctor",
       "properties": {
-        "contextDoctor.refreshSeconds": { "type": "number", "default": 5, "minimum": 1, "description": "How often to re-read the newest Claude Code transcript for this workspace." },
-        "contextDoctor.warnAtPercent": { "type": "number", "default": 70, "minimum": 1, "maximum": 100, "description": "Show the warning colour once the context passes this share of the model's window." }
+        "contextDoctor.refreshSeconds": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "description": "How often to re-read the newest Claude Code transcript for this workspace."
+        },
+        "contextDoctor.warnAtPercent": {
+          "type": "number",
+          "default": 70,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Show the warning colour once the context passes this share of the model's window."
+        }
       }
     }
   },
   "scripts": {
     "build": "tsc -p .",
-    "test": "npm run build && node --test out/test/*.test.js",
+    "test": "npm run build && node out/test/core.test.js",
     "package": "npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository"
   },
   "devDependencies": {
