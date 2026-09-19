@@ -135,6 +135,35 @@ export async function runDoctor() {
     else {
         checks.push({ label: "Every-prompt hook", status: "skip", detail: "Claude Code not detected" });
     }
+    // Codex (OpenAI): MCP table in config.toml, hook in hooks.json, skill.
+    const codexHome = join(homedir(), ".codex");
+    if (existsSync(codexHome)) {
+        const toml = existsSync(join(codexHome, "config.toml")) ? readFileSync(join(codexHome, "config.toml"), "utf8") : "";
+        checks.push(toml.includes("[mcp_servers.context-doctor]")
+            ? { label: "Codex MCP", status: "ok", detail: "wired in ~/.codex/config.toml" }
+            : { label: "Codex MCP", status: "fail", detail: "Codex detected but not wired — run: context-doctor install" });
+        try {
+            const hooksPath = join(codexHome, "hooks.json");
+            const hooks = existsSync(hooksPath) ? JSON.parse(readFileSync(hooksPath, "utf8")) : {};
+            const entries = hooks.hooks?.UserPromptSubmit ?? [];
+            const ours = entries.map((e) => e.hooks?.[0]?.command ?? "").find((c) => /context-doctor|cli\.js"?\s+hook/.test(c));
+            if (!ours) {
+                checks.push({ label: "Codex hook", status: "fail", detail: "not registered — run: context-doctor install" });
+            }
+            else {
+                const missing = hookBinaryMissing(ours);
+                checks.push(missing
+                    ? { label: "Codex hook", status: "fail", detail: `registered, but ${missing} no longer exists — re-run: context-doctor install` }
+                    : { label: "Codex hook", status: "ok", detail: "registered in ~/.codex/hooks.json (Codex must trust it once: /hooks)" });
+            }
+        }
+        catch (e) {
+            checks.push({ label: "Codex hook", status: "fail", detail: `~/.codex/hooks.json unreadable (${e.message})` });
+        }
+    }
+    else {
+        checks.push({ label: "Codex", status: "skip", detail: "not detected (ChatGPT's Codex agent, IDE extension or CLI)" });
+    }
     // Status line (opt-in, so absence is a note, not a failure)
     if (existsSync(settingsPath)) {
         try {

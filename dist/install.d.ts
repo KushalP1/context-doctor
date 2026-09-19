@@ -27,6 +27,18 @@ export declare function npxLauncher(platformName: string): {
  * ours. Returns what happened so install can print the truth.
  */
 export declare function installStatusLine(): "installed" | "already" | "kept-foreign" | "no-claude-code";
+export declare function codexDir(): string;
+/**
+ * Add or replace our [mcp_servers.context-doctor] table in config.toml without
+ * a TOML library: the file is the user's, so everything outside our own table
+ * is copied through byte for byte. Our table is delimited by its header and the
+ * next header (or EOF).
+ */
+export declare function upsertCodexMcpTable(toml: string, entry: {
+    command: string;
+    args: string[];
+}): string;
+export declare function removeCodexMcpTable(toml: string): string;
 /** Outcome of an install run, so the CLI can set a truthful exit code. */
 export interface InstallResult {
     /** Detected targets that could not be configured, with the reason. */
