@@ -8,3 +8,7 @@ node_modules/
 vscode/node_modules/
 vscode/out/
 vscode/*.vsix
+
+# Claude Desktop bundle: built by `npm run build:mcpb`, attached to GitHub releases
+build/
+*.mcpb
