@@ -470,6 +470,8 @@ export function runInstall(options = {}) {
     else {
         console.log("\nDone. Restart the apps to pick up the new tools, then try:");
         console.log('  "What\'s eating my context?" — or paste a conversation and ask for a profile.');
+        console.log("Chat apps (Claude Desktop, claude.ai, ChatGPT, phones) have no hook. To make the rules standing there:");
+        console.log("  context-doctor instructions --copy   then paste into the app's preferences (it tells you where).");
     }
     return { failures };
 }
