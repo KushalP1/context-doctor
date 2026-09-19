@@ -36,3 +36,11 @@ jobs:
       - name: Verify committed dist/ is in sync with src/
         shell: bash
         run: git diff --exit-code -- dist
+      - name: VS Code / Cursor extension builds, tests and packages
+        shell: bash
+        working-directory: vscode
+        run: |
+          npm ci
+          npm test
+          npm run package
+          ls *.vsix

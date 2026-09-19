@@ -17,3 +17,4 @@ export { pricingFor, inputCostUsd, estimatedTtftSeconds, formatUsd } from "./pri
 export type { ModelPricing } from "./pricing.js";
 export { estimateTokens, contextWindowFor, providerFor, formatTokens } from "./tokens.js";
 export type { Provider } from "./tokens.js";
+export { renderStatusLine, tailUsage } from "./statusline.js";

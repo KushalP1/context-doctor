@@ -21,3 +21,7 @@ export { pricingFor, inputCostUsd, estimatedTtftSeconds, formatUsd } from "./pri
 export type { ModelPricing } from "./pricing.js";
 export { estimateTokens, contextWindowFor, providerFor, formatTokens } from "./tokens.js";
 export type { Provider } from "./tokens.js";
+
+// Status-line building blocks, for editor integrations (the VS Code / Cursor
+// extension in ./vscode) that show the same number in their own status bar.
+export { renderStatusLine, tailUsage } from "./statusline.js";
