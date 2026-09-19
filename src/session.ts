@@ -223,6 +223,90 @@ function startsWithArray(path: string): boolean {
   }
 }
 
+/**
+ * Codex (OpenAI's agent: the Codex tab in ChatGPT.app, the IDE extension, the
+ * CLI) writes rollouts to ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl as
+ * {timestamp, type, payload}. Convert one line into the Claude-shaped entry the
+ * rest of this parser understands, or return null for lines that carry no
+ * context (reasoning is encrypted, world_state is bookkeeping).
+ *
+ *   response_item/message                  → user or assistant text
+ *   response_item/function_call | custom_tool_call → assistant tool_use
+ *   response_item/*_call_output            → user tool_result
+ *   event_msg/token_count                  → the API's own usage figures
+ *   turn_context                           → model
+ */
+function fromCodexLine(entry: Record<string, any>): Record<string, any> | null {
+  const payload = entry.payload;
+  if (!payload || typeof payload !== "object") return null;
+  const timestamp = entry.timestamp;
+
+  if (entry.type === "turn_context") {
+    return typeof payload.model === "string" ? { codexModel: payload.model } : null;
+  }
+
+  if (entry.type === "event_msg" && payload.type === "token_count") {
+    const last = payload.info?.last_token_usage;
+    if (!last || !(last.input_tokens > 0)) return null;
+    // Codex's input_tokens already includes the cached portion, so it maps to
+    // Anthropic's (input + cache_read) with cached carried separately.
+    const cached = last.cached_input_tokens ?? 0;
+    return {
+      type: "assistant",
+      timestamp,
+      codexUsageOnly: true,
+      message: {
+        role: "assistant",
+        content: [],
+        usage: {
+          input_tokens: Math.max(0, last.input_tokens - cached),
+          cache_read_input_tokens: cached,
+          cache_creation_input_tokens: last.cache_write_input_tokens ?? 0,
+          output_tokens: last.output_tokens ?? 0,
+        },
+      },
+    };
+  }
+
+  if (entry.type !== "response_item") return null;
+  const text = (parts: unknown): string =>
+    Array.isArray(parts)
+      ? parts.map((b: any) => (typeof b === "string" ? b : typeof b?.text === "string" ? b.text : "")).join("\n")
+      : typeof parts === "string" ? parts : "";
+
+  switch (payload.type) {
+    case "message": {
+      const role = payload.role === "assistant" ? "assistant" : payload.role === "user" ? "user" : null;
+      if (!role) return null;
+      return { type: role, timestamp, message: { role, content: text(payload.content) } };
+    }
+    case "function_call":
+    case "custom_tool_call":
+    case "web_search_call": {
+      const id = payload.call_id ?? payload.id;
+      let input: unknown = payload.arguments ?? payload.input ?? payload.action ?? {};
+      if (typeof input === "string") {
+        try { input = JSON.parse(input); } catch { input = { input }; }
+      }
+      return {
+        type: "assistant",
+        timestamp,
+        message: { role: "assistant", content: [{ type: "tool_use", id, name: payload.name ?? payload.type, input }] },
+      };
+    }
+    case "function_call_output":
+    case "custom_tool_call_output": {
+      return {
+        type: "user",
+        timestamp,
+        message: { role: "user", content: [{ type: "tool_result", tool_use_id: payload.call_id, content: text(payload.output) }] },
+      };
+    }
+    default:
+      return null;
+  }
+}
+
 export function parseSessionFile(path: string): ParsedSession {
   // ChatGPT exports are one big JSON array, not JSONL — and small enough to
   // read whole. Only peek first, so multi-hundred-MB JSONL is never slurped.
@@ -261,6 +345,27 @@ export function parseSessionFile(path: string): ParsedSession {
     // Titles are metadata lines; the last one wins.
     if (entry.type === "custom-title" && entry.customTitle) title = entry.customTitle;
     if (entry.type === "ai-title" && entry.aiTitle && !title) title = entry.aiTitle;
+
+    // Codex rollouts: translate, then fall through to the shared handling.
+    if (entry.payload && typeof entry.payload === "object" && typeof entry.type === "string" && ["response_item", "event_msg", "turn_context"].includes(entry.type)) {
+      const converted = fromCodexLine(entry);
+      if (!converted) return;
+      if (converted.codexModel) {
+        model = converted.codexModel;
+        return;
+      }
+      if (converted.codexUsageOnly) {
+        // A usage-only line attaches to the conversation position, not a message.
+        const u = converted.message.usage;
+        const total = usageNumber(u.input_tokens) + usageNumber(u.cache_read_input_tokens) + usageNumber(u.cache_creation_input_tokens);
+        if (total > 0) {
+          reportedInputTokens = total;
+          usageSamples.push({ index: messages.length, input: total });
+        }
+        return;
+      }
+      entry = converted;
+    }
 
     // Cursor's agent transcripts (~/.cursor/projects/*/agent-transcripts/) are
     // one {role, message:{content}} per line: no `type`, no `message.role`, no

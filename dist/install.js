@@ -196,9 +196,17 @@ function isOurHookEntry(entry) {
  * Claude Code query gets a context-size check. Idempotent.
  */
 function installHook() {
-    const settingsPath = join(homedir(), ".claude", "settings.json");
-    if (!existsSync(join(homedir(), ".claude")))
-        return null; // no Claude Code here
+    return installHookInto(join(homedir(), ".claude", "settings.json"), join(homedir(), ".claude"));
+}
+/**
+ * Register the UserPromptSubmit hook in a hooks file. Claude Code's
+ * settings.json and Codex's hooks.json share the exact same shape
+ * ({hooks:{UserPromptSubmit:[{hooks:[{type:"command",command}]}]}}), so one
+ * writer serves both; only the path differs.
+ */
+function installHookInto(settingsPath, gateDir) {
+    if (!existsSync(gateDir))
+        return null; // that app is not on this machine
     const settings = readJson(settingsPath);
     settings.hooks = settings.hooks ?? {};
     const entries = settings.hooks.UserPromptSubmit ?? [];
@@ -227,7 +235,10 @@ function installHook() {
     return settingsPath;
 }
 function uninstallHook() {
-    const settingsPath = join(homedir(), ".claude", "settings.json");
+    uninstallHookFrom(join(homedir(), ".claude", "settings.json"), "Claude Code every-prompt hook");
+    uninstallHookFrom(join(homedir(), ".codex", "hooks.json"), "Codex every-prompt hook");
+}
+function uninstallHookFrom(settingsPath, label) {
     if (!existsSync(settingsPath))
         return;
     const settings = readJson(settingsPath);
@@ -240,19 +251,134 @@ function uninstallHook() {
         if (filtered.length === 0)
             delete settings.hooks.UserPromptSubmit;
         writeJsonWithBackup(settingsPath, settings);
-        console.log("✓ Claude Code every-prompt hook removed");
+        console.log(`✓ ${label} removed`);
     }
 }
 function installSkill() {
+    return installSkillInto(join(homedir(), ".claude", "skills", "context-doctor"));
+}
+/** Agent Skills are one format across Claude Code and Codex; only the home differs. */
+function installSkillInto(skillDest) {
     const selfDir = dirname(fileURLToPath(import.meta.url));
     // dist/install.js → package root is one level up; skills/ ships in the package.
     const skillSource = join(selfDir, "..", "skills", "context-doctor", "SKILL.md");
     if (!existsSync(skillSource))
         return null;
-    const skillDest = join(homedir(), ".claude", "skills", "context-doctor");
     mkdirSync(skillDest, { recursive: true });
     copyFileSync(skillSource, join(skillDest, "SKILL.md"));
     return join(skillDest, "SKILL.md");
+}
+// -- Codex (OpenAI's agent: the Codex tab in ChatGPT.app, the IDE extension, the CLI)
+//
+// Codex supports the same three integration points as Claude Code, in almost
+// the same formats: MCP servers ([mcp_servers.<name>] in ~/.codex/config.toml),
+// hooks (~/.codex/hooks.json, identical shape to Claude's settings.json, same
+// hookSpecificOutput.additionalContext response), and Agent Skills
+// (~/.codex/skills/<name>/SKILL.md). One difference matters: Codex requires the
+// user to trust a new hook once, via /hooks inside Codex, before it runs.
+export function codexDir() {
+    return join(homedir(), ".codex");
+}
+/**
+ * Add or replace our [mcp_servers.context-doctor] table in config.toml without
+ * a TOML library: the file is the user's, so everything outside our own table
+ * is copied through byte for byte. Our table is delimited by its header and the
+ * next header (or EOF).
+ */
+export function upsertCodexMcpTable(toml, entry) {
+    const header = "[mcp_servers.context-doctor]";
+    const table = `${header}\n` +
+        `command = ${JSON.stringify(entry.command)}\n` +
+        `args = [${entry.args.map((a) => JSON.stringify(a)).join(", ")}]\n`;
+    const lines = toml.split("\n");
+    const start = lines.findIndex((l) => l.trim() === header);
+    if (start === -1) {
+        const sep = toml.length === 0 || toml.endsWith("\n\n") ? "" : toml.endsWith("\n") ? "\n" : "\n\n";
+        return toml + sep + table;
+    }
+    let end = start + 1;
+    while (end < lines.length && !/^\s*\[/.test(lines[end]))
+        end++;
+    // Trim trailing blank lines inside our block so we do not accumulate them.
+    const before = lines.slice(0, start).join("\n");
+    const after = lines.slice(end).join("\n");
+    return `${before}${before.length ? "\n" : ""}${table}${after.length ? "\n" + after : ""}`;
+}
+export function removeCodexMcpTable(toml) {
+    const header = "[mcp_servers.context-doctor]";
+    const lines = toml.split("\n");
+    const start = lines.findIndex((l) => l.trim() === header);
+    if (start === -1)
+        return toml;
+    let end = start + 1;
+    while (end < lines.length && !/^\s*\[/.test(lines[end]))
+        end++;
+    return [...lines.slice(0, start), ...lines.slice(end)].join("\n").replace(/\n{3,}/g, "\n\n");
+}
+function installCodex(entry, failures) {
+    const dir = codexDir();
+    if (!existsSync(dir))
+        return; // Codex is not on this machine
+    const configPath = join(dir, "config.toml");
+    try {
+        const current = existsSync(configPath) ? readFileSync(configPath, "utf8") : "";
+        const next = upsertCodexMcpTable(current, entry);
+        if (next !== current) {
+            if (existsSync(configPath))
+                copyFileSync(configPath, configPath + ".context-doctor.backup");
+            writeFileSync(configPath, next);
+        }
+        console.log(`✓ Codex: MCP server added (${configPath})`);
+    }
+    catch (e) {
+        console.error(`✗ Codex MCP: ${e.message}`);
+        failures.push("Codex MCP");
+    }
+    try {
+        const skill = installSkillInto(join(dir, "skills", "context-doctor"));
+        if (skill)
+            console.log(`✓ Agent Skill installed for Codex (${skill})`);
+    }
+    catch (e) {
+        console.error(`✗ Codex skill: ${e.message}`);
+        failures.push("Codex skill");
+    }
+    try {
+        const hook = installHookInto(join(dir, "hooks.json"), dir);
+        if (hook) {
+            console.log(`✓ Codex every-prompt hook installed (${hook})`);
+            console.log("  Codex runs a new hook only after you trust it once: open Codex, type /hooks, and trust context-doctor.");
+        }
+    }
+    catch (e) {
+        console.error(`✗ Codex hook: ${e.message}`);
+        failures.push("Codex hook");
+    }
+}
+function uninstallCodex() {
+    const dir = codexDir();
+    if (!existsSync(dir))
+        return;
+    const configPath = join(dir, "config.toml");
+    try {
+        if (existsSync(configPath)) {
+            const current = readFileSync(configPath, "utf8");
+            const next = removeCodexMcpTable(current);
+            if (next !== current) {
+                copyFileSync(configPath, configPath + ".context-doctor.backup");
+                writeFileSync(configPath, next);
+                console.log("✓ Codex: MCP server removed");
+            }
+        }
+    }
+    catch (e) {
+        console.error(`✗ Codex MCP: ${e.message}`);
+    }
+    const skillDir = join(dir, "skills", "context-doctor");
+    if (existsSync(skillDir)) {
+        rmSync(skillDir, { recursive: true });
+        console.log("✓ Codex skill removed");
+    }
 }
 /**
  * Install into every detected app.
@@ -267,7 +393,7 @@ function installSkill() {
 export function runInstall(options = {}) {
     const entry = serverEntry();
     const found = targets().filter((t) => t.detect());
-    if (found.length === 0) {
+    if (found.length === 0 && !existsSync(codexDir())) {
         console.log("No supported AI apps detected (Claude Desktop, Claude Code, Cursor).");
         console.log("Manual setup — add to your app's MCP config:");
         console.log(JSON.stringify({ mcpServers: { "context-doctor": entry } }, null, 2));
@@ -314,6 +440,7 @@ export function runInstall(options = {}) {
         console.error(`✗ Claude Code every-prompt hook: ${e.message}`);
         failures.push("Claude Code hook");
     }
+    installCodex(entry, failures);
     if (options.statusLine) {
         try {
             switch (installStatusLine()) {
@@ -369,6 +496,7 @@ export function runUninstall() {
     }
     uninstallHook();
     uninstallStatusLine();
+    uninstallCodex();
     // Remove our bookkeeping files too — uninstall means gone.
     for (const file of [".context-doctor-hook-state.json", ".context-doctor-ledger.jsonl"]) {
         const p = join(homedir(), ".claude", file);
