@@ -14,3 +14,4 @@ export { estimateTokens, contextWindowFor, providerFor, formatTokens } from "./t
 // extension in ./vscode) that show the same number in their own status bar.
 export { renderStatusLine, tailUsage } from "./statusline.js";
 export * from "./sketch.js";
+export * from "./preferences.js";

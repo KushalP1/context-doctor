@@ -19,3 +19,4 @@ export { estimateTokens, contextWindowFor, providerFor, formatTokens } from "./t
 export type { Provider } from "./tokens.js";
 export { renderStatusLine, tailUsage } from "./statusline.js";
 export * from "./sketch.js";
+export * from "./preferences.js";

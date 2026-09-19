@@ -21,6 +21,7 @@ import { runInstall, runUninstall } from "./install.js";
 import { listSessions, parseSessionFile } from "./session.js";
 import { runHook } from "./hook.js";
 import { buildImpactReport } from "./impact.js";
+import { renderPreferences, copyToClipboard, CHAT_PREFERENCES } from "./preferences.js";
 import { recordLedger } from "./ledger.js";
 import { runDoctor } from "./doctor.js";
 import { measureAccuracy, renderAccuracy } from "./accuracy.js";
@@ -48,6 +49,8 @@ Usage:
   context-doctor install                        Wire the MCP server + skill into Claude Desktop,
                                                 Claude Code, and Cursor automatically
   context-doctor uninstall                      Undo install
+  context-doctor instructions [--copy]          Standing context rules to paste into claude.ai or
+                                                ChatGPT preferences (works on web and mobile too)
   context-doctor session [file]                 Profile a Claude Code session transcript or a
                                                 ChatGPT export (default: most recent; --list to browse)
   context-doctor cursor [--list]                Profile a Cursor chat from its local history
@@ -141,6 +144,7 @@ interface Args {
   existing?: string;
   budgetUsd?: number;
   dryRun: boolean;
+  copy?: boolean;
   allowDirty: boolean;
   statusLine: boolean;
   /** Everything after the command name — `diff` needs two files, not one. */
@@ -179,6 +183,7 @@ function parseArgs(argv: string[]): Args {
       case "--existing": args.existing = argv[++i]; break;
       case "--budget": args.budgetUsd = Number(argv[++i]); break;
       case "--dry-run": args.dryRun = true; break;
+      case "--copy": args.copy = true; break;
       case "--allow-dirty": args.allowDirty = true; break;
       case "--statusline": args.statusLine = true; break;
       case "--host": args.host = argv[++i]; break;
@@ -432,6 +437,11 @@ function main(): void {
     if (runInstall({ statusLine: args.statusLine }).failures.length > 0) process.exitCode = 1;
     return;
   }
+  if (args.command === "instructions") {
+    console.log(renderPreferences(args.copy ? copyToClipboard(CHAT_PREFERENCES) : undefined));
+    return;
+  }
+
   if (args.command === "uninstall") {
     runUninstall();
     return;
