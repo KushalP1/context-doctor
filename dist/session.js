@@ -49,6 +49,37 @@ export function listSessions(limit = 20) {
             sessions.push({ path, project, modifiedAt: stat.mtime, sizeBytes: stat.size });
         }
     }
+    // Codex keeps rollouts by date: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl.
+    const codexRoot = join(homedir(), ".codex", "sessions");
+    if (existsSync(codexRoot)) {
+        const walk = (dir, depth) => {
+            let entries;
+            try {
+                entries = readdirSync(dir);
+            }
+            catch {
+                return;
+            }
+            for (const name of entries) {
+                const path = join(dir, name);
+                let stat;
+                try {
+                    stat = statSync(path);
+                }
+                catch {
+                    continue;
+                }
+                if (stat.isDirectory()) {
+                    if (depth < 3)
+                        walk(path, depth + 1);
+                }
+                else if (name.endsWith(".jsonl")) {
+                    sessions.push({ path, project: "codex", modifiedAt: stat.mtime, sizeBytes: stat.size });
+                }
+            }
+        };
+        walk(codexRoot, 0);
+    }
     return sessions.sort((a, b) => b.modifiedAt.getTime() - a.modifiedAt.getTime()).slice(0, limit);
 }
 /**

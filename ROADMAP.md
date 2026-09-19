@@ -68,6 +68,13 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.16.0 — GPT, through Codex
+
+| Item | Why |
+|---|---|
+| **Codex support** | Asked: "can we make it work for GPT?" The ChatGPT chat UI cannot be made inherent (no MCP, no hooks, no data path; checked). Codex can: the agent bundled in ChatGPT.app (binary 0.153.4), the IDE extension and the CLI implement Claude Code's hook contract almost verbatim (`hooks.json`, `hookSpecificOutput.additionalContext`, `transcript_path`), `[mcp_servers.*]` in `config.toml`, and `SKILL.md`. `install` wires all three; rollouts parse with the API's own usage (40/40 real sessions, tool timings via `call_id`); `session --list` includes them; `doctor` checks them. Codex's one-time hook trust (`/hooks`) is stated at install |
+| **`config.toml` editing without a TOML library** | The file is the user's. Everything outside `[mcp_servers.context-doctor]` is copied byte for byte; re-running replaces rather than duplicates; removal restores the file. Tested with our table first, last and in the middle |
+
 ## Shipped in 0.15.0 — what actually runs by itself, and one surface that now does
 
 | Item | Why |

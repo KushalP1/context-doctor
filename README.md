@@ -190,9 +190,10 @@ Because prompt caching matches byte-identical prefixes, deterministic strategies
 | **Cursor** | **Yes**, since 0.15: Cursor loads Claude Code's hook config (`~/.claude/settings.json`) and runs the same hook on every agent prompt, passing its own transcript. Output is accepted through Cursor's Claude-compat layer | Same guidance as Claude Code, inside Cursor's agent, for everyone who ran `install`. Before 0.15 the hook fired but could not read Cursor's transcript format, so it said nothing |
 | **API traffic through the proxy** | Yes: every request rewritten in flight | Fewer tokens, guaranteed, model not consulted |
 | **Claude Desktop** | Only the ~150-token standing instruction, plus a one-click `context_checkup` prompt in the + menu | The instruction now tells the model *when* to call `profile_context` (past ~30 turns, 3+ large pastes, any cost/speed question) rather than offering. It is a strong nudge, not enforcement: Desktop chat has no hook and no data path, and we checked the app bundle to be sure |
-| **ChatGPT** | No | Tools only via a developer-mode connector at a URL you host |
+| **Codex (OpenAI): ChatGPT.app's Codex tab, the Codex IDE extension, the `codex` CLI** | **Yes**, since 0.16: `install` writes the hook to `~/.codex/hooks.json`, the MCP server to `~/.codex/config.toml`, and the skill to `~/.codex/skills/`. Codex uses Claude Code's hook contract almost verbatim and passes its own rollout transcript, which carries the API's real usage figures | Same guidance as Claude Code, from measured tokens. One extra step, Codex's rule not ours: a new hook runs only after you trust it once (type `/hooks` in Codex). `session` and `session --list` read Codex rollouts too |
+| **ChatGPT chat UI** | No | No MCP, no hooks, no data path in the chat product itself. Use Codex, or a developer-mode connector at a URL you host |
 
-So "every chat inherently better" is true for Claude Code, Cursor and the proxy, and an honest "reminded in every chat, tools one click away" for Claude Desktop.
+So "every chat inherently better" is true for Claude Code, Cursor, Codex and the proxy; an honest "reminded in every chat, tools one click away" for Claude Desktop; and not a claim we make for the ChatGPT chat UI.
 
 **Do you need to configure anything by hand? Usually no:**
 
@@ -200,7 +201,8 @@ So "every chat inherently better" is true for Claude Code, Cursor and the proxy,
 |---|---|
 | Claude Desktop | `npx context-doctor install` writes the config — just restart the app |
 | Claude Code | Same command — MCP + skill + every-prompt hook, all automatic |
-| Cursor | Same command — writes `~/.cursor/mcp.json` |
+| Cursor | Same command — writes `~/.cursor/mcp.json`; the every-prompt hook is picked up from Claude Code's config, which Cursor reads |
+| Codex (OpenAI) | Same command — `~/.codex/config.toml`, `~/.codex/hooks.json`, `~/.codex/skills/`. Then, once, `/hooks` in Codex to trust the hook |
 | ChatGPT (developer mode) | **Manual + a reachable URL** — ChatGPT connects to servers over the internet, never local commands. Run `context-doctor-mcp --http` on a host/tunnel, then add the URL as a connector. Normal ChatGPT (no dev mode) has no MCP — use the CLI |
 
 For any other MCP client, the server entry is:
