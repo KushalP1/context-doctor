@@ -5,3 +5,6 @@ node_modules/
 .DS_Store
 .env
 
+vscode/node_modules/
+vscode/out/
+vscode/*.vsix

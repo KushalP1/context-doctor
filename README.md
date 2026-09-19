@@ -265,6 +265,21 @@ That is 10% on top of the parent session's own input cost ($5846.45), and none o
 
 Per subagent: what it was asked, how many calls it made, the context it ended with, how long it ran, and its cost at list price with cache reads and writes priced correctly. Models without a price on file are counted but marked unpriced rather than costed at zero. On this machine that was 195 subagents across 19 sessions and about $1,844 at list price that no profile had ever shown.
 
+## The same number inside VS Code and Cursor
+
+An extension in [`vscode/`](vscode/) puts context health in the editor's own status bar:
+
+```
+⌁ ctx 848k · 85% · cache 100% ⚠
+```
+
+It reads the newest Claude Code transcript for the open workspace folder, shows live context, share of window and cache share, turns to the warning colour past 70% (configurable), and opens a terminal running `context-doctor session` when clicked. Nothing leaves the machine; it only reads files Claude Code already writes. Until it is on the marketplace, build and install it locally:
+
+```bash
+cd vscode && npm ci && npm run package
+code --install-extension context-doctor-vscode-0.1.0.vsix     # or: cursor --install-extension …
+```
+
 ## Context health in Claude Code's status bar
 
 ```bash

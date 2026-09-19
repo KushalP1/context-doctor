@@ -68,6 +68,12 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.14.3 — the editor extension
+
+| Item | Why |
+|---|---|
+| **VS Code / Cursor extension** (`vscode/`) | The last roadmap item. Live context, share of window and cache share in the editor's status bar, from the newest Claude Code transcript for the open folder; warning colour past a configurable threshold; click to run `session`. Self-contained (no dependency on the npm package, so it works on a machine that never installed it), pure core with its own tests, built and packaged in CI, installed and verified in both VS Code and Cursor locally. Marketplace publishing is the owner's step |
+
 ## Shipped in 0.14.2 — subagents were never in the transcript
 
 | Item | Why |
@@ -163,7 +169,7 @@ committed until it ships.
 
 | Item | Why | Size |
 |---|---|---|
-| **VS Code / Cursor extension** | The Claude Code status line ships in 0.14.1 (below). The same number inside VS Code and Cursor is a separate package with its own publish pipeline | L |
+| **Publish the extension to the marketplaces** | Built, tested and installed locally in both VS Code and Cursor (0.14.3 below). Publishing needs a VS Code Marketplace publisher token and an Open VSX account for Cursor, both the owner's to create | S |
 
 ## Non-goals
 
