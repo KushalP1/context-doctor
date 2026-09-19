@@ -68,6 +68,14 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.17.0 — Claude Desktop, as far as it can go
+
+- **Why the tool was never called from chat.** Desktop's log showed zero `tools/call` in a month with the server loaded. The instruction said "call profile_context", but the tool's only input was the full conversation JSON, which a chat model cannot export and would have to re-type. An impossible instruction is not a nudge.
+- **`sketch` input**: turn count plus the blocks that matter (large, repeated, stale, image, base64) with one size hint each, ~100 output tokens. The server sizes it, prices the per-turn re-read, ranks findings and tells the model to apply the top one. Server instructions, tool description and the `context_checkup` prompt all point chat apps at it.
+- **Confirmed in the app bundle (v2.2553)** that Desktop's `LocalMcpServerManager` reads server `instructions`, so the standing rules do reach the model. Also confirmed, again, that there is no hook API and no transcript on disk; the README now says "the rules ride in every chat and the checkup is one cheap call away", not "inherent".
+- **`context-doctor instructions --copy`**: the same rules for claude.ai / ChatGPT per-account preferences, read on every turn on web and phones where no server runs.
+- **`.mcpb` bundle** (`npm run build:mcpb`, 3.1 MB, validated in CI and uploaded as an artifact): one-click install through Desktop's Extensions UI on Desktop's own Node, no npm.
+
 ## Shipped in 0.16.0 — GPT, through Codex
 
 | Item | Why |
@@ -188,7 +196,6 @@ Research into the Claude Desktop and Cursor app bundles, looking for a hook or a
 |---|---|---|
 | **Cursor `beforeReadFile` trimming** | Cursor's hooks can rewrite file content before the agent sees it (that is how secret-redaction hooks work). Oversized reads are the second biggest drain; capping them at the hook is inherent, model-independent, and needs no new UI | M |
 | **Cursor BYO-key → proxy** | Cursor's "Override OpenAI Base URL" puts our proxy in the data path for OpenAI-compatible traffic. Document it; consider `install --cursor-proxy` to set it | S |
-| **`.mcpb` bundle for Claude Desktop** | One-click install through Desktop's extensions UI instead of `npx … install`. Adoption lever for non-technical users; the app supports `.mcpb`/`.dxt` | S |
 
 ### Fit into how people actually work
 

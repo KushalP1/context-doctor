@@ -89,7 +89,8 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 
 | Command | What it does |
 |---|---|
-| `context-doctor install` / `uninstall` | Wire (or remove) everything: MCP for Claude Desktop/Code/Cursor, the Agent Skill, the every-prompt hook |
+| `context-doctor install` / `uninstall` | Wire (or remove) everything: MCP for Claude Desktop/Code/Cursor/Codex, the Agent Skill, the every-prompt hook |
+| `context-doctor instructions [--copy]` | The ~90-token standing rules for claude.ai / ChatGPT preferences, for web and phones where no server runs |
 | `context-doctor analyze <file>` | Profile a conversation: token breakdown, findings, cost + latency estimates. `--fail-over-budget` exits 1 on a breach, for CI |
 | `context-doctor optimize <file>` | Apply the safe fixes; add `--strategy trim-tool-calls` for big inline file writes, `--strategy prune-history` for consented lossy compaction |
 | `context-doctor session [file]` | Profile a Claude Code session: live context, findings, **measured tokens and prompt-cache economics**, **where the wall clock went** per tool, and **what its subagents cost** (their own windows, your bill; never in the parent's profile). Also reads ChatGPT data exports (`conversations.json`) |
@@ -189,17 +190,19 @@ Because prompt caching matches byte-identical prefixes, deterministic strategies
 | **Claude Code** | Yes: hook on every prompt, status line on every refresh | Past ~80k tokens the model receives hygiene guidance naming the largest waste; compaction is offered. Measured: 115 automatic checks, 48 warnings, across 32 sessions on one machine |
 | **Cursor** | **Yes**, since 0.15: Cursor loads Claude Code's hook config (`~/.claude/settings.json`) and runs the same hook on every agent prompt, passing its own transcript. Output is accepted through Cursor's Claude-compat layer | Same guidance as Claude Code, inside Cursor's agent, for everyone who ran `install`. Before 0.15 the hook fired but could not read Cursor's transcript format, so it said nothing |
 | **API traffic through the proxy** | Yes: every request rewritten in flight | Fewer tokens, guaranteed, model not consulted |
-| **Claude Desktop** | Only the ~150-token standing instruction, plus a one-click `context_checkup` prompt in the + menu | The instruction now tells the model *when* to call `profile_context` (past ~30 turns, 3+ large pastes, any cost/speed question) rather than offering. It is a strong nudge, not enforcement: Desktop chat has no hook and no data path, and we checked the app bundle to be sure |
+| **Claude Desktop** | The standing instruction in every chat (we confirmed in the app bundle that Desktop's `LocalMcpServerManager` reads it), a one-click `context_checkup` prompt, and since 0.17 a `profile_context` the model can actually afford to call from chat | Until 0.17 the tool wanted the whole conversation as its argument, so calling it from chat meant re-typing 50k tokens; nobody did, and Desktop's log showed zero calls in a month. Now the model passes a ~100-token **sketch** (turn count, the large or repeated blocks) and gets a sized estimate, findings and the fix to apply. Still a nudge, not a hook: Desktop chat has no hook API and no transcript on disk |
 | **Codex (OpenAI): ChatGPT.app's Codex tab, the Codex IDE extension, the `codex` CLI** | **Yes**, since 0.16: `install` writes the hook to `~/.codex/hooks.json`, the MCP server to `~/.codex/config.toml`, and the skill to `~/.codex/skills/`. Codex uses Claude Code's hook contract almost verbatim and passes its own rollout transcript, which carries the API's real usage figures | Same guidance as Claude Code, from measured tokens. One extra step, Codex's rule not ours: a new hook runs only after you trust it once (type `/hooks` in Codex). `session` and `session --list` read Codex rollouts too |
 | **ChatGPT chat UI** | No | No MCP, no hooks, no data path in the chat product itself. Use Codex, or a developer-mode connector at a URL you host |
 
-So "every chat inherently better" is true for Claude Code, Cursor, Codex and the proxy; an honest "reminded in every chat, tools one click away" for Claude Desktop; and not a claim we make for the ChatGPT chat UI.
+So "every chat inherently better" is true for Claude Code, Cursor, Codex and the proxy; for Claude Desktop it is "the rules ride in every chat and the checkup is one cheap tool call away"; and not a claim we make for the ChatGPT chat UI.
+
+**Where there is no hook and no MCP at all** (claude.ai on the web, the Claude and ChatGPT phone apps, plain ChatGPT): the app's per-account preferences are read on every turn, which is the closest those surfaces have to a hook. `context-doctor instructions --copy` puts the ~90-token rules on your clipboard and tells you where to paste them (claude.ai Settings > Profile; ChatGPT Settings > Personalization > Custom instructions).
 
 **Do you need to configure anything by hand? Usually no:**
 
 | App | Setup |
 |---|---|
-| Claude Desktop | `npx context-doctor install` writes the config — just restart the app |
+| Claude Desktop | `npx context-doctor install` writes the config — just restart the app. Or one click: download `context-doctor-<version>.mcpb` from the [latest release](https://github.com/KushalP1/context-doctor/releases) and open it (Settings > Extensions). The bundle runs on Desktop's own Node, no npm needed |
 | Claude Code | Same command — MCP + skill + every-prompt hook, all automatic |
 | Cursor | Same command — writes `~/.cursor/mcp.json`; the every-prompt hook is picked up from Claude Code's config, which Cursor reads |
 | Codex (OpenAI) | Same command — `~/.codex/config.toml`, `~/.codex/hooks.json`, `~/.codex/skills/`. Then, once, `/hooks` in Codex to trust the hook |
@@ -220,10 +223,14 @@ For any other MCP client, the server entry is:
 
 ### How it works in Claude Desktop, step by step
 
-1. Run `npx context-doctor install` (writes the config above for you) and restart Claude Desktop.
-2. From then on, **every conversation automatically carries context-doctor's standing instructions** — the MCP server hands Claude hygiene rules on connect: summarize big pastes instead of re-quoting them, offer profiling when the chat gets long, never inline base64.
-3. Chat normally. When a conversation grows heavy, Claude proactively offers: *"this chat is getting large — want me to profile it?"* — or you ask *"what's eating my context?"* and it calls `profile_context` and shows the token/cost breakdown.
-4. Say *"optimize it"* and Claude applies the safe fixes; if you agree to pruning old history, **Claude itself writes the replacement summary** (that's the no-API-key summarization).
+1. Run `npx context-doctor install` (writes the config above for you) and restart Claude Desktop. Or open the `.mcpb` from the latest release: same server, no npm, installs as an Extension.
+2. From then on, **every conversation carries context-doctor's standing instructions**. The MCP server hands them to Desktop on connect and Desktop puts them in front of Claude: summarize big pastes instead of re-quoting them, refer to earlier content by name, never inline base64, and past ~30 turns or on any question about tokens, cost, speed or limits, call `profile_context` before answering.
+3. That call is cheap on purpose. Claude cannot export a Desktop chat, so it passes a **sketch**: how many turns, which blocks are large, repeated, stale or images, with one size hint each (~100 tokens). The server sizes it (±30%, and it says so), prices the per-turn re-read (on a subscription that is what spends your usage limit), and returns ranked findings with the action for each: "summarize *the nginx config* into the points still needed", "refer to *test output* by name", "offer a 300-token handoff summary for a fresh chat". The reply ends with an instruction to apply the top one, not just suggest it.
+4. One click instead of asking: the `context_checkup` prompt in the **+** menu sends that request for you.
+5. Say *"optimize it"* on an exported conversation and Claude applies the safe fixes; if you agree to pruning old history, **Claude itself writes the replacement summary** (that's the no-API-key summarization).
+6. For the same rules on your phone and on claude.ai, where no MCP server runs: `context-doctor instructions --copy`, then paste into Settings > Profile > personal preferences.
+
+What this does not do: read the chat behind Claude's back or trim it for you. Desktop chat has no hook API and no transcript on disk (checked in the app bundle, v2.2553). The model does the trimming, when the rules and the checkup tell it to.
 
 ### How it works in ChatGPT, step by step (honest version)
 
@@ -235,15 +242,15 @@ ChatGPT's MCP support differs fundamentally from Claude Desktop's: **it never sp
 
 Security note for step 2: the HTTP endpoint is unauthenticated — put it behind your tunnel's auth or a reverse proxy if it stays up long-term.
 
-### claude.ai on the web
+### claude.ai on the web and the phone apps
 
-Your local MCP server can't reach the website, but the behavior can: upload `skills/context-doctor/SKILL.md` under Settings → Capabilities → Skills, and web conversations gain the same standing context-hygiene habits (summarize-don't-requote, offer compaction when heavy).
+Your local MCP server can't reach the website, but the behavior can. Two options: `context-doctor instructions --copy` and paste into Settings > Profile > personal preferences (applies everywhere you are signed in, phone included), or upload `skills/context-doctor/SKILL.md` under Settings → Capabilities → Skills. Either way web and mobile conversations gain the same standing habits: summarize, don't re-quote, offer a handoff when heavy.
 
 ### MCP tools
 
 | Tool | What it does |
 |---|---|
-| `profile_context` | Token breakdown by category, largest messages, findings with estimated savings |
+| `profile_context` | Token breakdown by category, largest messages, findings with estimated savings. Takes either `conversation` (full JSON or text) or `sketch` (turns + large/repeated blocks, for chat apps) |
 | `optimize_context` | Rewrites the conversation: dedupe, trim stale tool results, strip base64, optional history pruning |
 | `context_best_practices` | Curated checklist, optionally specialized for Anthropic / OpenAI |
 
@@ -479,9 +486,10 @@ Contributions welcome — this project is small on purpose. Open an issue before
 
 ```bash
 npm version patch        # or minor/major — bumps package.json + git tag
-npm test                 # 14 tests must pass; CI runs the same on 3 OSes
+npm test                 # 131 tests must pass; CI runs the same on 3 OSes x Node 20/22/24
 npm publish              # prompts for the npm 2FA code
 git push --follow-tags
+npm run build:mcpb       # context-doctor-<version>.mcpb for Claude Desktop; attach it to the GitHub release
 ```
 
 **What the npm download number measures.** `install` writes `npx -y context-doctor-mcp` into MCP configs, and npx re-fetches the tarball whenever a new version exists. So every release is downloaded once by every active install within about a day, and the daily count is almost entirely those refreshes: on this package, release days run ~170 downloads and non-release days ~27. Read it as "size of the active installed base × number of releases", not as new users — a quiet week with no releases will look like a decline while nothing has changed. Two corollaries: the release-day figure is a live count of machines running context-doctor, and a broken release reaches all of them automatically, which is why `prepublishOnly` runs the full test suite. npm's stats also lag by several days and occasionally record a day as zero; a zero on a release day is a gap in their pipeline, not in usage.
