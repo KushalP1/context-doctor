@@ -68,6 +68,15 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.18.0 — the proxy on a public URL
+
+- **`proxy --token <secret>`** (also `CONTEXT_DOCTOR_PROXY_TOKEN`). Every path except `/health` must start with `/t/<secret>/`, compared in constant time, stripped before routing; a wrong or missing prefix is a 401 with no upstream call. This is the prerequisite for the Cursor BYO-key item: in Cursor 3.18.25 the OpenAI base-URL override is sent to Cursor's backend inside the model configuration and Cursor's *servers* call it (only the key-verification ping is client-side), so the proxy must be on a public URL, and an unauthenticated relay must not be. Cursor can set a URL but not a header, so the secret rides in the path. README documents the tunnel + Cursor settings path.
+- Not available to us: Cursor's "local mode" (`CURSOR_LOCAL_AGENT_BASE_URL`, client-side inference against any OpenAI-compatible gateway) is compiled to `localMode: false` in the consumer build.
+
+## Closed by measurement in 0.18.0 — Cursor `beforeReadFile` trimming
+
+The item assumed the hook could rewrite file content. In Cursor 3.18.25 the `beforeReadFile` response validator accepts only `permission: allow|deny` and `user_message`; the local agent runtime reads the same two fields and nothing else. The only inherent action is to deny a read and tell the agent why. Then the measurement, on 735 `Read` calls across 13 real Cursor agent transcripts: Cursor's agent already ranges 82% of its reads (`offset`/`limit`); whole-file reads have a median size of 4.6 KB and a p90 of 26 KB; 6 of 735 reads exceeded ~10k tokens and none exceeded 200 KB. A deny guard would fire on under 1% of reads, save 10-25k tokens each time, and break a workflow whenever its threshold was wrong. Not shipped. Cursor's transcript also never contains tool results, which is why the hook there reports estimated sizes only.
+
 ## Shipped in 0.17.0 — Claude Desktop, as far as it can go
 
 - **Why the tool was never called from chat.** Desktop's log showed zero `tools/call` in a month with the server loaded. The instruction said "call profile_context", but the tool's only input was the full conversation JSON, which a chat model cannot export and would have to re-type. An impossible instruction is not a nudge.
@@ -190,12 +199,7 @@ committed until it ships.
 
 ### Make more surfaces inherent (2026-09-19 research)
 
-Research into the Claude Desktop and Cursor app bundles, looking for a hook or a data path on each. Claude Desktop chat has neither: the Bedrock/`ANTHROPIC_BASE_URL` strings belong to the embedded Claude Code, chat goes to claude.ai's backend, and the only "before send" is an Electron header handler. Cursor has both a hook (it loads Claude Code's hook config) and, for BYO-key users, an OpenAI base-URL override.
-
-| Item | Why | Size |
-|---|---|---|
-| **Cursor `beforeReadFile` trimming** | Cursor's hooks can rewrite file content before the agent sees it (that is how secret-redaction hooks work). Oversized reads are the second biggest drain; capping them at the hook is inherent, model-independent, and needs no new UI | M |
-| **Cursor BYO-key → proxy** | Cursor's "Override OpenAI Base URL" puts our proxy in the data path for OpenAI-compatible traffic. Document it; consider `install --cursor-proxy` to set it | S |
+Research into the Claude Desktop and Cursor app bundles, looking for a hook or a data path on each. Both Cursor items below were resolved on 2026-09-22; see "Shipped in 0.18.0" and "Closed by measurement in 0.18.0". Claude Desktop chat: see 0.17.0. Nothing is left in this group.
 
 ### Fit into how people actually work
 

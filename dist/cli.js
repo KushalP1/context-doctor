@@ -110,6 +110,9 @@ Options:
                           overwrites a statusLine you already have)
   --port <n>              (proxy) Port to listen on (default 8787)
   --host <addr>           (proxy) Bind address (default 127.0.0.1; use 0.0.0.0 to expose)
+  --token <secret>        (proxy) Require /t/<secret>/ in every request path; needed before
+                          putting the proxy on a public URL (Cursor BYO-key, tunnels).
+                          Also read from CONTEXT_DOCTOR_PROXY_TOKEN
   --config <file>         (proxy) Per-route overrides: {"routes":[{"modelPrefix":"gpt","strategies":[...],
                           "keepRecent":n,"maxToolResultTokens":n}]} — first prefix match wins
   --upstream-anthropic <url>  (proxy) Override Anthropic upstream (testing)
@@ -198,6 +201,9 @@ function parseArgs(argv) {
                 break;
             case "--host":
                 args.host = argv[++i];
+                break;
+            case "--token":
+                args.token = argv[++i];
                 break;
             case "--config":
                 args.config = argv[++i];
@@ -461,6 +467,7 @@ function main() {
             routes: routes,
             port: args.port,
             host: args.host,
+            token: args.token ?? process.env.CONTEXT_DOCTOR_PROXY_TOKEN,
             anthropicUpstream: args.upstreamAnthropic,
             openaiUpstream: args.upstreamOpenai,
             strategies: args.strategies.length > 0 ? args.strategies : loadedRc.config.strategies,

@@ -179,7 +179,20 @@ The proxy dedupes repeated content, trims stale tool results, and strips base64 
 
 Because prompt caching matches byte-identical prefixes, deterministic strategies are chosen so repeated requests stay stable — but if you rely on aggressive cache prefixes, start with `--strategy strip-base64 --strategy dedupe` and add more as you verify.
 
-> **Note on desktop chat apps:** Claude Desktop and the ChatGPT app talk to their own backends — no tool can sit in that path. For those, use the MCP integration below and add a line to your custom instructions like: *"When a conversation gets long or includes large pasted content, proactively use context-doctor's profile_context tool and tell me what to trim."* The model will then invoke it on its own.
+### Putting the proxy on a public URL (Cursor with your own OpenAI key, remote apps)
+
+Some apps let you set a base URL but call it from *their* servers, not your machine. Cursor is one: with your own OpenAI key, "Override OpenAI Base URL" is sent to Cursor's backend inside the model configuration, and Cursor's servers make the request (only the key-verification ping is client-side; we checked the app bundle, 3.18.25). So `127.0.0.1` cannot work there; the proxy has to be reachable from the internet, and an open relay on the internet is a bad idea. Hence the token:
+
+```bash
+npx context-doctor proxy --token "$(openssl rand -hex 16)"   # or CONTEXT_DOCTOR_PROXY_TOKEN=...
+ngrok http 8787                                               # or any HTTPS tunnel / reverse proxy
+```
+
+With `--token`, every path except `/health` must start with `/t/<token>/`; anything else gets 401 before any upstream call, and the comparison is constant time. Then in Cursor: Settings > Models > OpenAI API Key > Override OpenAI Base URL = `https://<your-host>/t/<token>/v1`. Every agent request Cursor makes with your key now passes through the proxy: deduped, stale tool results trimmed, base64 stripped, real usage counted in `/t/<token>/stats`. This is the one Cursor path that is model-independent and needs no hook. It applies only to BYO-key traffic; Cursor's own subscription models never leave Cursor's servers.
+
+Your API key still rides in the request headers, as before. The token protects the relay, not the key; keep the tunnel HTTPS.
+
+> **Note on desktop chat apps:** Claude Desktop and the ChatGPT app talk to their own backends — no tool can sit in that path. For those, use the MCP integration below (Claude Desktop gets the standing rules and a cheap `profile_context` sketch call) and `context-doctor instructions --copy` for the per-account preferences.
 
 ## Use with the Claude & ChatGPT apps
 

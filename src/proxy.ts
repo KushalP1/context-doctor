@@ -13,6 +13,7 @@
  */
 
 import http from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { optimizeConversation, OptimizeOptions } from "./optimize.js";
 import { formatTokens } from "./tokens.js";
 import { formatUsd, inputCostUsd, pricingFor } from "./pricing.js";
@@ -28,6 +29,15 @@ export interface ProxyOptions extends OptimizeOptions {
    * the user explicitly opts in (e.g. --host 0.0.0.0 inside a container).
    */
   host?: string;
+  /**
+   * When set, every request except /health must arrive under the path prefix
+   * `/t/<token>/`, which is stripped before routing. This is what makes the
+   * proxy safe to put on a public URL (a tunnel) for apps whose servers call
+   * the base URL, such as Cursor with your own OpenAI key: those apps can set a
+   * URL but not a header, so the secret rides in the path. Compared with
+   * constant time; a wrong or missing prefix gets 401 and no upstream call.
+   */
+  token?: string;
   anthropicUpstream?: string;
   openaiUpstream?: string;
 }
@@ -35,6 +45,22 @@ export interface ProxyOptions extends OptimizeOptions {
 /** Connection-level headers that must not be forwarded. */
 const SKIP_REQUEST_HEADERS = new Set(["host", "content-length", "connection", "transfer-encoding", "accept-encoding", "expect"]);
 const SKIP_RESPONSE_HEADERS = new Set(["content-length", "content-encoding", "transfer-encoding", "connection"]);
+
+/**
+ * Remove a leading `/t/<token>` from a request path, or return undefined when
+ * the prefix is absent or the token differs. The comparison is constant time
+ * so the token cannot be guessed a character at a time.
+ */
+export function stripToken(url: string, token: string): string | undefined {
+  const prefix = "/t/";
+  if (!url.startsWith(prefix)) return undefined;
+  const end = url.indexOf("/", prefix.length);
+  const candidate = end === -1 ? url.slice(prefix.length) : url.slice(prefix.length, end);
+  const a = Buffer.from(candidate), b = Buffer.from(token);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return undefined;
+  const rest = end === -1 ? "/" : url.slice(end);
+  return rest;
+}
 
 function upstreamFor(url: string, opts: ProxyOptions): string | undefined {
   if (url.startsWith("/v1/messages")) return opts.anthropicUpstream ?? "https://api.anthropic.com";
@@ -117,12 +143,22 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
   };
 
   const server = http.createServer(async (req, res) => {
-    const url = req.url ?? "/";
+    let url = req.url ?? "/";
     try {
       if (url === "/health") {
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify({ ok: true, service: "context-doctor-proxy" }));
         return;
+      }
+      if (opts.token) {
+        const stripped = stripToken(url, opts.token);
+        if (stripped === undefined) {
+          res.statusCode = 401;
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ error: "context-doctor proxy: this proxy requires its token in the path: /t/<token>/v1/..." }));
+          return;
+        }
+        url = stripped;
       }
       if (url === "/stats") {
         res.setHeader("content-type", "application/json");
@@ -325,11 +361,18 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
 
   const host = opts.host ?? "127.0.0.1";
   server.listen(port, host, () => {
+    // Print the token as <token>, never the value: this log is what people paste into bug reports.
+    const prefix = opts.token ? "/t/<token>" : "";
     console.error(`context-doctor proxy listening on http://${host}:${port}`);
-    console.error(`  Anthropic apps/SDKs: export ANTHROPIC_BASE_URL=http://localhost:${port}`);
-    console.error(`  OpenAI apps/SDKs:    export OPENAI_BASE_URL=http://localhost:${port}/v1`);
+    console.error(`  Anthropic apps/SDKs: export ANTHROPIC_BASE_URL=http://localhost:${port}${prefix}`);
+    console.error(`  OpenAI apps/SDKs:    export OPENAI_BASE_URL=http://localhost:${port}${prefix}/v1`);
     console.error(`  Every request's context is optimized in flight; savings are logged here.`);
-    console.error(`  Cumulative savings: http://localhost:${port}/stats`);
+    console.error(`  Cumulative savings: http://localhost:${port}${prefix}/stats`);
+    if (opts.token) {
+      console.error(`  Token required: every path except /health must start with /t/<token>/.`);
+      console.error(`  Cursor with your own OpenAI key: expose this port on HTTPS (a tunnel), then Settings > Models > OpenAI API Key >`);
+      console.error(`  "Override OpenAI Base URL" = https://<your-host>/t/<token>/v1. Cursor's servers call that URL, so 127.0.0.1 will not work there.`);
+    }
   });
   return server;
 }
