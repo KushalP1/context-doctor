@@ -23,9 +23,24 @@ export interface ProxyOptions extends OptimizeOptions {
      * the user explicitly opts in (e.g. --host 0.0.0.0 inside a container).
      */
     host?: string;
+    /**
+     * When set, every request except /health must arrive under the path prefix
+     * `/t/<token>/`, which is stripped before routing. This is what makes the
+     * proxy safe to put on a public URL (a tunnel) for apps whose servers call
+     * the base URL, such as Cursor with your own OpenAI key: those apps can set a
+     * URL but not a header, so the secret rides in the path. Compared with
+     * constant time; a wrong or missing prefix gets 401 and no upstream call.
+     */
+    token?: string;
     anthropicUpstream?: string;
     openaiUpstream?: string;
 }
+/**
+ * Remove a leading `/t/<token>` from a request path, or return undefined when
+ * the prefix is absent or the token differs. The comparison is constant time
+ * so the token cannot be guessed a character at a time.
+ */
+export declare function stripToken(url: string, token: string): string | undefined;
 export interface ProxyStats {
     startedAt: string;
     requests: number;

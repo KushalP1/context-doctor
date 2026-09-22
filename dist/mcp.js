@@ -49,7 +49,7 @@ const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-b
  * recommended pattern.
  */
 function createServer() {
-    const server = new McpServer({ name: "context-doctor", version: "0.17.0" }, { instructions: SERVER_INSTRUCTIONS });
+    const server = new McpServer({ name: "context-doctor", version: "0.18.0" }, { instructions: SERVER_INSTRUCTIONS });
     server.tool("profile_context", "Profile an LLM conversation or prompt: token breakdown, largest blocks, and actionable findings about wasted context (duplicates, oversized pastes or tool results, base64 blobs, long history). Two inputs, pass ONE: `conversation` (full OpenAI/Anthropic JSON or raw text, for agents, files and proxies) or `sketch` (for chat apps such as Claude Desktop or ChatGPT where you cannot export the conversation: the turn count plus the few blocks that matter, ~100 tokens to write). Call it whenever the user asks about token usage, context size, cost, speed or limits, and on your own once the conversation passes ~30 turns or holds 3+ large pastes. Act on the top finding in your reply.", {
         conversation: z.string().optional().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array) or raw prompt text. Omit in chat apps and pass `sketch`."),
         sketch: z.object({
