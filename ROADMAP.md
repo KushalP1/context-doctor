@@ -201,10 +201,17 @@ committed until it ships.
 
 Research into the Claude Desktop and Cursor app bundles, looking for a hook or a data path on each. Both Cursor items below were resolved on 2026-09-22; see "Shipped in 0.18.0" and "Closed by measurement in 0.18.0". Claude Desktop chat: see 0.17.0. Nothing is left in this group.
 
+### Make the numbers trustworthy
+
+| Item | Why | Size |
+|---|---|---|
+| **Calibrate the sketch estimator against exact usage** | The sketch path (0.17) sizes a chat from turn count and a few block sizes using fixed constants (570 tokens per plain turn, 12 tokens per code line). Codex rollouts carry both the content and the API's exact usage, so the constants can be fitted rather than assumed, and the stated ±30% checked | M |
+
 ### Fit into how people actually work
 
 | Item | Why | Size |
 |---|---|---|
+| **Sign the `.mcpb`** | Claude Desktop shows an unsigned-bundle warning on install. `mcpb sign` takes a code-signing certificate, which is the owner's to obtain | S |
 | **Publish the extension to the marketplaces** | Built, tested and installed locally in both VS Code and Cursor (0.14.3 below). Publishing needs a VS Code Marketplace publisher token and an Open VSX account for Cursor, both the owner's to create | S |
 
 ## Non-goals
