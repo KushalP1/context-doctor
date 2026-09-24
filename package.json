@@ -1,6 +1,6 @@
 {
   "name": "context-doctor",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "description": "Profile and optimize LLM context windows. See what's eating your tokens and fix it — works with Claude Code, Claude Desktop, Cursor, Codex (OpenAI), and any MCP-capable AI app.",
   "keywords": [
     "claude",

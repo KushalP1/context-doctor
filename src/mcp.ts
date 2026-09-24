@@ -31,7 +31,7 @@ import { runSketch } from "./sketch.js";
  * "standing context-hygiene instructions in every chat" — no hook needed.
  */
 // Kept deliberately terse: these ride in EVERY conversation's context, and a
-// context-saving tool must not itself be context overhead (~130 tokens).
+// context-saving tool must not itself be context overhead (~250 Claude tokens).
 //
 // Written as conditions and actions, not offers. On Claude Desktop this string
 // is the only channel that reaches the model without the user asking — MCP has
@@ -42,7 +42,7 @@ import { runSketch } from "./sketch.js";
 const SERVER_INSTRUCTIONS = `Context hygiene rules (always on):
 1. Summarize any paste or tool result over ~2k tokens into the points you will use, then work from the summary; never carry it verbatim.
 2. Reference earlier content by name; never re-quote it. Never inline base64.
-3. When the conversation passes ~30 turns, or holds 3+ large pastes, or the user asks about tokens, cost, speed or limits: call profile_context BEFORE answering and act on its top finding. In a chat app pass a \`sketch\` (turn count + the large/repeated blocks, ~100 tokens), not the conversation. Do not estimate token counts yourself.
+3. When the conversation passes ~30 turns, or holds 3+ large pastes, or the user asks about tokens, cost, speed or limits: call profile_context BEFORE answering and act on its top finding. In a chat app pass a \`sketch\` (turn count + the large/repeated blocks, ~120 tokens), not the conversation. Do not estimate token counts yourself.
 4. If optimize_context returns a pruned-turns digest, you write the ≤150-token replacement summary.`;
 
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"] as const;
@@ -54,13 +54,13 @@ const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-b
  */
 function createServer(): McpServer {
   const server = new McpServer(
-    { name: "context-doctor", version: "0.18.0" },
+    { name: "context-doctor", version: "0.19.0" },
     { instructions: SERVER_INSTRUCTIONS }
   );
 
   server.tool(
   "profile_context",
-  "Profile an LLM conversation or prompt: token breakdown, largest blocks, and actionable findings about wasted context (duplicates, oversized pastes or tool results, base64 blobs, long history). Two inputs, pass ONE: `conversation` (full OpenAI/Anthropic JSON or raw text, for agents, files and proxies) or `sketch` (for chat apps such as Claude Desktop or ChatGPT where you cannot export the conversation: the turn count plus the few blocks that matter, ~100 tokens to write). Call it whenever the user asks about token usage, context size, cost, speed or limits, and on your own once the conversation passes ~30 turns or holds 3+ large pastes. Act on the top finding in your reply.",
+  "Profile an LLM conversation or prompt: token breakdown, largest blocks, and actionable findings about wasted context (duplicates, oversized pastes or tool results, base64 blobs, long history). Two inputs, pass ONE: `conversation` (full OpenAI/Anthropic JSON or raw text, for agents, files and proxies) or `sketch` (for chat apps such as Claude Desktop or ChatGPT where you cannot export the conversation: the turn count plus the few blocks that matter, ~120 tokens to write). Call it whenever the user asks about token usage, context size, cost, speed or limits, and on your own once the conversation passes ~30 turns or holds 3+ large pastes. Act on the top finding in your reply.",
   {
     conversation: z.string().optional().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array) or raw prompt text. Omit in chat apps and pass `sketch`."),
     sketch: z.object({
