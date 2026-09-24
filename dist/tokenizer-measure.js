@@ -152,15 +152,17 @@ export function renderTokenizer(report) {
     const err = (assumed, real) => {
         // Estimated tokens / real tokens − 1, from chars/token on each side.
         const pct = Math.round((real / assumed - 1) * 100);
-        return pct === 0 ? "exact" : `${pct > 0 ? "+" : ""}${pct}%`;
+        return pct === 0 ? "exact" : `estimates ${pct > 0 ? "+" : ""}${pct}%`;
     };
+    const row = (label, st, unit, assumed) => `  ${label.padEnd(7)} ${f(st.median)}  ${`(p10 ${f(st.p10)}, p90 ${f(st.p90)}, ${st.samples} ${unit})`.padEnd(34)} ` +
+        `estimator ${f(assumed)} → ${err(assumed, st.median)}`;
     for (const m of report.models) {
         lines.push(m.model);
         if (m.prose) {
-            lines.push(`  prose   ${f(m.prose.median)} (p10 ${f(m.prose.p10)}, p90 ${f(m.prose.p90)}, ${m.prose.samples} replies)   estimator ${f(m.assumed.prose)}  → estimates ${err(m.assumed.prose, m.prose.median)}`);
+            lines.push(row("prose", m.prose, "replies", m.assumed.prose));
         }
         if (m.blocks) {
-            lines.push(`  blocks  ${f(m.blocks.median)} (p10 ${f(m.blocks.p10)}, p90 ${f(m.blocks.p90)}, ${m.blocks.samples} blocks)    estimator ${f(m.assumed.code)}  → estimates ${err(m.assumed.code, m.blocks.median)}`);
+            lines.push(row("blocks", m.blocks, "blocks", m.assumed.code));
         }
     }
     lines.push("");

@@ -90,14 +90,14 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | Command | What it does |
 |---|---|
 | `context-doctor install` / `uninstall` | Wire (or remove) everything: MCP for Claude Desktop/Code/Cursor/Codex, the Agent Skill, the every-prompt hook |
-| `context-doctor instructions [--copy]` | The ~90-token standing rules for claude.ai / ChatGPT preferences, for web and phones where no server runs |
+| `context-doctor instructions [--copy]` | The ~180-token standing rules (~120 on GPT) for claude.ai / ChatGPT preferences, for web and phones where no server runs |
 | `context-doctor analyze <file>` | Profile a conversation: token breakdown, findings, cost + latency estimates. `--fail-over-budget` exits 1 on a breach, for CI |
 | `context-doctor optimize <file>` | Apply the safe fixes; add `--strategy trim-tool-calls` for big inline file writes, `--strategy prune-history` for consented lossy compaction |
 | `context-doctor session [file]` | Profile a Claude Code session: live context, findings, **measured tokens and prompt-cache economics**, **where the wall clock went** per tool, and **what its subagents cost** (their own windows, your bill; never in the parent's profile). Also reads ChatGPT data exports (`conversations.json`) |
 | `context-doctor init [preset]` | Write a `.contextdoctorrc` from a preset (`chat`, `agent`, `batch`) — a budget you can adopt in one command and tune later |
 | `context-doctor experiment --task "…"` | Run one task twice from the same commit, in a fresh session and forked from an `--existing` one, same model and tools; compare bill, cache split, wall clock, and whether `--check` passed. The only command here that spends money, so it caps spend per arm and refuses a dirty tree |
 | `context-doctor diff <before> <after>` | Compare two profiles: what moved by category, which findings were resolved or introduced, and what it saves in money and latency |
-| `context-doctor accuracy` | How much of what you are billed for is visible in your transcript — the fixed harness baseline and the per-turn injected content neither you nor the profiler can see |
+| `context-doctor accuracy` | How much of what you are billed for is visible in your transcript (the fixed harness baseline, per-turn injected content), plus a tokenizer check: real chars/token per model from the API's own counts, next to the ratio the estimator uses |
 | `context-doctor cursor [--list]` | Profile a chat from Cursor's local history (both storage formats) |
 | `context-doctor report` | Machine-wide impact report (proxy savings persist across restarts): exact proxy savings, hook activity, recoverable waste in recent sessions |
 | `context-doctor proxy` | Always-on local proxy that optimizes every Anthropic/OpenAI API request in flight (`/stats` for cumulative savings) |
@@ -203,13 +203,13 @@ Your API key still rides in the request headers, as before. The token protects t
 | **Claude Code** | Yes: hook on every prompt, status line on every refresh | Past ~80k tokens the model receives hygiene guidance naming the largest waste; compaction is offered. Measured: 115 automatic checks, 48 warnings, across 32 sessions on one machine |
 | **Cursor** | **Yes**, since 0.15: Cursor loads Claude Code's hook config (`~/.claude/settings.json`) and runs the same hook on every agent prompt, passing its own transcript. Output is accepted through Cursor's Claude-compat layer | Same guidance as Claude Code, inside Cursor's agent, for everyone who ran `install`. Before 0.15 the hook fired but could not read Cursor's transcript format, so it said nothing |
 | **API traffic through the proxy** | Yes: every request rewritten in flight | Fewer tokens, guaranteed, model not consulted |
-| **Claude Desktop** | The standing instruction in every chat (we confirmed in the app bundle that Desktop's `LocalMcpServerManager` reads it), a one-click `context_checkup` prompt, and since 0.17 a `profile_context` the model can actually afford to call from chat | Until 0.17 the tool wanted the whole conversation as its argument, so calling it from chat meant re-typing 50k tokens; nobody did, and Desktop's log showed zero calls in a month. Now the model passes a ~100-token **sketch** (turn count, the large or repeated blocks) and gets a sized estimate, findings and the fix to apply. Still a nudge, not a hook: Desktop chat has no hook API and no transcript on disk |
+| **Claude Desktop** | The standing instruction in every chat (we confirmed in the app bundle that Desktop's `LocalMcpServerManager` reads it), a one-click `context_checkup` prompt, and since 0.17 a `profile_context` the model can actually afford to call from chat | Until 0.17 the tool wanted the whole conversation as its argument, so calling it from chat meant re-typing 50k tokens; nobody did, and Desktop's log showed zero calls in a month. Now the model passes a ~120-token **sketch** (turn count, the large or repeated blocks) and gets a sized estimate, findings and the fix to apply. Still a nudge, not a hook: Desktop chat has no hook API and no transcript on disk |
 | **Codex (OpenAI): ChatGPT.app's Codex tab, the Codex IDE extension, the `codex` CLI** | **Yes**, since 0.16: `install` writes the hook to `~/.codex/hooks.json`, the MCP server to `~/.codex/config.toml`, and the skill to `~/.codex/skills/`. Codex uses Claude Code's hook contract almost verbatim and passes its own rollout transcript, which carries the API's real usage figures | Same guidance as Claude Code, from measured tokens. One extra step, Codex's rule not ours: a new hook runs only after you trust it once (type `/hooks` in Codex). `session` and `session --list` read Codex rollouts too |
 | **ChatGPT chat UI** | No | No MCP, no hooks, no data path in the chat product itself. Use Codex, or a developer-mode connector at a URL you host |
 
 So "every chat inherently better" is true for Claude Code, Cursor, Codex and the proxy; for Claude Desktop it is "the rules ride in every chat and the checkup is one cheap tool call away"; and not a claim we make for the ChatGPT chat UI.
 
-**Where there is no hook and no MCP at all** (claude.ai on the web, the Claude and ChatGPT phone apps, plain ChatGPT): the app's per-account preferences are read on every turn, which is the closest those surfaces have to a hook. `context-doctor instructions --copy` puts the ~90-token rules on your clipboard and tells you where to paste them (claude.ai Settings > Profile; ChatGPT Settings > Personalization > Custom instructions).
+**Where there is no hook and no MCP at all** (claude.ai on the web, the Claude and ChatGPT phone apps, plain ChatGPT): the app's per-account preferences are read on every turn, which is the closest those surfaces have to a hook. `context-doctor instructions --copy` puts the ~180-token rules on your clipboard and tells you where to paste them (claude.ai Settings > Profile; ChatGPT Settings > Personalization > Custom instructions).
 
 **Do you need to configure anything by hand? Usually no:**
 
@@ -238,7 +238,7 @@ For any other MCP client, the server entry is:
 
 1. Run `npx context-doctor install` (writes the config above for you) and restart Claude Desktop. Or open the `.mcpb` from the latest release: same server, no npm, installs as an Extension.
 2. From then on, **every conversation carries context-doctor's standing instructions**. The MCP server hands them to Desktop on connect and Desktop puts them in front of Claude: summarize big pastes instead of re-quoting them, refer to earlier content by name, never inline base64, and past ~30 turns or on any question about tokens, cost, speed or limits, call `profile_context` before answering.
-3. That call is cheap on purpose. Claude cannot export a Desktop chat, so it passes a **sketch**: how many turns, which blocks are large, repeated, stale or images, with one size hint each (~100 tokens). The server sizes it (±30%, and it says so), prices the per-turn re-read (on a subscription that is what spends your usage limit), and returns ranked findings with the action for each: "summarize *the nginx config* into the points still needed", "refer to *test output* by name", "offer a 300-token handoff summary for a fresh chat". The reply ends with an instruction to apply the top one, not just suggest it.
+3. That call is cheap on purpose. Claude cannot export a Desktop chat, so it passes a **sketch**: how many turns, which blocks are large, repeated, stale or images, with one size hint each (~120 tokens). The server sizes it (usually within ±20%, measured; see "Why token counts are ~"), prices the per-turn re-read (on a subscription that is what spends your usage limit), and returns ranked findings with the action for each: "summarize *the nginx config* into the points still needed", "refer to *test output* by name", "offer a 300-token handoff summary for a fresh chat". The reply ends with an instruction to apply the top one, not just suggest it.
 4. One click instead of asking: the `context_checkup` prompt in the **+** menu sends that request for you.
 5. Say *"optimize it"* on an exported conversation and Claude applies the safe fixes; if you agree to pruning old history, **Claude itself writes the replacement summary** (that's the no-API-key summarization).
 6. For the same rules on your phone and on claude.ai, where no MCP server runs: `context-doctor instructions --copy`, then paste into Settings > Profile > personal preferences.
@@ -359,9 +359,9 @@ The verdict line is the point: cheaper only counts if it also passed. Because th
 
 ## Exact counts, and what they teach the estimator
 
-The default token count is a chars-per-token heuristic so everything runs with no key and no tokenizer. Its error is content-dependent, and there is no honest way to fix that from transcripts alone (the billed number includes content the transcript never sees). `analyze --exact` fetches a true count for the exact bytes just estimated (Anthropic's count-tokens API with `ANTHROPIC_API_KEY`; tiktoken for GPT if installed) and prints the drift.
+The default token count is a chars-per-token heuristic so everything runs with no key and no tokenizer, with ratios per provider (see "Why token counts are ~" below). `analyze --exact` fetches a true count for the exact bytes just estimated (Anthropic's count-tokens API with `ANTHROPIC_API_KEY`; tiktoken for GPT if installed) and prints the drift.
 
-Since 0.13.9 it also **remembers the comparison**, per model family, on this machine, and later estimates for that family are scaled by it. Nothing about this is silent: the profile header says `estimates calibrated +12% from 3 exact count(s) you ran on this machine`. No exact count ever run means no calibration and unchanged numbers; out-of-range samples are ignored; `CONTEXT_DOCTOR_NO_CALIBRATION=1` returns to the raw heuristic.
+Since 0.13.9 it also **remembers the comparison**, per model family, on this machine, and later estimates for that family are scaled by it. Nothing about this is silent: the profile header says `estimates calibrated +12% from 3 exact count(s) you ran on this machine`. No exact count ever run means no calibration and unchanged numbers; out-of-range samples are ignored; `CONTEXT_DOCTOR_NO_CALIBRATION=1` returns to the raw heuristic. Samples are tied to the heuristic they were taken against: after 0.19 changed Claude's ratios, older samples are ignored and learning restarts, rather than stacking an old correction on a fixed estimator.
 
 ## What it detects
 
@@ -466,7 +466,7 @@ A tool that promises speed must be near-free. Measured overhead per touchpoint:
 | Touchpoint | When it runs | Overhead |
 |---|---|---|
 | Every-prompt hook (Claude Code) | Every prompt | **~80ms** (Node startup; logic ~1ms). Lean sessions exit on a single `stat()` — the transcript is never read. Full profiling (~200ms on a 4MB session) happens only when the transcript has grown ~40% since last checked |
-| MCP server | Spawned once per app session | Tools run only when called; standing instructions cost **~110 tokens per conversation** — deliberately terse |
+| MCP server | Spawned once per app session | Tools run only when called; standing instructions cost **~250 tokens per conversation on Claude, ~170 on GPT** — deliberately terse |
 | Proxy | Per API request | ~1–3ms of CPU (parse → optimize → re-serialize) against typical model latencies of hundreds of ms; responses stream through chunk-by-chunk, never buffered |
 | Skill | Loads only when relevant | ~1k tokens while active; its always-present description is ~60 tokens |
 | Profiling a session | On demand, and on hook growth events | ~160ms for an 8.5MB / 1,855-message transcript (near-duplicate pairs that cannot clear the similarity bar are skipped without comparison) |
@@ -476,18 +476,23 @@ Net effect is strongly negative overhead: the tokens these touchpoints save on e
 
 ## Why token counts are "~" (and where they are exact)
 
-Counting exactly needs each provider's tokenizer, so the default is a calibrated chars-per-token heuristic (denser for code and JSON). It is good enough to rank what is heavy and to measure the effect of a fix, and it keeps the tool offline and zero-config.
+Counting exactly needs each provider's tokenizer, so the default is a chars-per-token heuristic, with ratios per provider and denser ones for code and JSON. It keeps the tool offline and zero-config.
 
-Two ways to get real numbers instead:
+| Model | Prose | Code / tool output | Source |
+|---|---|---|---|
+| Claude (Opus 4.7 to 5.x, Fable 5.x, Sonnet 5) | 2.75 chars/token | 2.4 | Measured from the API's own counts, below |
+| GPT, Gemini, unknown | 4.0 | 3.2 | Usual figures for o200k-class tokenizers; not re-measured here |
+
+**How the Claude figures were measured, with no key.** Claude Code transcripts record what the API billed, and two things in them are exact. A reply with no thinking block is billed as exactly its `output_tokens`, and all of it is visible text: 504 replies gave a median of 2.75 chars/token (p10 2.4, p90 3.0). Between two consecutive API calls the prompt grows by exactly what was appended; when that is one large block, its size is the growth minus the previous reply: 474 blocks of code and tool output gave 2.4 (p10 2.1, p90 2.8). The ratios this tool used until 0.19 (4.0 / 3.2 for everything) **undercounted current Claude models by about 40%**: hook warnings came late, savings and costs read low, and the proxy stayed silent on cacheable prefixes between 1,024 and ~1,670 tokens. `context-doctor accuracy` re-runs both measurements on your own sessions and prints them per model beside the ratio in use, so the next tokenizer change shows up as a number, not a surprise. On this machine every model lands within ±9%.
+
+Two ways to get real numbers instead of estimates:
 
 - **`analyze --exact`** uses the Anthropic count-tokens API for Claude models (set `ANTHROPIC_API_KEY`; opt-in network call, key never stored) or tiktoken for GPT models (install it alongside), and reports how far the heuristic drifted.
 - **Sessions report measured tokens automatically.** Claude Code transcripts record what the API actually charged, so `session`, the hook and the reports use that figure when it is present — no key, no estimate.
 
-One honest caveat worth knowing: a transcript stores the conversation, **not** the harness's system prompt, tool schemas or skills. Measured against the API's own numbers here, a message-only estimate undercounts the true context by roughly 60%. That is why sessions prefer the reported figure, and why the message breakdown is labelled as covering messages only.
+One honest caveat worth knowing: a transcript stores the conversation, **not** the harness's system prompt, tool schemas or skills (about 54k tokens before the first turn in Claude Code here), nor the reminders it injects each turn. With the corrected ratios the transcript accounts for a median 56% of each turn's billed growth; before 0.19 this read 39%, and about a third of that "invisible" gap was the estimator. That is why sessions prefer the reported figure, and why the message breakdown is labelled as covering messages only.
 
-
-
-Exact counts require each provider's private tokenizer. `context-doctor` uses a calibrated chars-per-token heuristic (denser for code/JSON) that lands within ~10% — plenty accurate for finding what's heavy and measuring savings, and it keeps the tool fully offline with zero configuration.
+**The chat-app sketch** (Claude Desktop, see above) is coarser by design, because the model describes the chat instead of sending it. Its sizes are measured, not assumed: a plain exchange is 2,060 chars (median of 1,283), a code line 42 chars (719 source files), a log line 56 (2,095 tool outputs), a word 6.3, all converted with the model's own ratio. Measured error: the total for a chat of 30+ exchanges from its turn count alone is within -20% to +9% (p10 to p90); a code block sized by lines is within about ±25%, by chars about ±15%. Logs vary from 38 to 100 chars a line, so the tool asks for their size in chars.
 
 ## Roadmap
 

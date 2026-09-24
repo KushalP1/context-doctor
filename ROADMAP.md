@@ -68,6 +68,18 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.19.0 — the estimator was undercounting Claude by ~40%
+
+Picked up as "calibrate the sketch against exact usage"; the calibration found a bigger problem underneath.
+
+- **Measured, with no key.** Two exact signals already sit in Claude Code transcripts: a reply with no thinking block is billed as exactly its `output_tokens` (504 replies: 2.75 chars/token on prose), and a single large appended block is exactly the prompt growth minus the previous reply (474 blocks: 2.4 on code and tool output). They agree across Opus 4.7 to 5.x, Fable 5.x and Sonnet 5 within ±9%. The provider-neutral 4.0 / 3.2 the tool used undercounted Claude by ~1.45x on prose and ~1.33x on code.
+- **Codex was the planned source and could not be one**: rollouts truncate tool output before the model sees it, so prompt growth does not isolate a block. OpenAI keeps 4.0 / 3.2, labelled as not re-measured.
+- **Per-provider estimator** (`estimateTokens(text, model)`), with the model taken from the request's own `model` field when not given; profile, optimize (savings and trim budgets), accuracy and the sketch use it.
+- **Three behaviours the old constant broke**: the hook's byte fast path assumed 4 bytes/token and could skip Claude sessions already past the warning line; the proxy gated cache advice on 4,000 chars and missed 1,024 to ~1,670-token prefixes; `accuracy` blamed the estimator's gap on invisible content (coverage now 56%, was 39%).
+- **Calibration files are versioned** so a factor learned against the old heuristic is not stacked on the new one.
+- **`accuracy` gained a tokenizer check** that re-runs both measurements per model on the user's own sessions.
+- **The sketch** now sizes in measured chars (exchange 2,060, code line 42, log line 56, word 6.3) converted per model, and states its measured error (total from turn count -20% to +9%; code by lines ±25%) instead of ±30%.
+
 ## Shipped in 0.18.0 — the proxy on a public URL
 
 - **`proxy --token <secret>`** (also `CONTEXT_DOCTOR_PROXY_TOKEN`). Every path except `/health` must start with `/t/<secret>/`, compared in constant time, stripped before routing; a wrong or missing prefix is a 401 with no upstream call. This is the prerequisite for the Cursor BYO-key item: in Cursor 3.18.25 the OpenAI base-URL override is sent to Cursor's backend inside the model configuration and Cursor's *servers* call it (only the key-verification ping is client-side), so the proxy must be on a public URL, and an unauthenticated relay must not be. Cursor can set a URL but not a header, so the secret rides in the path. README documents the tunnel + Cursor settings path.
@@ -80,7 +92,7 @@ The item assumed the hook could rewrite file content. In Cursor 3.18.25 the `bef
 ## Shipped in 0.17.0 — Claude Desktop, as far as it can go
 
 - **Why the tool was never called from chat.** Desktop's log showed zero `tools/call` in a month with the server loaded. The instruction said "call profile_context", but the tool's only input was the full conversation JSON, which a chat model cannot export and would have to re-type. An impossible instruction is not a nudge.
-- **`sketch` input**: turn count plus the blocks that matter (large, repeated, stale, image, base64) with one size hint each, ~100 output tokens. The server sizes it, prices the per-turn re-read, ranks findings and tells the model to apply the top one. Server instructions, tool description and the `context_checkup` prompt all point chat apps at it.
+- **`sketch` input**: turn count plus the blocks that matter (large, repeated, stale, image, base64) with one size hint each, ~120 output tokens. The server sizes it, prices the per-turn re-read, ranks findings and tells the model to apply the top one. Server instructions, tool description and the `context_checkup` prompt all point chat apps at it.
 - **Confirmed in the app bundle (v2.2553)** that Desktop's `LocalMcpServerManager` reads server `instructions`, so the standing rules do reach the model. Also confirmed, again, that there is no hook API and no transcript on disk; the README now says "the rules ride in every chat and the checkup is one cheap call away", not "inherent".
 - **`context-doctor instructions --copy`**: the same rules for claude.ai / ChatGPT per-account preferences, read on every turn on web and phones where no server runs.
 - **`.mcpb` bundle** (`npm run build:mcpb`, 3.1 MB, validated in CI and uploaded as an artifact): one-click install through Desktop's Extensions UI on Desktop's own Node, no npm.
@@ -205,7 +217,6 @@ Research into the Claude Desktop and Cursor app bundles, looking for a hook or a
 
 | Item | Why | Size |
 |---|---|---|
-| **Calibrate the sketch estimator against exact usage** | The sketch path (0.17) sizes a chat from turn count and a few block sizes using fixed constants (570 tokens per plain turn, 12 tokens per code line). Codex rollouts carry both the content and the API's exact usage, so the constants can be fitted rather than assumed, and the stated ±30% checked | M |
 
 ### Fit into how people actually work
 

@@ -4,7 +4,7 @@
  * "custom instructions" are read on every turn of every chat, which is the
  * closest thing those surfaces have to a UserPromptSubmit hook.
  *
- * Kept short (~90 tokens): it rides in every conversation.
+ * Kept short (~180 Claude tokens, ~120 GPT): it rides in every conversation.
  */
 
 import { spawnSync } from "node:child_process";

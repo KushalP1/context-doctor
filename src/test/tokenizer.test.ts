@@ -88,7 +88,7 @@ test("measureTokenizer recovers exact ratios from usage in a transcript", () => 
   const m = report.models.find((x) => x.model === "claude-opus-5")!;
   assert.equal(m.prose?.median, 2.75);
   assert.equal(m.blocks?.median, 2.4);
-  assert.match(renderTokenizer(report), /estimates exact/);
+  assert.match(renderTokenizer(report), /→ exact/);
 });
 
 test("calibration learned against the old heuristic is ignored, then restarted", async () => {
