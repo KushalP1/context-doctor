@@ -14,6 +14,14 @@
  * them. No exact count ever run means no calibration, and the numbers are
  * exactly what they were before.
  */
+/**
+ * Bumped whenever the uncalibrated heuristic changes. A factor learned against
+ * an older heuristic would correct for an error that no longer exists (0.19
+ * moved Claude from 4.0 to 2.75 chars/token; an old 1.4x factor on top of that
+ * would overcount by 1.4x), so records from another version are ignored and
+ * restarted rather than blended.
+ */
+export declare const HEURISTIC_VERSION = 2;
 export interface Calibration {
     /** Multiply heuristic estimates by this. 1 means uncalibrated. */
     factor: number;

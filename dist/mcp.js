@@ -66,7 +66,7 @@ function createServer() {
                 repeated: z.number().int().positive().optional().describe("Times this same content appears (2+ = duplicate)"),
                 stale: z.boolean().optional().describe("Already acted on; nothing in it is still needed"),
             })).describe("Only the blocks over ~500 tokens, repeated, or images. Plain turns need not be listed."),
-        }).optional().describe("Coarse description of the conversation for chat apps. Give one size hint per block (lines, words, chars or tokens)."),
+        }).optional().describe("Coarse description of the conversation for chat apps. One size hint per block: lines for code, words for prose, chars (or tokens) for logs and tool output, which vary most per line."),
         model: z.string().optional().describe("Target model name for context-window math, e.g. claude-sonnet-5 or gpt-4o"),
     }, async ({ conversation, sketch, model }) => {
         if (sketch) {

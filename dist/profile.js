@@ -146,11 +146,14 @@ function filesReadBy(toolName, toolCallText) {
     return [...paths];
 }
 export function profileConversation(conv, model) {
+    // An explicit model wins; otherwise the request's own model field decides
+    // which tokenizer ratios apply.
+    model = model ?? conv.model;
     // Learned from the user's own exact counts, if they ever fetched any.
     const calibration = calibrationFor(model);
     const perMessage = conv.messages.map((m) => ({
         msg: m,
-        tokens: Math.round(estimateTokens(m.text) * calibration.factor) + MESSAGE_OVERHEAD_TOKENS,
+        tokens: Math.round(estimateTokens(m.text, model) * calibration.factor) + MESSAGE_OVERHEAD_TOKENS,
     }));
     const totalTokens = perMessage.reduce((sum, p) => sum + p.tokens, 0);
     const categories = {

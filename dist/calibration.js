@@ -17,6 +17,14 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { statePath } from "./ledger.js";
+/**
+ * Bumped whenever the uncalibrated heuristic changes. A factor learned against
+ * an older heuristic would correct for an error that no longer exists (0.19
+ * moved Claude from 4.0 to 2.75 chars/token; an old 1.4x factor on top of that
+ * would overcount by 1.4x), so records from another version are ignored and
+ * restarted rather than blended.
+ */
+export const HEURISTIC_VERSION = 2;
 /** Anything outside this is a bad sample, not a calibration. */
 const MIN_FACTOR = 0.5;
 const MAX_FACTOR = 2.0;
@@ -52,8 +60,14 @@ export function recordCalibration(model, exactTokens, heuristicTokens) {
     try {
         const all = readAll();
         const key = modelFamily(model);
-        const rec = all[key] ?? { exactSum: 0, heuristicSum: 0, samples: 0 };
-        all[key] = { exactSum: rec.exactSum + exactTokens, heuristicSum: rec.heuristicSum + heuristicTokens, samples: rec.samples + 1 };
+        const prev = all[key];
+        const rec = prev && prev.v === HEURISTIC_VERSION ? prev : { exactSum: 0, heuristicSum: 0, samples: 0 };
+        all[key] = {
+            exactSum: rec.exactSum + exactTokens,
+            heuristicSum: rec.heuristicSum + heuristicTokens,
+            samples: rec.samples + 1,
+            v: HEURISTIC_VERSION,
+        };
         mkdirSync(dirname(calibrationPath()), { recursive: true });
         writeFileSync(calibrationPath(), JSON.stringify(all, null, 2));
     }
@@ -66,7 +80,7 @@ export function calibrationFor(model) {
     if (process.env.CONTEXT_DOCTOR_NO_CALIBRATION)
         return { factor: 1, samples: 0 };
     const rec = readAll()[modelFamily(model)];
-    if (!rec || rec.samples < 1 || rec.heuristicSum <= 0)
+    if (!rec || rec.v !== HEURISTIC_VERSION || rec.samples < 1 || rec.heuristicSum <= 0)
         return { factor: 1, samples: 0 };
     const factor = rec.exactSum / rec.heuristicSum;
     if (!Number.isFinite(factor) || factor < MIN_FACTOR || factor > MAX_FACTOR)

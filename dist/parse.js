@@ -146,5 +146,6 @@ export function parseConversation(input) {
         : messages.length === 0
             ? "This JSON has no `messages` array (and no `system`) — it does not look like a conversation. Expected {\"messages\":[{\"role\":…,\"content\":…}]}."
             : undefined;
-    return { sourceFormat: isAnthropic ? "anthropic" : "openai", parseWarning, messages };
+    const model = typeof obj.model === "string" && obj.model ? obj.model : undefined;
+    return { sourceFormat: isAnthropic ? "anthropic" : "openai", parseWarning, messages, model };
 }

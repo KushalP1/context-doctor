@@ -12,23 +12,27 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { blockTokens, profileSketch, renderSketchProfile } from "../sketch.js";
+import { blockTokens, exchangeTokens, profileSketch, renderSketchProfile } from "../sketch.js";
 import { sandboxEnv } from "./sandbox.js";
 
 const mcpPath = join(dirname(fileURLToPath(import.meta.url)), "..", "mcp.js");
 
-test("sketch: size hints convert to tokens by kind", () => {
-  assert.equal(blockTokens({ turn: 1, kind: "code", label: "a", approx_lines: 100 }), 1200);
-  assert.equal(blockTokens({ turn: 1, kind: "paste", label: "a", approx_words: 1000 }), 1350);
-  assert.equal(blockTokens({ turn: 1, kind: "text", label: "a", approx_chars: 4000 }), 1000);
-  assert.equal(blockTokens({ turn: 1, kind: "tool_result", label: "a", approx_tokens: 777 }), 777);
+test("sketch: size hints convert to tokens by kind, in the model's tokens", () => {
+  // Chars first, then the model's ratio: code/tool output 2.4 on Claude, 3.2 elsewhere.
+  assert.equal(blockTokens({ turn: 1, kind: "code", label: "a", approx_lines: 100 }, "claude-opus-5"), Math.round(4200 / 2.4));
+  assert.equal(blockTokens({ turn: 1, kind: "code", label: "a", approx_lines: 100 }, "gpt-5"), Math.round(4200 / 3.2));
+  assert.equal(blockTokens({ turn: 1, kind: "paste", label: "a", approx_words: 1000 }, "claude-opus-5"), Math.round(6300 / 2.75));
+  assert.equal(blockTokens({ turn: 1, kind: "text", label: "a", approx_chars: 4000 }, "gpt-5"), 1000);
+  assert.equal(blockTokens({ turn: 1, kind: "tool_result", label: "a", approx_tokens: 777 }), 777, "tokens pass through");
   assert.equal(blockTokens({ turn: 1, kind: "image", label: "a" }), 1500);
 });
 
 test("sketch: a short clean chat has no findings", () => {
   const p = profileSketch({ turns: 8, model: "claude-sonnet-5", blocks: [] });
   assert.equal(p.findings.length, 0);
-  assert.equal(p.totalTokens, 8 * 570);
+  assert.equal(p.totalTokens, 8 * exchangeTokens("claude-sonnet-5"));
+  assert.equal(exchangeTokens("claude-sonnet-5"), Math.round(2060 / 2.75));
+  assert.equal(exchangeTokens("gpt-5"), Math.round(2060 / 4));
   assert.match(renderSketchProfile(p), /No findings/);
 });
 

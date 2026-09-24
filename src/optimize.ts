@@ -8,7 +8,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { estimateTokens } from "./tokens.js";
+import { charsPerTokenFor, estimateTokens } from "./tokens.js";
 
 import { hasBase64Blob, stripBase64Blobs } from "./blob.js";
 
@@ -16,6 +16,11 @@ export type StrategyId = "dedupe" | "trim-tool-results" | "trim-tool-calls" | "p
 
 export interface OptimizeOptions {
   strategies?: StrategyId[];
+  /**
+   * Model the conversation is for; picks the tokenizer ratios for savings and
+   * trim budgets. Defaults to the conversation's own `model` field.
+   */
+  model?: string;
   /** Tool results older than this many messages from the end get trimmed. */
   keepRecent?: number;
   /** Max tokens a trimmed tool result — or tool-call argument set — keeps. */
@@ -54,7 +59,7 @@ export interface OptimizeResult {
 
 const TRIM_BOUNDARY_STEP = 10;
 
-const DEFAULTS: Required<OptimizeOptions> = {
+const DEFAULTS: Required<Omit<OptimizeOptions, "model">> = {
   strategies: ["dedupe", "trim-tool-results", "strip-base64"],
   keepRecent: 6,
   maxToolResultTokens: 300,
@@ -104,8 +109,10 @@ function editedLaterWithoutRead(messages: any[], writeIndex: number, path: strin
   return false;
 }
 
-function trimCallArguments(input: Record<string, unknown>, maxTokens: number): Record<string, unknown> {
-  const budgetChars = maxTokens * 4;
+function trimCallArguments(input: Record<string, unknown>, maxTokens: number, model?: string): Record<string, unknown> {
+  // Prose ratio: argument strings are mostly file content and commands, and
+  // the prose ratio keeps a little more than the budget rather than less.
+  const budgetChars = Math.round(maxTokens * charsPerTokenFor("", model));
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input)) {
     if (typeof value === "string" && value.length > budgetChars) {
@@ -192,8 +199,8 @@ function replaceText(content: unknown, newText: string): unknown {
   return out;
 }
 
-function truncateToTokens(text: string, maxTokens: number): string {
-  const approxChars = maxTokens * 4;
+function truncateToTokens(text: string, maxTokens: number, model?: string): string {
+  const approxChars = Math.round(maxTokens * charsPerTokenFor(text, model));
   if (text.length <= approxChars) return text;
   const head = text.slice(0, approxChars);
   const omitted = text.length - approxChars;
@@ -235,7 +242,7 @@ function isToolResultMessage(m: any): boolean {
 export function optimizeConversation(input: string, options: OptimizeOptions = {}): OptimizeResult {
   // ?? per field (not object spread) so an explicit `undefined` from a caller
   // still falls back to the default.
-  const opts: Required<OptimizeOptions> = {
+  const opts: Required<Omit<OptimizeOptions, "model">> = {
     strategies: options.strategies ?? DEFAULTS.strategies,
     keepRecent: options.keepRecent ?? DEFAULTS.keepRecent,
     maxToolResultTokens: options.maxToolResultTokens ?? DEFAULTS.maxToolResultTokens,
@@ -261,7 +268,11 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
     if (!messages[i] || typeof messages[i] !== "object") messages.splice(i, 1);
   }
 
-  const tokensBefore = messages.reduce((s, m) => s + estimateTokens(textOf(m.content)), 0);
+  const model: string | undefined =
+    options.model ?? (!Array.isArray(data) && typeof data?.model === "string" ? data.model : undefined);
+  const tok = (text: string): number => estimateTokens(text, model);
+
+  const tokensBefore = messages.reduce((s, m) => s + tok(textOf(m.content)), 0);
   const applied: AppliedChange[] = [];
 
   // -- strip-base64: replace inline blobs with a placeholder --------------------
@@ -269,9 +280,9 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
     messages.forEach((m, i) => {
       const text = textOf(m.content);
       if (!hasBase64Blob(text)) return;
-      const before = estimateTokens(text);
+      const before = tok(text);
       const cleaned = stripBase64Blobs(text);
-      const saved = before - estimateTokens(cleaned);
+      const saved = before - tok(cleaned);
       if (saved > 50) {
         m.content = replaceText(m.content, cleaned);
         applied.push({ strategy: "strip-base64", messageIndex: i, tokensSaved: saved, note: "Removed inline base64 data" });
@@ -303,7 +314,7 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
         seen.set(h, i);
         return;
       }
-      const saved = estimateTokens(text);
+      const saved = tok(text);
       m.content = replaceText(m.content, `[context-doctor: identical to message #${first} — content removed]`);
       applied.push({ strategy: "dedupe", messageIndex: i, tokensSaved: saved, note: `Duplicate of message #${first}` });
     });
@@ -315,18 +326,18 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
     messages.forEach((m, i) => {
       if (i >= cutoff || !isToolResultMessage(m)) return;
       const text = textOf(m.content);
-      const before = estimateTokens(text);
+      const before = tok(text);
       if (before <= opts.maxToolResultTokens) return;
-      const trimmed = truncateToTokens(text, opts.maxToolResultTokens);
+      const trimmed = truncateToTokens(text, opts.maxToolResultTokens, model);
       // The truncation notice has a length of its own, so a result only just
       // over the budget can come back LARGER than it went in. Measured on a
       // real session: 2,941 tokens "optimized" to 2,947.
-      if (estimateTokens(trimmed) >= before) return;
+      if (tok(trimmed) >= before) return;
       m.content = replaceText(m.content, trimmed);
       applied.push({
         strategy: "trim-tool-results",
         messageIndex: i,
-        tokensSaved: before - estimateTokens(trimmed),
+        tokensSaved: before - tok(trimmed),
         note: "Stale tool result truncated",
       });
     });
@@ -349,11 +360,11 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
           // plus a recovery Read. Offline we can see the future, so leave
           // those alone; the 63% never touched again are still pure gain.
           if (editedLaterWithoutRead(messages, i, writtenPath(b))) continue;
-          const before = estimateTokens(JSON.stringify(b.input));
+          const before = tok(JSON.stringify(b.input));
           if (before <= opts.maxToolResultTokens) continue;
-          const trimmedInput = trimCallArguments(b.input as Record<string, unknown>, opts.maxToolResultTokens);
+          const trimmedInput = trimCallArguments(b.input as Record<string, unknown>, opts.maxToolResultTokens, model);
           // Same trap as tool results: the marker can outweigh what it replaces.
-          const after = estimateTokens(JSON.stringify(trimmedInput));
+          const after = tok(JSON.stringify(trimmedInput));
           if (after >= before) continue;
           b.input = trimmedInput;
           saved += before - after;
@@ -363,10 +374,10 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
       for (const tc of (m.tool_calls as any[]) ?? []) {
         const args = tc?.function?.arguments;
         if (typeof args !== "string") continue;
-        const before = estimateTokens(args);
+        const before = tok(args);
         if (before <= opts.maxToolResultTokens) continue;
-        tc.function.arguments = truncateToTokens(args, opts.maxToolResultTokens);
-        saved += before - estimateTokens(tc.function.arguments);
+        tc.function.arguments = truncateToTokens(args, opts.maxToolResultTokens, model);
+        saved += before - tok(tc.function.arguments);
       }
       if (saved > 0) {
         applied.push({
@@ -399,7 +410,7 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
       dropOrphanedToolResults(messages.slice(keepFrom));
 
       const pruned = messages.slice(0, keepFrom);
-      const prunedTokens = pruned.reduce((s, m) => s + estimateTokens(textOf(m.content)), 0);
+      const prunedTokens = pruned.reduce((s, m) => s + tok(textOf(m.content)), 0);
       // Digest: first ~200 chars of each pruned turn — enough for a host LLM to
       // write a faithful summary, small enough not to defeat the pruning.
       prunedDigest = pruned
@@ -415,12 +426,12 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
       applied.push({
         strategy: "prune-history",
         messageIndex: 0,
-        tokensSaved: prunedTokens - estimateTokens(stub.content),
+        tokensSaved: prunedTokens - tok(stub.content),
         note: `Pruned ${pruned.length} old messages`,
       });
     }
   }
 
-  const tokensAfter = messages.reduce((s, m) => s + estimateTokens(textOf(m.content)), 0);
+  const tokensAfter = messages.reduce((s, m) => s + tok(textOf(m.content)), 0);
   return { conversation: data, tokensBefore, tokensAfter, applied, prunedDigest };
 }

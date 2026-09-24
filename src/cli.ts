@@ -21,6 +21,7 @@ import { runInstall, runUninstall } from "./install.js";
 import { listSessions, parseSessionFile } from "./session.js";
 import { runHook } from "./hook.js";
 import { buildImpactReport } from "./impact.js";
+import { measureTokenizer, renderTokenizer } from "./tokenizer-measure.js";
 import { renderPreferences, copyToClipboard, CHAT_PREFERENCES } from "./preferences.js";
 import { recordLedger } from "./ledger.js";
 import { runDoctor } from "./doctor.js";
@@ -314,7 +315,8 @@ function main(): void {
 
   if (args.command === "accuracy") {
     const report = measureAccuracy(args.limit ?? 20);
-    console.log(args.json ? JSON.stringify(report, null, 2) : renderAccuracy(report));
+    const tokenizer = measureTokenizer(Math.max(args.limit ?? 20, 60));
+    console.log(args.json ? JSON.stringify({ ...report, tokenizer }, null, 2) : `${renderAccuracy(report)}\n\n${renderTokenizer(tokenizer)}`);
     return;
   }
 

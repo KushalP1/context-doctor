@@ -9,6 +9,11 @@
 export type StrategyId = "dedupe" | "trim-tool-results" | "trim-tool-calls" | "prune-history" | "strip-base64";
 export interface OptimizeOptions {
     strategies?: StrategyId[];
+    /**
+     * Model the conversation is for; picks the tokenizer ratios for savings and
+     * trim budgets. Defaults to the conversation's own `model` field.
+     */
+    model?: string;
     /** Tool results older than this many messages from the end get trimmed. */
     keepRecent?: number;
     /** Max tokens a trimmed tool result — or tool-call argument set — keeps. */

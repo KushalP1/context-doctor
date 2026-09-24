@@ -44,6 +44,8 @@ export interface NormalizedConversation {
   messages: NormalizedMessage[];
   /** Format detected, for reporting. */
   sourceFormat: "openai" | "anthropic" | "array" | "text";
+  /** The request's own `model` field, when it has one. Picks the tokenizer ratios. */
+  model?: string;
   /**
    * Set when the input could not be read as a conversation. Silently profiling
    * a broken file as one big "user message" produces a confident, wrong report
@@ -199,5 +201,6 @@ export function parseConversation(input: string): NormalizedConversation {
       ? "This JSON has no `messages` array (and no `system`) — it does not look like a conversation. Expected {\"messages\":[{\"role\":…,\"content\":…}]}."
       : undefined;
 
-  return { sourceFormat: isAnthropic ? "anthropic" : "openai", parseWarning, messages };
+  const model = typeof obj.model === "string" && obj.model ? obj.model : undefined;
+  return { sourceFormat: isAnthropic ? "anthropic" : "openai", parseWarning, messages, model };
 }

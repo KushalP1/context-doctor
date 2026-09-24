@@ -23,7 +23,18 @@ interface FamilyRecord {
   exactSum: number;
   heuristicSum: number;
   samples: number;
+  /** Heuristic the samples were taken against; see HEURISTIC_VERSION. */
+  v?: number;
 }
+
+/**
+ * Bumped whenever the uncalibrated heuristic changes. A factor learned against
+ * an older heuristic would correct for an error that no longer exists (0.19
+ * moved Claude from 4.0 to 2.75 chars/token; an old 1.4x factor on top of that
+ * would overcount by 1.4x), so records from another version are ignored and
+ * restarted rather than blended.
+ */
+export const HEURISTIC_VERSION = 2;
 
 export interface Calibration {
   /** Multiply heuristic estimates by this. 1 means uncalibrated. */
@@ -64,8 +75,14 @@ export function recordCalibration(model: string | undefined, exactTokens: number
   try {
     const all = readAll();
     const key = modelFamily(model);
-    const rec = all[key] ?? { exactSum: 0, heuristicSum: 0, samples: 0 };
-    all[key] = { exactSum: rec.exactSum + exactTokens, heuristicSum: rec.heuristicSum + heuristicTokens, samples: rec.samples + 1 };
+    const prev = all[key];
+    const rec = prev && prev.v === HEURISTIC_VERSION ? prev : { exactSum: 0, heuristicSum: 0, samples: 0 };
+    all[key] = {
+      exactSum: rec.exactSum + exactTokens,
+      heuristicSum: rec.heuristicSum + heuristicTokens,
+      samples: rec.samples + 1,
+      v: HEURISTIC_VERSION,
+    };
     mkdirSync(dirname(calibrationPath()), { recursive: true });
     writeFileSync(calibrationPath(), JSON.stringify(all, null, 2));
   } catch {
@@ -77,7 +94,7 @@ export function recordCalibration(model: string | undefined, exactTokens: number
 export function calibrationFor(model?: string): Calibration {
   if (process.env.CONTEXT_DOCTOR_NO_CALIBRATION) return { factor: 1, samples: 0 };
   const rec = readAll()[modelFamily(model)];
-  if (!rec || rec.samples < 1 || rec.heuristicSum <= 0) return { factor: 1, samples: 0 };
+  if (!rec || rec.v !== HEURISTIC_VERSION || rec.samples < 1 || rec.heuristicSum <= 0) return { factor: 1, samples: 0 };
   const factor = rec.exactSum / rec.heuristicSum;
   if (!Number.isFinite(factor) || factor < MIN_FACTOR || factor > MAX_FACTOR) return { factor: 1, samples: 0 };
   return { factor, samples: rec.samples };

@@ -34,6 +34,8 @@ export interface NormalizedConversation {
     messages: NormalizedMessage[];
     /** Format detected, for reporting. */
     sourceFormat: "openai" | "anthropic" | "array" | "text";
+    /** The request's own `model` field, when it has one. Picks the tokenizer ratios. */
+    model?: string;
     /**
      * Set when the input could not be read as a conversation. Silently profiling
      * a broken file as one big "user message" produces a confident, wrong report
