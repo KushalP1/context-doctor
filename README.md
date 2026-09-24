@@ -483,6 +483,8 @@ Counting exactly needs each provider's tokenizer, so the default is a chars-per-
 | Claude (Opus 4.7 to 5.x, Fable 5.x, Sonnet 5) | 2.75 chars/token | 2.4 | Measured from the API's own counts, below |
 | GPT, Gemini, unknown | 4.0 | 3.2 | Usual figures for o200k-class tokenizers; not re-measured here |
 
+Which row applies: the model you pass, else the request's own `model` field, else the request's shape (Anthropic's `system` field or `tool_use` blocks mean Claude). Cursor transcripts record no model and use Anthropic-style blocks, so Cursor sessions are counted at Claude density; for a GPT model in Cursor that reads about 40% high.
+
 **How the Claude figures were measured, with no key.** Claude Code transcripts record what the API billed, and two things in them are exact. A reply with no thinking block is billed as exactly its `output_tokens`, and all of it is visible text: 504 replies gave a median of 2.75 chars/token (p10 2.4, p90 3.0). Between two consecutive API calls the prompt grows by exactly what was appended; when that is one large block, its size is the growth minus the previous reply: 474 blocks of code and tool output gave 2.4 (p10 2.1, p90 2.8). The ratios this tool used until 0.19 (4.0 / 3.2 for everything) **undercounted current Claude models by about 40%**: hook warnings came late, savings and costs read low, and the proxy stayed silent on cacheable prefixes between 1,024 and ~1,670 tokens. `context-doctor accuracy` re-runs both measurements on your own sessions and prints them per model beside the ratio in use, so the next tokenizer change shows up as a number, not a surprise. On this machine every model lands within ±9%.
 
 Two ways to get real numbers instead of estimates:
