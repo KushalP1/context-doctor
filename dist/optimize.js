@@ -231,7 +231,13 @@ export function optimizeConversation(input, options = {}) {
         if (!messages[i] || typeof messages[i] !== "object")
             messages.splice(i, 1);
     }
-    const model = options.model ?? (!Array.isArray(data) && typeof data?.model === "string" ? data.model : undefined);
+    // The request's own model, else Anthropic's shape (a top-level system, or
+    // tool_use/tool_result blocks) says whose tokenizer counts it.
+    const looksAnthropic = (!Array.isArray(data) && data?.system != null) ||
+        messages.some((m) => Array.isArray(m?.content) && m.content.some((b) => b?.type === "tool_use" || b?.type === "tool_result"));
+    const model = options.model ??
+        (!Array.isArray(data) && typeof data?.model === "string" ? data.model : undefined) ??
+        (looksAnthropic ? "claude" : undefined);
     const tok = (text) => estimateTokens(text, model);
     const tokensBefore = messages.reduce((s, m) => s + tok(textOf(m.content)), 0);
     const applied = [];

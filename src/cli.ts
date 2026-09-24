@@ -103,7 +103,7 @@ Options:
                           Default: dedupe, trim-tool-results, strip-base64 (lossless-ish set)
   --keep-recent <n>       (optimize) Messages at the tail to leave untouched (default 6)
   --max-tool-tokens <n>   (optimize) Token budget for trimmed tool results (default 300)
-  --limit <n>             (accuracy) Sessions to sample (default 20)
+  --limit <n>             (accuracy, session --list) Sessions to sample or list (default 20)
   --check <cmd>           (experiment) Command whose exit code is the pass/fail for each arm
   --existing <id>         (experiment) Session id to fork the second arm from (never mutated)
   --budget <usd>          (experiment) Spend cap per arm (default 1)
@@ -367,9 +367,9 @@ function main(): void {
 
   if (args.command === "session") {
     if (args.list) {
-      const sessions = listSessions();
+      const sessions = listSessions(args.limit ?? 20);
       if (sessions.length === 0) {
-        console.log("No Claude Code sessions found under ~/.claude/projects.");
+        console.log("No sessions found under ~/.claude/projects or ~/.codex/sessions.");
         return;
       }
       for (const s of sessions) {
