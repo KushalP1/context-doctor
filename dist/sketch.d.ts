@@ -6,8 +6,10 @@
  * JSON means re-typing 50k+ tokens as a tool argument. No model does that, and
  * it would double the context it is meant to measure. A sketch is ~100 output
  * tokens: turn count plus the handful of blocks that matter (pastes, tool
- * results, images, repeats). The estimate is coarse (±30%) and says so, but it
- * turns "call profile_context" from an impossible instruction into a cheap one.
+ * results, images, repeats). Measured error: -20% to +9% on the conversation
+ * total from turn count alone, ±25% on a code block sized by lines, ±15% on
+ * one sized by chars. Coarse, stated, and enough to find what to drop; it turns
+ * "call profile_context" from an impossible instruction into a cheap one.
  */
 export type SketchKind = "paste" | "code" | "tool_result" | "image" | "base64" | "text";
 export interface SketchBlock {
@@ -52,7 +54,9 @@ export interface SketchProfile {
     perTurnUsd?: number;
     perTurnCachedUsd?: number;
 }
-export declare function blockTokens(b: SketchBlock): number;
+export declare function blockTokens(b: SketchBlock, model?: string): number;
+/** Tokens for one plain exchange under this model's tokenizer. */
+export declare function exchangeTokens(model?: string): number;
 export declare function profileSketch(sketch: ConversationSketch): SketchProfile;
 export declare function renderSketchProfile(p: SketchProfile): string;
 /** Profile a sketch, log it to the ledger like a hook check, and render. */

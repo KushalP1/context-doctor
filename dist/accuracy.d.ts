@@ -11,10 +11,12 @@
  * measures the distance between them on your own sessions, so "why is my bill
  * bigger than the profile?" has an answer with evidence behind it.
  *
- * WHAT THIS IS NOT: a tokenizer benchmark. It cannot be — the content behind
- * the gap is unavailable to us, so the gap cannot be attributed to estimator
- * drift. To measure the estimator itself, use `analyze --exact`, which counts
- * the same bytes with the provider's own tokenizer.
+ * The coverage figure uses the model-aware estimator. Estimator drift itself is
+ * measured separately (tokenizer-measure.ts) on content the transcript DOES
+ * hold: replies whose output_tokens are exact, and single large blocks whose
+ * size is the exact prompt growth. Until 0.19 this command attributed the whole
+ * gap to invisible content; about a third of it was the estimator undercounting
+ * Claude's tokenizer.
  */
 export interface AccuracyReport {
     sessionsScanned: number;

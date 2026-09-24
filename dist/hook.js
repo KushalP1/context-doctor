@@ -17,7 +17,7 @@ import { recordLedger, statePath } from "./ledger.js";
 import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
 import { parseSessionFile } from "./session.js";
-import { formatTokens } from "./tokens.js";
+import { formatTokens, CHARS_PER_TOKEN } from "./tokens.js";
 import { formatUsd } from "./pricing.js";
 import { checkBudget, loadConfig } from "./config.js";
 /** Default nudge threshold; a project budget or env var can lower/raise it. */
@@ -37,13 +37,16 @@ function warnThreshold(budgetMaxTokens) {
 /** Re-nudge only after the context grows another 40% — one reminder, not a nag. */
 const REGROWTH_FACTOR = 1.4;
 /**
- * Fast-path gate: text tokens are at least ~4 bytes each and the transcript
+ * Fast-path gate: no tokenizer we model packs more than one token into fewer
+ * bytes than its densest ratio (Claude on code, 2.4), and the transcript
  * carries JSON overhead on top, so a file smaller than this cannot possibly
  * hold that many tokens of context. Lean sessions cost one stat() call — the
- * transcript is never even read.
+ * transcript is never even read. (This used 4 bytes per token until 0.19,
+ * which let Claude sessions past the threshold take the fast path.)
  */
+const DENSEST_CHARS_PER_TOKEN = Math.min(...Object.values(CHARS_PER_TOKEN).map((r) => Math.min(r.prose, r.code)));
 function minBytesForWarn(threshold) {
-    return threshold * 4;
+    return Math.floor(threshold * DENSEST_CHARS_PER_TOKEN);
 }
 /**
  * State lives in one small file per session, not one shared map.

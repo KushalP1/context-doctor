@@ -49,17 +49,51 @@ function symbolDensity(text) {
     const symbols = text.match(/[{}[\]()<>;:=_\/\\|"'`#$%&*+^~-]/g);
     return (symbols?.length ?? 0) / text.length;
 }
-export function estimateTokens(text) {
+/**
+ * Characters per token, by provider and by content type.
+ *
+ * Anthropic: measured 2026-09 against the API's own counts in 59 Claude Code
+ * sessions (Opus 4.7 to 5, Fable 5.x), two independent ways that agree.
+ * Prose: 504 assistant replies with no thinking block, visible text divided by
+ * the exact output_tokens: median 2.75 (p10 2.4, p90 3.0). Code and tool
+ * output: 474 single appended blocks over 6k chars, sized by the exact growth
+ * of the billed prompt between consecutive calls: median 2.4 (p10 2.1, p90 2.8).
+ * The ratios this tool used before (4.0 / 3.2) undercounted current Claude
+ * models by about 1.45x on prose and 1.33x on code.
+ *
+ * OpenAI, Google and unknown models keep 4.0 / 3.2, the usual figures for
+ * o200k-class tokenizers on English and code. They are not re-measured here:
+ * Codex rollouts truncate tool output before the model sees it, so the same
+ * delta method does not isolate a block. `analyze --exact` calibrates any
+ * provider from its own tokenizer on your machine.
+ */
+export const CHARS_PER_TOKEN = {
+    anthropic: { prose: 2.75, code: 2.4 },
+    openai: { prose: 4.0, code: 3.2 },
+    google: { prose: 4.0, code: 3.2 },
+    generic: { prose: 4.0, code: 3.2 },
+};
+/** True when text is dense with code/JSON symbols and tokenizes more finely. */
+export function isCodeLike(text) {
+    return symbolDensity(text) > 0.08;
+}
+/** Chars per token to use for this text under this model's tokenizer. */
+export function charsPerTokenFor(text, model) {
+    const ratios = CHARS_PER_TOKEN[providerFor(model)];
+    return isCodeLike(text) ? ratios.code : ratios.prose;
+}
+/**
+ * Estimated tokens for `text`. Pass the model when you know it: Claude's
+ * tokenizer produces ~40% more tokens than the provider-neutral default.
+ */
+export function estimateTokens(text, model) {
     // Public API: callers outside this package pass whatever they have, and a
     // TypeError from a token estimator is never the useful answer.
     if (typeof text !== "string")
         text = String(text ?? "");
     if (!text)
         return 0;
-    // Denser tokenization for code/JSON-like content, lighter for plain prose.
-    const density = symbolDensity(text);
-    const charsPerToken = density > 0.08 ? 3.2 : 4.0;
-    return Math.ceil(text.length / charsPerToken);
+    return Math.ceil(text.length / charsPerTokenFor(text, model));
 }
 /** Per-message structural overhead (role markers, delimiters) is roughly constant. */
 export const MESSAGE_OVERHEAD_TOKENS = 4;

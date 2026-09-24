@@ -6,12 +6,13 @@
  * JSON means re-typing 50k+ tokens as a tool argument. No model does that, and
  * it would double the context it is meant to measure. A sketch is ~100 output
  * tokens: turn count plus the handful of blocks that matter (pastes, tool
- * results, images, repeats). The estimate is coarse (±30%) and says so, but it
- * turns "call profile_context" from an impossible instruction into a cheap one.
+ * results, images, repeats). Measured error: -20% to +9% on the conversation
+ * total from turn count alone, ±25% on a code block sized by lines, ±15% on
+ * one sized by chars. Coarse, stated, and enough to find what to drop; it turns
+ * "call profile_context" from an impossible instruction into a cheap one.
  */
 
-import { contextWindowFor } from "./tokens.js";
-import { formatTokens } from "./tokens.js";
+import { CHARS_PER_TOKEN, contextWindowFor, formatTokens, providerFor } from "./tokens.js";
 import { formatUsd, inputCostUsd, pricingFor } from "./pricing.js";
 import { recordLedger } from "./ledger.js";
 
@@ -63,43 +64,69 @@ export interface SketchProfile {
   perTurnCachedUsd?: number;
 }
 
-// A plain chat turn without attachments: a short user message and a normal
-// assistant reply. Measured across Claude Code transcripts the median user turn
-// is ~120 tokens and the median assistant turn ~450; chat apps run similar.
-const BASELINE_TOKENS_PER_TURN = 570;
+// Every size here is in CHARACTERS, measured on real data, and converted to
+// tokens with the model's own ratio (tokens.ts), so a Claude chat and a GPT
+// chat of the same text get different, correct counts.
+//
+// A plain exchange: the user's message plus the assistant's reply. Median over
+// 1,283 exchanges in 59 Claude Code sessions (p25 1,177, p75 3,008). Sizing a
+// 30+ exchange chat from its turn count alone landed within -20% to +9% of the
+// real visible total (p10 to p90, 12 sessions): individual turns vary a lot,
+// long chats average it out.
+const CHARS_PER_EXCHANGE = 2060;
 
-// Tokens per unit when the model reports size in lines/words/chars. Code and
-// tool output are denser per line than prose; words are ~1.35 tokens each.
-const TOKENS_PER_LINE: Record<SketchKind, number> = {
-  code: 12, tool_result: 12, paste: 14, text: 14, base64: 40, image: 0,
+// Mean chars per non-empty line. Code: median over 719 source files (a line
+// count for code is within about ±25%). Logs and tool output: median over
+// 2,095 tool results, but they range 38 to 100 chars a line, so the schema
+// asks for chars or tokens on those, and lines are the fallback.
+const CHARS_PER_LINE: Record<SketchKind, number> = {
+  code: 42, tool_result: 56, paste: 56, text: 80, base64: 76, image: 0,
 };
-const TOKENS_PER_WORD = 1.35;
-const CHARS_PER_TOKEN = 4;
-// When a block carries no size at all. Images are billed at a near-fixed rate.
-const DEFAULT_TOKENS: Record<SketchKind, number> = {
-  image: 1500, paste: 800, code: 800, tool_result: 800, base64: 4000, text: 300,
+// Prose, including the space after each word (6.3 measured on assistant text).
+const CHARS_PER_WORD = 6.3;
+// When a block carries no size at all.
+const DEFAULT_CHARS: Record<SketchKind, number> = {
+  paste: 2400, code: 2400, tool_result: 2400, text: 900, base64: 12000, image: 0,
 };
+// Images are billed by pixels, not bytes: ~1,600 tokens for a full-size
+// screenshot on Claude, fewer on smaller images and on GPT. One figure is enough
+// for a sketch.
+const IMAGE_TOKENS = 1500;
 
 const LARGE_BLOCK_TOKENS = 2000;
 const LONG_HISTORY_TURNS = 30;
 const HANDOFF_SUMMARY_TOKENS = 300;
 const RECENT_TURNS_KEPT = 6;
 
-export function blockTokens(b: SketchBlock): number {
-  if (b.kind === "image") return b.approx_tokens ?? DEFAULT_TOKENS.image;
+/** Code, tool output and base64 tokenize at the code ratio; pastes and text at the prose ratio. */
+function ratioFor(kind: SketchKind, model?: string): number {
+  const r = CHARS_PER_TOKEN[providerFor(model)];
+  return kind === "code" || kind === "tool_result" || kind === "base64" ? r.code : r.prose;
+}
+
+export function blockTokens(b: SketchBlock, model?: string): number {
+  if (b.kind === "image") return b.approx_tokens && b.approx_tokens > 0 ? Math.round(b.approx_tokens) : IMAGE_TOKENS;
   if (b.approx_tokens && b.approx_tokens > 0) return Math.round(b.approx_tokens);
-  if (b.approx_lines && b.approx_lines > 0) return Math.round(b.approx_lines * TOKENS_PER_LINE[b.kind]);
-  if (b.approx_words && b.approx_words > 0) return Math.round(b.approx_words * TOKENS_PER_WORD);
-  if (b.approx_chars && b.approx_chars > 0) return Math.round(b.approx_chars / CHARS_PER_TOKEN);
-  return DEFAULT_TOKENS[b.kind];
+  const chars =
+    b.approx_chars && b.approx_chars > 0 ? b.approx_chars
+    : b.approx_lines && b.approx_lines > 0 ? b.approx_lines * CHARS_PER_LINE[b.kind]
+    : b.approx_words && b.approx_words > 0 ? b.approx_words * CHARS_PER_WORD
+    : DEFAULT_CHARS[b.kind];
+  return Math.round(chars / ratioFor(b.kind, model));
+}
+
+/** Tokens for one plain exchange under this model's tokenizer. */
+export function exchangeTokens(model?: string): number {
+  return Math.round(CHARS_PER_EXCHANGE / CHARS_PER_TOKEN[providerFor(model)].prose);
 }
 
 export function profileSketch(sketch: ConversationSketch): SketchProfile {
   const turns = Math.max(0, Math.floor(sketch.turns || 0));
   const blocks = Array.isArray(sketch.blocks) ? sketch.blocks : [];
-  const baselineTokens = turns * BASELINE_TOKENS_PER_TURN;
+  const perExchange = exchangeTokens(sketch.model);
+  const baselineTokens = turns * perExchange;
   // A repeated block costs its size every time it appears.
-  const sized = blocks.map((b) => ({ block: b, tokens: blockTokens(b), copies: Math.max(1, Math.floor(b.repeated ?? 1)) }));
+  const sized = blocks.map((b) => ({ block: b, tokens: blockTokens(b, sketch.model), copies: Math.max(1, Math.floor(b.repeated ?? 1)) }));
   const blockTotal = sized.reduce((n, s) => n + s.tokens * s.copies, 0);
   const totalTokens = baselineTokens + blockTotal;
 
@@ -154,7 +181,7 @@ export function profileSketch(sketch: ConversationSketch): SketchProfile {
   }
 
   if (turns >= LONG_HISTORY_TURNS) {
-    const afterHandoff = RECENT_TURNS_KEPT * BASELINE_TOKENS_PER_TURN + HANDOFF_SUMMARY_TOKENS;
+    const afterHandoff = RECENT_TURNS_KEPT * perExchange + HANDOFF_SUMMARY_TOKENS;
     findings.push({
       id: "long_history",
       severity: totalTokens > 100_000 ? "high" : "warn",
@@ -197,7 +224,7 @@ export function renderSketchProfile(p: SketchProfile): string {
   const lines: string[] = [];
   const window = p.usagePct !== undefined ? ` (~${p.usagePct}% of ${formatTokens(p.contextWindow!)})` : "";
   lines.push(`Context estimate from sketch: ~${formatTokens(p.totalTokens)} tokens${window}, ${p.turns} turns.`);
-  lines.push(`  ${formatTokens(p.baselineTokens)} plain conversation + ${formatTokens(p.blockTokens)} in pastes, tool output and images. Estimate, ±30%.`);
+  lines.push(`  ${formatTokens(p.baselineTokens)} plain conversation + ${formatTokens(p.blockTokens)} in pastes, tool output and images. Estimate, usually within ±20%.`);
   if (p.perTurnUsd !== undefined) {
     lines.push(`  Re-read on every turn: ${formatUsd(p.perTurnUsd)} at list price, ${formatUsd(p.perTurnCachedUsd!)} when cached. On a subscription this is what spends the usage limit.`);
   } else {

@@ -14,7 +14,7 @@
 import http from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { optimizeConversation } from "./optimize.js";
-import { formatTokens } from "./tokens.js";
+import { formatTokens, CHARS_PER_TOKEN, providerFor } from "./tokens.js";
 import { formatUsd, inputCostUsd, pricingFor } from "./pricing.js";
 import { recordLedger } from "./ledger.js";
 /** Connection-level headers that must not be forwarded. */
@@ -155,7 +155,9 @@ export function startProxy(opts = {}) {
                         if (url.startsWith("/v1/messages") && requestModel) {
                             const stablePrefix = JSON.stringify(parsedBody.tools ?? null) + JSON.stringify(parsedBody.system ?? null);
                             const hasBreakpoint = body.includes("cache_control");
-                            if (stablePrefix.length > 4000 && !hasBreakpoint) {
+                            const stablePrefixTokens = Math.round(stablePrefix.length / CHARS_PER_TOKEN[providerFor(requestModel)].code);
+                            // Anthropic will not cache a prefix under ~1024 tokens; below that the advice is useless.
+                            if (stablePrefixTokens >= 1024 && !hasBreakpoint) {
                                 // Say WHERE, not just that. A breakpoint caches everything up
                                 // to and including the block it sits on, so it belongs on the
                                 // LAST stable block: the final tool definition if there are
@@ -163,7 +165,7 @@ export function startProxy(opts = {}) {
                                 const where = Array.isArray(parsedBody.tools) && parsedBody.tools.length > 0
                                     ? `the last entry in "tools" (tools come before system in the cached prefix)`
                                     : `the last block of "system"`;
-                                advise(`~${Math.round(stablePrefix.length / 4)}+ tokens of stable system/tools on ${requestModel} without cache_control. ` +
+                                advise(`~${stablePrefixTokens}+ tokens of stable system/tools on ${requestModel} without cache_control. ` +
                                     `Add {"cache_control":{"type":"ephemeral"}} to ${where}; everything before it then bills at ~10% on every call`);
                             }
                             const fp = fnv1a(stablePrefix);
@@ -188,7 +190,7 @@ export function startProxy(opts = {}) {
                                     stable++;
                                 if (stable >= 2) {
                                     const stableChars = msgs.slice(0, stable).reduce((n, m) => n + JSON.stringify(m).length, 0);
-                                    const stableTokens = Math.round(stableChars / 4);
+                                    const stableTokens = Math.round(stableChars / CHARS_PER_TOKEN[providerFor(requestModel)].code);
                                     // Anthropic will not cache a prefix under ~1024 tokens (2048 on Haiku).
                                     if (stableTokens >= 1024) {
                                         advise(`messages #0-#${stable - 1} (~${stableTokens} tokens) were identical to the previous ${requestModel} request and carry no cache_control. ` +
