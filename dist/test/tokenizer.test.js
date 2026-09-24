@@ -152,3 +152,25 @@ test("proxy: the missing-cache_control advice fires from 1,024 Claude tokens, no
         upstream.close();
     }
 });
+test("an Anthropic-format request with no model field is counted with Claude's ratios", () => {
+    const body = JSON.stringify({ system: "Be brief.", messages: [{ role: "user", content: prose.repeat(100) }] });
+    const conv = parseConversation(body);
+    assert.equal(conv.sourceFormat, "anthropic");
+    const p = profileConversation(conv);
+    assert.equal(p.model, undefined, "no model is invented for pricing or the window");
+    assert.ok(p.totalTokens > profileConversation(parseConversation(JSON.stringify({ messages: [{ role: "system", content: "Be brief." }, { role: "user", content: prose.repeat(100) }] }))).totalTokens * 1.35);
+    assert.ok(optimizeConversation(body).tokensBefore > optimizeConversation(JSON.stringify({ messages: [{ role: "user", content: prose.repeat(100) }] })).tokensBefore * 1.35);
+});
+test("session --list honours --limit", async () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-list-"));
+    const { mkdirSync } = await import("node:fs");
+    const proj = join(home, ".claude", "projects", "p");
+    mkdirSync(proj, { recursive: true });
+    for (let i = 0; i < 25; i++)
+        writeFileSync(join(proj, `s${i}.jsonl`), JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }));
+    const run = (args) => new Promise((resolve, reject) => {
+        execFile(process.execPath, [cliPath, "session", "--list", ...args], { env: { ...process.env, HOME: home, USERPROFILE: home } }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
+    });
+    assert.equal((await run([])).trim().split("\n").length, 20);
+    assert.equal((await run(["--limit", "25"])).trim().split("\n").length, 25);
+});

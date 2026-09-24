@@ -149,11 +149,15 @@ export function profileConversation(conv, model) {
     // An explicit model wins; otherwise the request's own model field decides
     // which tokenizer ratios apply.
     model = model ?? conv.model;
+    // With no model at all, Anthropic's request format still says whose
+    // tokenizer counts it. Only the ratios use this; pricing and the window
+    // stay unknown rather than guessed.
+    const tokenizerModel = model ?? (conv.sourceFormat === "anthropic" ? "claude" : undefined);
     // Learned from the user's own exact counts, if they ever fetched any.
-    const calibration = calibrationFor(model);
+    const calibration = calibrationFor(tokenizerModel);
     const perMessage = conv.messages.map((m) => ({
         msg: m,
-        tokens: Math.round(estimateTokens(m.text, model) * calibration.factor) + MESSAGE_OVERHEAD_TOKENS,
+        tokens: Math.round(estimateTokens(m.text, tokenizerModel) * calibration.factor) + MESSAGE_OVERHEAD_TOKENS,
     }));
     const totalTokens = perMessage.reduce((sum, p) => sum + p.tokens, 0);
     const categories = {
