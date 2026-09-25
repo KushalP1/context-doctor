@@ -238,6 +238,7 @@ export async function autopilotOn(port = DEFAULT_AUTOPILOT_PORT, paths = autopil
     lines.push(`✓ Claude Code routed through it (env.ANTHROPIC_BASE_URL in ${paths.settings})`);
     lines.push("  Applies to Claude Code sessions started from now on (CLI, IDE, and the desktop app's Code tab).");
     lines.push("  Sessions already open keep their old route until restarted.");
+    lines.push(`  GPT apps on your own OpenAI key get the same: export OPENAI_BASE_URL=${proxyUrl(port)}/v1`);
     return { ok: true, lines };
 }
 export async function autopilotOff(paths = autopilotPaths()) {

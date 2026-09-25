@@ -1,14 +1,29 @@
 # context-doctor 🩺
 
-[![CI](https://github.com/KushalP1/context-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/KushalP1/context-doctor/actions) [![npm](https://img.shields.io/npm/v/context-doctor)](https://www.npmjs.com/package/context-doctor)
+[![CI](https://github.com/KushalP1/context-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/KushalP1/context-doctor/actions) [![npm](https://img.shields.io/npm/v/context-doctor)](https://www.npmjs.com/package/context-doctor) [![npm downloads](https://img.shields.io/npm/dm/context-doctor)](https://www.npmjs.com/package/context-doctor) [![license: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE) ![macOS | Linux | Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
-**See what's eating your LLM context window — and fix it.**
+**Keep every AI session's context lean, automatically, without ever making it more expensive.**
 
-Every long-running LLM conversation slowly fills up with junk: duplicated documents, 10k-token tool outputs nobody reads again, base64 blobs, stale history. You pay for those tokens on **every single call**, and model quality drops as the window fills.
+Long agent sessions fill up with tool output nobody reads again: file dumps, shell logs, search results, screenshots. You pay for all of it on every request, the model gets slower, and it drifts as the window fills. `context-doctor` measures that, and with **autopilot** it removes it from every Claude Code (and GPT API) request on your machine, only at moments when doing so costs nothing extra.
 
-`context-doctor` is a zero-config profiler + optimizer for LLM contexts. It works with **Claude, GPT, Gemini** message formats, and plugs into **Claude Desktop, ChatGPT (developer mode), Cursor, Claude Code** — any MCP-capable app — or runs standalone from the terminal.
+- **9.8% less input cost, no session worse.** Measured by replaying every real Claude Code session on the author's machine through the shipped code, request by request, priced the way the prompt cache bills it. Up to 37.6% on one long session. [How →](#autopilot-every-claude-code-session-keeps-its-own-context-lean)
+- **Counts Claude correctly.** Current Claude models pack 2.75 characters per token, not the 4 most tools assume; estimates built on 4 undercount Claude by about 40%. The ratios here were measured from the API's own counts, and `context-doctor accuracy` re-checks them on yours. [How →](#why-token-counts-are--and-where-they-are-exact)
+- **Works where you work:** Claude Code, Cursor, Codex, Claude Desktop, any Anthropic or OpenAI API app, VS Code, CI. macOS, Linux and Windows, Node 20+.
+- **Local and keyless.** No account, no telemetry, no API key. Your own login passes through untouched. MIT.
 
 Built and maintained by [gAI Ventures](https://gai.ventures).
+
+## Quick start
+
+```bash
+npm install -g context-doctor
+context-doctor install          # hooks, MCP server and skill in every AI app it finds
+context-doctor autopilot on     # every new Claude Code session keeps its context lean
+```
+
+Then start a new Claude Code session and work as usual. `context-doctor autopilot status` shows what it did; `context-doctor doctor` checks the whole setup. Everything is reversible: `context-doctor autopilot off`, `context-doctor uninstall`.
+
+Just want a look first? `npx context-doctor session` profiles your latest Claude Code or Codex session in place, no install.
 
 ```
 Where the tokens go
@@ -26,35 +41,49 @@ Findings (4)
    → Truncate or summarize large tool outputs before they enter history.
 ```
 
-## Quick start (30 seconds)
+## What happens on each platform
 
-**One command sets up everything** — detects Claude Desktop, Claude Code, and Cursor on your machine, wires in the MCP server, installs the Agent Skill, and registers the Claude Code every-prompt hook:
+| Where you work | Automatic, every request | What you get on top |
+|---|---|---|
+| **Claude Code** (terminal, VS Code, JetBrains, desktop app's Code tab) | **Autopilot** clears stale tool output (cold cache only, never more expensive). **Hook** on every prompt warns the model with the real context size and its largest waste | Status bar context meter, `/context-doctor` skill, `session`, `watch`, `report`, dashboard |
+| **Cursor** (agent) | Cursor runs Claude Code's hooks, so the same every-prompt check fires inside Cursor | MCP tools, editor status bar extension, `cursor` profiler. With your own OpenAI key, autopilot too via a tokened tunnel ([how](#putting-the-proxy-on-a-public-url-cursor-with-your-own-openai-key-remote-apps)) |
+| **Codex** (ChatGPT app's Codex tab, IDE extension, CLI) | Every-prompt hook with the API's own token counts | MCP tools, skill, `session` reads Codex rollouts. On an API key, autopilot too (`OPENAI_BASE_URL`) |
+| **Your own apps on the Anthropic or OpenAI API** | Autopilot on `/v1/messages`, `/v1/chat/completions` and `/v1/responses` (`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`), or the full optimizing proxy | Exact usage and cache hit rates in `/stats`, prompt-cache placement advice |
+| **Claude Desktop chat** | Standing context rules in every chat; one cheap `profile_context` call the model makes past ~30 turns or on any cost question | One-click `.mcpb` install, `context_checkup` prompt |
+| **claude.ai, ChatGPT, the phone apps** | Your account's standing preferences (`context-doctor instructions --copy`) | Profile an exported chat with `analyze` |
+| **CI** | `analyze --fail-over-budget` fails a build whose prompts outgrow a budget | `.contextdoctorrc` budgets and presets |
 
-```bash
-npx context-doctor install
-```
+Not claimed, because no process on your machine sends those requests: trimming inside Claude Desktop chat, claude.ai, ChatGPT, Cursor's own subscription models, or Codex signed in with ChatGPT. Those get the rules and the measurements above, not autopilot.
+
+## What's new
+
+- **0.20 Autopilot**: stale tool output cleared from every Claude Code request, only when the prompt cache is cold, so it cannot cost more; runs as a login service on macOS, Linux and Windows; now also for GPT via OpenAI's Chat Completions and Responses APIs.
+- **0.19 Measured Claude tokenizer**: estimates were 40% low for Claude; fixed from the API's own counts, with a per-model check in `accuracy`.
+- **0.18** `proxy --token` for putting the proxy on a public URL safely. **0.17** Claude Desktop: a `profile_context` the model can afford to call from chat, `.mcpb` bundle, standing preferences for web and mobile. **0.16** Codex. **0.15** Cursor.
+
+Full history with the measurements behind each change: [ROADMAP.md](./ROADMAP.md).
+
+## Setup details
 
 `install` configures every app it detects and does not stop at the first problem: a corrupt Claude Desktop config still gets you Claude Code and Cursor. It does not pretend either. Any target that failed is named with a ✗ line, the summary reads "Done with N problem(s)" instead of "Done.", and the **exit code is 1**, so dotfiles and onboarding scripts can react. A broken config file is never overwritten; fix it and re-run.
 
-That single command is also all it takes to **set up context-doctor on anyone else's machine**. Prefer a global install, or want the unreleased `main`? Both work (Node 20+):
-
-```bash
-npm install -g context-doctor && context-doctor install
-```
-
-Restart your apps, then just ask Claude: *"what's eating my context?"* (`npx context-doctor uninstall` reverses it.)
+`npx context-doctor install` works too, but autopilot needs the global install: a background service cannot point into npx's cache, which npm deletes at will.
 
 **No API keys, ever.** Everything is deterministic local code; when an LLM is needed (summarizing pruned history), the model already running in your app does it. The proxy forwards *your app's* credentials untouched — context-doctor itself holds nothing.
 
 ## What `install` actually does — and what happens in every session after
 
-One run of `npx context-doctor install` writes five things (each config edit makes a `.backup` first; `uninstall` reverses all of it):
+One run of `context-doctor install` writes these (each config edit makes a `.backup` first; `uninstall` reverses all of it):
 
 1. **Claude Desktop config** (`claude_desktop_config.json`) — registers the MCP server
 2. **Claude Code config** (`~/.claude.json`) — registers the MCP server
 3. **Cursor config** (`~/.cursor/mcp.json`) — registers the MCP server
 4. **Agent Skill** → `~/.claude/skills/context-doctor/` — context-hygiene playbook for Claude Code
-5. **Every-prompt hook** → `~/.claude/settings.json` — the per-query context check for Claude Code
+5. **Every-prompt hook** → `~/.claude/settings.json` — the per-query context check for Claude Code (Cursor runs it too)
+6. **Codex**, when present: MCP server in `~/.codex/config.toml`, the hook in `~/.codex/hooks.json`, the skill in `~/.codex/skills/`
+7. With `--statusline`: live context size, cache share and cost in Claude Code's status bar
+
+`context-doctor autopilot on` is separate and opt-in: it adds the background proxy service and one line (`env.ANTHROPIC_BASE_URL`) to `~/.claude/settings.json`, after the proxy has answered a health check.
 
 **In every chat afterward (Claude Desktop, Cursor):** when the conversation starts, the app launches the MCP server, which hands the model standing instructions that stay in force for the whole chat:
 
@@ -72,11 +101,12 @@ One run of `npx context-doctor install` writes five things (each config edit mak
 
 ## Do you need MCP? Only sometimes — all the ways to use context-doctor
 
-MCP is just one of six delivery mechanisms. It's only required when you want the AI **inside a chat app** to run the tools itself. Everything else works without it:
+MCP is just one of seven delivery mechanisms. It's only required when you want the AI **inside a chat app** to run the tools itself. Everything else works without it:
 
 | How you use it | MCP needed? | What it requires |
 |---|---|---|
 | **CLI** — `analyze`, `optimize`, `session` on files/transcripts | ❌ No | Nothing but `npx` — works in any terminal, scripts, CI |
+| **Autopilot** — every Claude Code session, and GPT API apps | ❌ No | `context-doctor autopilot on` (a login service + one line in `~/.claude/settings.json`) |
 | **Proxy** — always-on optimization of your API apps | ❌ No | `context-doctor proxy` + one env var in your app |
 | **Claude Code every-prompt hook** | ❌ No | Written by `install`; Claude Code invokes it directly |
 | **Agent Skill** — hygiene behavior in Claude Code / claude.ai | ❌ No | A markdown file; `install` places it (or upload to claude.ai) |
@@ -113,14 +143,13 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 
 | Where you run LLMs | Mechanism | Guarantee |
 |---|---|---|
-| Your own apps/agents (API) | `context-doctor proxy` rewrites every request in flight | **Every call, automatic** |
+| Claude Code sessions, with autopilot on | The login-service proxy clears stale tool output from every request, only when the cache is cold | **Every request; never more expensive (measured)** |
+| Your own apps/agents (API) | `context-doctor proxy` rewrites every request in flight, or `proxy --autopilot` for the cache-safe mode | **Every call, automatic** |
 | Claude Code / Cowork sessions | `install` registers a **UserPromptSubmit hook**: every query measures the session; heavy sessions get injected hygiene guidance (silent when lean, rate-limited, never blocks a prompt) | **Every query checked** |
 | Claude Desktop chat / Cursor | **MCP server instructions** — standing hygiene directives injected into every conversation where the server is enabled, plus prescriptive tool triggers | **Every conversation carries the rules** |
-| claude.ai (web) / ChatGPT app | Upload `skills/context-doctor/SKILL.md` in the app's Skills settings for the same standing behavior | Manual one-time upload |
+| claude.ai (web) / ChatGPT / phone apps | `context-doctor instructions --copy`, pasted once into the account's preferences (or upload `skills/context-doctor/SKILL.md` as a skill) | Every chat on that account carries the rules |
 
-Nothing runs in the background for the Claude apps — the hook, skill, MCP server, and its instructions are all delivered by the app itself at the right moment. The proxy is the only long-running piece, and only your API-calling apps need it.
-
-Optional belt-and-braces for any chat app: add one line to your profile preferences — *"Practice context hygiene: summarize large content instead of re-quoting it, and use context-doctor's tools when conversations get heavy."*
+Without autopilot nothing runs in the background: the hook, skill, MCP server and its instructions are delivered by the apps themselves at the right moment. With autopilot, one small proxy runs as a login service (launchd / systemd user service / logon task) and is restarted by the service or by the next prompt's hook if it ever stops.
 
 Or use the CLI directly, no install needed:
 
