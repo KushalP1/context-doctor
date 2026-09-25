@@ -68,6 +68,16 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.20.0 — autopilot: lean context in every Claude Code session, never more expensive
+
+Asked: "auto-optimize every session I run, and make sure performance only improves." Measured before building:
+
+- **The existing proxy strategies failed the bar.** Replayed over 33 real sessions with cache pricing they saved 6.7% overall but made one session 13% more expensive: editing history the cache holds re-bills everything after the edit.
+- **Where the cost is:** 94% of input cost came from requests above 200k tokens (53% above 600k), in 1M-context sessions.
+- **Claude Code already contains the right idea**: a "microcompact" that clears old tool output (keep 3, clear 40k+ batches), switched off by a server-side flag on this account (42 unexplained prompt drops in 19,769 requests), and an API context-management option compiled out.
+- **AutoClearer** follows that design with one change for "never worse": batches are taken only when the cache is cold anyway (idle past the request's own TTL, 1 hour here; 444 of 19,824 gaps). Replaying every session through the shipped class: 9.8% less cache-weighted input, no session worse. Warm-cache payback rules gained 0.1% and lost on one session, so they are opt-in.
+- **Service + wiring**: launchd / systemd --user / logon task; `/health` must answer before settings.json is touched; the hook restarts a dead proxy before the prompt's request (0.6 s, measured); `pause` is an instant passthrough. Overhead 7 ms on a 2.9 MB request. Verified that settings.json `env` overrides the base URL the desktop app injects.
+
 ## Shipped in 0.19.0 — the estimator was undercounting Claude by ~40%
 
 Picked up as "calibrate the sketch against exact usage"; the calibration found a bigger problem underneath.
