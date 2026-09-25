@@ -90,6 +90,7 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | Command | What it does |
 |---|---|
 | `context-doctor install` / `uninstall` | Wire (or remove) everything: MCP for Claude Desktop/Code/Cursor/Codex, the Agent Skill, the every-prompt hook |
+| `context-doctor autopilot on\|off\|pause\|resume\|status` | Every new Claude Code session goes through the local proxy, which clears stale tool output only when the prompt cache is cold: measured 9.8% less input cost, no session worse |
 | `context-doctor instructions [--copy]` | The ~180-token standing rules (~120 on GPT) for claude.ai / ChatGPT preferences, for web and phones where no server runs |
 | `context-doctor analyze <file>` | Profile a conversation: token breakdown, findings, cost + latency estimates. `--fail-over-budget` exits 1 on a breach, for CI |
 | `context-doctor optimize <file>` | Apply the safe fixes; add `--strategy trim-tool-calls` for big inline file writes, `--strategy prune-history` for consented lossy compaction |
@@ -149,6 +150,35 @@ npx context-doctor session --list    # browse sessions
 ```
 
 Parses the transcripts Claude Code writes locally and answers "where did my tokens go today?" — it will happily tell you that one giant skill load is 67% of your context.
+
+## Autopilot: every Claude Code session keeps its own context lean
+
+```bash
+context-doctor autopilot on        # once; survives reboots
+context-doctor autopilot status    # what it has done
+context-doctor autopilot pause     # instant passthrough, nothing restarts
+context-doctor autopilot off       # remove it
+```
+
+`autopilot on` runs the local proxy as a background service (launchd on macOS, a systemd user service on Linux, a logon task on Windows), waits until it answers, and only then points Claude Code at it through `env.ANTHROPIC_BASE_URL` in `~/.claude/settings.json`. Every Claude Code session started afterwards, in the terminal, an IDE, or the desktop app's Code tab, sends its requests through it. Your login (subscription or API key) passes through untouched.
+
+**What it does to each request:** once old tool output adds up to 20k+ tokens (file reads, shell output, search and web results, screenshots inside them), it replaces that output with a one-line note, keeping the 3 most recent results. The tool call stays in the history, so the model can simply run it again if it needs the output. Your messages, its answers, answers you gave to its questions, subagent reports and MCP results are never touched.
+
+**Why it cannot make a session more expensive.** A prompt cache matches a byte-identical prefix, and changing old history re-bills everything after the change at the write rate (1.25x instead of 0.1x). So autopilot changes history only when the cache is cold anyway: after an idle gap longer than the cache lifetime the request itself declares (1 hour for Claude Code on a subscription, 5 minutes otherwise), when the whole prompt is re-written regardless. Once cleared, an output stays cleared on every later request, so the prefix is identical between clearings and the cache keeps hitting.
+
+**Measured before it shipped**, by replaying every Claude Code session on the author's machine request by request through the shipped code, priced as the cache bills it, with real timestamps (`scripts/replay-autopilot.mjs` does this on yours):
+
+| Policy | Input cost saved | Worst session |
+|---|---|---|
+| **Autopilot: clear only when the cache is cold (default)** | **9.8%** (9.2% of raw input tokens; best session 37.6%) | **0.00%, no session worse** |
+| Also clear on a warm cache when the saving "should" repay the rewrite | 9.9% | −0.13% (one session worse) |
+| The proxy's general strategies (dedupe, trim, strip-base64) | 6.7% | −13% (one session worse) |
+
+94% of input cost on that machine came from requests above 200k tokens, which is where the clearing lands. Smaller requests also mean later auto-compaction and a faster first token.
+
+**Never in the way:** anything it cannot parse is forwarded unchanged; only Anthropic `/v1/messages` requests are touched. It adds about 7 ms to a 2.9 MB (~1M token) request. If the proxy dies, the service restarts it within seconds, and the every-prompt hook checks it before each prompt and starts it if needed (measured: 0.6 s once, when it had to). `pause` turns it into a passthrough without restarting anything; `off` removes the setting before stopping the service, and sessions started while it was on need a restart.
+
+**What it cannot reach** (no process on your machine sends those requests): Claude Desktop's chat tab and claude.ai, which use the standing instructions and the `profile_context` sketch instead; Cursor's own models (Cursor's servers call the model; with your own OpenAI key, see the tunnel section below); and Codex signed in with ChatGPT, where the every-prompt hook still reports context size.
 
 ## Always-on: optimize every request automatically
 

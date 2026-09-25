@@ -5,6 +5,7 @@
  * check, so "it doesn't work" becomes a single pasteable diagnosis. Always
  * exits 0 — absence of an app is a note, not a failure.
  */
+import { autopilotPaths, health, proxyUrl } from "./autopilot.js";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
@@ -209,6 +210,27 @@ export async function runDoctor() {
         checks.push({ label: "Project config", status: "skip", detail: "no .contextdoctorrc (optional; create one with: context-doctor init <preset>)" });
     }
     checks.push(await checkMcpHandshake());
+    // Autopilot: optional, so "off" is a skip, not a failure. When it is on, a
+    // dead proxy or a settings file pointing elsewhere is a real problem.
+    {
+        const paths = autopilotPaths();
+        if (!existsSync(paths.config)) {
+            checks.push({ label: "Autopilot", status: "skip", detail: "off (context-doctor autopilot on: clears stale tool output in every new Claude Code session)" });
+        }
+        else {
+            const cfg = JSON.parse(readFileSync(paths.config, "utf8"));
+            const h = await health(cfg.port);
+            let routed = false;
+            try {
+                routed = JSON.parse(readFileSync(paths.settings, "utf8"))?.env?.ANTHROPIC_BASE_URL === proxyUrl(cfg.port);
+            }
+            catch { /* reported below */ }
+            const paused = existsSync(paths.pauseFile);
+            checks.push(h.ok && h.autopilot && routed
+                ? { label: "Autopilot", status: "ok", detail: `proxy up on ${proxyUrl(cfg.port)}, Claude Code routed through it${paused ? " (PAUSED: passthrough)" : ""}` }
+                : { label: "Autopilot", status: "fail", detail: !h.ok ? `proxy not answering on ${proxyUrl(cfg.port)}: the next Claude Code prompt restarts it; or run: context-doctor autopilot on` : "settings.json no longer routes Claude Code to the proxy: run context-doctor autopilot on" });
+        }
+    }
     const mark = { ok: "✓", fail: "✗", skip: "–" };
     console.log("CONTEXT DOCTOR — self-check");
     console.log("═".repeat(56));
