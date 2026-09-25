@@ -75,6 +75,7 @@ Not claimed, because no process on your machine sends those requests: trimming i
 ## What's new
 
 - **0.20 Autopilot**: stale tool output cleared from every Claude Code request, only when the prompt cache is cold, so it cannot cost more (measured: 9.8% less input cost, ~$1,080 a month on the author's usage, no session worse); runs as a login service on macOS, Linux and Windows; now also for GPT via OpenAI's Chat Completions and Responses APIs.
+- **0.20.1 Releases that finish themselves**: one tag publishes to npm and creates a GitHub release with the Claude Desktop bundle (signed when a certificate is configured); the editor extension is ready for the VS Code Marketplace and Open VSX.
 - **0.19 Measured Claude tokenizer**: estimates were 40% low for Claude; fixed from the API's own counts, with a per-model check in `accuracy`.
 - **0.18** `proxy --token` for putting the proxy on a public URL safely. **0.17** Claude Desktop: a `profile_context` the model can afford to call from chat, `.mcpb` bundle, standing preferences for web and mobile. **0.16** Codex. **0.15** Cursor.
 
@@ -580,13 +581,26 @@ Contributions welcome — this project is small on purpose. Open an issue before
 
 ## Releasing (maintainers)
 
+**One-time setup** (repo Settings > Secrets and variables > Actions). Each secret switches on one channel; any that is missing is skipped with a notice, never a failed run:
+
+| Secret | Turns on | Where to get it |
+|---|---|---|
+| `NPM_TOKEN` | `npm publish` on every `v*` tag | npmjs.com > Access Tokens > Generate > Granular, read/write on `context-doctor` only |
+| `MCPB_CERT`, `MCPB_KEY` (+ `MCPB_INTERMEDIATE`) | A signed Claude Desktop bundle, no install warning | A code-signing certificate from a trusted CA; paste the PEM text. `mcpb verify` must pass in CI or the release stops |
+| `VSCE_PAT` | VS Code Marketplace on `vscode-v*` tags | Azure DevOps PAT, scope Marketplace > Manage, for the `gai-ventures` publisher |
+| `OVSX_PAT` | Open VSX (where Cursor installs from) | open-vsx.org > Settings > Access Tokens |
+
+**Each release:**
+
 ```bash
-npm version patch        # or minor/major — bumps package.json + git tag
-npm test                 # 131 tests must pass; CI runs the same on 3 OSes x Node 20/22/24
-npm publish              # prompts for the npm 2FA code
-git push --follow-tags
-npm run build:mcpb       # context-doctor-<version>.mcpb for Claude Desktop; attach it to the GitHub release
+npm version minor        # or patch/major: bumps package.json and tags vX.Y.Z
+npm test                 # the full suite; CI runs it on 3 OSes x Node 20/22/24
+git push --follow-tags   # npm publish + GitHub release with the .mcpb attached
 ```
+
+For the editor extension: bump `vscode/package.json`, add a `vscode/CHANGELOG.md` entry, then `git tag vscode-vX.Y.Z && git push --tags`. The `.vsix` is attached to a GitHub release either way.
+
+Locally, `npm run build:mcpb` builds the bundle (`MCPB_SELF_SIGNED=1` exercises the signing path with a throwaway certificate; Desktop still warns for those).
 
 **What the npm download number measures.** `install` writes `npx -y context-doctor-mcp` into MCP configs, and npx re-fetches the tarball whenever a new version exists. So every release is downloaded once by every active install within about a day, and the daily count is almost entirely those refreshes: on this package, release days run ~170 downloads and non-release days ~27. Read it as "size of the active installed base × number of releases", not as new users — a quiet week with no releases will look like a decline while nothing has changed. Two corollaries: the release-day figure is a live count of machines running context-doctor, and a broken release reaches all of them automatically, which is why `prepublishOnly` runs the full test suite. npm's stats also lag by several days and occasionally record a day as zero; a zero on a release day is a gap in their pipeline, not in usage.
 

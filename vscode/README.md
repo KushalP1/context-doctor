@@ -12,4 +12,14 @@ Nothing leaves the machine and nothing is installed globally; the extension only
 
 Settings: `contextDoctor.refreshSeconds` (default 5), `contextDoctor.warnAtPercent` (default 70).
 
-Part of [context-doctor](https://github.com/KushalP1/context-doctor) (MIT).
+## Want the context kept lean automatically?
+
+This extension shows the number. The [context-doctor CLI](https://github.com/KushalP1/context-doctor) acts on it: `context-doctor autopilot on` clears stale tool output from every new Claude Code session, only when the prompt cache is cold, so it never costs more. Replayed over 130 days of real sessions it saved 9.8% of input cost with no session more expensive.
+
+```bash
+npm install -g context-doctor
+context-doctor install
+context-doctor autopilot on
+```
+
+Part of [context-doctor](https://github.com/KushalP1/context-doctor) (MIT). Nothing leaves your machine.

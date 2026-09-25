@@ -1,8 +1,8 @@
 {
   "name": "context-doctor-vscode",
-  "displayName": "context-doctor",
-  "description": "Live Claude Code context health in the status bar: context vs window, cache share, cost. Works in VS Code and Cursor.",
-  "version": "0.1.0",
+  "displayName": "context-doctor: Claude Code context meter",
+  "description": "Live Claude Code context size, window share and prompt-cache hit rate in the status bar. Local, keyless, works in VS Code and Cursor.",
+  "version": "0.2.0",
   "publisher": "gai-ventures",
   "license": "MIT",
   "repository": {
@@ -14,14 +14,24 @@
     "vscode": "^1.85.0"
   },
   "categories": [
+    "AI",
+    "Machine Learning",
+    "Visualization",
     "Other"
   ],
   "keywords": [
     "claude",
     "claude code",
+    "anthropic",
     "context window",
     "tokens",
-    "mcp"
+    "prompt caching",
+    "token usage",
+    "cursor",
+    "llm",
+    "ai",
+    "mcp",
+    "cost"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -60,11 +70,21 @@
   "scripts": {
     "build": "tsc -p .",
     "test": "npm run build && node out/test/core.test.js",
-    "package": "npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository"
+    "package": "npx --yes @vscode/vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.85.0",
     "typescript": "^5.5.0"
-  }
+  },
+  "icon": "icon.png",
+  "homepage": "https://github.com/KushalP1/context-doctor/tree/main/vscode#readme",
+  "bugs": {
+    "url": "https://github.com/KushalP1/context-doctor/issues"
+  },
+  "galleryBanner": {
+    "color": "#152038",
+    "theme": "dark"
+  },
+  "qna": false
 }

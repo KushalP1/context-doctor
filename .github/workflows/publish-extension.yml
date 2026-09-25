@@ -1,0 +1,57 @@
+name: Publish VS Code / Cursor extension
+
+# Tag vscode-v0.2.0 (matching vscode/package.json) to publish the extension.
+# Each marketplace is published only when its token is present as a repo
+# secret; a missing token is a skipped step with a notice, not a red run:
+#   VSCE_PAT  - VS Code Marketplace (Azure DevOps PAT, scope Marketplace > Manage,
+#               for the publisher named in vscode/package.json)
+#   OVSX_PAT  - Open VSX, where Cursor installs extensions from
+# The .vsix is attached to a GitHub release either way, so it can be
+# installed by hand (Extensions > ... > Install from VSIX).
+on:
+  push:
+    tags: ["vscode-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
+    defaults:
+      run:
+        working-directory: vscode
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm test
+      - name: Tag matches vscode/package.json
+        run: |
+          V="vscode-v$(node -p "require('./package.json').version")"
+          [ "$V" = "${GITHUB_REF_NAME}" ] || { echo "Tag ${GITHUB_REF_NAME} != $V"; exit 1; }
+      - run: npm run package
+      - name: VS Code Marketplace
+        if: env.VSCE_PAT != ''
+        run: npx --yes @vscode/vsce publish --no-dependencies --packagePath *.vsix -p "$VSCE_PAT"
+      - name: VS Code Marketplace (skipped)
+        if: env.VSCE_PAT == ''
+        run: echo "::notice::VSCE_PAT not set; not published to the VS Code Marketplace"
+      - name: Open VSX (Cursor)
+        if: env.OVSX_PAT != ''
+        run: npx --yes ovsx publish *.vsix -p "$OVSX_PAT"
+      - name: Open VSX (skipped)
+        if: env.OVSX_PAT == ''
+        run: echo "::notice::OVSX_PAT not set; not published to Open VSX"
+      - name: Attach the .vsix to a GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "context-doctor for VS Code and Cursor ${GITHUB_REF_NAME#vscode-v}" --notes-file CHANGELOG.md
+          gh release upload "$GITHUB_REF_NAME" *.vsix --clobber

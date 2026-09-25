@@ -1,19 +1,26 @@
-name: Publish to npm
+name: Release
 
-# Any tag like v0.5.0 publishes that commit to npm — no OTP round-trips.
-# Requires the NPM_TOKEN repo secret: an npm *granular access token* scoped to
-# read/write only the context-doctor package (npmjs.com → Access Tokens →
-# Generate → Granular). Granular tokens bypass interactive 2FA by design.
+# Tag vX.Y.Z (matching package.json) and push the tag. One tag does all of it:
+#   1. npm publish, when the NPM_TOKEN secret exists (an npm granular access
+#      token scoped to read/write context-doctor; granular tokens bypass
+#      interactive 2FA by design). Without it: a notice, not a red run.
+#   2. A GitHub release with the Claude Desktop bundle (.mcpb) attached,
+#      signed when MCPB_CERT and MCPB_KEY exist (PEM text of a code-signing
+#      certificate from a trusted CA and its key; MCPB_INTERMEDIATE for the
+#      chain). Unsigned bundles still install; Desktop shows a warning.
 on:
   push:
     tags: ["v*"]
 
 jobs:
-  publish:
+  npm:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       id-token: write # npm provenance attestation
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,6 +36,39 @@ jobs:
           if [ "$PKG" != "${GITHUB_REF_NAME}" ]; then
             echo "Tag ${GITHUB_REF_NAME} != package.json ${PKG}"; exit 1
           fi
-      - run: npm publish --provenance --access public
+      - name: npm publish
+        if: env.NPM_TOKEN != ''
+        run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: npm publish (skipped)
+        if: env.NPM_TOKEN == ''
+        run: echo "::notice::NPM_TOKEN not set; run npm publish locally or add the secret"
+
+  github-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      MCPB_CERT: ${{ secrets.MCPB_CERT }}
+      MCPB_KEY: ${{ secrets.MCPB_KEY }}
+      MCPB_INTERMEDIATE: ${{ secrets.MCPB_INTERMEDIATE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build:mcpb
+      - name: Release with the Claude Desktop bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          NOTES=$(awk -v v="$V" '$0 ~ "^## Shipped in "v {f=1; next} /^## / && f {exit} f' ROADMAP.md)
+          [ -n "$NOTES" ] || NOTES="See ROADMAP.md."
+          printf '%s\n\n**Install:** `npm install -g context-doctor && context-doctor install && context-doctor autopilot on`. Claude Desktop: download the .mcpb below and open it.\n' "$NOTES" > notes.md
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "context-doctor $V" --notes-file notes.md
+          gh release upload "$GITHUB_REF_NAME" context-doctor-*.mcpb --clobber

@@ -20,7 +20,7 @@ import { formatTokens, CHARS_PER_TOKEN, providerFor } from "./tokens.js";
 import { formatUsd, inputCostUsd, pricingFor } from "./pricing.js";
 import { recordLedger } from "./ledger.js";
 /** Reported by /health so `autopilot status` can tell an outdated service from a current one. */
-export const PROXY_VERSION = "0.20.0";
+export const PROXY_VERSION = "0.20.1";
 /** Connection-level headers that must not be forwarded. */
 const SKIP_REQUEST_HEADERS = new Set(["host", "content-length", "connection", "transfer-encoding", "accept-encoding", "expect"]);
 const SKIP_RESPONSE_HEADERS = new Set(["content-length", "content-encoding", "transfer-encoding", "connection"]);

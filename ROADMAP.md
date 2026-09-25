@@ -68,6 +68,12 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.20.1 — releases that finish themselves
+
+- **One tag, every channel.** `v*` tags run the suite, publish to npm when `NPM_TOKEN` exists, and create a GitHub release with the Claude Desktop bundle attached, its notes taken from this file. A missing secret is a notice, not a red run (the v0.17.0 tag failed red for exactly that).
+- **Signed Desktop bundle, when a certificate exists.** `build:mcpb` signs with `MCPB_CERT` / `MCPB_KEY` (PEM files or text) and requires `mcpb verify` to pass, which chains the certificate to the OS trust store the way Desktop does. Found while testing: a self-signed certificate never passes `verify` by design, so the self-signed mode (`MCPB_SELF_SIGNED=1`) checks the signature block instead and is for pipeline tests only. The bundle now carries an icon.
+- **Extension 0.2.0, marketplace-ready**: icon, categories, listing README and changelog; `vscode-v*` tags publish to the VS Code Marketplace and Open VSX when their tokens exist and always attach the `.vsix` to a release.
+
 ## Shipped in 0.20.0 — autopilot: lean context in every Claude Code session, never more expensive
 
 Asked: "auto-optimize every session I run, and make sure performance only improves." Measured before building:
@@ -206,34 +212,13 @@ sessions contain sidechain traffic, so the field shapes would be guesswork.
 
 ## Next candidates
 
-Grouped by the question each one answers. Sizes are S/M/L; nothing here is
-committed until it ships.
+Nothing left that code can finish. The two remaining items are built, tested and wired into CI; each waits on an account only the owner can create (see "Releasing" in the README for exactly where each secret goes):
 
-### Make the numbers trustworthy
-
-| Item | Why | Size |
+| Item | State | Owner's step |
 |---|---|---|
-
-### Turn advice into action
-
-| Item | Why | Size |
-|---|---|---|
-
-### Make more surfaces inherent (2026-09-19 research)
-
-Research into the Claude Desktop and Cursor app bundles, looking for a hook or a data path on each. Both Cursor items below were resolved on 2026-09-22; see "Shipped in 0.18.0" and "Closed by measurement in 0.18.0". Claude Desktop chat: see 0.17.0. Nothing is left in this group.
-
-### Make the numbers trustworthy
-
-| Item | Why | Size |
-|---|---|---|
-
-### Fit into how people actually work
-
-| Item | Why | Size |
-|---|---|---|
-| **Sign the `.mcpb`** | Claude Desktop shows an unsigned-bundle warning on install. `mcpb sign` takes a code-signing certificate, which is the owner's to obtain | S |
-| **Publish the extension to the marketplaces** | Built, tested and installed locally in both VS Code and Cursor (0.14.3 below). Publishing needs a VS Code Marketplace publisher token and an Open VSX account for Cursor, both the owner's to create | S |
+| **Sign the `.mcpb`** | Signing is in `build:mcpb` and the release workflow; `mcpb verify` gates the release. Tested end to end with a self-signed certificate | Obtain a code-signing certificate from a trusted CA; add `MCPB_CERT` / `MCPB_KEY` |
+| **Publish the extension** | 0.2.0 has marketplace metadata, icon, listing README and changelog; the `vscode-v*` workflow publishes to both marketplaces and attaches the `.vsix` to a release | Create the `gai-ventures` publisher and an Open VSX account; add `VSCE_PAT` / `OVSX_PAT`; push `vscode-v0.2.0` |
+| **npm** | The `v*` workflow publishes with provenance | Add `NPM_TOKEN` (or run `npm publish` once); npm still serves 0.13.3 |
 
 ## Non-goals
 
