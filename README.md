@@ -6,7 +6,7 @@
 
 Long agent sessions fill up with tool output nobody reads again: file dumps, shell logs, search results, screenshots. You pay for all of it on every request, the model gets slower, and it drifts as the window fills. `context-doctor` measures that, and with **autopilot** it removes it from every Claude Code (and GPT API) request on your machine, only at moments when doing so costs nothing extra.
 
-- **9.8% less input cost, no session worse.** Measured by replaying every real Claude Code session on the author's machine through the shipped code, request by request, priced the way the prompt cache bills it. Up to 37.6% on one long session. [How →](#autopilot-every-claude-code-session-keeps-its-own-context-lean)
+- **9.8% less input cost, no session worse.** Replaying 130 days of the author's real Claude Code use (43 sessions) through the shipped code: **3.8 billion input tokens not sent, $4,694 saved at API list price, about $1,080 a month**, and not one session more expensive. Up to 37.7% on a long session. [What it saves →](#what-it-saves)
 - **Counts Claude correctly.** Current Claude models pack 2.75 characters per token, not the 4 most tools assume; estimates built on 4 undercount Claude by about 40%. The ratios here were measured from the API's own counts, and `context-doctor accuracy` re-checks them on yours. [How →](#why-token-counts-are--and-where-they-are-exact)
 - **Works where you work:** Claude Code, Cursor, Codex, Claude Desktop, any Anthropic or OpenAI API app, VS Code, CI. macOS, Linux and Windows, Node 20+.
 - **Local and keyless.** No account, no telemetry, no API key. Your own login passes through untouched. MIT.
@@ -41,6 +41,23 @@ Findings (4)
    → Truncate or summarize large tool outputs before they enter history.
 ```
 
+## What it saves
+
+Measured, not modelled: every Claude Code session on the author's machine from 18 May to 25 September 2026 (43 sessions, 130 days, mostly Opus 5 and Fable 5 with the 1M window) was replayed request by request through the shipped autopilot code, with the real timestamps, and priced the way the prompt cache bills it (cached reads 0.1x, writes 1.25x). Run it on your own history with `node scripts/replay-autopilot.mjs`.
+
+| | Without autopilot | With autopilot | Saved |
+|---|---|---|---|
+| Input tokens sent | 41.4 billion | 37.6 billion | **3.8 billion (9.2%)** |
+| Input cost at API list price | $48,962 | $44,268 | **$4,694 (9.8%)** |
+| Per 30 days | | | **~875 million tokens, ~$1,080** |
+| Sessions made more expensive | | | **0 of 43** |
+
+How it spreads: the median session saves 1.9%, the best 37.7%. Short sessions barely change, because they rarely pile up 20k tokens of stale tool output before they end. Long sessions are where the money is: on this machine 94% of input cost came from requests above 200k tokens, and those are the requests autopilot makes smaller. Savings scale with how long your sessions run and how much they read, so a lighter user saves proportionally less, and never pays more.
+
+On a Claude subscription you do not pay list price; the same tokens come out of your usage limit instead. Anthropic does not publish how limits weight cached tokens, so read the dollar column as the size of the effect, not as your bill. The token column holds either way, and every request that is 9% smaller is also faster to first token and further from auto-compaction.
+
+What is not counted here: the proxy's full optimizer for your own API apps, the hook's guidance to the model, and fixes you make from `session` findings. Those save more on top, but they depend on what the model or you do with the advice, so they are not in this table.
+
 ## What happens on each platform
 
 | Where you work | Automatic, every request | What you get on top |
@@ -57,7 +74,7 @@ Not claimed, because no process on your machine sends those requests: trimming i
 
 ## What's new
 
-- **0.20 Autopilot**: stale tool output cleared from every Claude Code request, only when the prompt cache is cold, so it cannot cost more; runs as a login service on macOS, Linux and Windows; now also for GPT via OpenAI's Chat Completions and Responses APIs.
+- **0.20 Autopilot**: stale tool output cleared from every Claude Code request, only when the prompt cache is cold, so it cannot cost more (measured: 9.8% less input cost, ~$1,080 a month on the author's usage, no session worse); runs as a login service on macOS, Linux and Windows; now also for GPT via OpenAI's Chat Completions and Responses APIs.
 - **0.19 Measured Claude tokenizer**: estimates were 40% low for Claude; fixed from the API's own counts, with a per-model check in `accuracy`.
 - **0.18** `proxy --token` for putting the proxy on a public URL safely. **0.17** Claude Desktop: a `profile_context` the model can afford to call from chat, `.mcpb` bundle, standing preferences for web and mobile. **0.16** Codex. **0.15** Cursor.
 
@@ -195,11 +212,11 @@ context-doctor autopilot off       # remove it
 
 **Why it cannot make a session more expensive.** A prompt cache matches a byte-identical prefix, and changing old history re-bills everything after the change at the write rate (1.25x instead of 0.1x). So autopilot changes history only when the cache is cold anyway: after an idle gap longer than the cache lifetime the request itself declares (1 hour for Claude Code on a subscription, 5 minutes otherwise), when the whole prompt is re-written regardless. Once cleared, an output stays cleared on every later request, so the prefix is identical between clearings and the cache keeps hitting.
 
-**Measured before it shipped**, by replaying every Claude Code session on the author's machine request by request through the shipped code, priced as the cache bills it, with real timestamps (`scripts/replay-autopilot.mjs` does this on yours):
+**Measured before it shipped**, by replaying every Claude Code session on the author's machine (43 sessions, 130 days) request by request through the shipped code, priced as the cache bills it, with real timestamps: 3.8 billion input tokens not sent and $4,694 at list price, ~$1,080 a month ([details](#what-it-saves)). `scripts/replay-autopilot.mjs` does this on yours:
 
 | Policy | Input cost saved | Worst session |
 |---|---|---|
-| **Autopilot: clear only when the cache is cold (default)** | **9.8%** (9.2% of raw input tokens; best session 37.6%) | **0.00%, no session worse** |
+| **Autopilot: clear only when the cache is cold (default)** | **9.8%** (9.2% of raw input tokens; best session 37.7%) | **0.00%, no session worse** |
 | Also clear on a warm cache when the saving "should" repay the rewrite | 9.9% | −0.13% (one session worse) |
 | The proxy's general strategies (dedupe, trim, strip-base64) | 6.7% | −13% (one session worse) |
 
