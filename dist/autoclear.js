@@ -29,7 +29,7 @@
  *     construction, and measured: replaying every Claude Code session on the
  *     author's machine through this class, with real timestamps and cache
  *     pricing, it saved 9.8% of cache-weighted input cost (9.2% of raw input
- *     tokens, up to 37.6% in one long session) and made no session worse.
+ *     tokens, up to 37.7% in one long session) and made no session worse.
  *     Clearing on a warm cache when the saving "should" repay the rewrite
  *     (`paybackSafety` > 0) added 0.1% and made one session 0.13% worse: the
  *     future is not knowable, so it is off unless asked for.
