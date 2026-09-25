@@ -20,6 +20,10 @@ export declare function npxLauncher(platformName: string): {
     command: string;
     args: string[];
 };
+export declare function readJson(path: string): Record<string, any>;
+export declare function writeJsonWithBackup(path: string, data: Record<string, any>): void;
+/** Paths npm may delete at any time: the npx cache and the npm cache itself. */
+export declare function isEphemeralPath(path: string): boolean;
 /**
  * Claude Code's status bar: a `statusLine` command whose stdout is shown while
  * the user types. Opt-in, because there is only one status line and it may

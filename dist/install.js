@@ -63,7 +63,7 @@ export function npxLauncher(platformName) {
         ? { command: "cmd", args: ["/c", "npx", "-y", "context-doctor-mcp"] }
         : { command: "npx", args: ["-y", "context-doctor-mcp"] };
 }
-function readJson(path) {
+export function readJson(path) {
     if (!existsSync(path))
         return {};
     try {
@@ -73,7 +73,7 @@ function readJson(path) {
         throw new Error(`${path} exists but is not valid JSON — fix or remove it first (${e.message})`);
     }
 }
-function writeJsonWithBackup(path, data) {
+export function writeJsonWithBackup(path, data) {
     mkdirSync(dirname(path), { recursive: true });
     if (existsSync(path))
         copyFileSync(path, path + ".context-doctor.backup");
@@ -105,7 +105,7 @@ function binOnPath(name) {
     return null;
 }
 /** Paths npm may delete at any time: the npx cache and the npm cache itself. */
-function isEphemeralPath(path) {
+export function isEphemeralPath(path) {
     return /[\\/]_npx[\\/]/.test(path) || /[\\/]\.npm[\\/]/.test(path) || /[\\/]npm-cache[\\/]/i.test(path);
 }
 /**

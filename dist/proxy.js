@@ -14,9 +14,13 @@
 import http from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { optimizeConversation } from "./optimize.js";
+import { AutoClearer } from "./autoclear.js";
+import { existsSync } from "node:fs";
 import { formatTokens, CHARS_PER_TOKEN, providerFor } from "./tokens.js";
 import { formatUsd, inputCostUsd, pricingFor } from "./pricing.js";
 import { recordLedger } from "./ledger.js";
+/** Reported by /health so `autopilot status` can tell an outdated service from a current one. */
+export const PROXY_VERSION = "0.20.0";
 /** Connection-level headers that must not be forwarded. */
 const SKIP_REQUEST_HEADERS = new Set(["host", "content-length", "connection", "transfer-encoding", "accept-encoding", "expect"]);
 const SKIP_RESPONSE_HEADERS = new Set(["content-length", "content-encoding", "transfer-encoding", "connection"]);
@@ -70,6 +74,7 @@ function fnv1a(s) {
 }
 export function startProxy(opts = {}) {
     const port = opts.port ?? 8787;
+    const clearer = opts.autopilot ? new AutoClearer({ statePath: opts.autopilotStatePath }) : undefined;
     const stats = {
         startedAt: new Date().toISOString(),
         requests: 0,
@@ -81,6 +86,11 @@ export function startProxy(opts = {}) {
         upstreamInputTokens: 0,
         upstreamOutputTokens: 0,
         advice: [],
+        upstreamCacheReadTokens: 0,
+        upstreamCacheWriteTokens: 0,
+        autopilot: opts.autopilot
+            ? { enabled: true, paused: false, requests: 0, changedRequests: 0, batches: 0, coldBatches: 0, resultsCleared: 0, tokensRemoved: 0, lastReason: "" }
+            : undefined,
     };
     /** Last stable-prefix fingerprint per model, for cache-invalidation advice. */
     const prefixFingerprints = new Map();
@@ -97,7 +107,7 @@ export function startProxy(opts = {}) {
         try {
             if (url === "/health") {
                 res.setHeader("content-type", "application/json");
-                res.end(JSON.stringify({ ok: true, service: "context-doctor-proxy" }));
+                res.end(JSON.stringify({ ok: true, service: "context-doctor-proxy", autopilot: Boolean(opts.autopilot), version: PROXY_VERSION }));
                 return;
             }
             if (opts.token) {
@@ -133,7 +143,47 @@ export function startProxy(opts = {}) {
             stats.requests++;
             const isMeasurement = url.startsWith("/v1/messages/count_tokens");
             let note = "passthrough";
-            if (req.method === "POST" && body && !isMeasurement) {
+            if (opts.autopilot) {
+                if (req.method === "POST" && body && !isMeasurement && url.startsWith("/v1/messages")) {
+                    const ap = stats.autopilot;
+                    ap.paused = Boolean(opts.autopilotPauseFile && existsSync(opts.autopilotPauseFile));
+                    if (ap.paused) {
+                        note = "autopilot paused";
+                    }
+                    else {
+                        try {
+                            const parsed = JSON.parse(body);
+                            const r = clearer.apply(parsed);
+                            ap.requests++;
+                            ap.lastReason = r.reason;
+                            if (r.newlyCleared > 0) {
+                                ap.batches++;
+                                ap.resultsCleared += r.newlyCleared;
+                                if (r.cold)
+                                    ap.coldBatches++;
+                            }
+                            if (r.changed) {
+                                body = JSON.stringify(parsed);
+                                ap.changedRequests++;
+                                ap.tokensRemoved += r.tokensRemoved;
+                                stats.optimizedRequests++;
+                                stats.tokensSaved += r.tokensRemoved;
+                                const pricing = pricingFor(typeof parsed.model === "string" ? parsed.model : undefined);
+                                if (pricing)
+                                    stats.estUsdSaved += inputCostUsd(r.tokensRemoved, pricing);
+                                note = `autopilot: ${formatTokens(r.tokensRemoved)} tokens of stale tool output not sent (${r.reason})`;
+                            }
+                            else {
+                                note = `autopilot: ${r.reason}`;
+                            }
+                        }
+                        catch {
+                            note = "autopilot: unparseable body, forwarded unchanged";
+                        }
+                    }
+                }
+            }
+            else if (req.method === "POST" && body && !isMeasurement) {
                 try {
                     // Per-route overrides: first modelPrefix match wins.
                     let effective = opts;
@@ -263,6 +313,11 @@ export function startProxy(opts = {}) {
                         stats.upstreamInputTokens += usage.input;
                         stats.upstreamOutputTokens += usage.output;
                     }
+                    // Streams repeat the usage object; the last figure is the final one.
+                    const lastNum = (re) => { let m, v = 0; while ((m = re.exec(scanBuf)) !== null)
+                        v = Number(m[1]); return v; };
+                    stats.upstreamCacheReadTokens += lastNum(/"cache_read_input_tokens"\s*:\s*(\d+)/g);
+                    stats.upstreamCacheWriteTokens += lastNum(/"cache_creation_input_tokens"\s*:\s*(\d+)/g);
                 }
             }
             res.end();

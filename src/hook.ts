@@ -19,6 +19,7 @@ import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
 import { parseSessionFile } from "./session.js";
 import { formatTokens, CHARS_PER_TOKEN } from "./tokens.js";
+import { ensureProxyUp } from "./autopilot.js";
 import { formatUsd } from "./pricing.js";
 import { checkBudget, loadConfig } from "./config.js";
 
@@ -126,7 +127,12 @@ async function readStdin(): Promise<string> {
 export async function runHook(): Promise<void> {
   // A hook must never break the user's prompt: any failure exits silently.
   try {
+    // Autopilot self-heal: this prompt's request is about to go to the proxy,
+    // so if the proxy died, start it now. One existsSync when autopilot is
+    // off; a ~1ms localhost health check when it is on and healthy.
+    const heal = ensureProxyUp().catch(() => undefined);
     const input = JSON.parse(await readStdin()) as { session_id?: string; transcript_path?: string; cwd?: string };
+    await heal;
     const transcriptPath = input.transcript_path;
     if (!transcriptPath || !existsSync(transcriptPath)) return;
 

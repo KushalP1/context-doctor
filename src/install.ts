@@ -76,7 +76,7 @@ export function npxLauncher(platformName: string): { command: string; args: stri
     : { command: "npx", args: ["-y", "context-doctor-mcp"] };
 }
 
-function readJson(path: string): Record<string, any> {
+export function readJson(path: string): Record<string, any> {
   if (!existsSync(path)) return {};
   try {
     return JSON.parse(readFileSync(path, "utf8"));
@@ -85,7 +85,7 @@ function readJson(path: string): Record<string, any> {
   }
 }
 
-function writeJsonWithBackup(path: string, data: Record<string, any>): void {
+export function writeJsonWithBackup(path: string, data: Record<string, any>): void {
   mkdirSync(dirname(path), { recursive: true });
   if (existsSync(path)) copyFileSync(path, path + ".context-doctor.backup");
   writeFileSync(path, JSON.stringify(data, null, 2));
@@ -115,7 +115,7 @@ function binOnPath(name: string): string | null {
 }
 
 /** Paths npm may delete at any time: the npx cache and the npm cache itself. */
-function isEphemeralPath(path: string): boolean {
+export function isEphemeralPath(path: string): boolean {
   return /[\\/]_npx[\\/]/.test(path) || /[\\/]\.npm[\\/]/.test(path) || /[\\/]npm-cache[\\/]/i.test(path);
 }
 
