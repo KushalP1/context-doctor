@@ -144,7 +144,7 @@ export function startProxy(opts = {}) {
             const isMeasurement = url.startsWith("/v1/messages/count_tokens");
             let note = "passthrough";
             if (opts.autopilot) {
-                if (req.method === "POST" && body && !isMeasurement && url.startsWith("/v1/messages")) {
+                if (req.method === "POST" && body && !isMeasurement && /^\/v1\/(messages|chat\/completions|responses)(\?|$)/.test(url)) {
                     const ap = stats.autopilot;
                     ap.paused = Boolean(opts.autopilotPauseFile && existsSync(opts.autopilotPauseFile));
                     if (ap.paused) {

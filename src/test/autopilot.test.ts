@@ -92,6 +92,49 @@ test("a malformed request is forwarded unchanged, never an error", () => {
   assert.equal(r.changed, false);
 });
 
+function openaiChat(results: number) {
+  const messages: any[] = [{ role: "system", content: "You are a coding agent." }, { role: "user", content: "fix the build" }];
+  for (let i = 0; i < results; i++) {
+    messages.push({ role: "assistant", content: null, tool_calls: [{ id: `call_${i}`, type: "function", function: { name: "read_file", arguments: `{"path":"/src/f${i}.ts"}` } }] });
+    messages.push({ role: "tool", tool_call_id: `call_${i}`, content: big(400) });
+  }
+  return { model: "gpt-5", messages };
+}
+function openaiResponses(results: number, extra: Record<string, unknown> = {}) {
+  const input: any[] = [{ role: "user", content: "fix the build" }];
+  for (let i = 0; i < results; i++) {
+    input.push({ type: "function_call", call_id: `call_${i}`, name: "shell", arguments: `{"command":["cat","f${i}.ts"]}` });
+    input.push({ type: "function_call_output", call_id: `call_${i}`, output: big(400) });
+  }
+  return { model: "gpt-5-codex", input, ...extra };
+}
+
+test("GPT: OpenAI Chat Completions tool messages are cleared the same way", () => {
+  const body = openaiChat(12);
+  const r = new AutoClearer().apply(body, 0);
+  assert.equal(r.newlyCleared, 9);
+  const tools = body.messages.filter((m: any) => m.role === "tool");
+  assert.ok(tools.slice(0, 9).every((m: any) => m.content.startsWith("[context-doctor")));
+  assert.ok(tools.slice(9).every((m: any) => m.content.startsWith("const value")));
+  assert.equal(body.messages[2].tool_calls[0].function.name, "read_file", "the call itself stays, so it can be re-run");
+});
+
+test("GPT: OpenAI Responses function_call_output items (Codex with an API key) are cleared", () => {
+  const body = openaiResponses(12);
+  const r = new AutoClearer().apply(body, 0);
+  assert.equal(r.newlyCleared, 9);
+  assert.ok(body.input.filter((x: any) => x.type === "function_call_output").slice(0, 9).every((x: any) => x.output.startsWith("[context-doctor")));
+});
+
+test("GPT: cache lifetime is taken as the longest OpenAI may keep it (1h, or 24h when asked)", () => {
+  assert.equal(requestTtlMs(openaiChat(1)), 3_600_000);
+  assert.equal(requestTtlMs(openaiResponses(1)), 3_600_000);
+  assert.equal(requestTtlMs(openaiResponses(1, { prompt_cache_retention: "24h" })), 24 * 3_600_000);
+  const c = new AutoClearer();
+  c.apply(openaiChat(2), 0);
+  assert.equal(c.apply(openaiChat(12), 30 * 60_000).newlyCleared, 0, "30 minutes later an OpenAI cache may still be warm: wait");
+});
+
 // Proxy in autopilot mode against a fake upstream that records what it received.
 let received: any[] = [];
 const upstream = http.createServer((req, res) => {
@@ -121,6 +164,18 @@ test("proxy autopilot: first (cold) request goes out lighter; stats and /health 
   assert.equal(stats.upstreamCacheReadTokens, 1000);
   const h = await fetch(`${base}/health`).then((r) => r.json()) as any;
   assert.equal(h.autopilot, true);
+});
+
+test("proxy autopilot: OpenAI Chat Completions requests are lightened too", async () => {
+  received = [];
+  const openaiUp = http.createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { received.push(JSON.parse(b)); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ usage: { prompt_tokens: 10, completion_tokens: 1 } })); }); });
+  await new Promise<void>((r) => openaiUp.listen(0, "127.0.0.1", r));
+  const p2 = startProxy({ port: 0, openaiUpstream: `http://127.0.0.1:${(openaiUp.address() as AddressInfo).port}`, autopilot: true });
+  await new Promise<void>((r) => p2.once("listening", r));
+  try {
+    await fetch(`http://127.0.0.1:${(p2.address() as AddressInfo).port}/v1/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer k" }, body: JSON.stringify(openaiChat(12)) });
+    assert.ok(received[0].messages.find((m: any) => m.role === "tool").content.startsWith("[context-doctor"));
+  } finally { p2.close(); openaiUp.close(); }
 });
 
 test("proxy autopilot: the pause file makes it a pure passthrough, instantly", async () => {

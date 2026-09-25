@@ -43,8 +43,8 @@ export interface ProxyOptions extends OptimizeOptions {
   /**
    * Autopilot: instead of the general strategies, run only the cache-aware
    * stale-tool-output clearing (autoclear.ts), which replays of real sessions
-   * showed never costs more than it saves. Anthropic Messages requests only;
-   * everything else passes through untouched.
+   * showed never costs more than it saves. Anthropic Messages, OpenAI Chat
+   * Completions and OpenAI Responses requests; everything else passes through.
    */
   autopilot?: boolean;
   /** Where autopilot remembers cleared tool results across restarts. */
@@ -223,7 +223,7 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
       const isMeasurement = url.startsWith("/v1/messages/count_tokens");
       let note = "passthrough";
       if (opts.autopilot) {
-        if (req.method === "POST" && body && !isMeasurement && url.startsWith("/v1/messages")) {
+        if (req.method === "POST" && body && !isMeasurement && /^\/v1\/(messages|chat\/completions|responses)(\?|$)/.test(url)) {
           const ap = stats.autopilot!;
           ap.paused = Boolean(opts.autopilotPauseFile && existsSync(opts.autopilotPauseFile));
           if (ap.paused) {
