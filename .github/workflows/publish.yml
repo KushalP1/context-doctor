@@ -1,9 +1,13 @@
 name: Release
 
 # Tag vX.Y.Z (matching package.json) and push the tag. One tag does all of it:
-#   1. npm publish, when the NPM_TOKEN secret exists (an npm granular access
-#      token scoped to read/write context-doctor; granular tokens bypass
-#      interactive 2FA by design). Without it: a notice, not a red run.
+#   1. npm publish, through npm TRUSTED PUBLISHING: npm verifies this workflow
+#      by OIDC, so no token is stored anywhere. One-time setup on npmjs.com:
+#      package context-doctor > Settings > Trusted Publisher > GitHub Actions,
+#      owner KushalP1, repository context-doctor, workflow publish.yml.
+#      (npm is phasing out tokens that bypass 2FA for publishing.) An NPM_TOKEN
+#      secret still works as a fallback. With neither, or when the version is
+#      already on npm, the step leaves a notice instead of failing the run.
 #   2. A GitHub release with the Claude Desktop bundle (.mcpb) attached,
 #      signed when MCPB_CERT and MCPB_KEY exist (PEM text of a code-signing
 #      certificate from a trusted CA and its key; MCPB_INTERMEDIATE for the
@@ -37,13 +41,23 @@ jobs:
             echo "Tag ${GITHUB_REF_NAME} != package.json ${PKG}"; exit 1
           fi
       - name: npm publish
-        if: env.NPM_TOKEN != ''
-        run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: npm publish (skipped)
-        if: env.NPM_TOKEN == ''
-        run: echo "::notice::NPM_TOKEN not set; run npm publish locally or add the secret"
+        run: |
+          V="$(node -p "require('./package.json').version")"
+          if npm view "context-doctor@$V" version >/dev/null 2>&1; then
+            echo "::notice::context-doctor@$V is already on npm; nothing to publish"; exit 0
+          fi
+          # Trusted publishing needs npm 11.5.1 or newer.
+          npm install -g npm@latest >/dev/null 2>&1
+          if npm publish --provenance --access public 2>publish.err; then
+            echo "Published context-doctor@$V"
+          elif [ -z "$NPM_TOKEN" ]; then
+            cat publish.err
+            echo "::notice::npm publish was not authorized. Set up trusted publishing (see the header of this workflow), then re-run this job."
+          else
+            cat publish.err; exit 1
+          fi
 
   github-release:
     runs-on: ubuntu-latest

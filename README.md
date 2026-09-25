@@ -581,11 +581,11 @@ Contributions welcome — this project is small on purpose. Open an issue before
 
 ## Releasing (maintainers)
 
-**One-time setup** (repo Settings > Secrets and variables > Actions). Each secret switches on one channel; any that is missing is skipped with a notice, never a failed run:
+**One-time setup.** Each row switches on one channel; any that is missing is skipped with a notice, never a failed run. Secrets go in the repo's Settings > Secrets and variables > Actions:
 
 | Secret | Turns on | Where to get it |
 |---|---|---|
-| `NPM_TOKEN` | `npm publish` on every `v*` tag | npmjs.com > Access Tokens > Generate > Granular, read/write on `context-doctor` only |
+| *(no secret: npm trusted publishing)* | `npm publish` on every `v*` tag, with provenance | npmjs.com > package `context-doctor` > Settings > Trusted Publisher > GitHub Actions: owner `KushalP1`, repository `context-doctor`, workflow `publish.yml`. npm is phasing out publish tokens that bypass 2FA; an `NPM_TOKEN` secret still works as a fallback |
 | `MCPB_CERT`, `MCPB_KEY` (+ `MCPB_INTERMEDIATE`) | A signed Claude Desktop bundle, no install warning | A code-signing certificate from a trusted CA; paste the PEM text. `mcpb verify` must pass in CI or the release stops |
 | `VSCE_PAT` | VS Code Marketplace on `vscode-v*` tags | Azure DevOps PAT, scope Marketplace > Manage, for the `gai-ventures` publisher |
 | `OVSX_PAT` | Open VSX (where Cursor installs from) | open-vsx.org > Settings > Access Tokens |

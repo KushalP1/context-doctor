@@ -70,7 +70,7 @@ worth making after real-world use, not on the day the features land.
 
 ## Shipped in 0.20.1 — releases that finish themselves
 
-- **One tag, every channel.** `v*` tags run the suite, publish to npm when `NPM_TOKEN` exists, and create a GitHub release with the Claude Desktop bundle attached, its notes taken from this file. A missing secret is a notice, not a red run (the v0.17.0 tag failed red for exactly that).
+- **One tag, every channel.** `v*` tags run the suite, publish to npm through trusted publishing (npm is restricting tokens that bypass 2FA, so the workflow authenticates by OIDC and needs no stored token), and create a GitHub release with the Claude Desktop bundle attached, its notes taken from this file. A missing secret is a notice, not a red run (the v0.17.0 tag failed red for exactly that).
 - **Signed Desktop bundle, when a certificate exists.** `build:mcpb` signs with `MCPB_CERT` / `MCPB_KEY` (PEM files or text) and requires `mcpb verify` to pass, which chains the certificate to the OS trust store the way Desktop does. Found while testing: a self-signed certificate never passes `verify` by design, so the self-signed mode (`MCPB_SELF_SIGNED=1`) checks the signature block instead and is for pipeline tests only. The bundle now carries an icon.
 - **Extension 0.2.0, marketplace-ready**: icon, categories, listing README and changelog; `vscode-v*` tags publish to the VS Code Marketplace and Open VSX when their tokens exist and always attach the `.vsix` to a release.
 
@@ -218,7 +218,7 @@ Nothing left that code can finish. The two remaining items are built, tested and
 |---|---|---|
 | **Sign the `.mcpb`** | Signing is in `build:mcpb` and the release workflow; `mcpb verify` gates the release. Tested end to end with a self-signed certificate | Obtain a code-signing certificate from a trusted CA; add `MCPB_CERT` / `MCPB_KEY` |
 | **Publish the extension** | 0.2.0 has marketplace metadata, icon, listing README and changelog; the `vscode-v*` workflow publishes to both marketplaces and attaches the `.vsix` to a release | Create the `gai-ventures` publisher and an Open VSX account; add `VSCE_PAT` / `OVSX_PAT`; push `vscode-v0.2.0` |
-| **npm** | The `v*` workflow publishes with provenance | Add `NPM_TOKEN` (or run `npm publish` once); npm still serves 0.13.3 |
+| **npm** | The `v*` workflow publishes through npm trusted publishing (OIDC, no stored token), with provenance; skips with a notice when not yet authorized or already published | Add the trusted publisher on npmjs.com once (README > Releasing); npm has 0.20.0 |
 
 ## Non-goals
 
