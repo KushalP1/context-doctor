@@ -14,7 +14,7 @@ name: Release
 #      chain). Unsigned bundles still install; Desktop shows a warning.
 on:
   push:
-    tags: ["v*"]
+    tags: ["v[0-9]*"]
 
 jobs:
   npm:
