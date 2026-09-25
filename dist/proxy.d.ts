@@ -32,9 +32,22 @@ export interface ProxyOptions extends OptimizeOptions {
      * constant time; a wrong or missing prefix gets 401 and no upstream call.
      */
     token?: string;
+    /**
+     * Autopilot: instead of the general strategies, run only the cache-aware
+     * stale-tool-output clearing (autoclear.ts), which replays of real sessions
+     * showed never costs more than it saves. Anthropic Messages requests only;
+     * everything else passes through untouched.
+     */
+    autopilot?: boolean;
+    /** Where autopilot remembers cleared tool results across restarts. */
+    autopilotStatePath?: string;
+    /** While this file exists, autopilot forwards every request unchanged (instant, restart-free off switch). */
+    autopilotPauseFile?: string;
     anthropicUpstream?: string;
     openaiUpstream?: string;
 }
+/** Reported by /health so `autopilot status` can tell an outdated service from a current one. */
+export declare const PROXY_VERSION = "0.20.0";
 /**
  * Remove a leading `/t/<token>` from a request path, or return undefined when
  * the prefix is absent or the token differs. The comparison is constant time
@@ -55,6 +68,21 @@ export interface ProxyStats {
     upstreamOutputTokens: number;
     /** Prompt-cache advisories observed on live traffic (unique, capped). */
     advice: string[];
+    /** Cache reads/writes reported upstream (Anthropic), so autopilot's effect on the cache is visible. */
+    upstreamCacheReadTokens: number;
+    upstreamCacheWriteTokens: number;
+    autopilot?: {
+        enabled: boolean;
+        paused: boolean;
+        requests: number;
+        changedRequests: number;
+        batches: number;
+        coldBatches: number;
+        resultsCleared: number;
+        /** Tokens removed from requests, summed over requests (what was not sent). */
+        tokensRemoved: number;
+        lastReason: string;
+    };
 }
 /** Per-model-prefix strategy overrides for the proxy (`--config`). */
 export interface RouteConfig {

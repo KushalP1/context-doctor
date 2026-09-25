@@ -21,3 +21,5 @@ export { renderStatusLine, tailUsage } from "./statusline.js";
 export * from "./sketch.js";
 export * from "./preferences.js";
 export * from "./tokenizer-measure.js";
+export * from "./autoclear.js";
+export * from "./autopilot.js";

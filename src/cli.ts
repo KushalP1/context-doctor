@@ -22,6 +22,7 @@ import { listSessions, parseSessionFile } from "./session.js";
 import { runHook } from "./hook.js";
 import { buildImpactReport } from "./impact.js";
 import { measureTokenizer, renderTokenizer } from "./tokenizer-measure.js";
+import { autopilotOff, autopilotOn, autopilotPause, autopilotStatus, DEFAULT_AUTOPILOT_PORT } from "./autopilot.js";
 import { renderPreferences, copyToClipboard, CHAT_PREFERENCES } from "./preferences.js";
 import { recordLedger } from "./ledger.js";
 import { runDoctor } from "./doctor.js";
@@ -50,6 +51,10 @@ Usage:
   context-doctor install                        Wire the MCP server + skill into Claude Desktop,
                                                 Claude Code, and Cursor automatically
   context-doctor uninstall                      Undo install
+  context-doctor autopilot on|off|pause|resume|status
+                                                Every new Claude Code session goes through the
+                                                local proxy, which clears stale tool output only
+                                                when the prompt cache is cold (never costs more)
   context-doctor instructions [--copy]          Standing context rules to paste into claude.ai or
                                                 ChatGPT preferences (works on web and mobile too)
   context-doctor session [file]                 Profile a Claude Code session transcript or a
@@ -142,6 +147,9 @@ interface Args {
   port?: number;
   host?: string;
   token?: string;
+  autopilot?: boolean;
+  autopilotState?: string;
+  autopilotPauseFile?: string;
   intervalMs?: number;
   limit?: number;
   task?: string;
@@ -193,6 +201,9 @@ function parseArgs(argv: string[]): Args {
       case "--statusline": args.statusLine = true; break;
       case "--host": args.host = argv[++i]; break;
       case "--token": args.token = argv[++i]; break;
+      case "--autopilot": args.autopilot = true; break;
+      case "--autopilot-state": args.autopilotState = argv[++i]; break;
+      case "--autopilot-pause-file": args.autopilotPauseFile = argv[++i]; break;
       case "--config": args.config = argv[++i]; break;
       case "--upstream-anthropic": args.upstreamAnthropic = argv[++i]; break;
       case "--upstream-openai": args.upstreamOpenai = argv[++i]; break;
@@ -233,7 +244,7 @@ function readInput(file: string): string {
   return readFileSync(file, "utf8");
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.command === "hook") {
@@ -444,6 +455,26 @@ function main(): void {
     if (runInstall({ statusLine: args.statusLine }).failures.length > 0) process.exitCode = 1;
     return;
   }
+  if (args.command === "autopilot") {
+    const sub = args.file ?? "status";
+    const port = args.port ?? DEFAULT_AUTOPILOT_PORT;
+    if (sub === "on") {
+      const r = await autopilotOn(port);
+      console.log(r.lines.join("\n"));
+      if (!r.ok) process.exitCode = 1;
+    } else if (sub === "off") {
+      console.log((await autopilotOff()).join("\n"));
+    } else if (sub === "pause" || sub === "resume") {
+      console.log(autopilotPause(sub === "pause"));
+    } else if (sub === "status") {
+      console.log((await autopilotStatus()).join("\n"));
+    } else {
+      console.error("Usage: context-doctor autopilot on|off|pause|resume|status [--port n]");
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   if (args.command === "instructions") {
     console.log(renderPreferences(args.copy ? copyToClipboard(CHAT_PREFERENCES) : undefined));
     return;
@@ -470,6 +501,9 @@ function main(): void {
       port: args.port,
       host: args.host,
       token: args.token ?? process.env.CONTEXT_DOCTOR_PROXY_TOKEN,
+      autopilot: args.autopilot,
+      autopilotStatePath: args.autopilotState,
+      autopilotPauseFile: args.autopilotPauseFile,
       anthropicUpstream: args.upstreamAnthropic,
       openaiUpstream: args.upstreamOpenai,
       strategies: args.strategies.length > 0 ? args.strategies : loadedRc.config.strategies,
@@ -559,4 +593,4 @@ function main(): void {
   process.exit(1);
 }
 
-main();
+void main();
