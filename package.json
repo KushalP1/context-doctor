@@ -1,20 +1,32 @@
 {
   "name": "context-doctor",
   "version": "0.20.0",
-  "description": "Profile and optimize LLM context windows. See what's eating your tokens and fix it — works with Claude Code, Claude Desktop, Cursor, Codex (OpenAI), and any MCP-capable AI app.",
+  "description": "Keep AI coding sessions lean automatically: clears stale tool output from every Claude Code and GPT API request, only when it costs nothing extra (measured 9.8% less input, no session worse). Token profiler, hooks and MCP tools for Claude Code, Cursor, Codex and Claude Desktop.",
   "keywords": [
+    "agent",
+    "ai-agents",
+    "anthropic",
+    "autocompact",
     "claude",
     "claude-code",
+    "claude-desktop",
     "codex",
+    "context-engineering",
     "context-management",
     "context-window",
+    "cost",
     "cursor",
+    "developer-tools",
+    "gpt",
     "llm",
+    "llm-cost",
     "mcp",
     "model-context-protocol",
     "openai",
     "prompt-caching",
     "prompt-engineering",
+    "proxy",
+    "token-usage",
     "tokens"
   ],
   "license": "MIT",
@@ -55,5 +67,9 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.5.0"
+  },
+  "homepage": "https://github.com/KushalP1/context-doctor#readme",
+  "bugs": {
+    "url": "https://github.com/KushalP1/context-doctor/issues"
   }
 }
