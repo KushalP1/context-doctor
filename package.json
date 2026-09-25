@@ -1,6 +1,6 @@
 {
   "name": "context-doctor",
-  "version": "0.20.0",
+  "version": "0.20.1",
   "description": "Keep AI coding sessions lean automatically: clears stale tool output from every Claude Code and GPT API request, only when it costs nothing extra (measured 9.8% less input, no session worse). Token profiler, hooks and MCP tools for Claude Code, Cursor, Codex and Claude Desktop.",
   "keywords": [
     "agent",

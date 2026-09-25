@@ -47,7 +47,7 @@ export interface ProxyOptions extends OptimizeOptions {
     openaiUpstream?: string;
 }
 /** Reported by /health so `autopilot status` can tell an outdated service from a current one. */
-export declare const PROXY_VERSION = "0.20.0";
+export declare const PROXY_VERSION = "0.20.1";
 /**
  * Remove a leading `/t/<token>` from a request path, or return undefined when
  * the prefix is absent or the token differs. The comparison is constant time

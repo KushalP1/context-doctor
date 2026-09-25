@@ -30,6 +30,7 @@ rmSync(stage, { recursive: true, force: true });
 mkdirSync(stage, { recursive: true });
 cpSync(join(root, "dist"), join(stage, "dist"), { recursive: true, filter: (src) => !src.includes(`${join("dist", "test")}`) });
 cpSync(join(root, "LICENSE"), join(stage, "LICENSE"));
+cpSync(join(root, "assets", "icon.png"), join(stage, "icon.png"));
 
 // Production dependencies only; devDependencies (typescript, @types) would triple the bundle.
 writeFileSync(join(stage, "package.json"), JSON.stringify({
@@ -55,6 +56,7 @@ const manifest = {
   documentation: "https://github.com/KushalP1/context-doctor#readme",
   support: "https://github.com/KushalP1/context-doctor/issues",
   license: pkg.license ?? "MIT",
+  icon: "icon.png",
   keywords: ["context", "tokens", "cost", "prompt-caching", "context-window", "llm"],
   server: {
     type: "node",
@@ -80,4 +82,39 @@ writeFileSync(join(stage, "manifest.json"), JSON.stringify(manifest, null, 2));
 rmSync(out, { force: true });
 execFileSync("npx", ["--yes", MCPB_CLI, "validate", join(stage, "manifest.json")], { stdio: "inherit" });
 execFileSync("npx", ["--yes", MCPB_CLI, "pack", stage, out], { stdio: "inherit" });
-console.log(`\nBundle: ${out}`);
+
+// Signing. Claude Desktop warns on unsigned bundles; a bundle signed with a
+// certificate from a trusted CA installs without that warning.
+//   MCPB_CERT / MCPB_KEY: PEM files, or the PEM text itself (as CI secrets are)
+//   MCPB_INTERMEDIATE:    optional chain certificate(s), PEM file or text
+//   MCPB_SELF_SIGNED=1:   sign with a throwaway self-signed certificate, to
+//                         test the pipeline (Desktop still shows a warning)
+const pemPath = (value, name) => {
+  if (!value) return undefined;
+  if (value.includes("-----BEGIN")) {
+    const p = join(root, "build", name);
+    writeFileSync(p, value.endsWith("\n") ? value : value + "\n", { mode: 0o600 });
+    return p;
+  }
+  return value;
+};
+const cert = pemPath(process.env.MCPB_CERT, "sign-cert.pem");
+const key = pemPath(process.env.MCPB_KEY, "sign-key.pem");
+const chain = pemPath(process.env.MCPB_INTERMEDIATE, "sign-chain.pem");
+if (cert && key) {
+  execFileSync("npx", ["--yes", MCPB_CLI, "sign", out, "-c", cert, "-k", key, ...(chain ? ["-i", chain] : [])], { stdio: "inherit" });
+} else if (process.env.MCPB_SELF_SIGNED === "1") {
+  const dir = join(root, "build");
+  execFileSync("npx", ["--yes", MCPB_CLI, "sign", out, "--self-signed", "-c", join(dir, "self-cert.pem"), "-k", join(dir, "self-key.pem")], { stdio: "inherit" });
+}
+if (cert && key) {
+  // verify chains the certificate to the OS trust store: the same test Claude
+  // Desktop applies. A certificate that fails here would still show the warning.
+  execFileSync("npx", ["--yes", MCPB_CLI, "verify", out], { stdio: "inherit" });
+} else if (process.env.MCPB_SELF_SIGNED === "1") {
+  // A self-signed certificate never chains to a trusted root, so `verify`
+  // reports it as unsigned by design. Check the signature block was written.
+  if (!readFileSync(out).subarray(-12).equals(Buffer.from("MCPB_SIG_END"))) throw new Error("signing did not append a signature block");
+}
+for (const f of ["sign-cert.pem", "sign-key.pem", "sign-chain.pem"]) rmSync(join(root, "build", f), { force: true });
+console.log(`\nBundle: ${out}${cert && key ? " (signed)" : process.env.MCPB_SELF_SIGNED === "1" ? " (self-signed, test only)" : " (unsigned)"}`);
