@@ -35,8 +35,8 @@ export interface ProxyOptions extends OptimizeOptions {
     /**
      * Autopilot: instead of the general strategies, run only the cache-aware
      * stale-tool-output clearing (autoclear.ts), which replays of real sessions
-     * showed never costs more than it saves. Anthropic Messages requests only;
-     * everything else passes through untouched.
+     * showed never costs more than it saves. Anthropic Messages, OpenAI Chat
+     * Completions and OpenAI Responses requests; everything else passes through.
      */
     autopilot?: boolean;
     /** Where autopilot remembers cleared tool results across restarts. */
