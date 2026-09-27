@@ -47,7 +47,7 @@ context-doctor autopilot on     # every new Claude Code session keeps its contex
 /plugin install context-doctor@context-doctor
 ```
 
-The plugin brings the every-prompt check, the MCP tools, and `/context-doctor:savings`, `/context-doctor:checkup` and `/context-doctor:autopilot`. It needs no npm step and works on any Claude Code version.
+The plugin brings the every-prompt check, the MCP tools, and `/context-doctor:savings`, `/context-doctor:checkup` and `/context-doctor:autopilot`. It needs no npm step: the MCP server ships as one self-contained file, so it also works on Claude Code versions that do not install plugin dependencies.
 
 `context-doctor autopilot status` shows what autopilot did; `context-doctor doctor` checks the whole setup. Everything is reversible: `context-doctor autopilot off`, `context-doctor uninstall`, or `/plugin uninstall`.
 
@@ -101,7 +101,7 @@ Not claimed, because no process on your machine sends those requests: trimming i
 ## What's new
 
 - **0.20 Autopilot**: stale tool output cleared from every Claude Code request, only when the prompt cache is cold, so it cannot cost more (measured: 9.8% less input cost, ~$1,080 a month on the author's usage, no session worse); runs as a login service on macOS, Linux and Windows; now also for GPT via OpenAI's Chat Completions and Responses APIs.
-- **0.21 See it before you install it**: `npx context-doctor savings` replays your own recent sessions through autopilot and shows what it would have saved, against what you were actually billed. Install as a **Claude Code plugin** from inside Claude Code. Listed in the official **MCP Registry** (`io.github.KushalP1/context-doctor`); any MCP client can launch it as `npx -y context-doctor mcp`.
+- **0.21 See it before you install it**: `npx context-doctor savings` replays your own recent sessions through autopilot and shows what it would have saved, against what you were actually billed. Install as a **Claude Code plugin** from inside Claude Code. Ready for the official **MCP Registry** (`io.github.KushalP1/context-doctor`), which every release now publishes to; any MCP client can launch it as `npx -y context-doctor mcp`.
 - **0.20.1 Releases that finish themselves**: one tag publishes to npm and creates a GitHub release with the Claude Desktop bundle (signed when a certificate is configured); the editor extension is ready for the VS Code Marketplace and Open VSX.
 - **0.19 Measured Claude tokenizer**: estimates were 40% low for Claude; fixed from the API's own counts, with a per-model check in `accuracy`.
 - **0.18** `proxy --token` for putting the proxy on a public URL safely. **0.17** Claude Desktop: a `profile_context` the model can afford to call from chat, `.mcpb` bundle, standing preferences for web and mobile. **0.16** Codex. **0.15** Cursor.
