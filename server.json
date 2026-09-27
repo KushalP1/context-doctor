@@ -1,0 +1,28 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.KushalP1/context-doctor",
+  "title": "context-doctor",
+  "description": "Profile LLM context: token breakdown, wasted-context findings and fixes for chats and agents.",
+  "repository": {
+    "url": "https://github.com/KushalP1/context-doctor",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/KushalP1/context-doctor#readme",
+  "version": "0.20.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "context-doctor",
+      "version": "0.20.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ]
+    }
+  ]
+}

@@ -15,15 +15,41 @@ Built and maintained by [gAI Ventures](https://gai.ventures).
 
 ## Quick start
 
+**See what it would save you first** (no install, reads your local Claude Code history):
+
 ```bash
+npx context-doctor savings
+```
+
+```
+What autopilot would have saved you (last 30 days, 53 Claude Code sessions)
+────────────────────────────────────────────────────────
+Input you were billed for           $11,205   (from the usage your transcripts record)
+Autopilot would have cut             $1,396   12.5%, 1.2B tokens not sent
+Sessions made more expensive              0
+Biggest win                            $503   tech-Whatsit (31% of that session)
+```
+
+That is the author's machine. Yours is computed the same way: every recent session replayed request by request through the shipped autopilot code, against what your transcripts show you were actually billed.
+
+**Then install it**, whichever way suits you:
+
+```bash
+# Everything, every app it finds (Claude Code, Cursor, Codex, Claude Desktop)
 npm install -g context-doctor
-context-doctor install          # hooks, MCP server and skill in every AI app it finds
+context-doctor install
 context-doctor autopilot on     # every new Claude Code session keeps its context lean
 ```
 
-Then start a new Claude Code session and work as usual. `context-doctor autopilot status` shows what it did; `context-doctor doctor` checks the whole setup. Everything is reversible: `context-doctor autopilot off`, `context-doctor uninstall`.
+```text
+# Or as a Claude Code plugin, from inside Claude Code
+/plugin marketplace add KushalP1/context-doctor
+/plugin install context-doctor@context-doctor
+```
 
-Just want a look first? `npx context-doctor session` profiles your latest Claude Code or Codex session in place, no install.
+The plugin brings the every-prompt check, the MCP tools, and `/context-doctor:savings`, `/context-doctor:checkup` and `/context-doctor:autopilot`. It needs no npm step and works on any Claude Code version.
+
+`context-doctor autopilot status` shows what autopilot did; `context-doctor doctor` checks the whole setup. Everything is reversible: `context-doctor autopilot off`, `context-doctor uninstall`, or `/plugin uninstall`.
 
 ```
 Where the tokens go
@@ -62,7 +88,7 @@ What is not counted here: the proxy's full optimizer for your own API apps, the 
 
 | Where you work | Automatic, every request | What you get on top |
 |---|---|---|
-| **Claude Code** (terminal, VS Code, JetBrains, desktop app's Code tab) | **Autopilot** clears stale tool output (cold cache only, never more expensive). **Hook** on every prompt warns the model with the real context size and its largest waste | Status bar context meter, `/context-doctor` skill, `session`, `watch`, `report`, dashboard |
+| **Claude Code** (terminal, VS Code, JetBrains, desktop app's Code tab) | **Autopilot** clears stale tool output (cold cache only, never more expensive). **Hook** on every prompt warns the model with the real context size and its largest waste | Install via npm or as a **plugin** (`/plugin marketplace add KushalP1/context-doctor`). Status bar context meter, `/context-doctor:savings`, `session`, `watch`, `report`, dashboard |
 | **Cursor** (agent) | Cursor runs Claude Code's hooks, so the same every-prompt check fires inside Cursor | MCP tools, editor status bar extension, `cursor` profiler. With your own OpenAI key, autopilot too via a tokened tunnel ([how](#putting-the-proxy-on-a-public-url-cursor-with-your-own-openai-key-remote-apps)) |
 | **Codex** (ChatGPT app's Codex tab, IDE extension, CLI) | Every-prompt hook with the API's own token counts | MCP tools, skill, `session` reads Codex rollouts. On an API key, autopilot too (`OPENAI_BASE_URL`) |
 | **Your own apps on the Anthropic or OpenAI API** | Autopilot on `/v1/messages`, `/v1/chat/completions` and `/v1/responses` (`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`), or the full optimizing proxy | Exact usage and cache hit rates in `/stats`, prompt-cache placement advice |
@@ -75,6 +101,7 @@ Not claimed, because no process on your machine sends those requests: trimming i
 ## What's new
 
 - **0.20 Autopilot**: stale tool output cleared from every Claude Code request, only when the prompt cache is cold, so it cannot cost more (measured: 9.8% less input cost, ~$1,080 a month on the author's usage, no session worse); runs as a login service on macOS, Linux and Windows; now also for GPT via OpenAI's Chat Completions and Responses APIs.
+- **0.21 See it before you install it**: `npx context-doctor savings` replays your own recent sessions through autopilot and shows what it would have saved, against what you were actually billed. Install as a **Claude Code plugin** from inside Claude Code. Listed in the official **MCP Registry** (`io.github.KushalP1/context-doctor`); any MCP client can launch it as `npx -y context-doctor mcp`.
 - **0.20.1 Releases that finish themselves**: one tag publishes to npm and creates a GitHub release with the Claude Desktop bundle (signed when a certificate is configured); the editor extension is ready for the VS Code Marketplace and Open VSX.
 - **0.19 Measured Claude tokenizer**: estimates were 40% low for Claude; fixed from the API's own counts, with a per-model check in `accuracy`.
 - **0.18** `proxy --token` for putting the proxy on a public URL safely. **0.17** Claude Desktop: a `profile_context` the model can afford to call from chat, `.mcpb` bundle, standing preferences for web and mobile. **0.16** Codex. **0.15** Cursor.
@@ -138,6 +165,8 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | Command | What it does |
 |---|---|
 | `context-doctor install` / `uninstall` | Wire (or remove) everything: MCP for Claude Desktop/Code/Cursor/Codex, the Agent Skill, the every-prompt hook |
+| `context-doctor savings [--days n]` | What autopilot saves, or would have saved, on your own recent Claude Code sessions: replayed through the shipped code, against your actual billed usage. A bare `context-doctor` in a terminal shows the same |
+| `context-doctor mcp [--http]` | The MCP server as a subcommand, for clients and registries that launch `npx -y context-doctor mcp` |
 | `context-doctor autopilot on\|off\|pause\|resume\|status` | Every new Claude Code session goes through the local proxy, which clears stale tool output only when the prompt cache is cold: measured 9.8% less input cost, no session worse |
 | `context-doctor instructions [--copy]` | The ~180-token standing rules (~120 on GPT) for claude.ai / ChatGPT preferences, for web and phones where no server runs |
 | `context-doctor analyze <file>` | Profile a conversation: token breakdown, findings, cost + latency estimates. `--fail-over-budget` exits 1 on a breach, for CI |

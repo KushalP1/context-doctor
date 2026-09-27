@@ -68,6 +68,16 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.21.0 — see it before you install it, install it where you already are
+
+Asked: "can we make anything better so more people download and use this?" Measured first: downloads were rising (350 on 25 Sep), but npm search ranked context-doctor outside the top 50 for every generic query ("claude code context", "context window", "token usage"), so new users were not finding it by searching, and a first run printed help text.
+
+- **`context-doctor savings`**, and a bare `context-doctor` in a terminal: every recent Claude Code session replayed through the shipped AutoClearer; the share it would save is applied to the input the transcripts show was actually billed, so the headline is a fraction of the user's real spend. 53 sessions in ~9 s here: $11,205 billed, $1,396 (12.5%) cut, 0 sessions worse.
+- **Claude Code plugin.** The repo is its own marketplace. Found by installing from GitHub into a sandboxed Claude Code 2.1.62: older versions reject unknown manifest keys (`displayName`) and do not install a plugin's npm dependencies, so the MCP server ships as one self-contained bundle (`dist/mcp.bundle.js`, 417 KB, not in the npm package), and Claude Code reported it `✓ Connected` with zero node_modules. Plugin-only skills `/context-doctor:savings`, `:checkup`, `:autopilot`; the plugin hook stays silent when the npm install's hook is also present.
+- **Official MCP Registry.** `server.json` (validated by the registry's own tool), `mcpName` in package.json, a `context-doctor mcp` subcommand so `npx -y context-doctor mcp` works, and a release job that publishes by GitHub OIDC after npm, with no secret.
+- **`npm version` syncs every version string** (server.json, the MCP server, the proxy), rebuilds `dist/` and stages it, so a release is one command.
+- **Fixed:** with autopilot off, the every-prompt hook health-checked port `undefined` and printed a Node deprecation warning, and `autopilot status` would have reported a dead proxy instead of "off".
+
 ## Shipped in 0.20.1 — releases that finish themselves
 
 - **One tag, every channel.** `v*` tags run the suite, publish to npm through trusted publishing (npm is restricting tokens that bypass 2FA, so the workflow authenticates by OIDC and needs no stored token), and create a GitHub release with the Claude Desktop bundle attached, its notes taken from this file. A missing secret is a notice, not a red run (the v0.17.0 tag failed red for exactly that).

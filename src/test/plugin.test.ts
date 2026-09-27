@@ -59,3 +59,15 @@ test("the bundled MCP server answers from a directory with no node_modules", asy
     child.kill();
   }
 });
+
+test("MCP Registry: server.json matches package.json and the registry's limits", () => {
+  const server = JSON.parse(readFileSync(join(root, "server.json"), "utf8"));
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  assert.equal(server.name, pkg.mcpName, "registry name must equal package.json mcpName");
+  assert.match(server.name, /^io\.github\.KushalP1\//);
+  assert.ok(server.description.length <= 100, `description is ${server.description.length} chars; the registry allows 100`);
+  assert.equal(server.version, pkg.version, "bump server.json with package.json");
+  assert.equal(server.packages[0].version, pkg.version);
+  assert.equal(server.packages[0].identifier, pkg.name);
+  assert.deepEqual(server.packages[0].packageArguments, [{ type: "positional", value: "mcp" }]);
+});

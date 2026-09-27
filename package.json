@@ -59,7 +59,8 @@
     "prepublishOnly": "npm test",
     "dev": "tsc --watch",
     "test": "npm run build && node scripts/test.mjs",
-    "build:mcpb": "npm run build && node scripts/build-mcpb.mjs"
+    "build:mcpb": "npm run build && node scripts/build-mcpb.mjs",
+    "version": "node scripts/sync-versions.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
@@ -73,5 +74,6 @@
   "homepage": "https://github.com/KushalP1/context-doctor#readme",
   "bugs": {
     "url": "https://github.com/KushalP1/context-doctor/issues"
-  }
+  },
+  "mcpName": "io.github.KushalP1/context-doctor"
 }

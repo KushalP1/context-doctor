@@ -8,7 +8,8 @@ name: Release
 #      (npm is phasing out tokens that bypass 2FA for publishing.) An NPM_TOKEN
 #      secret still works as a fallback. With neither, or when the version is
 #      already on npm, the step leaves a notice instead of failing the run.
-#   2. A GitHub release with the Claude Desktop bundle (.mcpb) attached,
+#   2. The official MCP Registry, via GitHub OIDC (no secret), after npm.
+#   3. A GitHub release with the Claude Desktop bundle (.mcpb) attached,
 #      signed when MCPB_CERT and MCPB_KEY exist (PEM text of a code-signing
 #      certificate from a trusted CA and its key; MCPB_INTERMEDIATE for the
 #      chain). Unsigned bundles still install; Desktop shows a warning.
@@ -55,6 +56,31 @@ jobs:
           elif [ -z "$NPM_TOKEN" ]; then
             cat publish.err
             echo "::notice::npm publish was not authorized. Set up trusted publishing (see the header of this workflow), then re-run this job."
+          else
+            cat publish.err; exit 1
+          fi
+
+  mcp-registry:
+    # The official MCP Registry (registry.modelcontextprotocol.io), which many
+    # directories copy from. GitHub OIDC proves this workflow belongs to the
+    # io.github.KushalP1 namespace, so no login or secret is needed. It checks
+    # the published npm package's mcpName, so it runs after the npm job.
+    needs: npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish server.json
+        run: |
+          curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          if ./mcp-publisher publish 2>publish.err; then
+            echo "Published $(node -p "require('./server.json').name") to the MCP Registry"
+          elif grep -qi "already exists\|duplicate\|cannot publish duplicate" publish.err; then
+            echo "::notice::This version is already in the MCP Registry"
           else
             cat publish.err; exit 1
           fi

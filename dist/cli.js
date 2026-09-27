@@ -57,6 +57,8 @@ Usage:
                                                 Every new Claude Code session goes through the
                                                 local proxy, which clears stale tool output only
                                                 when the prompt cache is cold (never costs more)
+  context-doctor mcp [--http]                   The MCP server (same as context-doctor-mcp), for clients
+                                                that launch \`npx -y context-doctor mcp\`
   context-doctor instructions [--copy]          Standing context rules to paste into claude.ai or
                                                 ChatGPT preferences (works on web and mobile too)
   context-doctor session [file]                 Profile a Claude Code session transcript or a
@@ -493,6 +495,15 @@ async function main() {
             if (!args.command)
                 console.log("\nAll commands: context-doctor --help");
         }
+        return;
+    }
+    if (args.command === "mcp") {
+        // `context-doctor mcp [--http ...]` is the MCP server, the same program as
+        // the context-doctor-mcp binary. Registries and clients that launch a
+        // package with `npx -y context-doctor <args>` can only reach the package's
+        // main binary, so the server has to be a subcommand of it too.
+        process.argv.splice(2, 1);
+        await import("./mcp.js");
         return;
     }
     if (args.command === "autopilot") {
