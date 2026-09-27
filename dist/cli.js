@@ -21,7 +21,8 @@ import { listSessions, parseSessionFile } from "./session.js";
 import { runHook } from "./hook.js";
 import { buildImpactReport } from "./impact.js";
 import { measureTokenizer, renderTokenizer } from "./tokenizer-measure.js";
-import { autopilotOff, autopilotOn, autopilotPause, autopilotStatus, DEFAULT_AUTOPILOT_PORT } from "./autopilot.js";
+import { autopilotOff, autopilotOn, autopilotPause, autopilotPaths, autopilotStatus, DEFAULT_AUTOPILOT_PORT } from "./autopilot.js";
+import { estimateSavings, renderSavings } from "./savings.js";
 import { renderPreferences, copyToClipboard, CHAT_PREFERENCES } from "./preferences.js";
 import { recordLedger } from "./ledger.js";
 import { runDoctor } from "./doctor.js";
@@ -49,6 +50,9 @@ Usage:
   context-doctor install                        Wire the MCP server + skill into Claude Desktop,
                                                 Claude Code, and Cursor automatically
   context-doctor uninstall                      Undo install
+  context-doctor savings [--days n]              What autopilot saves (or would have) on YOUR recent
+                                                Claude Code sessions: replayed, priced as billed.
+                                                Also what a bare \`context-doctor\` shows
   context-doctor autopilot on|off|pause|resume|status
                                                 Every new Claude Code session goes through the
                                                 local proxy, which clears stale tool output only
@@ -211,6 +215,9 @@ function parseArgs(argv) {
             case "--token":
                 args.token = argv[++i];
                 break;
+            case "--days":
+                args.days = Number(argv[++i]);
+                break;
             case "--autopilot":
                 args.autopilot = true;
                 break;
@@ -265,6 +272,15 @@ function readInput(file) {
     if (file === "-")
         return readFileSync(0, "utf8");
     return readFileSync(file, "utf8");
+}
+/** Any Claude Code transcript on this machine? One directory listing, no parsing. */
+function hasClaudeSessions() {
+    try {
+        return listSessions(1).some((s) => s.path.includes(".claude"));
+    }
+    catch {
+        return false;
+    }
 }
 async function main() {
     const args = parseArgs(process.argv.slice(2));
@@ -457,6 +473,26 @@ async function main() {
         // makes the exit code non-zero so automation can react.
         if (runInstall({ statusLine: args.statusLine }).failures.length > 0)
             process.exitCode = 1;
+        return;
+    }
+    if (args.command === "savings" || (!args.command && process.stdout.isTTY && hasClaudeSessions())) {
+        // A bare `context-doctor` in a terminal, with Claude Code history on the
+        // machine, answers the question people install this for: what would it
+        // save me? Scripts and pipes still get the help text.
+        const progress = process.stderr.isTTY
+            ? (done, total) => process.stderr.write(`\rReplaying your Claude Code sessions through autopilot… ${done}/${total}`)
+            : undefined;
+        const report = estimateSavings(args.days ?? 30, {}, undefined, progress);
+        if (progress)
+            process.stderr.write("\r\x1b[K");
+        const on = existsSync(autopilotPaths().config);
+        if (args.json)
+            console.log(JSON.stringify(report, null, 2));
+        else {
+            console.log(renderSavings(report, on));
+            if (!args.command)
+                console.log("\nAll commands: context-doctor --help");
+        }
         return;
     }
     if (args.command === "autopilot") {
