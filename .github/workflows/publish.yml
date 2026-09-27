@@ -54,14 +54,17 @@ jobs:
             echo "::notice::context-doctor@$V is already on npm; nothing to publish"; exit 0
           fi
           # Trusted publishing needs npm 11.5.1 or newer.
-          npm install -g npm@latest >/dev/null 2>&1
+          npm install -g npm@latest >/dev/null 2>&1 || echo "::warning::could not upgrade npm"
+          echo "npm $(npm --version); OIDC token available: $([ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && echo yes || echo no); NPM_TOKEN secret: $([ -n "$NPM_TOKEN" ] && echo set || echo absent)"
+          # With no token, drop setup-node's empty _authToken line so npm takes the OIDC route.
+          if [ -z "$NPM_TOKEN" ]; then unset NODE_AUTH_TOKEN; sed -i '/_authToken/d' "$NPM_CONFIG_USERCONFIG" 2>/dev/null || true; fi
           # The job already ran the suite; --ignore-scripts skips prepublishOnly's
           # second run, which also kept npm's own error off the end of the log.
           if npm publish --provenance --access public --ignore-scripts > publish.log 2>&1; then
             echo "Published context-doctor@$V"
           else
             cat publish.log
-            REASON=$(grep -E "npm (error|ERR!)" publish.log | head -4 | tr '\n' ' ')
+            REASON="$(npm --version): $(grep -E "npm (error|ERR!)" publish.log | head -4 | tr '\n' ' ')"
             if [ -z "$NPM_TOKEN" ]; then
               echo "::warning::npm publish was not authorized: ${REASON:-see log}. Set up trusted publishing (see the header of this workflow) or add NPM_TOKEN, then use Run workflow."
             else
