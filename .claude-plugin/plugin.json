@@ -1,0 +1,26 @@
+{
+  "name": "context-doctor",
+  "displayName": "context-doctor",
+  "description": "Keeps Claude Code sessions lean: an every-prompt context check that tells the model its real context size and largest waste, MCP tools to profile and slim a conversation, and /context-doctor:savings to see what autopilot would save on your own sessions.",
+  "author": { "name": "gAI Ventures", "url": "https://gai.ventures" },
+  "homepage": "https://github.com/KushalP1/context-doctor#readme",
+  "repository": "https://github.com/KushalP1/context-doctor",
+  "license": "MIT",
+  "keywords": ["context", "tokens", "cost", "prompt-caching", "context-window", "autopilot", "hooks", "mcp"],
+  "skills": "./plugin/skills",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/cli.js\" hook" }
+        ]
+      }
+    ]
+  },
+  "mcpServers": {
+    "context-doctor": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/mcp.js"]
+    }
+  }
+}

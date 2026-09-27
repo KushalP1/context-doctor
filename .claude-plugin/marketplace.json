@@ -1,0 +1,18 @@
+{
+  "name": "context-doctor",
+  "description": "context-doctor: keep AI coding sessions lean, measured, never more expensive.",
+  "owner": {
+    "name": "gAI Ventures",
+    "url": "https://gai.ventures"
+  },
+  "plugins": [
+    {
+      "name": "context-doctor",
+      "source": "./",
+      "description": "Every-prompt context check, profiling MCP tools, and what autopilot would save on your own sessions."
+    }
+  ],
+  "metadata": {
+    "description": "context-doctor: keep AI coding sessions lean, measured, never more expensive."
+  }
+}

@@ -192,11 +192,11 @@ export function currentCli() {
 export async function autopilotOn(port = DEFAULT_AUTOPILOT_PORT, paths = autopilotPaths()) {
     const lines = [];
     const cli = currentCli();
-    if (isEphemeralPath(cli)) {
+    if (isEphemeralPath(cli) || /[\\/]\.claude[\\/]plugins[\\/]/.test(cli)) {
         return {
             ok: false,
             lines: [
-                "✗ Running from the npx cache, which npm deletes at will; a background service cannot point there.",
+                "✗ Running from the npx cache or a Claude Code plugin copy, which are replaced or deleted on update; a background service cannot point there.",
                 "  Install it once, then re-run:  npm install -g context-doctor && context-doctor autopilot on",
             ],
         };

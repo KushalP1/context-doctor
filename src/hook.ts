@@ -13,6 +13,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { recordLedger, statePath } from "./ledger.js";
 import { parseConversation } from "./parse.js";
@@ -124,6 +125,15 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+function settingsHasOurHook(): boolean {
+  try {
+    const hooks = JSON.parse(readFileSync(join(homedir(), ".claude", "settings.json"), "utf8"))?.hooks?.UserPromptSubmit;
+    return JSON.stringify(hooks ?? "").includes("context-doctor");
+  } catch {
+    return false;
+  }
+}
+
 export async function runHook(): Promise<void> {
   // A hook must never break the user's prompt: any failure exits silently.
   try {
@@ -131,6 +141,9 @@ export async function runHook(): Promise<void> {
     // so if the proxy died, start it now. One existsSync when autopilot is
     // off; a ~1ms localhost health check when it is on and healthy.
     const heal = ensureProxyUp().catch(() => undefined);
+    // Installed both ways (plugin and `context-doctor install`)? The plugin
+    // copy stays silent so the model is told once, not twice.
+    if (process.env.CLAUDE_PLUGIN_ROOT && settingsHasOurHook()) { await heal; return; }
     const input = JSON.parse(await readStdin()) as { session_id?: string; transcript_path?: string; cwd?: string };
     await heal;
     const transcriptPath = input.transcript_path;
