@@ -16,6 +16,9 @@ name: Release
 on:
   push:
     tags: ["v[0-9]*"]
+  # Retry a release without a new tag: Actions > Release > Run workflow on
+  # main publishes whatever version package.json holds, if npm lacks it.
+  workflow_dispatch:
 
 jobs:
   npm:
@@ -36,6 +39,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - name: Verify tag matches package.json version
+        if: github.event_name == 'push'
         run: |
           PKG="v$(node -p "require('./package.json').version")"
           if [ "$PKG" != "${GITHUB_REF_NAME}" ]; then
@@ -51,13 +55,18 @@ jobs:
           fi
           # Trusted publishing needs npm 11.5.1 or newer.
           npm install -g npm@latest >/dev/null 2>&1
-          if npm publish --provenance --access public 2>publish.err; then
+          # The job already ran the suite; --ignore-scripts skips prepublishOnly's
+          # second run, which also kept npm's own error off the end of the log.
+          if npm publish --provenance --access public --ignore-scripts > publish.log 2>&1; then
             echo "Published context-doctor@$V"
-          elif [ -z "$NPM_TOKEN" ]; then
-            cat publish.err
-            echo "::notice::npm publish was not authorized. Set up trusted publishing (see the header of this workflow), then re-run this job."
           else
-            cat publish.err; exit 1
+            cat publish.log
+            REASON=$(grep -E "npm (error|ERR!)" publish.log | head -4 | tr '\n' ' ')
+            if [ -z "$NPM_TOKEN" ]; then
+              echo "::warning::npm publish was not authorized: ${REASON:-see log}. Set up trusted publishing (see the header of this workflow) or add NPM_TOKEN, then use Run workflow."
+            else
+              echo "::error::npm publish failed: ${REASON:-see log}"; exit 1
+            fi
           fi
 
   mcp-registry:
@@ -76,16 +85,22 @@ jobs:
       - name: Publish server.json
         run: |
           curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          V="$(node -p "require('./package.json').version")"
+          if ! npm view "context-doctor@$V" version >/dev/null 2>&1; then
+            echo "::warning::context-doctor@$V is not on npm yet, and the registry checks the npm package; skipped"; exit 0
+          fi
           ./mcp-publisher login github-oidc
           if ./mcp-publisher publish 2>publish.err; then
             echo "Published $(node -p "require('./server.json').name") to the MCP Registry"
           elif grep -qi "already exists\|duplicate\|cannot publish duplicate" publish.err; then
             echo "::notice::This version is already in the MCP Registry"
           else
-            cat publish.err; exit 1
+            cat publish.err; echo "::error::MCP Registry: $(head -c 300 publish.err | tr '\n' ' ')"; exit 1
           fi
 
   github-release:
+    # Tag pushes only: a manual run is a publish retry, not a new release.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
