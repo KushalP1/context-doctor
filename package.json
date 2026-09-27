@@ -46,6 +46,7 @@
   "files": [
     "dist",
     "!dist/test",
+    "!dist/mcp.bundle.js",
     "skills",
     "README.md",
     "LICENSE"
@@ -54,7 +55,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc && node -e \"const fs=require('fs');['dist/cli.js','dist/mcp.js'].forEach(f=>fs.chmodSync(f,0o755))\"",
+    "build": "tsc && node scripts/bundle-mcp.mjs && node -e \"const fs=require('fs');['dist/cli.js','dist/mcp.js'].forEach(f=>fs.chmodSync(f,0o755))\"",
     "prepublishOnly": "npm test",
     "dev": "tsc --watch",
     "test": "npm run build && node scripts/test.mjs",
@@ -66,6 +67,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "esbuild": "^0.25.12",
     "typescript": "^5.5.0"
   },
   "homepage": "https://github.com/KushalP1/context-doctor#readme",

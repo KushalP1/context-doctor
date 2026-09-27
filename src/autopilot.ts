@@ -211,8 +211,11 @@ async function waitHealthy(port: number, ms: number): Promise<Health> {
 }
 
 function readConfig(paths: AutopilotPaths): AutopilotConfig | undefined {
+  // readJson returns {} for a missing file; only a file with a port is a config.
+  if (!existsSync(paths.config)) return undefined;
   try {
-    return readJson(paths.config) as AutopilotConfig;
+    const cfg = readJson(paths.config) as Partial<AutopilotConfig>;
+    return typeof cfg.port === "number" && cfg.port > 0 ? (cfg as AutopilotConfig) : undefined;
   } catch {
     return undefined;
   }
@@ -346,7 +349,7 @@ export async function ensureProxyUp(paths = autopilotPaths()): Promise<void> {
   const cfg = readConfig(paths);
   if (!cfg) return;
   if ((await health(cfg.port, 300)).ok) return;
-  if (!existsSync(cfg.node) || !existsSync(cfg.cli)) return;
+  if (typeof cfg.node !== "string" || typeof cfg.cli !== "string" || !existsSync(cfg.node) || !existsSync(cfg.cli)) return;
   startDetached(serviceCommand(cfg.node, cfg.cli, cfg.port, paths), paths.log);
   await waitHealthy(cfg.port, 2500);
 }

@@ -187,3 +187,17 @@ test("service definitions for macOS, Linux and Windows run the autopilot proxy w
     assert.match(unit, /Restart=always/);
     assert.equal(windowsTaskCommand(["C:\\node.exe", "C:\\cd\\cli.js", "proxy"]), '"C:\\node.exe" "C:\\cd\\cli.js" "proxy"');
 });
+test("autopilot off (no config file): status says off and the hook's self-heal does nothing", async () => {
+    const { autopilotStatus, ensureProxyUp } = await import("../autopilot.js");
+    const home = mkdtempSync(join(tmpdir(), "cd-apoff-"));
+    const paths = autopilotPaths(home);
+    const lines = await autopilotStatus(paths);
+    assert.match(lines.join("\n"), /Autopilot is off/);
+    const warnings = [];
+    const onWarn = (w) => warnings.push(w.message);
+    process.on("warning", onWarn);
+    await ensureProxyUp(paths);
+    await new Promise((r) => setImmediate(r));
+    process.off("warning", onWarn);
+    assert.deepEqual(warnings, []);
+});

@@ -35,7 +35,7 @@
     "context-doctor": {
       "command": "node",
       "args": [
-        "${CLAUDE_PLUGIN_ROOT}/dist/mcp.js"
+        "${CLAUDE_PLUGIN_ROOT}/dist/mcp.bundle.js"
       ]
     }
   }

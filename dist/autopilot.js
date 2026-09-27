@@ -179,8 +179,12 @@ async function waitHealthy(port, ms) {
     }
 }
 function readConfig(paths) {
+    // readJson returns {} for a missing file; only a file with a port is a config.
+    if (!existsSync(paths.config))
+        return undefined;
     try {
-        return readJson(paths.config);
+        const cfg = readJson(paths.config);
+        return typeof cfg.port === "number" && cfg.port > 0 ? cfg : undefined;
     }
     catch {
         return undefined;
@@ -318,7 +322,7 @@ export async function ensureProxyUp(paths = autopilotPaths()) {
         return;
     if ((await health(cfg.port, 300)).ok)
         return;
-    if (!existsSync(cfg.node) || !existsSync(cfg.cli))
+    if (typeof cfg.node !== "string" || typeof cfg.cli !== "string" || !existsSync(cfg.node) || !existsSync(cfg.cli))
         return;
     startDetached(serviceCommand(cfg.node, cfg.cli, cfg.port, paths), paths.log);
     await waitHealthy(cfg.port, 2500);
