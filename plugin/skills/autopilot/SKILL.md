@@ -12,4 +12,4 @@ Autopilot runs as a small background service, so it needs the globally installed
    - status: `context-doctor autopilot status`
    - pause (instant passthrough, nothing restarts): `context-doctor autopilot pause`, and `resume`
    - off: `context-doctor autopilot off`
-4. Show the output. After `on`, tell the user it applies to Claude Code sessions started from now on, and that `context-doctor savings` shows what it saves.
+4. Show the output. After `on`, tell the user it applies to Claude Code sessions started from now on in a terminal or an IDE; the desktop app's Code tab sets its own API address, so autopilot cannot reach it (the output warns when that is the user's case). `context-doctor savings` shows what each lever is worth on their own sessions.

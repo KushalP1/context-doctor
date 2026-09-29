@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.1
+- Listing text: what the CLI does in the desktop app versus terminal and IDE sessions, stated accurately.
+
 ## 0.2.0
 - Marketplace listing: icon, categories, description.
 - Works in Cursor as well as VS Code (Open VSX build).

@@ -68,6 +68,16 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.22.0 — an audit of what actually works, and a lever that does in the desktop app
+
+Asked: "make it better, make sure everything works." Audited on the author's machine first:
+
+- **Autopilot had seen 0 requests in 4 days.** Every session there runs in the desktop app's Code tab, and Claude Code there (2.1.284) is host-orchestrated: the app sets `ANTHROPIC_BASE_URL` from its own account config and `filterSettingsEnv` drops the same key from settings files. `doctor` reported ✓ regardless. Now `autopilot on`, `status` and `doctor` read which surface recent sessions ran in and say when autopilot cannot reach them; the README no longer claims the desktop app.
+- **Cold-resume advice (new).** The every-prompt hook does run in the desktop app. When a prompt arrives more than 65 minutes after the last reply on a session over 150k tokens, the cache has expired and the message re-sends everything at the write rate; the hook gives the model the numbers and it offers `/compact` once. Replayed over 133 days: 401 such returns, $4,053 net saving had the user compacted after the first reply ($914 a month), positive in 296, worst −$2.30. Claude Code 2.1.284 ships a flag-gated server-side "tool result clearing after idle" with the same 65-minute rule; this is the user-side version that works today.
+- **`savings` window fixed**: "last 30 days" counted the whole history of any file touched in the window (0.21 showed $11,205; the true 30-day figure was $6,006). It now also separates surfaces autopilot can and cannot reach and reports the cold-resume opportunity.
+- **Cost quoted at the wrong rate**: the hook priced a cached session's per-message cost at the uncached rate (10x too high), and `report` and autopilot's counter priced cached tokens at the full input rate. Both now use the cached rate.
+- **Checked live on every surface**: this Claude Code session's MCP tool (sketch), the published npm package in a clean home (`savings`, `doctor`, `npx -y context-doctor mcp`), Codex (`codex mcp list` shows it enabled), Cursor's config, a fresh plugin install from GitHub (MCP `✓ Connected`), the Claude Desktop MCP server (connected; the model has not called it since 0.17, so chat apps remain a nudge). `--version` was missing, and is added.
+
 ## Shipped in 0.21.0 — see it before you install it, install it where you already are
 
 Asked: "can we make anything better so more people download and use this?" Measured first: downloads were rising (350 on 25 Sep), but npm search ranked context-doctor outside the top 50 for every generic query ("claude code context", "context window", "token usage"), so new users were not finding it by searching, and a first run printed help text.

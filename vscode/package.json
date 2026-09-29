@@ -2,7 +2,7 @@
   "name": "context-doctor-vscode",
   "displayName": "context-doctor: Claude Code context meter",
   "description": "Live Claude Code context size, window share and prompt-cache hit rate in the status bar. Local, keyless, works in VS Code and Cursor.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "gai-ventures",
   "license": "MIT",
   "repository": {

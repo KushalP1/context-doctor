@@ -2,14 +2,14 @@
 
 [![CI](https://github.com/KushalP1/context-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/KushalP1/context-doctor/actions) [![npm](https://img.shields.io/npm/v/context-doctor)](https://www.npmjs.com/package/context-doctor) [![npm downloads](https://img.shields.io/npm/dm/context-doctor)](https://www.npmjs.com/package/context-doctor) [![license: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE) ![macOS | Linux | Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
-**Keep every AI session's context lean, automatically, without ever making it more expensive.**
+**Keep every AI session's context lean, and see exactly what it costs you, without ever making it more expensive.**
 
-Long agent sessions fill up with tool output nobody reads again: file dumps, shell logs, search results, screenshots. You pay for all of it on every request, the model gets slower, and it drifts as the window fills. `context-doctor` measures that, and with **autopilot** it removes it from every Claude Code (and GPT API) request on your machine, only at moments when doing so costs nothing extra.
+Long agent sessions fill up with tool output nobody reads again, and a 500k-token session re-reads all of it on every message. The most expensive moment is coming back after lunch: the prompt cache has expired, so the next message re-sends everything at full price. `context-doctor` measures this on your own sessions and acts on it at the moments that pay.
 
-- **9.8% less input cost, no session worse.** Replaying 130 days of the author's real Claude Code use (43 sessions) through the shipped code: **3.8 billion input tokens not sent, $4,694 saved at API list price, about $1,080 a month**, and not one session more expensive. Up to 37.7% on a long session. [What it saves →](#what-it-saves)
-- **Counts Claude correctly.** Current Claude models pack 2.75 characters per token, not the 4 most tools assume; estimates built on 4 undercount Claude by about 40%. The ratios here were measured from the API's own counts, and `context-doctor accuracy` re-checks them on yours. [How →](#why-token-counts-are--and-where-they-are-exact)
-- **Works where you work:** Claude Code, Cursor, Codex, Claude Desktop, any Anthropic or OpenAI API app, VS Code, CI. macOS, Linux and Windows, Node 20+.
-- **Local and keyless.** No account, no telemetry, no API key. Your own login passes through untouched. MIT.
+- **Tells you when to `/compact`, at the moment it pays.** When you come back to a large session after the cache expired, the every-prompt hook gives the model the numbers and it offers `/compact` once. Replayed over 133 days of the author's Claude Code history: 401 such returns, and compacting then would have saved **$4,053 net at list price, about $914 a month**. It works in every Claude Code surface, including the desktop app. [What it saves →](#what-it-saves)
+- **Autopilot for terminal and IDE sessions and API apps:** a local proxy that clears stale tool output only when the prompt cache is cold, so it never costs more. **9.8% less input cost, no session made more expensive**, in the same replay. (The desktop app's Code tab sets its own API address, so autopilot cannot reach it; `doctor` tells you if that is your case.)
+- **Counts Claude correctly.** Current Claude models pack 2.75 characters per token, not the 4 most tools assume, so estimates built on 4 undercount Claude by about 40%. The ratios were measured from the API's own counts; `context-doctor accuracy` re-checks them on yours.
+- **Works where you work:** Claude Code (terminal, IDE, desktop app, plugin), Cursor, Codex, Claude Desktop chat, any Anthropic or OpenAI API app, VS Code, CI. macOS, Linux and Windows, Node 20+. Local, keyless, no telemetry, MIT.
 
 Built and maintained by [gAI Ventures](https://gai.ventures).
 
@@ -22,15 +22,21 @@ npx context-doctor savings
 ```
 
 ```
-What autopilot would have saved you (last 30 days, 53 Claude Code sessions)
-────────────────────────────────────────────────────────
-Input you were billed for           $11,205   (from the usage your transcripts record)
-Autopilot would have cut             $1,396   12.5%, 1.2B tokens not sent
-Sessions made more expensive              0
-Biggest win                            $503   tech-Whatsit (31% of that session)
+What context-doctor finds in your Claude Code sessions (last 30 days, 29 sessions)
+────────────────────────────────────────────────────────────────
+Input you were billed for            $6,021   from the usage your transcripts record
+
+1. Compact when you come back        $2,492   199 returns to a session over 150k tokens
+   after the prompt cache expired. Running /compact then, net of the compaction
+   itself, would have saved this. The every-prompt hook points these moments out;
+   it works in every Claude Code surface, the desktop app included.
+
+2. Autopilot                            n/a   all 29 sessions ran in the desktop app, which
+   sets its own API address, so the autopilot proxy cannot sit in front of it.
+   (Had they run in the terminal or an IDE: $788, 12.9%.)
 ```
 
-That is the author's machine. Yours is computed the same way: every recent session replayed request by request through the shipped autopilot code, against what your transcripts show you were actually billed.
+That is the author's machine: every session there runs in the desktop app, so the first line is the one that applies. Yours is computed the same way, from your own transcripts: every session replayed request by request through the shipped code, against what you were actually billed.
 
 **Then install it**, whichever way suits you:
 
@@ -69,26 +75,36 @@ Findings (4)
 
 ## What it saves
 
-Measured, not modelled: every Claude Code session on the author's machine from 18 May to 25 September 2026 (43 sessions, 130 days, mostly Opus 5 and Fable 5 with the 1M window) was replayed request by request through the shipped autopilot code, with the real timestamps, and priced the way the prompt cache bills it (cached reads 0.1x, writes 1.25x). Run it on your own history with `node scripts/replay-autopilot.mjs`.
+Measured, not modelled, on every Claude Code session on the author's machine (mostly Opus 5 and Fable 5 with the 1M window), priced the way the prompt cache bills it (cached reads 0.1x, writes 1.25x) at API list prices. `context-doctor savings` runs the same measurement on yours.
+
+**1. Compacting when you come back** (every Claude Code surface, desktop app included). 133 days, 401 returns to a session over 150k tokens after more than 65 idle minutes; median context at the return, 517k tokens.
+
+| | |
+|---|---|
+| Net saving had you run `/compact` after the first reply | **$4,053 (about $914 a month)** |
+| Returns where it paid off | 296 of 401 |
+| Worst single case | −$2.30 (a session left a few messages later) |
+
+Each return counts only the messages up to the next return, and the compaction request is charged as a cost. Not counted: files the model may re-read after compacting, and what the summary leaves out. That is why this is advice with the numbers attached, not something done for you.
+
+**2. Autopilot** (terminal and IDE sessions, API apps). 130 days, 43 sessions, replayed through the shipped autopilot code with real timestamps:
 
 | | Without autopilot | With autopilot | Saved |
 |---|---|---|---|
 | Input tokens sent | 41.4 billion | 37.6 billion | **3.8 billion (9.2%)** |
 | Input cost at API list price | $48,962 | $44,268 | **$4,694 (9.8%)** |
-| Per 30 days | | | **~875 million tokens, ~$1,080** |
 | Sessions made more expensive | | | **0 of 43** |
 
-How it spreads: the median session saves 1.9%, the best 37.7%. Short sessions barely change, because they rarely pile up 20k tokens of stale tool output before they end. Long sessions are where the money is: on this machine 94% of input cost came from requests above 200k tokens, and those are the requests autopilot makes smaller. Savings scale with how long your sessions run and how much they read, so a lighter user saves proportionally less, and never pays more.
+The median session saves 1.9%, the best 37.7%: long sessions are where the money is (94% of input cost on that machine came from requests above 200k tokens). These sessions ran in the desktop app, which autopilot cannot reach, so for the author this is what the same sessions would have saved in a terminal; `context-doctor savings` separates the two for you.
 
-On a Claude subscription you do not pay list price; the same tokens come out of your usage limit instead. Anthropic does not publish how limits weight cached tokens, so read the dollar column as the size of the effect, not as your bill. The token column holds either way, and every request that is 9% smaller is also faster to first token and further from auto-compaction.
-
-What is not counted here: the proxy's full optimizer for your own API apps, the hook's guidance to the model, and fixes you make from `session` findings. Those save more on top, but they depend on what the model or you do with the advice, so they are not in this table.
+On a Claude subscription you do not pay list price; the same tokens come out of your usage limit instead. Anthropic does not publish how limits weight cached tokens, so read the dollars as the size of the effect, not as your bill.
 
 ## What happens on each platform
 
 | Where you work | Automatic, every request | What you get on top |
 |---|---|---|
-| **Claude Code** (terminal, VS Code, JetBrains, desktop app's Code tab) | **Autopilot** clears stale tool output (cold cache only, never more expensive). **Hook** on every prompt warns the model with the real context size and its largest waste | Install via npm or as a **plugin** (`/plugin marketplace add KushalP1/context-doctor`). Status bar context meter, `/context-doctor:savings`, `session`, `watch`, `report`, dashboard |
+| **Claude Code** in the terminal, VS Code or JetBrains | **Autopilot** clears stale tool output (cold cache only, never more expensive). **Hook** on every prompt: real context size, largest waste, and a `/compact` offer when you return to a large session after the cache expired |
+| **Claude Code** in the desktop app's Code tab | **Hook**, as above, including the cold-resume `/compact` offer. Not autopilot: the app sets its own API address and ignores the one in settings | Same install options | Install via npm or as a **plugin** (`/plugin marketplace add KushalP1/context-doctor`). Status bar context meter, `/context-doctor:savings`, `session`, `watch`, `report`, dashboard |
 | **Cursor** (agent) | Cursor runs Claude Code's hooks, so the same every-prompt check fires inside Cursor | MCP tools, editor status bar extension, `cursor` profiler. With your own OpenAI key, autopilot too via a tokened tunnel ([how](#putting-the-proxy-on-a-public-url-cursor-with-your-own-openai-key-remote-apps)) |
 | **Codex** (ChatGPT app's Codex tab, IDE extension, CLI) | Every-prompt hook with the API's own token counts | MCP tools, skill, `session` reads Codex rollouts. On an API key, autopilot too (`OPENAI_BASE_URL`) |
 | **Your own apps on the Anthropic or OpenAI API** | Autopilot on `/v1/messages`, `/v1/chat/completions` and `/v1/responses` (`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`), or the full optimizing proxy | Exact usage and cache hit rates in `/stats`, prompt-cache placement advice |
@@ -101,6 +117,7 @@ Not claimed, because no process on your machine sends those requests: trimming i
 ## What's new
 
 - **0.20 Autopilot**: stale tool output cleared from every Claude Code request, only when the prompt cache is cold, so it cannot cost more (measured: 9.8% less input cost, ~$1,080 a month on the author's usage, no session worse); runs as a login service on macOS, Linux and Windows; now also for GPT via OpenAI's Chat Completions and Responses APIs.
+- **0.22 Honest about where each lever works, and a new one that works everywhere**: the every-prompt hook now offers `/compact` when you return to a large session after the cache expired (measured: ~$914 a month on the author's history), including in the desktop app. Found and fixed: autopilot cannot reach the desktop app's Code tab, and `doctor` now says so instead of reporting ✓; `savings` counted whole-file history as "last 30 days"; the hook quoted per-message cost at the uncached rate (10x too high). `--version` added.
 - **0.21 See it before you install it**: `npx context-doctor savings` replays your own recent sessions through autopilot and shows what it would have saved, against what you were actually billed. Install as a **Claude Code plugin** from inside Claude Code. Ready for the official **MCP Registry** (`io.github.KushalP1/context-doctor`), which every release now publishes to; any MCP client can launch it as `npx -y context-doctor mcp`.
 - **0.20.1 Releases that finish themselves**: one tag publishes to npm and creates a GitHub release with the Claude Desktop bundle (signed when a certificate is configured); the editor extension is ready for the VS Code Marketplace and Open VSX.
 - **0.19 Measured Claude tokenizer**: estimates were 40% low for Claude; fixed from the API's own counts, with a per-model check in `accuracy`.
@@ -236,7 +253,7 @@ context-doctor autopilot pause     # instant passthrough, nothing restarts
 context-doctor autopilot off       # remove it
 ```
 
-`autopilot on` runs the local proxy as a background service (launchd on macOS, a systemd user service on Linux, a logon task on Windows), waits until it answers, and only then points Claude Code at it through `env.ANTHROPIC_BASE_URL` in `~/.claude/settings.json`. Every Claude Code session started afterwards, in the terminal, an IDE, or the desktop app's Code tab, sends its requests through it. Your login (subscription or API key) passes through untouched.
+`autopilot on` runs the local proxy as a background service (launchd on macOS, a systemd user service on Linux, a logon task on Windows), waits until it answers, and only then points Claude Code at it through `env.ANTHROPIC_BASE_URL` in `~/.claude/settings.json`. Every Claude Code session started afterwards in a terminal or an IDE sends its requests through it. **Not the desktop app's Code tab:** it runs Claude Code "host-orchestrated", sets `ANTHROPIC_BASE_URL` from its own account configuration, and drops the same key from settings files (checked in Claude Code 2.1.284). `autopilot on`, `autopilot status` and `doctor` look at which surface your recent sessions ran in and warn when autopilot cannot reach them; for desktop sessions the cold-resume advice is the lever that works. Your login (subscription or API key) passes through untouched.
 
 **What it does to each request:** once old tool output adds up to 20k+ tokens (file reads, shell output, search and web results, screenshots inside them), it replaces that output with a one-line note, keeping the 3 most recent results. The tool call stays in the history, so the model can simply run it again if it needs the output. Your messages, its answers, answers you gave to its questions, subagent reports and MCP results are never touched.
 
