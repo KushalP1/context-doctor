@@ -268,3 +268,12 @@ test("--redact hides conversation content but keeps the numbers", async () => {
     assert.ok(redacted.includes("CONTEXT DOCTOR — profile"));
     assert.ok(redacted.includes("Tool results"));
 });
+test("--version prints the package version", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const { readFileSync } = await import("node:fs");
+    const { dirname, join } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const here = dirname(fileURLToPath(import.meta.url));
+    const pkg = JSON.parse(readFileSync(join(here, "..", "..", "package.json"), "utf8"));
+    assert.equal(execFileSync(process.execPath, [join(here, "..", "cli.js"), "--version"], { encoding: "utf8" }).trim(), pkg.version);
+});

@@ -50,6 +50,7 @@ Usage:
   context-doctor install                        Wire the MCP server + skill into Claude Desktop,
                                                 Claude Code, and Cursor automatically
   context-doctor uninstall                      Undo install
+  context-doctor --version                      Print the installed version
   context-doctor savings [--days n]              What autopilot saves (or would have) on YOUR recent
                                                 Claude Code sessions: replayed, priced as billed.
                                                 Also what a bare \`context-doctor\` shows
@@ -147,6 +148,10 @@ function parseArgs(argv) {
             case "-h":
             case "--help":
                 console.log(HELP);
+                process.exit(0);
+            case "-v":
+            case "--version":
+                console.log(packageVersion());
                 process.exit(0);
             case "--json":
                 args.json = true;
@@ -274,6 +279,15 @@ function readInput(file) {
     if (file === "-")
         return readFileSync(0, "utf8");
     return readFileSync(file, "utf8");
+}
+/** The installed package's version, read from its package.json so it cannot drift. */
+function packageVersion() {
+    try {
+        return JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+    }
+    catch {
+        return "unknown";
+    }
 }
 /** Any Claude Code transcript on this machine? One directory listing, no parsing. */
 function hasClaudeSessions() {
