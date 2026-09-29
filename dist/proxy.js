@@ -169,8 +169,9 @@ export function startProxy(opts = {}) {
                                 stats.optimizedRequests++;
                                 stats.tokensSaved += r.tokensRemoved;
                                 const pricing = pricingFor(typeof parsed.model === "string" ? parsed.model : undefined);
+                                // What autopilot removes would mostly have been cached reads: price it so.
                                 if (pricing)
-                                    stats.estUsdSaved += inputCostUsd(r.tokensRemoved, pricing);
+                                    stats.estUsdSaved += (r.tokensRemoved / 1e6) * pricing.cacheReadPerM;
                                 note = `autopilot: ${formatTokens(r.tokensRemoved)} tokens of stale tool output not sent (${r.reason})`;
                             }
                             else {

@@ -21,7 +21,8 @@ import { profileConversation } from "./profile.js";
 import { parseSessionFile } from "./session.js";
 import { formatTokens, CHARS_PER_TOKEN } from "./tokens.js";
 import { ensureProxyUp } from "./autopilot.js";
-import { formatUsd } from "./pricing.js";
+import { detectColdResume, renderColdResume } from "./coldresume.js";
+import { formatUsd, pricingFor } from "./pricing.js";
 import { checkBudget, loadConfig } from "./config.js";
 
 /** Default nudge threshold; a project budget or env var can lower/raise it. */
@@ -56,6 +57,7 @@ function minBytesForWarn(threshold: number): number {
 interface SessionState {
   t: number; // tokens at last warning (0 = parsed but never warned)
   b: number; // transcript bytes at last full parse
+  cr?: number; // last reply timestamp of the idle period already advised on (cold resume)
 }
 
 /**
@@ -162,7 +164,27 @@ export async function runHook(): Promise<void> {
     // expensive read. Heavy-but-quiet sessions cost one stat + tiny state read.
     const sessionId = input.session_id ?? transcriptPath;
     const prev = readSessionState(sessionId);
-    if (prev.b > 0 && sizeBytes < prev.b * REGROWTH_FACTOR) return;
+
+    // Cold resume: back on a large session after the cache expired. Checked
+    // before the growth gate, because a return after idle involves no growth.
+    // Once per idle period; the tail read is ~1 ms and only on large files.
+    const notes: string[] = [];
+    const cold = detectColdResume(transcriptPath);
+    let cr = prev.cr;
+    if (cold && cold.lastReplyAt !== prev.cr) {
+      notes.push(renderColdResume(cold));
+      cr = cold.lastReplyAt;
+      recordLedger({ ev: "cold_resume", sid: sessionId.slice(0, 12), tok: cold.tokens, model: cold.model });
+    }
+    const emit = (lines: string[]): void => {
+      if (lines.length === 0) return;
+      console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: `<context-doctor>\n${lines.join("\n")}\n</context-doctor>` } }));
+    };
+    if (prev.b > 0 && sizeBytes < prev.b * REGROWTH_FACTOR) {
+      if (cr !== prev.cr) writeSessionState(sessionId, { ...prev, cr });
+      emit(notes);
+      return;
+    }
 
     // Slow path (growth events only): full parse + profile.
     const parsed = parseSessionFile(transcriptPath);
@@ -176,18 +198,22 @@ export async function runHook(): Promise<void> {
 
     // Record this parse so the next prompts take fast path 2.
     const shouldWarn = liveTokens >= threshold && liveTokens >= prev.t * REGROWTH_FACTOR;
-    writeSessionState(sessionId, { t: shouldWarn ? liveTokens : prev.t, b: sizeBytes });
+    writeSessionState(sessionId, { t: shouldWarn ? liveTokens : prev.t, b: sizeBytes, cr });
     recordLedger({ ev: "check", sid: sessionId.slice(0, 12), tok: liveTokens, warn: shouldWarn });
-    if (!shouldWarn) return;
+    if (!shouldWarn) { emit(notes); return; }
 
     const windowPct = profile.contextWindow ? (liveTokens / profile.contextWindow) * 100 : undefined;
-    const costPerCall = profile.cost && profile.totalTokens > 0
-      ? (profile.cost.perCallUsd * liveTokens) / profile.totalTokens
-      : undefined;
+    // Agent sessions run on the prompt cache: a message normally re-reads the
+    // context at the cached rate (0.1x) and pays the full rate only when the
+    // cache has expired. Quoting the uncached figure alone overstated the
+    // per-message cost tenfold (fixed in 0.22).
+    const pricing = pricingFor(parsed.model);
+    const cachedUsd = pricing ? (liveTokens * pricing.cacheReadPerM) / 1e6 : undefined;
+    const coldUsd = pricing ? (liveTokens * pricing.inputPerM * 1.25) / 1e6 : undefined;
     const lines: string[] = [
       `This session's context is at ~${formatTokens(liveTokens)} tokens` +
         (windowPct !== undefined ? ` (${windowPct.toFixed(0)}% of the window)` : "") +
-        (costPerCall !== undefined ? `, costing ~${formatUsd(costPerCall)} of input per message` : "") +
+        (cachedUsd !== undefined ? `: each message re-reads it for ~${formatUsd(cachedUsd)} from the prompt cache, ~${formatUsd(coldUsd!)} when the cache has expired` : "") +
         ".",
       "Practice context hygiene from here on: summarize large tool results instead of keeping them verbatim, reference earlier content rather than re-reading or re-quoting it, and keep responses lean.",
     ];
@@ -204,14 +230,7 @@ export async function runHook(): Promise<void> {
       lines.push("If it fits the flow, offer the user a compaction of the older history.");
     }
 
-    console.log(
-      JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "UserPromptSubmit",
-          additionalContext: `<context-doctor>\n${lines.join("\n")}\n</context-doctor>`,
-        },
-      })
-    );
+    emit([...notes, ...lines]);
   } catch {
     /* silent — never disturb the prompt */
   }

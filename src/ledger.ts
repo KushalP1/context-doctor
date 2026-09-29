@@ -22,7 +22,7 @@ import { dirname, join } from "node:path";
 
 export interface LedgerEntry {
   ts: number;
-  ev?: "check" | "optimize" | "proxy" | "rollup";
+  ev?: "check" | "optimize" | "proxy" | "rollup" | "cold_resume";
   sid?: string;
   tok?: number;
   warn?: boolean;

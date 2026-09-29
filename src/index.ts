@@ -31,3 +31,4 @@ export * from "./tokenizer-measure.js";
 export * from "./autoclear.js";
 export * from "./autopilot.js";
 export * from "./savings.js";
+export * from "./coldresume.js";

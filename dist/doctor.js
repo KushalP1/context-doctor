@@ -5,7 +5,7 @@
  * check, so "it doesn't work" becomes a single pasteable diagnosis. Always
  * exits 0 — absence of an app is a note, not a failure.
  */
-import { autopilotPaths, health, proxyUrl } from "./autopilot.js";
+import { autopilotPaths, health, proxyUrl, recentSurfaces } from "./autopilot.js";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
@@ -226,12 +226,24 @@ export async function runDoctor() {
             }
             catch { /* reported below */ }
             const paused = existsSync(paths.pauseFile);
-            checks.push(h.ok && h.autopilot && routed
-                ? { label: "Autopilot", status: "ok", detail: `proxy up on ${proxyUrl(cfg.port)}, Claude Code routed through it${paused ? " (PAUSED: passthrough)" : ""}` }
-                : { label: "Autopilot", status: "fail", detail: !h.ok ? `proxy not answering on ${proxyUrl(cfg.port)}: the next Claude Code prompt restarts it; or run: context-doctor autopilot on` : "settings.json no longer routes Claude Code to the proxy: run context-doctor autopilot on" });
+            // Routed in settings is not the same as reached: the desktop app ignores it.
+            let seen = -1;
+            try {
+                const st = (await fetch(`${proxyUrl(cfg.port)}/stats`, { signal: AbortSignal.timeout(800) }).then((r) => r.json()));
+                seen = st.autopilot?.requests ?? -1;
+            }
+            catch { /* stats are best effort */ }
+            const surfaces = recentSurfaces(7);
+            const known = [...surfaces.keys()].filter((ep) => ep !== "unknown");
+            const desktopOnly = known.length > 0 && known.every((ep) => ep.startsWith("claude-desktop"));
+            checks.push(h.ok && h.autopilot && routed && seen === 0 && desktopOnly
+                ? { label: "Autopilot", status: "warn", detail: "running, but it has seen 0 requests: your recent Claude Code sessions all ran in the desktop app, which ignores settings.json's API address. Autopilot only reaches terminal and IDE sessions" }
+                : h.ok && h.autopilot && routed
+                    ? { label: "Autopilot", status: "ok", detail: `proxy up on ${proxyUrl(cfg.port)}, Claude Code routed through it${seen >= 0 ? ` (${seen} requests since start)` : ""}${paused ? " (PAUSED: passthrough)" : ""}` }
+                    : { label: "Autopilot", status: "fail", detail: !h.ok ? `proxy not answering on ${proxyUrl(cfg.port)}: the next Claude Code prompt restarts it; or run: context-doctor autopilot on` : "settings.json no longer routes Claude Code to the proxy: run context-doctor autopilot on" });
         }
     }
-    const mark = { ok: "✓", fail: "✗", skip: "–" };
+    const mark = { ok: "✓", warn: "!", fail: "✗", skip: "–" };
     console.log("CONTEXT DOCTOR — self-check");
     console.log("═".repeat(56));
     for (const c of checks) {

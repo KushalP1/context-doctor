@@ -19,7 +19,7 @@
  * backend, not an API base URL).
  */
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, openSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -190,6 +190,64 @@ function readConfig(paths) {
         return undefined;
     }
 }
+/** Which Claude Code surfaces ran recent sessions: entrypoint -> count. */
+export function recentSurfaces(days = 30, home = homedir()) {
+    const out = new Map();
+    const root = join(home, ".claude", "projects");
+    const since = Date.now() - days * 86_400_000;
+    let dirs = [];
+    try {
+        dirs = readdirSync(root);
+    }
+    catch {
+        return out;
+    }
+    for (const d of dirs) {
+        let files = [];
+        try {
+            files = readdirSync(join(root, d)).filter((f) => f.endsWith(".jsonl"));
+        }
+        catch {
+            continue;
+        }
+        for (const f of files) {
+            const p = join(root, d, f);
+            try {
+                if (statSync(p).mtimeMs < since)
+                    continue;
+                const head = readFileSync(p, "utf8").slice(0, 64 * 1024);
+                const m = head.match(/"entrypoint":"([^"]+)"/);
+                const ep = m ? m[1] : "unknown";
+                out.set(ep, (out.get(ep) ?? 0) + 1);
+            }
+            catch { /* unreadable: skip */ }
+        }
+    }
+    return out;
+}
+/** Lines explaining which recent sessions autopilot can reach, or nothing when all can. */
+export function reachNote(days = 30) {
+    const surfaces = recentSurfaces(days);
+    let desktop = 0, other = 0;
+    // Sessions with no recorded surface are evidence of nothing either way.
+    for (const [ep, n] of surfaces) {
+        if (ep.startsWith("claude-desktop"))
+            desktop += n;
+        else if (ep !== "unknown")
+            other += n;
+    }
+    if (desktop === 0)
+        return [];
+    const lines = [
+        `! ${desktop} of your ${desktop + other} Claude Code sessions in the last ${days} days (with a recorded surface) ran in the desktop app. The desktop app`,
+        "  sets its own API address and ignores the one in settings.json, so autopilot cannot reach those sessions.",
+        "  It applies to Claude Code in a terminal (`claude`) and in IDEs. For desktop sessions, the every-prompt",
+        "  hook points out when /compact would pay off (see `context-doctor savings`).",
+    ];
+    if (other === 0)
+        lines.push("  Every recent session of yours is a desktop one: autopilot will not change anything until you use the terminal or an IDE.");
+    return lines;
+}
 export function currentCli() {
     return join(dirname(fileURLToPath(import.meta.url)), "cli.js");
 }
@@ -242,6 +300,7 @@ export async function autopilotOn(port = DEFAULT_AUTOPILOT_PORT, paths = autopil
     lines.push(`✓ Claude Code routed through it (env.ANTHROPIC_BASE_URL in ${paths.settings})`);
     lines.push("  Applies to Claude Code sessions started from now on (CLI, IDE, and the desktop app's Code tab).");
     lines.push("  Sessions already open keep their old route until restarted.");
+    lines.push(...reachNote());
     lines.push(`  GPT apps on your own OpenAI key get the same: export OPENAI_BASE_URL=${proxyUrl(port)}/v1`);
     return { ok: true, lines };
 }
@@ -299,6 +358,8 @@ export async function autopilotStatus(paths = autopilotPaths()) {
                 lines.push(`Since ${s.startedAt.slice(0, 16).replace("T", " ")} UTC: ${a.requests} requests, ${a.changedRequests} sent lighter`);
                 lines.push(`  ${a.resultsCleared} stale tool outputs cleared in ${a.batches} batches (${a.coldBatches} while the cache was cold anyway)`);
                 lines.push(`  ~${formatTokens(a.tokensRemoved)} tokens not sent`);
+                if (a.requests === 0)
+                    lines.push(...reachNote(7).map((l) => l.replace(/^! /, "  ")));
                 const billed = s.upstreamInputTokens + s.upstreamCacheReadTokens + s.upstreamCacheWriteTokens;
                 if (billed > 0)
                     lines.push(`  Billed input: ${formatTokens(billed)} (${Math.round((s.upstreamCacheReadTokens / billed) * 100)}% cache reads)`);

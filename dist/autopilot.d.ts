@@ -40,6 +40,10 @@ export interface Health {
     version?: string;
 }
 export declare function health(port: number, timeoutMs?: number): Promise<Health>;
+/** Which Claude Code surfaces ran recent sessions: entrypoint -> count. */
+export declare function recentSurfaces(days?: number, home?: string): Map<string, number>;
+/** Lines explaining which recent sessions autopilot can reach, or nothing when all can. */
+export declare function reachNote(days?: number): string[];
 export declare function currentCli(): string;
 export declare function autopilotOn(port?: number, paths?: AutopilotPaths): Promise<{
     ok: boolean;

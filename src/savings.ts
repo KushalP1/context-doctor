@@ -13,6 +13,7 @@
 
 import { basename, dirname } from "node:path";
 import { AutoClearer, type AutoClearOptions } from "./autoclear.js";
+import { coldResumeEvents } from "./coldresume.js";
 import { forEachLine, listSessions } from "./session.js";
 import { pricingFor } from "./pricing.js";
 import { estimateTokens, formatTokens } from "./tokens.js";
@@ -35,6 +36,23 @@ export interface SessionSavings {
   /** Raw input tokens autopilot would not have sent. */
   savedTokens: number;
   savedPct: number;
+  /** Claude Code surface that ran the session ("cli", "claude-vscode", "claude-desktop", ...). */
+  entrypoint?: string;
+  /** Can a settings-file ANTHROPIC_BASE_URL route this surface through autopilot? */
+  autopilotReachable: boolean;
+  /** Returns to this session after the cache expired, and what /compact then would have saved. */
+  coldResumes: number;
+  coldResumeNetUsd: number;
+}
+
+/**
+ * The desktop app runs Claude Code "host-orchestrated": it sets
+ * ANTHROPIC_BASE_URL itself and drops the same key from settings files, so
+ * the autopilot proxy cannot sit in front of it (checked in Claude Code
+ * 2.1.284). Terminal and IDE sessions read settings normally.
+ */
+export function autopilotReaches(entrypoint?: string): boolean {
+  return !(entrypoint ?? "").startsWith("claude-desktop");
 }
 
 export interface SavingsReport {
@@ -46,6 +64,11 @@ export interface SavingsReport {
   billedTokens: number;
   savedPct: number;
   worse: number;
+  /** Autopilot's share in sessions it can actually reach. */
+  reachableUsd: number;
+  unreachableSessions: number;
+  coldResumes: number;
+  coldResumeNetUsd: number;
 }
 
 type Msg = { role: string; content: Array<Record<string, unknown>> };
@@ -63,7 +86,7 @@ function arm(model: string | undefined, clearer: AutoClearer | null) {
       msgs[i].content.push(...structuredClone(blocks));
       total -= tok[i]; tok[i] = size(msgs[i]); total += tok[i];
     },
-    request(now: number, cold: boolean) {
+    request(now: number, cold: boolean, counted = true) {
       let first = -1;
       if (clearer) {
         const body = { model, messages: msgs, system: [{ type: "text", text: "", cache_control: { type: "ephemeral", ttl: "1h" } }] };
@@ -74,8 +97,10 @@ function arm(model: string | undefined, clearer: AutoClearer | null) {
       let read = 0;
       for (let i = 0; i < k; i++) read += tok[i];
       const write = total - read;
-      weighted += (cold ? FIXED_TOKENS * 1.25 : FIXED_TOKENS * 0.1) + read * 0.1 + write * 1.25;
-      raw += FIXED_TOKENS + total;
+      if (counted) {
+        weighted += (cold ? FIXED_TOKENS * 1.25 : FIXED_TOKENS * 0.1) + read * 0.1 + write * 1.25;
+        raw += FIXED_TOKENS + total;
+      }
       prevLen = msgs.length;
     },
     get weighted() { return weighted; },
@@ -84,10 +109,11 @@ function arm(model: string | undefined, clearer: AutoClearer | null) {
 }
 
 /** Replay one Claude Code transcript. Undefined when it holds too few requests to mean anything. */
-export function replaySession(path: string, options: AutoClearOptions = {}): SessionSavings | undefined {
+export function replaySession(path: string, options: AutoClearOptions = {}, since = 0): SessionSavings | undefined {
   let model: string | undefined;
   let base = arm(undefined, null), auto = arm(undefined, new AutoClearer(options));
   let baseW = 0, autoW = 0, baseRaw = 0, autoRaw = 0;
+  let entrypoint: string | undefined;
   let billed = 0, billedRaw = 0, requests = 0, lastId: string | undefined, lastTs: number | null = null;
   const flush = () => { baseW += base.weighted; autoW += auto.weighted; baseRaw += base.raw; autoRaw += auto.raw; };
 
@@ -95,6 +121,7 @@ export function replaySession(path: string, options: AutoClearOptions = {}): Ses
     let e: any;
     try { e = JSON.parse(line); } catch { return; }
     if (!e || e.isSidechain) return;
+    if (!entrypoint && typeof e.entrypoint === "string") entrypoint = e.entrypoint;
     if (e.type === "system" && e.subtype === "compact_boundary") {
       // Compaction replaces the history in both arms alike: start fresh.
       flush();
@@ -111,13 +138,18 @@ export function replaySession(path: string, options: AutoClearOptions = {}): Ses
         const u = m.usage ?? {};
         const read = u.cache_read_input_tokens ?? 0, write = u.cache_creation_input_tokens ?? 0, fresh = u.input_tokens ?? 0;
         if (read + write + fresh > 0) {
-          billed += fresh + read * 0.1 + write * 1.25;
-          billedRaw += fresh + read + write;
-          requests++;
           const now = Date.parse(e.timestamp) || 0;
+          // History before the window still shapes the replay's state; only
+          // requests inside the window are billed and counted.
+          const inWindow = now >= since;
+          if (inWindow) {
+            billed += fresh + read * 0.1 + write * 1.25;
+            billedRaw += fresh + read + write;
+            requests++;
+          }
           const cold = lastTs === null || now - lastTs > CLAUDE_CODE_TTL_MS;
-          base.request(now, cold);
-          auto.request(now, cold);
+          base.request(now, cold, inWindow);
+          auto.request(now, cold, inWindow);
           lastTs = now;
         }
         base.push({ role: "assistant", content: blocks });
@@ -140,6 +172,7 @@ export function replaySession(path: string, options: AutoClearOptions = {}): Ses
   // share is applied to what was actually billed, so the dollars and tokens
   // shown are fractions of the user's real usage, not of an estimate.
   const perM = pricingFor(model)?.inputPerM ?? 0;
+  const cold = coldResumeEvents(path).filter((c) => c.at >= since);
   const pct = baseW > 0 ? (baseW - autoW) / baseW : 0;
   const rawPct = baseRaw > 0 ? (baseRaw - autoRaw) / baseRaw : 0;
   const dir = basename(dirname(path));
@@ -154,6 +187,10 @@ export function replaySession(path: string, options: AutoClearOptions = {}): Ses
     savedUsd: ((pct * billed) / 1e6) * perM,
     savedTokens: rawPct * billedRaw,
     savedPct: pct,
+    entrypoint,
+    autopilotReachable: autopilotReaches(entrypoint),
+    coldResumes: cold.length,
+    coldResumeNetUsd: cold.reduce((n, c) => n + c.netUsd, 0),
   };
 }
 
@@ -164,7 +201,7 @@ export function estimateSavings(days = 30, options: AutoClearOptions = {}, paths
   for (const [i, p] of targets.entries()) {
     onProgress?.(i, targets.length);
     try {
-      const s = replaySession(p, options);
+      const s = replaySession(p, options, since);
       if (s) sessions.push(s);
     } catch {
       /* one unreadable transcript must not sink the report */
@@ -183,6 +220,10 @@ export function estimateSavings(days = 30, options: AutoClearOptions = {}, paths
     billedTokens: sessions.reduce((n, s) => n + s.billedWeighted, 0),
     savedPct,
     worse: sessions.filter((s) => s.savedPct < -1e-9).length,
+    reachableUsd: sessions.filter((s) => s.autopilotReachable).reduce((n, s) => n + s.savedUsd, 0),
+    unreachableSessions: sessions.filter((s) => !s.autopilotReachable).length,
+    coldResumes: sum("coldResumes"),
+    coldResumeNetUsd: sum("coldResumeNetUsd"),
   };
 }
 
@@ -196,21 +237,30 @@ export function renderSavings(r: SavingsReport, autopilotOn = false): string {
     lines.push("Use Claude Code for a while, then run this again: `context-doctor savings`.");
     return lines.join("\n");
   }
-  const title = autopilotOn ? "What autopilot saves on your sessions" : "What autopilot would have saved you";
-  lines.push(`${title} (last ${r.days} days, ${r.sessions.length} Claude Code session${r.sessions.length === 1 ? "" : "s"})`);
-  lines.push("─".repeat(56));
-  lines.push(`Input you were billed for     ${usd(r.billedUsd).padStart(10)}   (from the usage your transcripts record)`);
-  lines.push(`Autopilot would have cut      ${usd(r.savedUsd).padStart(10)}   ${(r.savedPct * 100).toFixed(1)}%, ${tokens(r.savedTokens)} tokens not sent`);
-  lines.push(`Sessions made more expensive  ${String(r.worse).padStart(10)}`);
-  const best = r.sessions[0];
-  if (best && best.savedUsd > 0) lines.push(`Biggest win                   ${usd(best.savedUsd).padStart(10)}   ${best.project} (${(best.savedPct * 100).toFixed(0)}% of that session)`);
+  const n = r.sessions.length;
+  const allDesktop = r.unreachableSessions === n;
+  lines.push(`What context-doctor finds in your Claude Code sessions (last ${r.days} days, ${n} session${n === 1 ? "" : "s"})`);
+  lines.push("─".repeat(64));
+  lines.push(`Input you were billed for        ${usd(r.billedUsd).padStart(10)}   from the usage your transcripts record`);
   lines.push("");
-  lines.push("Replayed request by request through the shipped autopilot code and priced as");
-  lines.push("the prompt cache bills. List prices; on a subscription the same tokens come");
-  lines.push("out of your usage limit instead.");
-  if (!autopilotOn) {
-    lines.push("");
-    lines.push("Turn it on for every new session:  context-doctor autopilot on");
+  lines.push(`1. Compact when you come back    ${usd(Math.max(0, r.coldResumeNetUsd)).padStart(10)}   ${r.coldResumes} return${r.coldResumes === 1 ? "" : "s"} to a session over 150k tokens`);
+  lines.push("   after the prompt cache expired. Running /compact then, net of the compaction");
+  lines.push("   itself, would have saved this. The every-prompt hook points these moments out;");
+  lines.push("   it works in every Claude Code surface, the desktop app included.");
+  lines.push("");
+  if (allDesktop) {
+    lines.push(`2. Autopilot                     ${"n/a".padStart(10)}   all ${n} sessions ran in the desktop app, which`);
+    lines.push("   sets its own API address, so the autopilot proxy cannot sit in front of it.");
+    lines.push(`   (Had they run in the terminal or an IDE: ${usd(r.savedUsd)}, ${(r.savedPct * 100).toFixed(1)}%.)`);
+  } else {
+    lines.push(`2. Autopilot                     ${usd(r.reachableUsd).padStart(10)}   stale tool output cleared only when the cache`);
+    lines.push(`   is cold (never costs more; ${r.worse} session${r.worse === 1 ? "" : "s"} made more expensive), ${tokens(r.savedTokens)} tokens not sent.`);
+    if (r.unreachableSessions > 0) lines.push(`   Counts terminal and IDE sessions only; ${r.unreachableSessions} desktop-app session${r.unreachableSessions === 1 ? "" : "s"} excluded (not reachable).`);
+    if (!autopilotOn) lines.push("   Turn it on:  context-doctor autopilot on");
   }
+  lines.push("");
+  lines.push("Replayed request by request through the shipped code and priced as the prompt");
+  lines.push("cache bills, at list prices. On a subscription the same tokens come out of your");
+  lines.push("usage limit instead.");
   return lines.join("\n");
 }

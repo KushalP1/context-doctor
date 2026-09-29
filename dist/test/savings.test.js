@@ -57,7 +57,8 @@ test("savings: short sessions are skipped, and the report renders either way", (
     assert.equal(r.sessions.length, 2);
     assert.equal(r.worse, 0);
     const text = renderSavings(r);
-    assert.match(text, /would have cut/);
+    assert.match(text, /Input you were billed for/);
+    assert.match(text, /2\. Autopilot/);
     assert.match(text, /autopilot on/);
     assert.doesNotMatch(renderSavings(r, true), /Turn it on/);
 });

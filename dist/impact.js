@@ -130,8 +130,11 @@ export async function buildImpactReport(proxyPort = 8787) {
                 const p = profileConversation(parseConversation(parsed.conversationJson), parsed.model);
                 totalTokens += p.totalTokens;
                 totalWaste += p.totalEstSavings;
-                if (p.cost)
-                    totalWasteUsd += p.cost.savingsPerCallUsd;
+                // Claude Code sessions run on the prompt cache, so recoverable tokens
+                // cost the cached rate on each message, not the full input rate.
+                const pr = pricingFor(p.model);
+                if (p.cost && pr)
+                    totalWasteUsd += p.cost.savingsPerCallUsd * (pr.cacheReadPerM / pr.inputPerM);
                 const wastePct = p.totalTokens > 0 ? Math.round((p.totalEstSavings / p.totalTokens) * 100) : 0;
                 // Ledger sids are the session UUID's first 12 chars (= filename prefix).
                 const sid = (s.path.split("/").pop() ?? "").slice(0, 12);

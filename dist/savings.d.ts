@@ -25,7 +25,21 @@ export interface SessionSavings {
     /** Raw input tokens autopilot would not have sent. */
     savedTokens: number;
     savedPct: number;
+    /** Claude Code surface that ran the session ("cli", "claude-vscode", "claude-desktop", ...). */
+    entrypoint?: string;
+    /** Can a settings-file ANTHROPIC_BASE_URL route this surface through autopilot? */
+    autopilotReachable: boolean;
+    /** Returns to this session after the cache expired, and what /compact then would have saved. */
+    coldResumes: number;
+    coldResumeNetUsd: number;
 }
+/**
+ * The desktop app runs Claude Code "host-orchestrated": it sets
+ * ANTHROPIC_BASE_URL itself and drops the same key from settings files, so
+ * the autopilot proxy cannot sit in front of it (checked in Claude Code
+ * 2.1.284). Terminal and IDE sessions read settings normally.
+ */
+export declare function autopilotReaches(entrypoint?: string): boolean;
 export interface SavingsReport {
     days: number;
     sessions: SessionSavings[];
@@ -35,8 +49,13 @@ export interface SavingsReport {
     billedTokens: number;
     savedPct: number;
     worse: number;
+    /** Autopilot's share in sessions it can actually reach. */
+    reachableUsd: number;
+    unreachableSessions: number;
+    coldResumes: number;
+    coldResumeNetUsd: number;
 }
 /** Replay one Claude Code transcript. Undefined when it holds too few requests to mean anything. */
-export declare function replaySession(path: string, options?: AutoClearOptions): SessionSavings | undefined;
+export declare function replaySession(path: string, options?: AutoClearOptions, since?: number): SessionSavings | undefined;
 export declare function estimateSavings(days?: number, options?: AutoClearOptions, paths?: string[], onProgress?: (done: number, total: number) => void): SavingsReport;
 export declare function renderSavings(r: SavingsReport, autopilotOn?: boolean): string;
