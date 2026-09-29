@@ -89,8 +89,11 @@ jobs:
         run: |
           curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
           V="$(node -p "require('./package.json').version")"
+          # npm takes a little while to serve a version it just accepted; the
+          # v0.22.0 run checked seconds after publishing and skipped. Wait.
+          for i in $(seq 1 30); do npm view "context-doctor@$V" version >/dev/null 2>&1 && break; sleep 10; done
           if ! npm view "context-doctor@$V" version >/dev/null 2>&1; then
-            echo "::warning::context-doctor@$V is not on npm yet, and the registry checks the npm package; skipped"; exit 0
+            echo "::warning::context-doctor@$V is not on npm after 5 minutes, and the registry checks the npm package; skipped. Re-run with Run workflow."; exit 0
           fi
           ./mcp-publisher login github-oidc
           if ./mcp-publisher publish 2>publish.err; then
