@@ -12,3 +12,6 @@ vscode/*.vsix
 # Claude Desktop bundle: built by `npm run build:mcpb`, attached to GitHub releases
 build/
 *.mcpb
+
+# Private notes (marketing plans, post drafts): never published
+marketing/
