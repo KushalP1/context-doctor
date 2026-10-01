@@ -23,7 +23,7 @@ import { runHook } from "./hook.js";
 import { buildImpactReport } from "./impact.js";
 import { measureTokenizer, renderTokenizer } from "./tokenizer-measure.js";
 import { autopilotOff, autopilotOn, autopilotPause, autopilotPaths, autopilotStatus, DEFAULT_AUTOPILOT_PORT } from "./autopilot.js";
-import { estimateSavings, renderSavings } from "./savings.js";
+import { estimateSavings, renderSavings, renderShare } from "./savings.js";
 import { renderPreferences, copyToClipboard, CHAT_PREFERENCES } from "./preferences.js";
 import { recordLedger } from "./ledger.js";
 import { runDoctor } from "./doctor.js";
@@ -53,9 +53,11 @@ Usage:
                                                 Claude Code, and Cursor automatically
   context-doctor uninstall                      Undo install
   context-doctor --version                      Print the installed version
-  context-doctor savings [--days n]              What autopilot saves (or would have) on YOUR recent
-                                                Claude Code sessions: replayed, priced as billed.
-                                                Also what a bare \`context-doctor\` shows
+  context-doctor savings [--days n] [--share [--copy]]
+                                                What your recent Claude Code sessions cost, and what
+                                                /compact at cold resumes and autopilot would save,
+                                                replayed and priced as billed. --share: totals only,
+                                                to paste. Also what a bare \`context-doctor\` shows
   context-doctor autopilot on|off|pause|resume|status
                                                 Every new Claude Code session goes through the
                                                 local proxy, which clears stale tool output only
@@ -166,6 +168,7 @@ interface Args {
   budgetUsd?: number;
   dryRun: boolean;
   copy?: boolean;
+  share?: boolean;
   allowDirty: boolean;
   statusLine: boolean;
   /** Everything after the command name — `diff` needs two files, not one. */
@@ -206,6 +209,7 @@ function parseArgs(argv: string[]): Args {
       case "--budget": args.budgetUsd = numArg("--budget", argv[++i], { min: 0 }); break;
       case "--dry-run": args.dryRun = true; break;
       case "--copy": args.copy = true; break;
+      case "--share": args.share = true; break;
       case "--allow-dirty": args.allowDirty = true; break;
       case "--statusline": args.statusLine = true; break;
       case "--host": args.host = argv[++i]; break;
@@ -510,7 +514,11 @@ async function main(): Promise<void> {
     if (progress) process.stderr.write("\r\x1b[K");
     const on = existsSync(autopilotPaths().config);
     if (args.json) console.log(JSON.stringify(report, null, 2));
-    else {
+    else if (args.share) {
+      const text = renderShare(report);
+      console.log(text);
+      if (args.copy) console.log(copyToClipboard(text) ? "\n(copied to the clipboard)" : "\n(no clipboard tool found; copy the lines above)");
+    } else {
       console.log(renderSavings(report, on));
       if (!args.command) console.log("\nAll commands: context-doctor --help");
     }

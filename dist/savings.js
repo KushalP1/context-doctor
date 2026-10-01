@@ -236,3 +236,22 @@ export function renderSavings(r, autopilotOn = false) {
     lines.push("usage limit instead.");
     return lines.join("\n");
 }
+/**
+ * `savings --share`: a few lines people can paste or screenshot. Totals only:
+ * no project names, paths or session ids, so sharing it leaks nothing.
+ */
+export function renderShare(r) {
+    if (r.sessions.length === 0)
+        return "context-doctor found no Claude Code sessions to measure yet.";
+    const lines = [
+        `My Claude Code input, last ${r.days} days: ${usd(r.billedUsd)} at list price (${r.sessions.length} sessions).`,
+    ];
+    if (r.coldResumeNetUsd > 0) {
+        lines.push(`Running /compact when I came back to a big session after the cache expired would have saved ${usd(r.coldResumeNetUsd)} (${Math.round((r.coldResumeNetUsd / r.billedUsd) * 100)}%, ${r.coldResumes} times).`);
+    }
+    if (r.reachableUsd > 0) {
+        lines.push(`Clearing stale tool output only when the cache is cold would have cut another ${usd(r.reachableUsd)}, with no session made more expensive.`);
+    }
+    lines.push("Measured from my own transcripts with context-doctor: npx context-doctor savings");
+    return lines.join("\n");
+}

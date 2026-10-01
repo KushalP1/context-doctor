@@ -59,3 +59,8 @@ export interface SavingsReport {
 export declare function replaySession(path: string, options?: AutoClearOptions, since?: number): SessionSavings | undefined;
 export declare function estimateSavings(days?: number, options?: AutoClearOptions, paths?: string[], onProgress?: (done: number, total: number) => void): SavingsReport;
 export declare function renderSavings(r: SavingsReport, autopilotOn?: boolean): string;
+/**
+ * `savings --share`: a few lines people can paste or screenshot. Totals only:
+ * no project names, paths or session ids, so sharing it leaks nothing.
+ */
+export declare function renderShare(r: SavingsReport): string;

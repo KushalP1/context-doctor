@@ -114,3 +114,17 @@ test("detect: no cold-resume alarm after /compact, even when the pre-compaction 
   writeFileSync(p, lines.map((l) => JSON.stringify(l)).join("\n"));
   assert.equal(detectColdResume(p, T0 + 3 * HOUR), undefined);
 });
+
+test("savings --share: totals only, never a project name or path", async () => {
+  const { renderShare } = await import("../savings.js");
+  const reqs: Req[] = [{ at: Date.now() - 5 * HOUR, prompt: 500_000 }, { at: Date.now() - 3 * HOUR, prompt: 500_000 }];
+  for (let i = 1; i <= 30; i++) reqs.push({ at: Date.now() - 3 * HOUR + i * 60_000, prompt: 500_000 + i * 1000 });
+  const p = transcript(reqs, { entrypoint: "claude-desktop" });
+  const r = estimateSavings(30, {}, [p]);
+  const text = renderShare(r);
+  assert.match(text, /My Claude Code input, last 30 days/);
+  assert.match(text, /\/compact/);
+  assert.match(text, /npx context-doctor savings/);
+  assert.doesNotMatch(text, new RegExp(r.sessions[0].project.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(text, /\/tmp|\/Users|\.jsonl/);
+});
