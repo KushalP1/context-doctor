@@ -187,7 +187,7 @@ export function profileSketch(sketch: ConversationSketch): SketchProfile {
       severity: totalTokens > 100_000 ? "high" : "warn",
       estSavings: Math.max(0, totalTokens - afterHandoff),
       message: `${turns} turns: every new message re-reads ~${formatTokens(totalTokens)}.`,
-      action: `Offer a handoff: write a ≤${HANDOFF_SUMMARY_TOKENS}-token summary (decisions, current state, open items, key identifiers) for the user to start a new chat with. A fresh chat re-reads ~${formatTokens(afterHandoff)} instead.`,
+      action: `Offer a handoff: write a ≤${HANDOFF_SUMMARY_TOKENS}-token summary (decisions, current state, open items, key identifiers) for the user to start a new chat with. A fresh chat re-reads ~${formatTokens(afterHandoff)} of conversation instead, plus the app's own system prompt, which every chat carries.`,
     });
   }
 

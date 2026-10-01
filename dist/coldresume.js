@@ -60,6 +60,12 @@ export function detectColdResume(path, now = Date.now(), idleMs = COLD_IDLE_MS, 
             catch {
                 continue;
             }
+            // Compacted since the last reply: the old usage no longer describes the
+            // context, and there is nothing large left to warn about.
+            if (e?.type === "system" && e.subtype === "compact_boundary")
+                return undefined;
+            if (e?.isCompactSummary)
+                return undefined;
             if (e?.type !== "assistant" || e.isSidechain)
                 continue;
             const u = e.message?.usage;

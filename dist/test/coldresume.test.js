@@ -104,3 +104,14 @@ test("reachNote: warns when recent sessions ran in the desktop app, silent when 
             process.env.USERPROFILE = saved.profile;
     }
 });
+test("detect: no cold-resume alarm after /compact, even when the pre-compaction reply was huge", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cd-coldcompact-"));
+    const p = join(dir, "s.jsonl");
+    const lines = [
+        { type: "assistant", timestamp: new Date(T0).toISOString(), message: { id: "m0", model: "claude-opus-5", content: [{ type: "text", text: "ok" }], usage: { input_tokens: 5, cache_read_input_tokens: 800_000, cache_creation_input_tokens: 0, output_tokens: 10 } } },
+        { type: "system", subtype: "compact_boundary", timestamp: new Date(T0 + 60_000).toISOString() },
+        { type: "user", isCompactSummary: true, timestamp: new Date(T0 + 61_000).toISOString(), message: { role: "user", content: "summary" } },
+    ];
+    writeFileSync(p, lines.map((l) => JSON.stringify(l)).join("\n"));
+    assert.equal(detectColdResume(p, T0 + 3 * HOUR), undefined);
+});

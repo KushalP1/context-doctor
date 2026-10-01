@@ -118,7 +118,9 @@ interface View {
 const HOUR = 3_600_000;
 
 export function clearedNote(tokens: number): string {
-  return `[context-doctor: old tool output cleared to keep context lean (~${tokens} tokens). Run the tool again if you need it.]`;
+  // Not "run it again": a cleared Bash result may come from a command with
+  // side effects (a push, a delete), and repeating that would be wrong.
+  return `[context-doctor: old tool output cleared to keep context lean (~${tokens} tokens). The call above shows what ran; repeat it only if it is read-only, otherwise ask the user.]`;
 }
 
 function resultTokens(content: unknown, model?: string): number {

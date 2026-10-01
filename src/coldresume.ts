@@ -71,6 +71,10 @@ export function detectColdResume(path: string, now = Date.now(), idleMs = COLD_I
     for (const line of tailLines(path)) {
       let e: any;
       try { e = JSON.parse(line); } catch { continue; }
+      // Compacted since the last reply: the old usage no longer describes the
+      // context, and there is nothing large left to warn about.
+      if (e?.type === "system" && e.subtype === "compact_boundary") return undefined;
+      if (e?.isCompactSummary) return undefined;
       if (e?.type !== "assistant" || e.isSidechain) continue;
       const u = e.message?.usage;
       if (!u) continue;
