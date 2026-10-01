@@ -68,6 +68,15 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.23.0 — audit fixes and the share loop
+
+- **Security:** 4 transitive vulnerabilities under the MCP SDK patched (fast-uri high; hono, qs, ip-address moderate). hono's `parseBody` memory exhaustion applied to `context-doctor-mcp --http`. `npm audit`: 0.
+- **Cold resume after /compact:** the hook read the last reply's usage even when the session had been compacted since, so coming back hours after `/compact` warned about the old (e.g. 800k) size of a now-small context. It now stops at a compact boundary. (Found by reading the code; the live note fired correctly on this session at 807k after 43 idle hours.)
+- **Autopilot's cleared-output note** no longer says "run the tool again": a cleared Bash result can be from a push or a delete. It now says to repeat only read-only calls.
+- **CLI input:** numeric flags validated (`--days abc` printed "NaN days"; a bad `--port` started the proxy on a random port); unknown commands are named.
+- **`savings` fits 80 columns** (it ran to ~95 and wrapped); **`savings --share [--copy]`** prints totals only, tested to contain no project names or paths; the README shows the real output as a rendered terminal image (`scripts/render-terminal-svg.mjs`).
+- **Checked:** every CLI command in a clean home (no crashes, no stack traces); install/doctor/uninstall round trip with existing user settings (kept intact, ours fully removed); README and roadmap anchors; hook time on the three largest real sessions (0.12–0.16 s per prompt, 0.8–1.7 s on a full re-parse of 86–343 MB).
+
 ## Shipped in 0.22.0 — an audit of what actually works, and a lever that does in the desktop app
 
 Asked: "make it better, make sure everything works." Audited on the author's machine first:
