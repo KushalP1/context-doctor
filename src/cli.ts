@@ -195,22 +195,22 @@ function parseArgs(argv: string[]): Args {
       case "--model": args.model = argv[++i]; break;
       case "--out": args.out = argv[++i]; break;
       case "--strategy": args.strategies.push(argv[++i] as StrategyId); break;
-      case "--keep-recent": args.keepRecent = Number(argv[++i]); break;
-      case "--max-tool-tokens": args.maxToolTokens = Number(argv[++i]); break;
-      case "--port": args.port = Number(argv[++i]); break;
-      case "--interval-ms": args.intervalMs = Number(argv[++i]); break;
-      case "--limit": args.limit = Number(argv[++i]); break;
+      case "--keep-recent": args.keepRecent = numArg("--keep-recent", argv[++i], { min: 0, integer: true }); break;
+      case "--max-tool-tokens": args.maxToolTokens = numArg("--max-tool-tokens", argv[++i], { min: 1, integer: true }); break;
+      case "--port": args.port = numArg("--port", argv[++i], { min: 0, max: 65535, integer: true }); break;
+      case "--interval-ms": args.intervalMs = numArg("--interval-ms", argv[++i], { min: 100, integer: true }); break;
+      case "--limit": args.limit = numArg("--limit", argv[++i], { min: 1, integer: true }); break;
       case "--task": args.task = argv[++i]; break;
       case "--check": args.check = argv[++i]; break;
       case "--existing": args.existing = argv[++i]; break;
-      case "--budget": args.budgetUsd = Number(argv[++i]); break;
+      case "--budget": args.budgetUsd = numArg("--budget", argv[++i], { min: 0 }); break;
       case "--dry-run": args.dryRun = true; break;
       case "--copy": args.copy = true; break;
       case "--allow-dirty": args.allowDirty = true; break;
       case "--statusline": args.statusLine = true; break;
       case "--host": args.host = argv[++i]; break;
       case "--token": args.token = argv[++i]; break;
-      case "--days": args.days = Number(argv[++i]); break;
+      case "--days": args.days = numArg("--days", argv[++i], { min: 1 }); break;
       case "--autopilot": args.autopilot = true; break;
       case "--autopilot-state": args.autopilotState = argv[++i]; break;
       case "--autopilot-pause-file": args.autopilotPauseFile = argv[++i]; break;
@@ -261,6 +261,22 @@ function packageVersion(): string {
   } catch {
     return "unknown";
   }
+}
+
+/**
+ * A numeric flag's value, or exit 1 with a message naming the flag. Number()
+ * alone turned `--days abc` into "the last NaN days" and a bad --port into a
+ * random port.
+ */
+function numArg(flag: string, raw: string | undefined, { min, max, integer }: { min?: number; max?: number; integer?: boolean } = {}): number {
+  const n = Number(raw);
+  const ok = raw !== undefined && raw.trim() !== "" && Number.isFinite(n) && (!integer || Number.isInteger(n)) && (min === undefined || n >= min) && (max === undefined || n <= max);
+  if (!ok) {
+    const range = min !== undefined && max !== undefined ? ` between ${min} and ${max}` : min !== undefined ? ` of at least ${min}` : "";
+    console.error(`${flag} needs ${integer ? "a whole number" : "a number"}${range}; got ${raw === undefined ? "nothing" : JSON.stringify(raw)}.`);
+    process.exit(1);
+  }
+  return n;
 }
 
 /** Any Claude Code transcript on this machine? One directory listing, no parsing. */
@@ -571,6 +587,11 @@ async function main(): Promise<void> {
   }
 
   if (!args.command || !args.file) {
+    const known = ["analyze", "optimize"];
+    if (args.command && !known.includes(args.command)) {
+      console.error(`Unknown command "${args.command}". Run \`context-doctor --help\` for the list.`);
+      process.exit(1);
+    }
     console.log(HELP);
     process.exit(args.command ? 1 : 0);
   }

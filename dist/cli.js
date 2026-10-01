@@ -178,19 +178,19 @@ function parseArgs(argv) {
                 args.strategies.push(argv[++i]);
                 break;
             case "--keep-recent":
-                args.keepRecent = Number(argv[++i]);
+                args.keepRecent = numArg("--keep-recent", argv[++i], { min: 0, integer: true });
                 break;
             case "--max-tool-tokens":
-                args.maxToolTokens = Number(argv[++i]);
+                args.maxToolTokens = numArg("--max-tool-tokens", argv[++i], { min: 1, integer: true });
                 break;
             case "--port":
-                args.port = Number(argv[++i]);
+                args.port = numArg("--port", argv[++i], { min: 0, max: 65535, integer: true });
                 break;
             case "--interval-ms":
-                args.intervalMs = Number(argv[++i]);
+                args.intervalMs = numArg("--interval-ms", argv[++i], { min: 100, integer: true });
                 break;
             case "--limit":
-                args.limit = Number(argv[++i]);
+                args.limit = numArg("--limit", argv[++i], { min: 1, integer: true });
                 break;
             case "--task":
                 args.task = argv[++i];
@@ -202,7 +202,7 @@ function parseArgs(argv) {
                 args.existing = argv[++i];
                 break;
             case "--budget":
-                args.budgetUsd = Number(argv[++i]);
+                args.budgetUsd = numArg("--budget", argv[++i], { min: 0 });
                 break;
             case "--dry-run":
                 args.dryRun = true;
@@ -223,7 +223,7 @@ function parseArgs(argv) {
                 args.token = argv[++i];
                 break;
             case "--days":
-                args.days = Number(argv[++i]);
+                args.days = numArg("--days", argv[++i], { min: 1 });
                 break;
             case "--autopilot":
                 args.autopilot = true;
@@ -288,6 +288,21 @@ function packageVersion() {
     catch {
         return "unknown";
     }
+}
+/**
+ * A numeric flag's value, or exit 1 with a message naming the flag. Number()
+ * alone turned `--days abc` into "the last NaN days" and a bad --port into a
+ * random port.
+ */
+function numArg(flag, raw, { min, max, integer } = {}) {
+    const n = Number(raw);
+    const ok = raw !== undefined && raw.trim() !== "" && Number.isFinite(n) && (!integer || Number.isInteger(n)) && (min === undefined || n >= min) && (max === undefined || n <= max);
+    if (!ok) {
+        const range = min !== undefined && max !== undefined ? ` between ${min} and ${max}` : min !== undefined ? ` of at least ${min}` : "";
+        console.error(`${flag} needs ${integer ? "a whole number" : "a number"}${range}; got ${raw === undefined ? "nothing" : JSON.stringify(raw)}.`);
+        process.exit(1);
+    }
+    return n;
 }
 /** Any Claude Code transcript on this machine? One directory listing, no parsing. */
 function hasClaudeSessions() {
@@ -582,6 +597,11 @@ async function main() {
         return; // server keeps the process alive
     }
     if (!args.command || !args.file) {
+        const known = ["analyze", "optimize"];
+        if (args.command && !known.includes(args.command)) {
+            console.error(`Unknown command "${args.command}". Run \`context-doctor --help\` for the list.`);
+            process.exit(1);
+        }
         console.log(HELP);
         process.exit(args.command ? 1 : 0);
     }

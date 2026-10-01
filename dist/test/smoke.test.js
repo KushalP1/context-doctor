@@ -277,3 +277,22 @@ test("--version prints the package version", async () => {
     const pkg = JSON.parse(readFileSync(join(here, "..", "..", "package.json"), "utf8"));
     assert.equal(execFileSync(process.execPath, [join(here, "..", "cli.js"), "--version"], { encoding: "utf8" }).trim(), pkg.version);
 });
+test("numeric flags reject garbage with a message naming the flag; unknown commands say so", async () => {
+    const { spawnSync } = await import("node:child_process");
+    const { dirname, join } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
+    const run = (...args) => spawnSync(process.execPath, [cli, ...args], { encoding: "utf8" });
+    for (const [args, msg] of [
+        [["savings", "--days", "abc"], /--days needs a number of at least 1; got "abc"/],
+        [["savings", "--days", "0"], /--days needs/],
+        [["proxy", "--port", "99999"], /--port needs a whole number between 0 and 65535/],
+        [["analyze", "x.json", "--keep-recent", "-1"], /--keep-recent needs a whole number of at least 0/],
+        [["analyze", "x.json", "--limit"], /--limit needs a whole number of at least 1; got nothing/],
+        [["bogus-command"], /Unknown command "bogus-command"/],
+    ]) {
+        const r = run(...args);
+        assert.equal(r.status, 1, args.join(" "));
+        assert.match(r.stderr, msg);
+    }
+});
