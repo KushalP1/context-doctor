@@ -21,22 +21,9 @@ Built and maintained by [gAI Ventures](https://gai.ventures).
 npx context-doctor savings
 ```
 
-```
-What context-doctor finds in your Claude Code sessions (last 30 days, 29 sessions)
-────────────────────────────────────────────────────────────────
-Input you were billed for            $6,021   from the usage your transcripts record
+<img src="https://raw.githubusercontent.com/KushalP1/context-doctor/main/assets/savings.svg" alt="npx context-doctor savings: input billed, what /compact at cold resumes and autopilot would have saved" width="640">
 
-1. Compact when you come back        $2,492   199 returns to a session over 150k tokens
-   after the prompt cache expired. Running /compact then, net of the compaction
-   itself, would have saved this. The every-prompt hook points these moments out;
-   it works in every Claude Code surface, the desktop app included.
-
-2. Autopilot                            n/a   all 29 sessions ran in the desktop app, which
-   sets its own API address, so the autopilot proxy cannot sit in front of it.
-   (Had they run in the terminal or an IDE: $788, 12.9%.)
-```
-
-That is the author's machine: every session there runs in the desktop app, so the first line is the one that applies. Yours is computed the same way, from your own transcripts: every session replayed request by request through the shipped code, against what you were actually billed.
+That is the author's machine: every session there runs in the desktop app, so the first line is the one that applies. Yours is computed the same way, from your own transcripts: every session replayed request by request through the shipped code, against what you were actually billed. `context-doctor savings --share` prints a few lines with totals only (no project names or paths) if you want to post your number.
 
 **Then install it**, whichever way suits you:
 

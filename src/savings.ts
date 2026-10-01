@@ -239,29 +239,35 @@ export function renderSavings(r: SavingsReport, autopilotOn = false): string {
   }
   const n = r.sessions.length;
   const allDesktop = r.unreachableSessions === n;
-  lines.push(`What context-doctor finds in your Claude Code sessions (last ${r.days} days, ${n} session${n === 1 ? "" : "s"})`);
-  lines.push("─".repeat(64));
-  lines.push(`Input you were billed for        ${usd(r.billedUsd).padStart(10)}   from the usage your transcripts record`);
+  const pct = (x: number) => (r.billedUsd > 0 ? ` (${Math.round((x / r.billedUsd) * 100)}%)` : "");
+  // Kept within 80 columns: this is most people's first screen of the tool.
+  lines.push("What context-doctor finds in your Claude Code sessions");
+  lines.push(`Last ${r.days} days, ${n} session${n === 1 ? "" : "s"}, priced at list prices`);
+  lines.push("─".repeat(60));
+  lines.push(`Input you were billed for         ${usd(r.billedUsd).padStart(9)}   from your transcripts' usage`);
   lines.push("");
-  lines.push(`1. Compact when you come back    ${usd(Math.max(0, r.coldResumeNetUsd)).padStart(10)}   ${r.coldResumes} return${r.coldResumes === 1 ? "" : "s"} to a session over 150k tokens`);
-  lines.push("   after the prompt cache expired. Running /compact then, net of the compaction");
-  lines.push("   itself, would have saved this. The every-prompt hook points these moments out;");
-  lines.push("   it works in every Claude Code surface, the desktop app included.");
+  lines.push(`1. Compact when you come back     ${usd(Math.max(0, r.coldResumeNetUsd)).padStart(9)}${pct(Math.max(0, r.coldResumeNetUsd))}`);
+  lines.push(`   ${r.coldResumes} return${r.coldResumes === 1 ? "" : "s"} to a session over 150k tokens after the prompt cache`);
+  lines.push("   expired. Running /compact then, net of the compaction itself, would");
+  lines.push("   have saved this. The every-prompt hook points these moments out, in");
+  lines.push("   every Claude Code surface, the desktop app included.");
   lines.push("");
   if (allDesktop) {
-    lines.push(`2. Autopilot                     ${"n/a".padStart(10)}   all ${n} sessions ran in the desktop app, which`);
-    lines.push("   sets its own API address, so the autopilot proxy cannot sit in front of it.");
-    lines.push(`   (Had they run in the terminal or an IDE: ${usd(r.savedUsd)}, ${(r.savedPct * 100).toFixed(1)}%.)`);
+    lines.push(`2. Autopilot                      ${"n/a".padStart(9)}`);
+    lines.push(`   All ${n} sessions ran in the desktop app, which sets its own API`);
+    lines.push("   address, so the autopilot proxy cannot sit in front of them. In a");
+    lines.push(`   terminal or an IDE they would have saved ${usd(r.savedUsd)} (${(r.savedPct * 100).toFixed(1)}%).`);
   } else {
-    lines.push(`2. Autopilot                     ${usd(r.reachableUsd).padStart(10)}   stale tool output cleared only when the cache`);
-    lines.push(`   is cold (never costs more; ${r.worse} session${r.worse === 1 ? "" : "s"} made more expensive), ${tokens(r.savedTokens)} tokens not sent.`);
-    if (r.unreachableSessions > 0) lines.push(`   Counts terminal and IDE sessions only; ${r.unreachableSessions} desktop-app session${r.unreachableSessions === 1 ? "" : "s"} excluded (not reachable).`);
+    lines.push(`2. Autopilot                      ${usd(r.reachableUsd).padStart(9)}${pct(r.reachableUsd)}`);
+    lines.push("   Stale tool output cleared only when the cache is cold, so it never");
+    lines.push(`   costs more (${r.worse} session${r.worse === 1 ? "" : "s"} made more expensive); ${tokens(r.savedTokens)} tokens not sent.`);
+    if (r.unreachableSessions > 0) lines.push(`   Terminal and IDE sessions only; ${r.unreachableSessions} desktop-app session${r.unreachableSessions === 1 ? "" : "s"} not reachable.`);
     if (!autopilotOn) lines.push("   Turn it on:  context-doctor autopilot on");
   }
   lines.push("");
-  lines.push("Replayed request by request through the shipped code and priced as the prompt");
-  lines.push("cache bills, at list prices. On a subscription the same tokens come out of your");
-  lines.push("usage limit instead.");
+  lines.push("Replayed request by request through the shipped code and priced as the");
+  lines.push("prompt cache bills. On a subscription the same tokens come out of your");
+  lines.push("usage limit instead. Share yours: context-doctor savings --share");
   return lines.join("\n");
 }
 
