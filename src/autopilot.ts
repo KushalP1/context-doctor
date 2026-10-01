@@ -20,7 +20,7 @@
  */
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -236,7 +236,13 @@ export function recentSurfaces(days = 30, home = homedir()): Map<string, number>
       const p = join(root, d, f);
       try {
         if (statSync(p).mtimeMs < since) continue;
-        const head = readFileSync(p, "utf8").slice(0, 64 * 1024);
+        // The surface is recorded in the first lines; never read a 300 MB
+        // transcript to find it (this took 10 s on a real machine).
+        const fd = openSync(p, "r");
+        const buf = Buffer.alloc(64 * 1024);
+        let n = 0;
+        try { n = readSync(fd, buf, 0, buf.length, 0); } finally { closeSync(fd); }
+        const head = buf.toString("utf8", 0, n);
         const m = head.match(/"entrypoint":"([^"]+)"/);
         const ep = m ? m[1] : "unknown";
         out.set(ep, (out.get(ep) ?? 0) + 1);

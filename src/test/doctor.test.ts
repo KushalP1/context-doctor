@@ -14,11 +14,14 @@ import { sandboxEnv } from "./sandbox.js";
 
 test("doctor runs, checks the MCP handshake, and exits 0", async () => {
   const stateDir = mkdtempSync(join(tmpdir(), "ctxdoc-doctor-"));
+  // A sandbox home: doctor reads ~/.claude (configs, recent transcripts), and
+  // a real home with large sessions made this test slow and machine-dependent.
+  const home = mkdtempSync(join(tmpdir(), "ctxdoc-doctor-home-"));
   const out = await new Promise<string>((resolve, reject) => {
     execFile(
       process.execPath,
       [cliPath, "doctor"],
-      { env: { ...process.env, CONTEXT_DOCTOR_HOOK_STATE: join(stateDir, "state.json") }, timeout: 20000 },
+      { env: { ...sandboxEnv(home), CONTEXT_DOCTOR_HOOK_STATE: join(stateDir, "state.json") }, timeout: 20000 },
       (err, stdout) => (err ? reject(err) : resolve(stdout))
     );
   });
