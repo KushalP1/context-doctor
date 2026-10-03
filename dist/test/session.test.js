@@ -290,3 +290,32 @@ test("tool wall clock is measured from tool_use to tool_result timestamps", asyn
     assert.match(out, /permission prompt/, "the caveat travels with the number");
     assert.equal(renderToolTimings([]), null, "nothing to say when there are no timings");
 });
+test("Claude Code rows are rebuilt into API messages: split replies merge, interleaved parallel calls rejoin their reply", async () => {
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { parseSessionFile } = await import("../session.js");
+    const usage = { input_tokens: 5, cache_read_input_tokens: 1000, cache_creation_input_tokens: 0, output_tokens: 3 };
+    const a = (content) => ({ type: "assistant", message: { role: "assistant", id: "msg_A", model: "claude-opus-5", content: [content], usage } });
+    const r = (id) => ({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "out " + id }] } });
+    const rows = [
+        { type: "user", message: { role: "user", content: "search three things" } },
+        a({ type: "text", text: "Searching." }),
+        a({ type: "tool_use", id: "t1", name: "WebSearch", input: {} }),
+        a({ type: "tool_use", id: "t2", name: "WebSearch", input: {} }),
+        r("t1"),
+        a({ type: "tool_use", id: "t3", name: "WebSearch", input: {} }), // streamed after t1's result
+        r("t2"),
+        r("t3"),
+    ];
+    const dir = mkdtempSync(join(tmpdir(), "cd-merge-"));
+    const p = join(dir, "s.jsonl");
+    writeFileSync(p, rows.map((x) => JSON.stringify(x)).join("\n"));
+    const parsed = parseSessionFile(p);
+    const msgs = JSON.parse(parsed.conversationJson).messages;
+    assert.deepEqual(msgs.map((m) => m.role), ["user", "assistant", "user"]);
+    assert.deepEqual(msgs[1].content.map((b) => b.id ?? b.type), ["text", "t1", "t2", "t3"]);
+    assert.deepEqual(msgs[2].content.map((b) => b.tool_use_id), ["t1", "t2", "t3"]);
+    assert.equal(parsed.usageSamples.length, 1, "one usage sample per API reply, not per row");
+    assert.equal(parsed.usageSamples[0].index, 1, "the reply's request input is the one message before it");
+});

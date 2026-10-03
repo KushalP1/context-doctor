@@ -19,8 +19,11 @@ const file = (lines) => {
 const big = "const value = compute(input, options); // step\n".repeat(400);
 /** A Read-heavy session: `n` tool calls, one per request; an idle `gapAfter` hours after request `gapAt`. */
 function session(n, gapAt = -1, gapAfterHours = 2) {
-    const lines = [{ type: "user", message: { role: "user", content: "fix the build" }, timestamp: "2026-09-01T10:00:00Z" }];
-    let t = Date.parse("2026-09-01T10:00:00Z"), prompt = 60_000;
+    // Relative to now: the report counts only the last N days, and a fixed date
+    // silently fell out of the window a month after it was written.
+    const start = Date.now() - 3 * 86_400_000;
+    const lines = [{ type: "user", message: { role: "user", content: "fix the build" }, timestamp: new Date(start).toISOString() }];
+    let t = start, prompt = 60_000;
     for (let i = 0; i < n; i++) {
         t += (i === gapAt ? gapAfterHours * 3_600_000 : 30_000);
         lines.push({ type: "assistant", timestamp: new Date(t).toISOString(), message: { id: `msg_${i}`, model: "claude-opus-5", content: [{ type: "tool_use", id: `toolu_${i}`, name: "Read", input: { file_path: `/f${i}.ts` } }], usage: { input_tokens: 5, cache_read_input_tokens: prompt, cache_creation_input_tokens: 8000, output_tokens: 50 } } });

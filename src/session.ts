@@ -334,6 +334,13 @@ function fromCodexLine(entry: Record<string, any>): Record<string, any> | null {
   }
 }
 
+/** Message content as a block array (a plain string becomes one text block). */
+function asBlocks(content: unknown): unknown[] {
+  if (Array.isArray(content)) return content;
+  if (typeof content === "string") return content ? [{ type: "text", text: content }] : [];
+  return content == null ? [] : [content];
+}
+
 export function parseSessionFile(path: string): ParsedSession {
   // ChatGPT exports are one big JSON array, not JSONL — and small enough to
   // read whole. Only peek first, so multi-hundred-MB JSONL is never slurped.
@@ -353,6 +360,12 @@ export function parseSessionFile(path: string): ParsedSession {
   let model: string | undefined;
   /** Index in `messages` of the newest compaction summary, or -1. */
   let lastCompactIndex = -1;
+  let lastReplyId: string | undefined;
+  /** Where each API reply (by message id) lives in `messages`. */
+  const replyIndex = new Map<string, number>();
+  let lastSampledReplyId: string | undefined;
+  // A compaction summary marks where the live context starts; never merge into it.
+  const prevIndexAllowsMerge = (i: number): boolean => i !== lastCompactIndex;
   /** Newest API-reported input size, if the transcript carries usage. */
   let reportedInputTokens: number | undefined;
   /** Every reported size, positioned — the basis for `context-doctor accuracy`. */
@@ -422,7 +435,16 @@ export function parseSessionFile(path: string): ParsedSession {
         usageNumber(usage.cache_creation_input_tokens);
       if (total > 0) {
         reportedInputTokens = total;
-        usageSamples.push({ index: messages.length, input: total });
+        // One sample per API reply: Claude Code writes a reply as several
+        // rows (one per content block) carrying the same usage. The request's
+        // input is everything before the reply's first row.
+        const replyId = typeof message.id === "string" ? message.id : undefined;
+        if (!replyId || replyId !== lastSampledReplyId) {
+          const prevMsg = messages[messages.length - 1];
+          const startsNew = !(prevMsg?.role === "assistant" && replyId !== undefined && replyId === lastReplyId);
+          usageSamples.push({ index: startsNew ? messages.length : messages.length - 1, input: total });
+          lastSampledReplyId = replyId;
+        }
       }
     }
     if (entry.isCompactSummary) lastCompactIndex = messages.length;
@@ -444,7 +466,30 @@ export function parseSessionFile(path: string): ParsedSession {
       }
     }
 
-    messages.push({ role: message.role, content: message.content });
+    // Rebuild messages the way the API saw them. Claude Code writes one row
+    // per content block, so one reply (text + two tool calls) arrived as three
+    // "assistant" messages and its results as two "user" ones: exported
+    // conversations broke tool_use/tool_result pairing, and every split added
+    // per-message overhead to the profile. The API treats consecutive
+    // same-role messages as one; so do we.
+    // Parallel tool calls are written as they stream: a reply's later
+    // tool_use rows can land after the first tool_result rows. A row that
+    // belongs to an earlier reply (same message id) joins that reply.
+    const replyId = entry.type === "assistant" && typeof message.id === "string" ? message.id : undefined;
+    const home = replyId !== undefined ? replyIndex.get(replyId) : undefined;
+    if (home !== undefined && home > lastCompactIndex && home < messages.length - 1) {
+      messages[home].content = [...asBlocks(messages[home].content), ...asBlocks(message.content)];
+      return;
+    }
+    const prev = messages[messages.length - 1];
+    if (entry.type === "assistant") lastReplyId = replyId;
+    if (prev && prev.role === message.role && !entry.isCompactSummary && prevIndexAllowsMerge(messages.length - 1)) {
+      prev.content = [...asBlocks(prev.content), ...asBlocks(message.content)];
+      if (replyId !== undefined) replyIndex.set(replyId, messages.length - 1);
+    } else {
+      messages.push({ role: message.role, content: message.content });
+      if (replyId !== undefined) replyIndex.set(replyId, messages.length - 1);
+    }
   });
 
   const toolTimings: ToolTiming[] = [...latenciesByTool.entries()]
