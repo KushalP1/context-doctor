@@ -7,7 +7,7 @@
  * Polling (not fs.watch) is deliberate: editors/agents rewrite files in ways
  * that break watchers cross-platform, and a 2s stat is effectively free.
  */
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { listSessions, parseSessionFile } from "./session.js";
 import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
@@ -31,10 +31,24 @@ export function runWatch(opts) {
             if (size === lastSize)
                 return; // nothing new — cost of this tick was one stat
             lastSize = size;
+            // A session transcript (Claude Code, Codex, ChatGPT export), or else a
+            // plain conversation file (OpenAI/Anthropic messages JSON), which is how
+            // most agent frameworks dump a trace. Until 0.24 the second kind was
+            // read as an empty session and watch printed nothing.
             const parsed = parseSessionFile(file);
-            if (parsed.messageCount === 0)
-                return;
-            const profile = profileConversation(parseConversation(parsed.conversationJson), opts.model ?? parsed.model);
+            let conversation;
+            let model = opts.model;
+            if (parsed.messageCount > 0) {
+                conversation = parseConversation(parsed.conversationJson);
+                model ??= parsed.model;
+            }
+            else {
+                conversation = parseConversation(readFileSync(file, "utf8"));
+                if (conversation.parseWarning || conversation.messages.length === 0)
+                    return;
+                model ??= conversation.model;
+            }
+            const profile = profileConversation(conversation, model);
             const delta = profile.totalTokens - lastTokens;
             lastTokens = profile.totalTokens;
             const cost = profile.cost ? ` · ${formatUsd(profile.cost.perCallUsd)}/msg` : "";

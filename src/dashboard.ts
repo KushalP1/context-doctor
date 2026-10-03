@@ -49,7 +49,8 @@ export async function collectDashboardData(proxyPort = 8787): Promise<DashboardD
   // real reduction, so it counts alongside explicit optimize runs.
   const perSession = new Map<string, number[]>();
   for (const c of checks) {
-    if (!c.sid || typeof c.tok !== "number") continue;
+    // "mcp-sketch" was a shared id for unrelated chats (fixed in 0.24); never a session.
+    if (!c.sid || c.sid === "mcp-sketch" || typeof c.tok !== "number") continue;
     perSession.set(c.sid, [...(perSession.get(c.sid) ?? []), c.tok]);
   }
   let shrinkage = carried.shrinkage;

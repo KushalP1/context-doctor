@@ -1,5 +1,6 @@
 /** watch: emits a status line on growth, surfaces new findings once. */
 import { test } from "node:test";
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { appendFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -41,4 +42,31 @@ test("watch reports growth and new findings live", async () => {
     finally {
         child.kill();
     }
+});
+test("watch follows a plain conversation JSON file (agent traces), not only session transcripts", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cd-watch-json-"));
+    const file = join(dir, "trace.json");
+    writeFileSync(file, JSON.stringify({ model: "claude-opus-5", messages: [{ role: "user", content: "hi" }] }));
+    const child = spawn(process.execPath, [cliPath, "watch", file, "--interval-ms", "200"]);
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    // Wait for output rather than sleeping a fixed time: a loaded CI runner can
+    // take well over a second to start node.
+    const waitFor = async (re, ms = 15_000) => {
+        const end = Date.now() + ms;
+        while (!re.test(out)) {
+            if (Date.now() > end)
+                throw new Error(`timed out waiting for ${re}; got: ${out}`);
+            await new Promise((r) => setTimeout(r, 50));
+        }
+    };
+    try {
+        await waitFor(/1 messages/);
+        writeFileSync(file, JSON.stringify({ model: "claude-opus-5", messages: [{ role: "user", content: "hi" }, { role: "assistant", content: "x".repeat(40000) }] }));
+        await waitFor(/2 messages/);
+    }
+    finally {
+        child.kill();
+    }
+    assert.match(out, /~15k tokens \(\+15k\)/);
 });

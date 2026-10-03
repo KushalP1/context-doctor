@@ -45,7 +45,8 @@ export async function buildImpactReport(proxyPort = 8787): Promise<string> {
   // checks (compaction/cleanup after a warning), that drop is measured fact.
   const bySession = new Map<string, { toks: number[]; warns: number }>();
   for (const c of checks) {
-    if (!c.sid || typeof c.tok !== "number") continue;
+    // "mcp-sketch" was a shared id for unrelated chats (fixed in 0.24); never a session.
+    if (!c.sid || c.sid === "mcp-sketch" || typeof c.tok !== "number") continue;
     const s = bySession.get(c.sid) ?? { toks: [], warns: 0 };
     s.toks.push(c.tok);
     if (c.warn) s.warns++;

@@ -37,7 +37,8 @@ export async function collectDashboardData(proxyPort = 8787) {
     // real reduction, so it counts alongside explicit optimize runs.
     const perSession = new Map();
     for (const c of checks) {
-        if (!c.sid || typeof c.tok !== "number")
+        // "mcp-sketch" was a shared id for unrelated chats (fixed in 0.24); never a session.
+        if (!c.sid || c.sid === "mcp-sketch" || typeof c.tok !== "number")
             continue;
         perSession.set(c.sid, [...(perSession.get(c.sid) ?? []), c.tok]);
     }

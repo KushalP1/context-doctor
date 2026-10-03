@@ -42,3 +42,23 @@ test("collectDashboardData works without a proxy running", async () => {
   assert.equal(data.proxy, null);
   assert.ok(data.totals.tokensSaved >= 0);
 });
+
+test("sketch checks never count as session shrinkage (they describe different chats)", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "cd-dash-sketch-"));
+  const saved = process.env.CONTEXT_DOCTOR_HOOK_STATE;
+  process.env.CONTEXT_DOCTOR_HOOK_STATE = join(dir, "state.json");
+  try {
+    // A ledger written by 0.17-0.23: two sketches of unrelated chats under the shared old id.
+    writeFileSync(join(dir, ".context-doctor-ledger.jsonl"), [
+      { ts: 1, ev: "check", sid: "mcp-sketch", src: "mcp", tok: 900_000 },
+      { ts: 2, ev: "check", sid: "mcp-sketch", src: "mcp", tok: 1_000 },
+    ].map((e) => JSON.stringify(e)).join("\n") + "\n");
+    const data = await collectDashboardData(1);
+    assert.equal(data.totals.tokensSaved, 0, "a big sketch followed by a small one is not a saving");
+  } finally {
+    if (saved === undefined) delete process.env.CONTEXT_DOCTOR_HOOK_STATE; else process.env.CONTEXT_DOCTOR_HOOK_STATE = saved;
+  }
+});
