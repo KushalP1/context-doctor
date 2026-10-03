@@ -54,6 +54,15 @@ export declare const PROXY_VERSION = "0.23.1";
  * so the token cannot be guessed a character at a time.
  */
 export declare function stripToken(url: string, token: string): string | undefined;
+/**
+ * Where a request goes. The endpoints we optimize are fixed; EVERY other path
+ * is forwarded untouched, because a client routed through the proxy (Claude
+ * Code under autopilot, an SDK) also lists models, uploads files, counts
+ * tokens. Until 0.24 those got a 404 and broke the feature for that client.
+ * Unknown paths go to Anthropic when the request says it is one (Anthropic
+ * clients always send anthropic-version, or x-api-key), else to OpenAI.
+ */
+export declare function upstreamFor(url: string, opts: ProxyOptions, headers?: http.IncomingHttpHeaders): string;
 export interface ProxyStats {
     startedAt: string;
     requests: number;

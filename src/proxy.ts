@@ -78,12 +78,20 @@ export function stripToken(url: string, token: string): string | undefined {
   return rest;
 }
 
-function upstreamFor(url: string, opts: ProxyOptions): string | undefined {
-  if (url.startsWith("/v1/messages")) return opts.anthropicUpstream ?? "https://api.anthropic.com";
-  if (url.startsWith("/v1/chat/completions") || url.startsWith("/v1/responses") || url.startsWith("/v1/embeddings")) {
-    return opts.openaiUpstream ?? "https://api.openai.com";
-  }
-  return undefined;
+/**
+ * Where a request goes. The endpoints we optimize are fixed; EVERY other path
+ * is forwarded untouched, because a client routed through the proxy (Claude
+ * Code under autopilot, an SDK) also lists models, uploads files, counts
+ * tokens. Until 0.24 those got a 404 and broke the feature for that client.
+ * Unknown paths go to Anthropic when the request says it is one (Anthropic
+ * clients always send anthropic-version, or x-api-key), else to OpenAI.
+ */
+export function upstreamFor(url: string, opts: ProxyOptions, headers: http.IncomingHttpHeaders = {}): string {
+  const anthropic = opts.anthropicUpstream ?? "https://api.anthropic.com";
+  const openai = opts.openaiUpstream ?? "https://api.openai.com";
+  if (url.startsWith("/v1/messages")) return anthropic;
+  if (url.startsWith("/v1/chat/completions") || url.startsWith("/v1/responses") || url.startsWith("/v1/embeddings")) return openai;
+  return headers["anthropic-version"] !== undefined || headers["x-api-key"] !== undefined ? anthropic : openai;
 }
 
 export interface ProxyStats {
@@ -203,7 +211,7 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
         return;
       }
 
-      const upstreamBase = upstreamFor(url, opts);
+      const upstreamBase = upstreamFor(url, opts, req.headers);
       if (!upstreamBase) {
         res.statusCode = 404;
         res.setHeader("content-type", "application/json");
@@ -213,7 +221,13 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
 
       const chunks: Buffer[] = [];
       for await (const chunk of req) chunks.push(chunk as Buffer);
-      let body = Buffer.concat(chunks).toString("utf8");
+      // Keep the original bytes: only conversation JSON is ever rewritten, and
+      // anything else (a multipart file upload) must reach upstream byte for
+      // byte. Decoding everything as UTF-8 corrupted binary bodies.
+      const rawBody = Buffer.concat(chunks);
+      let body = rawBody.toString("utf8");
+      const originalBody = body;
+      const conversationPath = /^\/v1\/(messages|chat\/completions|responses)(\?|$)/.test(url);
 
       // Optimize the message history in flight. Anything unparseable (or with
       // no messages array, e.g. embeddings) passes through untouched.
@@ -253,7 +267,7 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
             }
           }
         }
-      } else if (req.method === "POST" && body && !isMeasurement) {
+      } else if (req.method === "POST" && body && !isMeasurement && conversationPath) {
         try {
           // Per-route overrides: first modelPrefix match wins.
           let effective: OptimizeOptions = opts;
@@ -355,7 +369,7 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
       const upstream = await fetch(upstreamBase + url, {
         method: req.method ?? "POST",
         headers,
-        body: req.method === "GET" || req.method === "HEAD" ? undefined : body,
+        body: req.method === "GET" || req.method === "HEAD" ? undefined : body === originalBody ? rawBody : body,
       });
 
       console.error(
