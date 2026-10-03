@@ -68,6 +68,19 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.24.0 — a module-by-module audit
+
+Each module checked against real data and hostile input, not only its tests:
+
+- **Session parser rebuilt API messages.** Claude Code writes one transcript row per content block; the parser emitted one message per row (3,604 rows for 1,765 replies in one session). Exported conversations broke tool_use/tool_result pairing in 9 of 13 real sessions, profiles carried extra per-message overhead, and `keepRecent` protected fewer real turns. Consecutive same-role rows now merge as the API merges them, and rows of a reply rejoin it by message id even when parallel tool calls interleave with their results. 12 of 13 sessions now pair cleanly; the 13th has a tool call interrupted before it returned. Usage is sampled once per reply.
+- **Optimizer verified**: across those sessions and the sample, 4 strategy sets x 2 settings, it introduced no pairing errors.
+- **Proxy**: non-conversation endpoints (`/v1/models`, `/v1/files`) returned 404 through it, so a client under autopilot lost those features; they are now forwarded by the request's own headers. Every body was decoded as UTF-8 and re-sent, corrupting binary uploads; untouched bodies now pass byte for byte. Streaming, client aborts and an unreachable upstream (502) were already correct.
+- **Dashboard and report overclaimed**: MCP sketches shared one session id, so a big sketch followed by a small one of another chat counted as savings; and compaction shrinkage was added into "tokens context-doctor saved". Both fixed; shrinkage is shown on its own.
+- **`watch`** read plain conversation JSON files as empty sessions; it now follows them.
+- **MCP**: sketch inputs bounded (1e9 turns produced "1000515000.0M tokens"); `keep_recent: 0` accepted as on the CLI; token counts read billions as B.
+- **Tests**: a savings fixture used fixed September dates and fell out of the 30-day window on 3 October; fixtures are relative now, and the watch test waits for output instead of sleeping.
+- **Checked clean**: all 178 local sessions and rollouts and 20 Cursor chats parse and profile without error; MCP tools reject malformed arguments with clear errors; the dashboard, `experiment --dry-run` and the editor extension work.
+
 ## Shipped in 0.23.0 — audit fixes and the share loop
 
 - **Security:** 4 transitive vulnerabilities under the MCP SDK patched (fast-uri high; hono, qs, ip-address moderate). hono's `parseBody` memory exhaustion applied to `context-doctor-mcp --http`. `npm audit`: 0.

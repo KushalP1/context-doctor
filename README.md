@@ -104,6 +104,7 @@ Not claimed, because no process on your machine sends those requests: trimming i
 ## What's new
 
 - **0.20 Autopilot**: stale tool output cleared from every Claude Code request, only when the prompt cache is cold, so it cannot cost more (measured: 9.8% less input cost, ~$1,080 a month on the author's usage, no session worse); runs as a login service on macOS, Linux and Windows; now also for GPT via OpenAI's Chat Completions and Responses APIs.
+- **0.24 A full audit, fixed**: the session parser now rebuilds API messages from Claude Code's one-row-per-block transcripts (it had split each reply into several messages, breaking tool pairing in exported conversations and inflating profiles); the proxy forwards every non-conversation endpoint and never re-encodes bodies it does not rewrite (model listing and file uploads failed or were corrupted through it); `report` and the dashboard no longer count compaction as tokens context-doctor saved, and MCP sketches no longer inflate them; `watch` follows plain conversation files; MCP inputs are bounded. 0.23: four dependency vulnerabilities patched, no false `/compact` alarm after compacting, `savings --share`.
 - **0.22 Honest about where each lever works, and a new one that works everywhere**: the every-prompt hook now offers `/compact` when you return to a large session after the cache expired (measured: ~$914 a month on the author's history), including in the desktop app. Found and fixed: autopilot cannot reach the desktop app's Code tab, and `doctor` now says so instead of reporting ✓; `savings` counted whole-file history as "last 30 days"; the hook quoted per-message cost at the uncached rate (10x too high). `--version` added.
 - **0.21 See it before you install it**: `npx context-doctor savings` replays your own recent sessions through autopilot and shows what it would have saved, against what you were actually billed. Install as a **Claude Code plugin** from inside Claude Code. Ready for the official **MCP Registry** (`io.github.KushalP1/context-doctor`), which every release now publishes to; any MCP client can launch it as `npx -y context-doctor mcp`.
 - **0.20.1 Releases that finish themselves**: one tag publishes to npm and creates a GitHub release with the Claude Desktop bundle (signed when a certificate is configured); the editor extension is ready for the VS Code Marketplace and Open VSX.
@@ -169,7 +170,7 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | Command | What it does |
 |---|---|
 | `context-doctor install` / `uninstall` | Wire (or remove) everything: MCP for Claude Desktop/Code/Cursor/Codex, the Agent Skill, the every-prompt hook |
-| `context-doctor savings [--days n]` | What autopilot saves, or would have saved, on your own recent Claude Code sessions: replayed through the shipped code, against your actual billed usage. A bare `context-doctor` in a terminal shows the same |
+| `context-doctor savings [--days n] [--share [--copy]]` | What your recent Claude Code sessions cost, and what `/compact` at cold resumes and autopilot would save, replayed through the shipped code against your actual billed usage. `--share` prints totals only (no project names or paths) to post. A bare `context-doctor` in a terminal shows the same |
 | `context-doctor mcp [--http]` | The MCP server as a subcommand, for clients and registries that launch `npx -y context-doctor mcp` |
 | `context-doctor autopilot on\|off\|pause\|resume\|status` | Every new Claude Code session goes through the local proxy, which clears stale tool output only when the prompt cache is cold: measured 9.8% less input cost, no session worse |
 | `context-doctor instructions [--copy]` | The ~180-token standing rules (~120 on GPT) for claude.ai / ChatGPT preferences, for web and phones where no server runs |
@@ -183,7 +184,7 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | `context-doctor cursor [--list]` | Profile a chat from Cursor's local history (both storage formats) |
 | `context-doctor report` | Machine-wide impact report (proxy savings persist across restarts): exact proxy savings, hook activity, recoverable waste in recent sessions |
 | `context-doctor proxy` | Always-on local proxy that optimizes every Anthropic/OpenAI API request in flight (`/stats` for cumulative savings) |
-| `context-doctor watch [file]` | Live monitor of a growing session/agent trace: token/cost line per change, findings as they appear |
+| `context-doctor watch [file]` | Live monitor of a growing session transcript or agent trace (Claude Code / Codex JSONL, or a plain OpenAI/Anthropic conversation JSON file): token/cost line per change, findings as they appear |
 | `context-doctor doctor` | Self-check the whole installation — one pasteable ✓/✗ diagnosis with fixes |
 | `context-doctor dashboard` | Local savings dashboard on 127.0.0.1: tokens saved per day, sessions by context in use vs recoverable, budget status |
 | `context-doctor statusline` | Claude Code status bar: live context vs window, cache share, cost. Wired by `install --statusline`; never overwrites a statusLine you already have |
@@ -280,6 +281,8 @@ The proxy dedupes repeated content, trims stale tool results, and strips base64 
 ```
 [context-doctor] POST /v1/messages → 200 in 842ms | optimized 7.3k → 518 tokens (2 changes) | session total: 6.9k tokens ≈ $0.021 saved
 ```
+
+Only conversation requests (`/v1/messages`, `/v1/chat/completions`, `/v1/responses`) are ever rewritten. Every other endpoint a client uses through the proxy (listing models, uploading files, counting tokens) is forwarded untouched, to Anthropic when the request carries `anthropic-version` or `x-api-key` and to OpenAI otherwise, and request bodies the proxy does not rewrite reach upstream byte for byte.
 
 `GET http://localhost:8787/stats` returns cumulative savings (requests, tokens, estimated USD), **exact upstream usage** read from every response (JSON and SSE), and **prompt-cache advisories** — the proxy watches your real traffic and flags big stable prefixes missing `cache_control` or prefix churn that silently re-bills the cache. Per-model behavior via `--config`: The advisor now says *where*: for a large system/tools prefix it names the block to mark (the last tool definition, or the last system block), and when the older messages were byte-identical to the previous request it names the exact message to put `cache_control` on, with the token count that run is re-billing each turn. Anyone who already placed breakpoints is left alone.
 
@@ -521,7 +524,7 @@ One report for your whole machine, led by a headline of **tokens context-doctor 
 
 - **exact** proxy savings (real before/after on every request),
 - **exact** savings from every optimization applied via the CLI or the in-chat tools — split by model family (Claude vs GPT), with dollar estimates,
-- **observed per-session shrinkage**: real context reductions recorded between the hook's deep checks after hygiene warnings — shown per session in the table alongside remaining waste.
+- and, **on its own line, not in the total**: sessions that got smaller after a hygiene warning. That is mostly compaction, by you or by Claude Code, and a warning may or may not be why it happened, so it is not credited to context-doctor (until 0.24 it was, which overclaimed). The dashboard keeps the same split.
 
 Honest measurement note: proxy numbers are exact. Session numbers are measured-now. What no tool can report is the counterfactual — tokens Claude *avoided* adding because of the hygiene guidance — since the same session can't be re-run without it. The report says so instead of inventing a number.
 
