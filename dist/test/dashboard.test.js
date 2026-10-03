@@ -58,3 +58,27 @@ test("sketch checks never count as session shrinkage (they describe different ch
             process.env.CONTEXT_DOCTOR_HOOK_STATE = saved;
     }
 });
+test("compaction shrinkage is reported apart from tokens context-doctor saved", async () => {
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "cd-dash-shrink-"));
+    const saved = process.env.CONTEXT_DOCTOR_HOOK_STATE;
+    process.env.CONTEXT_DOCTOR_HOOK_STATE = join(dir, "state.json");
+    try {
+        writeFileSync(join(dir, ".context-doctor-ledger.jsonl"), [
+            { ts: 1, ev: "check", sid: "sess-1", tok: 500_000, warn: true },
+            { ts: 2, ev: "check", sid: "sess-1", tok: 60_000 }, // compacted
+            { ts: 3, ev: "optimize", src: "cli", saved: 4_000, model: "claude-opus-5" },
+        ].map((e) => JSON.stringify(e)).join("\n") + "\n");
+        const d = await collectDashboardData(1);
+        assert.equal(d.totals.tokensSaved, 4_000, "only what context-doctor removed");
+        assert.equal(d.totals.shrinkage, 440_000, "compaction shown on its own");
+    }
+    finally {
+        if (saved === undefined)
+            delete process.env.CONTEXT_DOCTOR_HOOK_STATE;
+        else
+            process.env.CONTEXT_DOCTOR_HOOK_STATE = saved;
+    }
+});

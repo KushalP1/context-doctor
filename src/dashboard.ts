@@ -20,7 +20,8 @@ const MAX_SESSION_BYTES = 30 * 1024 * 1024;
 
 export interface DashboardData {
   generatedAt: string;
-  totals: { tokensSaved: number; usdSaved: number; checks: number; warnings: number; optimizeRuns: number };
+  /** tokensSaved: removed by context-doctor itself. shrinkage: sessions that got smaller after a warning (mostly compaction), shown apart. */
+  totals: { tokensSaved: number; usdSaved: number; checks: number; warnings: number; optimizeRuns: number; shrinkage: number };
   daily: Array<{ date: string; saved: number }>;
   sessions: Array<{ title: string; tokens: number; waste: number; model?: string }>;
   proxy: { requests: number; optimizedRequests: number; tokensSaved: number; estUsdSaved: number } | null;
@@ -104,7 +105,10 @@ export async function collectDashboardData(proxyPort = 8787): Promise<DashboardD
   return {
     generatedAt: new Date().toISOString(),
     totals: {
-      tokensSaved: optimizeSaved + shrinkage + (proxy?.tokensSaved ?? 0),
+      // What context-doctor removed itself; compaction shrinkage is reported
+      // separately (it was counted here until 0.24, which overclaimed).
+      tokensSaved: optimizeSaved + (proxy?.tokensSaved ?? 0),
+      shrinkage,
       usdSaved: usdSaved + (proxy?.estUsdSaved ?? 0),
       checks: checks.length + carried.checks,
       warnings: checks.filter((c) => c.warn).length + carried.warnings,

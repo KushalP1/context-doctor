@@ -95,7 +95,10 @@ export async function collectDashboardData(proxyPort = 8787) {
     return {
         generatedAt: new Date().toISOString(),
         totals: {
-            tokensSaved: optimizeSaved + shrinkage + (proxy?.tokensSaved ?? 0),
+            // What context-doctor removed itself; compaction shrinkage is reported
+            // separately (it was counted here until 0.24, which overclaimed).
+            tokensSaved: optimizeSaved + (proxy?.tokensSaved ?? 0),
+            shrinkage,
             usdSaved: usdSaved + (proxy?.estUsdSaved ?? 0),
             checks: checks.length + carried.checks,
             warnings: checks.filter((c) => c.warn).length + carried.warnings,

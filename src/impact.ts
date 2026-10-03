@@ -81,7 +81,10 @@ export async function buildImpactReport(proxyPort = 8787): Promise<string> {
   const proxySaved = proxyHistoric + (proxy?.tokensSaved ?? 0);
 
   // -- Headline: what context-doctor has saved ----------------------------------
-  const totalSaved = proxySaved + optimizeSaved + totalReduction;
+  // Only what context-doctor itself removed. Sessions also shrink when Claude
+  // Code auto-compacts or the user runs /compact; counting that as our saving
+  // overclaimed (until 0.24 it was in this total), so it is shown apart.
+  const totalSaved = proxySaved + optimizeSaved;
   lines.push("Tokens context-doctor saved (measured)");
   lines.push("─".repeat(56));
   lines.push(`TOTAL: ~${formatTokens(totalSaved)} tokens`);
@@ -106,7 +109,10 @@ export async function buildImpactReport(proxyPort = 8787): Promise<string> {
       (familyNote ? ` [${familyNote}]` : "") +
       (optimizeUsd > 0 ? ` ≈ ${formatUsd(optimizeUsd)}` : "")
   );
-  lines.push(`  · observed session shrinkage after hygiene warnings: ${formatTokens(totalReduction)}`);
+  lines.push("");
+  lines.push(`Sessions that got smaller after a hygiene warning: ${formatTokens(totalReduction)} tokens`);
+  lines.push("  (mostly compaction, by you or Claude Code; not counted above, because a warning");
+  lines.push("  may or may not be why it happened)");
   lines.push("");
 
   // -- Hook activity ------------------------------------------------------------

@@ -9,12 +9,14 @@
 import http from "node:http";
 export interface DashboardData {
     generatedAt: string;
+    /** tokensSaved: removed by context-doctor itself. shrinkage: sessions that got smaller after a warning (mostly compaction), shown apart. */
     totals: {
         tokensSaved: number;
         usdSaved: number;
         checks: number;
         warnings: number;
         optimizeRuns: number;
+        shrinkage: number;
     };
     daily: Array<{
         date: string;
