@@ -102,3 +102,20 @@ test("mcp: profile_context accepts a sketch and rejects an empty call", async ()
     await client.close();
   }
 });
+
+test("formatTokens reads billions as B; the sketch schema rejects nonsense sizes", async () => {
+  const { formatTokens } = await import("../tokens.js");
+  assert.equal(formatTokens(1_200_000_000), "1.2B");
+  assert.equal(formatTokens(3_400_000), "3.4M");
+  const home = mkdtempSync(join(tmpdir(), "cd-sketch-bounds-"));
+  const client = new Client({ name: "bounds", version: "0" });
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: [mcpPath], env: sandboxEnv(home) as Record<string, string> }));
+  try {
+    const absurd = await client.callTool({ name: "profile_context", arguments: { sketch: { turns: 1e9, blocks: [] } } });
+    assert.equal(absurd.isError, true);
+    const zero = await client.callTool({ name: "optimize_context", arguments: { conversation: JSON.stringify([{ role: "user", content: "x" }]), keep_recent: 0 } });
+    assert.notEqual(zero.isError, true, "keep_recent 0 is legitimate, as on the CLI");
+  } finally {
+    await client.close();
+  }
+});

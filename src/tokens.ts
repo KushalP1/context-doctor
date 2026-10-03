@@ -104,6 +104,7 @@ export function formatTokens(n: number): string {
   // A NaN reaching a report renders literally as "NaN tokens"; show nothing
   // rather than something false.
   if (!Number.isFinite(n)) return "0";
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 10_000) return `${Math.round(n / 1000)}k`;
   if (n >= 1_000) return `${(n / 1000).toFixed(1)}k`;

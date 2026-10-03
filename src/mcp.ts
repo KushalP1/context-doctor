@@ -64,19 +64,19 @@ function createServer(): McpServer {
   {
     conversation: z.string().optional().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array) or raw prompt text. Omit in chat apps and pass `sketch`."),
     sketch: z.object({
-      turns: z.number().int().nonnegative().describe("User+assistant exchanges so far"),
+      turns: z.number().int().nonnegative().max(100_000).describe("User+assistant exchanges so far"),
       model: z.string().optional().describe("Model this chat runs as, e.g. claude-sonnet-5, gpt-5"),
       blocks: z.array(z.object({
-        turn: z.number().int().positive().describe("1-based turn the block sits in"),
+        turn: z.number().int().positive().max(100_000).describe("1-based turn the block sits in"),
         kind: z.enum(["paste", "code", "tool_result", "image", "base64", "text"]),
         label: z.string().describe("Short name you can refer to later, e.g. 'the nginx config'"),
-        approx_tokens: z.number().positive().optional(),
-        approx_lines: z.number().positive().optional(),
-        approx_words: z.number().positive().optional(),
-        approx_chars: z.number().positive().optional(),
-        repeated: z.number().int().positive().optional().describe("Times this same content appears (2+ = duplicate)"),
+        approx_tokens: z.number().positive().max(10_000_000).optional(),
+        approx_lines: z.number().positive().max(1_000_000).optional(),
+        approx_words: z.number().positive().max(5_000_000).optional(),
+        approx_chars: z.number().positive().max(40_000_000).optional(),
+        repeated: z.number().int().positive().max(1000).optional().describe("Times this same content appears (2+ = duplicate)"),
         stale: z.boolean().optional().describe("Already acted on; nothing in it is still needed"),
-      })).describe("Only the blocks over ~500 tokens, repeated, or images. Plain turns need not be listed."),
+      })).max(500).describe("Only the blocks over ~500 tokens, repeated, or images. Plain turns need not be listed."),
     }).optional().describe("Coarse description of the conversation for chat apps. One size hint per block: lines for code, words for prose, chars (or tokens) for logs and tool output, which vary most per line."),
     model: z.string().optional().describe("Target model name for context-window math, e.g. claude-sonnet-5 or gpt-4o"),
   },
@@ -102,7 +102,7 @@ server.tool(
     conversation: z.string().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array)"),
     strategies: z.array(z.enum(STRATEGY_IDS)).optional()
       .describe("Strategies to apply. Default: dedupe, trim-tool-results, strip-base64. Add trim-tool-calls to shrink big inline file writes, or prune-history for lossy compaction of old turns."),
-    keep_recent: z.number().int().positive().optional().describe("Messages at the tail to leave untouched (default 6)"),
+    keep_recent: z.number().int().nonnegative().optional().describe("Messages at the tail to leave untouched (default 6; 0 = none)"),
     max_tool_result_tokens: z.number().int().positive().optional().describe("Token budget for trimmed tool results (default 300)"),
   },
   async ({ conversation, strategies, keep_recent, max_tool_result_tokens }) => {
