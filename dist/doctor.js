@@ -237,7 +237,7 @@ export async function runDoctor() {
             const known = [...surfaces.keys()].filter((ep) => ep !== "unknown");
             const desktopOnly = known.length > 0 && known.every((ep) => ep.startsWith("claude-desktop"));
             checks.push(h.ok && h.autopilot && routed && seen === 0 && desktopOnly
-                ? { label: "Autopilot", status: "warn", detail: "running, but it has seen 0 requests: your recent Claude Code sessions all ran in the desktop app, which ignores settings.json's API address. Autopilot only reaches terminal and IDE sessions" }
+                ? { label: "Autopilot", status: "warn", detail: "running, but it has seen 0 requests: your recent Claude Code sessions all ran in the desktop app, which ignores settings.json's API address. Autopilot only reaches terminal and IDE sessions; for desktop ones, see `context-doctor compact-window`" }
                 : h.ok && h.autopilot && routed
                     ? { label: "Autopilot", status: "ok", detail: `proxy up on ${proxyUrl(cfg.port)}, Claude Code routed through it${seen >= 0 ? ` (${seen} requests since start)` : ""}${paused ? " (PAUSED: passthrough)" : ""}` }
                     : { label: "Autopilot", status: "fail", detail: !h.ok ? `proxy not answering on ${proxyUrl(cfg.port)}: the next Claude Code prompt restarts it; or run: context-doctor autopilot on` : "settings.json no longer routes Claude Code to the proxy: run context-doctor autopilot on" });

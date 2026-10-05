@@ -253,7 +253,8 @@ export function reachNote(days = 30) {
         `! ${desktop} of your ${desktop + other} Claude Code sessions in the last ${days} days (with a recorded surface) ran in the desktop app. The desktop app`,
         "  sets its own API address and ignores the one in settings.json, so autopilot cannot reach those sessions.",
         "  It applies to Claude Code in a terminal (`claude`) and in IDEs. For desktop sessions, the every-prompt",
-        "  hook points out when /compact would pay off (see `context-doctor savings`).",
+        "  hook points out when /compact would pay off, and `context-doctor compact-window` makes Claude Code",
+        "  compact earlier by itself, which the desktop app honours (see `context-doctor savings`).",
     ];
     if (other === 0)
         lines.push("  Every recent session of yours is a desktop one: autopilot will not change anything until you use the terminal or an IDE.");
