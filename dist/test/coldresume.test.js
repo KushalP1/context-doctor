@@ -53,6 +53,8 @@ test("hook: the note appears on the first prompt after idle, and only once", asy
     });
     const first = await run();
     assert.match(first, /longer than the prompt cache lasts/);
+    const out = JSON.parse(first);
+    assert.match(out.systemMessage, /^context-doctor: idle .* \/compact now makes each later message ~\d+% cheaper\.$/, "a notice the user sees in the app");
     const second = await run();
     assert.doesNotMatch(second, /longer than the prompt cache lasts/);
 });

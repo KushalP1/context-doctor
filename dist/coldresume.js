@@ -104,6 +104,16 @@ function duration(ms) {
     const h = ms / 3_600_000;
     return h < 48 ? `${h.toFixed(h < 10 ? 1 : 0)} hours` : `${Math.round(h / 24)} days`;
 }
+/**
+ * The one line shown to the USER in the app (hook `systemMessage`). In the
+ * first week the offer lived only inside the model's reply and was acted on
+ * 1 time in 33; a notice of its own is harder to miss.
+ */
+export function renderColdResumeNotice(c) {
+    const cheaper = Math.max(0, Math.round((1 - AFTER_COMPACT_TOKENS / c.tokens) * 100));
+    const money = c.resumeUsd !== undefined ? ` (~${formatUsd(c.resumeUsd)} at list price)` : "";
+    return `context-doctor: idle ${duration(c.idleMs)}, so this message re-sent the whole ~${formatTokens(c.tokens)}-token context${money}. If you keep working here, /compact now makes each later message ~${cheaper}% cheaper.`;
+}
 /** The note the hook hands the model: the numbers, and one sentence to say. */
 export function renderColdResume(c) {
     const cheaper = Math.max(0, Math.round((1 - AFTER_COMPACT_TOKENS / c.tokens) * 100));

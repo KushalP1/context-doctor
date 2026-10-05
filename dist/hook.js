@@ -20,7 +20,7 @@ import { profileConversation } from "./profile.js";
 import { parseSessionFile } from "./session.js";
 import { formatTokens, CHARS_PER_TOKEN } from "./tokens.js";
 import { ensureProxyUp } from "./autopilot.js";
-import { detectColdResume, renderColdResume } from "./coldresume.js";
+import { detectColdResume, renderColdResume, renderColdResumeNotice } from "./coldresume.js";
 import { formatUsd, pricingFor } from "./pricing.js";
 import { checkBudget, loadConfig } from "./config.js";
 /** Default nudge threshold; a project budget or env var can lower/raise it. */
@@ -165,17 +165,25 @@ export async function runHook() {
         // before the growth gate, because a return after idle involves no growth.
         // Once per idle period; the tail read is ~1 ms and only on large files.
         const notes = [];
+        let notice;
         const cold = detectColdResume(transcriptPath);
         let cr = prev.cr;
         if (cold && cold.lastReplyAt !== prev.cr) {
             notes.push(renderColdResume(cold));
+            notice = renderColdResumeNotice(cold);
             cr = cold.lastReplyAt;
             recordLedger({ ev: "cold_resume", sid: sessionId.slice(0, 12), tok: cold.tokens, model: cold.model });
         }
         const emit = (lines) => {
-            if (lines.length === 0)
+            if (lines.length === 0 && !notice)
                 return;
-            console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: `<context-doctor>\n${lines.join("\n")}\n</context-doctor>` } }));
+            const out = {};
+            // systemMessage is shown to the user in the app; additionalContext goes to the model.
+            if (notice)
+                out.systemMessage = notice;
+            if (lines.length > 0)
+                out.hookSpecificOutput = { hookEventName: "UserPromptSubmit", additionalContext: `<context-doctor>\n${lines.join("\n")}\n</context-doctor>` };
+            console.log(JSON.stringify(out));
         };
         if (prev.b > 0 && sizeBytes < prev.b * REGROWTH_FACTOR) {
             if (cr !== prev.cr)

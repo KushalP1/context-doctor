@@ -41,6 +41,12 @@ export interface ColdResume {
  * Reads only the transcript's tail. Undefined when not (or when unreadable).
  */
 export declare function detectColdResume(path: string, now?: number, idleMs?: number, minTokens?: number): ColdResume | undefined;
+/**
+ * The one line shown to the USER in the app (hook `systemMessage`). In the
+ * first week the offer lived only inside the model's reply and was acted on
+ * 1 time in 33; a notice of its own is harder to miss.
+ */
+export declare function renderColdResumeNotice(c: ColdResume): string;
 /** The note the hook hands the model: the numbers, and one sentence to say. */
 export declare function renderColdResume(c: ColdResume): string;
 export interface ColdResumeEvent {
