@@ -197,11 +197,11 @@ export function renderCompactWindows(r: CompactWindowReport, current?: number): 
   lines.push("Auto-compact window: compact earlier, automatically (Claude Code's own setting)");
   lines.push(`Your last ${r.days} days, ${r.sessions} Claude Code session${r.sessions === 1 ? "" : "s"}, priced at list prices`);
   lines.push("─".repeat(66));
+  lines.push(`Now: ${current ? `${k(current)} (set in ~/.claude/settings.json)` : "not set: Claude Code compacts near the model's full window"}`);
   if (r.sessions === 0) {
     lines.push("No sessions with 10+ requests in the window to replay.");
     return lines.join("\n");
   }
-  lines.push(`Now: ${current ? `${k(current)} (set in ~/.claude/settings.json)` : "not set: Claude Code compacts near the model's full window"}`);
   lines.push("");
   lines.push("  window   input cost   saved            compactions");
   for (const e of r.estimates) {

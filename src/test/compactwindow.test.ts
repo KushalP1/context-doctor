@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { currentCompactWindow, estimateCompactWindows, parseWindow, setCompactWindow } from "../compactwindow.js";
+import { currentCompactWindow, estimateCompactWindows, parseWindow, renderCompactWindows, setCompactWindow } from "../compactwindow.js";
 
 test("parseWindow understands 400k, 0.4m and plain numbers", () => {
   assert.equal(parseWindow("400k"), 400_000);
@@ -49,4 +49,12 @@ test("replay: a session growing to 900k saves with a 400k window and compacts wh
   assert.ok(w400.compactions >= 2, `expected repeated compactions, got ${w400.compactions}`);
   assert.equal(w1m.compactions, 0, "a 1M window never triggers on a 900k session");
   assert.ok(Math.abs(w1m.savedUsd) < 1e-9, "and changes nothing");
+});
+
+test("render: the current window is shown even with no history to replay", () => {
+  const empty = estimateCompactWindows([400_000], 30, []);
+  const text = renderCompactWindows(empty, 250_000);
+  assert.match(text, /Now: 250k/);
+  assert.match(text, /No sessions with 10\+ requests/);
+  assert.match(renderCompactWindows(empty), /Now: not set/);
 });
