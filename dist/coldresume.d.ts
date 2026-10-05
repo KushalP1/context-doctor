@@ -63,3 +63,16 @@ export interface ColdResumeEvent {
  * next one (no double counting), and the compaction request is a cost.
  */
 export declare function coldResumeEvents(path: string, idleMs?: number, minTokens?: number): ColdResumeEvent[];
+/**
+ * How often the cold-resume offer was acted on: offers (ledger events) whose
+ * session has a compaction within an hour after. `sessionPaths` maps the
+ * ledger's 12-char session id to its transcript. Only lines that mention a
+ * compact boundary are parsed, so even very large transcripts scan quickly.
+ */
+export declare function coldResumeFollowThrough(offers: {
+    ts: number;
+    sid?: string;
+}[], sessionPaths: Map<string, string>): {
+    offers: number;
+    compacted: number;
+};

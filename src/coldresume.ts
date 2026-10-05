@@ -185,3 +185,41 @@ export function coldResumeEvents(path: string, idleMs = COLD_IDLE_MS, minTokens 
   }
   return events;
 }
+
+/** A /compact within this long of the offer counts as acting on it. */
+const FOLLOW_MS = 60 * 60_000;
+
+/**
+ * How often the cold-resume offer was acted on: offers (ledger events) whose
+ * session has a compaction within an hour after. `sessionPaths` maps the
+ * ledger's 12-char session id to its transcript. Only lines that mention a
+ * compact boundary are parsed, so even very large transcripts scan quickly.
+ */
+export function coldResumeFollowThrough(
+  offers: { ts: number; sid?: string }[],
+  sessionPaths: Map<string, string>
+): { offers: number; compacted: number } {
+  const compactsBySid = new Map<string, number[]>();
+  let compacted = 0;
+  for (const o of offers) {
+    const path = o.sid ? sessionPaths.get(o.sid) : undefined;
+    if (!path) continue;
+    let times = compactsBySid.get(o.sid!);
+    if (!times) {
+      const found: number[] = [];
+      try {
+        forEachLine(path, (line) => {
+          if (!line.includes("compact_boundary")) return;
+          try {
+            const e = JSON.parse(line);
+            const at = Date.parse(e.timestamp);
+            if (e.subtype === "compact_boundary" && Number.isFinite(at)) found.push(at);
+          } catch { /* not a full JSON row */ }
+        });
+      } catch { /* unreadable transcript: no compactions known */ }
+      compactsBySid.set(o.sid!, (times = found));
+    }
+    if (times.some((t) => t >= o.ts && t - o.ts <= FOLLOW_MS)) compacted++;
+  }
+  return { offers: offers.length, compacted };
+}

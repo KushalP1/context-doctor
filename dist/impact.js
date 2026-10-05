@@ -14,6 +14,7 @@ import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
 import { formatTokens } from "./tokens.js";
 import { formatUsd, inputCostUsd, pricingFor } from "./pricing.js";
+import { coldResumeFollowThrough } from "./coldresume.js";
 /** Sessions larger than this are skipped in the report (keeps it snappy). */
 const MAX_SESSION_BYTES = 30 * 1024 * 1024;
 async function fetchProxyStats(port) {
@@ -117,6 +118,18 @@ export async function buildImpactReport(proxyPort = 8787) {
     else {
         lines.push("No hook activity recorded yet (ledger appears after the first deep check of a heavy session).");
     }
+    const offers = ledger.filter((e) => e.ev === "cold_resume");
+    if (offers.length > 0) {
+        const paths = new Map();
+        for (const s of listSessions(10_000))
+            paths.set((s.path.split(/[\\/]/).pop() ?? "").slice(0, 12), s.path);
+        const f = coldResumeFollowThrough(offers, paths);
+        lines.push(`/compact offered on ${f.offers} return(s) to a large session after the cache expired;`);
+        lines.push(`a compaction (yours or Claude Code's) followed within the hour on ${f.compacted}.`);
+        if (f.offers >= 5 && f.compacted / f.offers < 0.2) {
+            lines.push("Rarely acted on? `context-doctor compact-window` makes Claude Code compact earlier by itself.");
+        }
+    }
     lines.push("");
     // -- Measured-now: recent session profiles ------------------------------------
     lines.push("Your recent sessions — live context and waste still recoverable");
@@ -144,7 +157,7 @@ export async function buildImpactReport(proxyPort = 8787) {
                     totalWasteUsd += p.cost.savingsPerCallUsd * (pr.cacheReadPerM / pr.inputPerM);
                 const wastePct = p.totalTokens > 0 ? Math.round((p.totalEstSavings / p.totalTokens) * 100) : 0;
                 // Ledger sids are the session UUID's first 12 chars (= filename prefix).
-                const sid = (s.path.split("/").pop() ?? "").slice(0, 12);
+                const sid = (s.path.split(/[\\/]/).pop() ?? "").slice(0, 12);
                 const saved = reductionBySession.get(sid) ?? 0;
                 const warns = bySession.get(sid)?.warns ?? 0;
                 lines.push(`  ${(parsed.title ?? s.path.split("/").pop() ?? "session").slice(0, 40).padEnd(42)} ` +

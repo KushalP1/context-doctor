@@ -11,7 +11,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { coldResumeEvents, detectColdResume, renderColdResume } from "../coldresume.js";
+import { coldResumeEvents, coldResumeFollowThrough, detectColdResume, renderColdResume } from "../coldresume.js";
 import { estimateSavings, renderSavings } from "../savings.js";
 import { reachNote } from "../autopilot.js";
 
@@ -129,4 +129,22 @@ test("savings --share: totals only, never a project name or path", async () => {
   assert.match(text, /npx context-doctor savings/);
   assert.doesNotMatch(text, new RegExp(r.sessions[0].project.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.doesNotMatch(text, /\/tmp|\/Users|\.jsonl/);
+});
+
+test("follow-through: an offer counts as acted on only with a compaction within the hour after it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cd-follow-"));
+  const p = join(dir, "abcdef123456-rest.jsonl");
+  const row = (at: number) => JSON.stringify({ type: "system", subtype: "compact_boundary", timestamp: new Date(at).toISOString(), compactMetadata: { preTokens: 500_000 } });
+  writeFileSync(p, [row(T0 + 10 * 60_000), row(T0 + 5 * HOUR)].join("\n") + "\n" + JSON.stringify({ type: "user", timestamp: new Date(T0).toISOString(), message: { role: "user", content: "mentions compact_boundary in prose" } }));
+  const paths = new Map([["abcdef123456", p]]);
+  const f = coldResumeFollowThrough(
+    [
+      { ts: T0, sid: "abcdef123456" }, // compacted 10 minutes later
+      { ts: T0 + 2 * HOUR, sid: "abcdef123456" }, // next compaction is 3h later
+      { ts: T0, sid: "unknown00000" }, // no transcript
+      { ts: T0 + 20 * 60_000 }, // no session id
+    ],
+    paths
+  );
+  assert.deepEqual(f, { offers: 4, compacted: 1 });
 });
