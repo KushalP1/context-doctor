@@ -58,7 +58,15 @@ export interface SavingsReport {
 /** Replay one Claude Code transcript. Undefined when it holds too few requests to mean anything. */
 export declare function replaySession(path: string, options?: AutoClearOptions, since?: number): SessionSavings | undefined;
 export declare function estimateSavings(days?: number, options?: AutoClearOptions, paths?: string[], onProgress?: (done: number, total: number) => void): SavingsReport;
-export declare function renderSavings(r: SavingsReport, autopilotOn?: boolean): string;
+/** Optional third lever, computed by compactwindow.ts and passed in by the CLI. */
+export interface CompactWindowLine {
+    window: number;
+    savedUsd: number;
+    compactionsPerWeek: number;
+    nowPerWeek: number;
+    isCurrent: boolean;
+}
+export declare function renderSavings(r: SavingsReport, autopilotOn?: boolean, cw?: CompactWindowLine): string;
 /**
  * `savings --share`: a few lines people can paste or screenshot. Totals only:
  * no project names, paths or session ids, so sharing it leaks nothing.

@@ -199,7 +199,7 @@ export function estimateSavings(days = 30, options = {}, paths, onProgress) {
 }
 const tokens = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : formatTokens(n));
 const usd = (n) => (n >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
-export function renderSavings(r, autopilotOn = false) {
+export function renderSavings(r, autopilotOn = false, cw) {
     const lines = [];
     if (r.sessions.length === 0) {
         lines.push(`No Claude Code sessions with 10+ requests in the last ${r.days} days to replay.`);
@@ -235,6 +235,15 @@ export function renderSavings(r, autopilotOn = false) {
             lines.push(`   Terminal and IDE sessions only; ${r.unreachableSessions} desktop-app session${r.unreachableSessions === 1 ? "" : "s"} not reachable.`);
         if (!autopilotOn)
             lines.push("   Turn it on:  context-doctor autopilot on");
+    }
+    if (cw) {
+        lines.push("");
+        lines.push(`${`3. Compact earlier (${Math.round(cw.window / 1000)}k window)`.padEnd(34)}${usd(Math.max(0, cw.savedUsd)).padStart(9)}${pct(Math.max(0, cw.savedUsd))}`);
+        lines.push(`   Claude Code's own auto-compact window${cw.isCurrent ? ", as you have it set" : ""}: automatic in every surface,`);
+        lines.push(`   ${cw.compactionsPerWeek.toFixed(1)} compactions a week instead of ${cw.nowPerWeek.toFixed(1)}. Each keeps a summary, not the`);
+        lines.push("   full history. Compare sizes: context-doctor compact-window");
+        if (!cw.isCurrent)
+            lines.push(`   Set it:                  context-doctor compact-window ${Math.round(cw.window / 1000)}k`);
     }
     lines.push("");
     lines.push("Replayed request by request through the shipped code and priced as the");

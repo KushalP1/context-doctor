@@ -68,3 +68,16 @@ test("savings: short sessions are skipped, and the report renders either way", (
   assert.match(text, /autopilot on/);
   assert.doesNotMatch(renderSavings(r, true), /Turn it on/);
 });
+
+test("savings: the compact-window lever renders within 80 columns, set or not", () => {
+  const r = estimateSavings(30, {}, [session(30, 20), session(30)]);
+  const cw = { window: 400_000, savedUsd: 3360, compactionsPerWeek: 14.7, nowPerWeek: 4.9, isCurrent: false };
+  const text = renderSavings(r, false, cw);
+  assert.match(text, /3\. Compact earlier \(400k window\)/);
+  assert.match(text, /Set it: +context-doctor compact-window 400k/);
+  for (const line of text.split("\n")) assert.ok(line.length <= 80, `too wide: ${line}`);
+  const set = renderSavings(r, false, { ...cw, isCurrent: true });
+  assert.match(set, /as you have it set/);
+  assert.doesNotMatch(set, /Set it:/);
+  assert.doesNotMatch(renderSavings(r), /3\. Compact earlier/);
+});

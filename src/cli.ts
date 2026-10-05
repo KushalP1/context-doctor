@@ -517,6 +517,12 @@ async function main(): Promise<void> {
       : undefined;
     const report = estimateSavings(args.days ?? 30, {}, undefined, progress);
     if (progress) process.stderr.write("\r\x1b[K");
+    const setWindow = currentCompactWindow();
+    const cwReport = estimateCompactWindows([setWindow ?? 400_000], args.days ?? 30);
+    const est = cwReport.estimates[0];
+    const cwLine = cwReport.sessions > 0 && est
+      ? { window: est.window, savedUsd: est.savedUsd, compactionsPerWeek: (est.compactions / cwReport.days) * 7, nowPerWeek: (cwReport.actualCompactions / cwReport.days) * 7, isCurrent: setWindow !== undefined }
+      : undefined;
     const on = existsSync(autopilotPaths().config);
     if (args.json) console.log(JSON.stringify(report, null, 2));
     else if (args.share) {
@@ -524,7 +530,7 @@ async function main(): Promise<void> {
       console.log(text);
       if (args.copy) console.log(copyToClipboard(text) ? "\n(copied to the clipboard)" : "\n(no clipboard tool found; copy the lines above)");
     } else {
-      console.log(renderSavings(report, on));
+      console.log(renderSavings(report, on, cwLine));
       if (!args.command) console.log("\nAll commands: context-doctor --help");
     }
     return;
