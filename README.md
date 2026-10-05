@@ -41,7 +41,7 @@ context-doctor autopilot on     # every new Claude Code session keeps its contex
 /plugin install context-doctor@context-doctor
 ```
 
-The plugin brings the every-prompt check, the MCP tools, and `/context-doctor:savings`, `/context-doctor:checkup` and `/context-doctor:autopilot`. It needs no npm step: the MCP server ships as one self-contained file, so it also works on Claude Code versions that do not install plugin dependencies.
+The plugin brings the every-prompt check, the MCP tools, and `/context-doctor:savings`, `/context-doctor:checkup`, `/context-doctor:autopilot` and `/context-doctor:compact-window`. It needs no npm step: the MCP server ships as one self-contained file, so it also works on Claude Code versions that do not install plugin dependencies.
 
 `context-doctor autopilot status` shows what autopilot did; `context-doctor doctor` checks the whole setup. Everything is reversible: `context-doctor autopilot off`, `context-doctor uninstall`, or `/plugin uninstall`.
 
