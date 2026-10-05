@@ -70,11 +70,11 @@ test("savings: the compact-window lever renders within 80 columns, set or not", 
     const cw = { window: 400_000, savedUsd: 3360, compactionsPerWeek: 14.7, nowPerWeek: 4.9, isCurrent: false };
     const text = renderSavings(r, false, cw);
     assert.match(text, /3\. Compact earlier \(400k window\)/);
-    assert.match(text, /Set it: +context-doctor compact-window 400k/);
+    assert.match(text, /Set it with: context-doctor compact-window 400k/);
     for (const line of text.split("\n"))
         assert.ok(line.length <= 80, `too wide: ${line}`);
     const set = renderSavings(r, false, { ...cw, isCurrent: true });
     assert.match(set, /as you have it set/);
-    assert.doesNotMatch(set, /Set it:/);
+    assert.doesNotMatch(set, /Set it with:/);
     assert.doesNotMatch(renderSavings(r), /3\. Compact earlier/);
 });

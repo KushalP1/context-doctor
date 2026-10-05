@@ -68,6 +68,14 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.25.0 — compact earlier, without anyone following advice
+
+Measured first: since 0.22 the hook had offered `/compact` 33 times on the author's machine when a large session came back after the cache expired. It was followed once. The offer went only to the model, which mostly did not raise it, and advice that is not taken saves nothing.
+
+- **The cold-resume offer is shown to you.** The hook now returns a `systemMessage` beside the model's note, with what the message you just sent cost (the whole context re-sent at the cache-write rate) and how much cheaper each later message gets after `/compact`.
+- **`context-doctor compact-window`**: Claude Code auto-compacts near the full window (median 970k tokens over 31 compactions, measured), and has a native setting, `autoCompactWindow`, to compact as if the window were smaller. It is a settings key, not an environment variable, so the desktop app honours it, unlike autopilot's `ANTHROPIC_BASE_URL`. The command replays every session request by request at 200k-800k, both arms priced as the cache bills, each simulated compaction charged its request and a 20k-token summary at the output rate, and real compactions and rewinds keeping the arms in step. On the author's last 30 days: 55% less input cost at 400k, for 14.7 compactions a week instead of 5.1. It sets a window only when you name one, keeps a backup, and `off` undoes it. The replay's baseline came within 9% of billed usage, on the low side.
+- **`savings` shows it as a third lever**, using the window you have set or 400k as an example.
+
 ## Shipped in 0.24.0 — a module-by-module audit
 
 Each module checked against real data and hostile input, not only its tests:
@@ -254,13 +262,12 @@ sessions contain sidechain traffic, so the field shapes would be guesswork.
 
 ## Next candidates
 
-Nothing left that code can finish. The two remaining items are built, tested and wired into CI; each waits on an account only the owner can create (see "Releasing" in the README for exactly where each secret goes):
+Nothing left that code can finish. npm publishing by trusted publishing is done (every release since 0.22 went out by OIDC, with provenance). The two remaining items are built, tested and wired into CI; each waits on an account only the owner can create (see "Releasing" in the README for exactly where each secret goes):
 
 | Item | State | Owner's step |
 |---|---|---|
 | **Sign the `.mcpb`** | Signing is in `build:mcpb` and the release workflow; `mcpb verify` gates the release. Tested end to end with a self-signed certificate | Obtain a code-signing certificate from a trusted CA; add `MCPB_CERT` / `MCPB_KEY` |
 | **Publish the extension** | 0.2.0 has marketplace metadata, icon, listing README and changelog; the `vscode-v*` workflow publishes to both marketplaces and attaches the `.vsix` to a release | Create the `gai-ventures` publisher and an Open VSX account; add `VSCE_PAT` / `OVSX_PAT`; push `vscode-v0.2.0` |
-| **npm** | The `v*` workflow publishes through npm trusted publishing (OIDC, no stored token), with provenance; skips with a notice when not yet authorized or already published | Add the trusted publisher on npmjs.com once (README > Releasing); npm has 0.20.0 |
 
 ## Non-goals
 

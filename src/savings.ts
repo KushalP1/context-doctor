@@ -279,7 +279,7 @@ export function renderSavings(r: SavingsReport, autopilotOn = false, cw?: Compac
     lines.push(`   Claude Code's own auto-compact window${cw.isCurrent ? ", as you have it set" : ""}: automatic in every surface,`);
     lines.push(`   ${cw.compactionsPerWeek.toFixed(1)} compactions a week instead of ${cw.nowPerWeek.toFixed(1)}. Each keeps a summary, not the`);
     lines.push("   full history. Compare sizes: context-doctor compact-window");
-    if (!cw.isCurrent) lines.push(`   Set it:                  context-doctor compact-window ${Math.round(cw.window / 1000)}k`);
+    if (!cw.isCurrent) lines.push(`   Set it with: context-doctor compact-window ${Math.round(cw.window / 1000)}k`);
   }
   lines.push("");
   lines.push("Replayed request by request through the shipped code and priced as the");

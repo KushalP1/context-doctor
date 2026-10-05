@@ -1,20 +1,20 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="696" height="484" viewBox="0 0 696 484" role="img" aria-label="context-doctor savings output">
+<svg xmlns="http://www.w3.org/2000/svg" width="696" height="604" viewBox="0 0 696 604" role="img" aria-label="context-doctor savings output">
   <style>
     text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; fill: #d6dde8; }
     .cmd { fill: #7ee2b8; } .title { fill: #ffffff; font-weight: 600; } .rule { fill: #4b5563; }
     .item { fill: #ffffff; font-weight: 600; } .money { fill: #fbbf24; font-weight: 600; }
   </style>
-  <rect width="696" height="484" rx="10" fill="#0f172a"/>
+  <rect width="696" height="604" rx="10" fill="#0f172a"/>
   <circle cx="20" cy="18" r="6" fill="#ff5f57"/><circle cx="40" cy="18" r="6" fill="#febc2e"/><circle cx="60" cy="18" r="6" fill="#28c840"/>
   <text x="22" y="46" class="cmd" xml:space="preserve">$ npx context-doctor savings</text>
   <text x="22" y="66" class="" xml:space="preserve"></text>
   <text x="22" y="86" class="title" xml:space="preserve">What context-doctor finds in your Claude Code sessions</text>
   <text x="22" y="106" class="" xml:space="preserve">Last 30 days, 29 sessions, priced at list prices</text>
   <text x="22" y="126" class="rule" xml:space="preserve">────────────────────────────────────────────────────────────</text>
-  <text x="22" y="146" class="" xml:space="preserve">Input you were billed for            <tspan class="money">$6,169</tspan>   from your transcripts' usage</text>
+  <text x="22" y="146" class="" xml:space="preserve">Input you were billed for            <tspan class="money">$6,057</tspan>   from your transcripts' usage</text>
   <text x="22" y="166" class="" xml:space="preserve"></text>
-  <text x="22" y="186" class="item" xml:space="preserve">1. Compact when you come back        <tspan class="money">$2,672</tspan> (43%)</text>
-  <text x="22" y="206" class="" xml:space="preserve">   203 returns to a session over 150k tokens after the prompt cache</text>
+  <text x="22" y="186" class="item" xml:space="preserve">1. Compact when you come back        <tspan class="money">$2,714</tspan> (45%)</text>
+  <text x="22" y="206" class="" xml:space="preserve">   192 returns to a session over 150k tokens after the prompt cache</text>
   <text x="22" y="226" class="" xml:space="preserve">   expired. Running /compact then, net of the compaction itself, would</text>
   <text x="22" y="246" class="" xml:space="preserve">   have saved this. The every-prompt hook points these moments out, in</text>
   <text x="22" y="266" class="" xml:space="preserve">   every Claude Code surface, the desktop app included.</text>
@@ -22,9 +22,15 @@
   <text x="22" y="306" class="item" xml:space="preserve">2. Autopilot                            n/a</text>
   <text x="22" y="326" class="" xml:space="preserve">   All 29 sessions ran in the desktop app, which sets its own API</text>
   <text x="22" y="346" class="" xml:space="preserve">   address, so the autopilot proxy cannot sit in front of them. In a</text>
-  <text x="22" y="366" class="" xml:space="preserve">   terminal or an IDE they would have saved <tspan class="money">$820</tspan> (12.9%).</text>
+  <text x="22" y="366" class="" xml:space="preserve">   terminal or an IDE they would have saved <tspan class="money">$793</tspan> (12.9%).</text>
   <text x="22" y="386" class="" xml:space="preserve"></text>
-  <text x="22" y="406" class="" xml:space="preserve">Replayed request by request through the shipped code and priced as the</text>
-  <text x="22" y="426" class="" xml:space="preserve">prompt cache bills. On a subscription the same tokens come out of your</text>
-  <text x="22" y="446" class="" xml:space="preserve">usage limit instead. Share yours: context-doctor savings --share</text>
+  <text x="22" y="406" class="item" xml:space="preserve">3. Compact earlier (400k window)     <tspan class="money">$3,362</tspan> (56%)</text>
+  <text x="22" y="426" class="" xml:space="preserve">   Claude Code's own auto-compact window: automatic in every surface,</text>
+  <text x="22" y="446" class="" xml:space="preserve">   14.7 compactions a week instead of 5.1. Each keeps a summary, not the</text>
+  <text x="22" y="466" class="" xml:space="preserve">   full history. Compare sizes: context-doctor compact-window</text>
+  <text x="22" y="486" class="" xml:space="preserve">   Set it with: context-doctor compact-window 400k</text>
+  <text x="22" y="506" class="" xml:space="preserve"></text>
+  <text x="22" y="526" class="" xml:space="preserve">Replayed request by request through the shipped code and priced as the</text>
+  <text x="22" y="546" class="" xml:space="preserve">prompt cache bills. On a subscription the same tokens come out of your</text>
+  <text x="22" y="566" class="" xml:space="preserve">usage limit instead. Share yours: context-doctor savings --share</text>
 </svg>

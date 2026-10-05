@@ -7,6 +7,7 @@
 Long agent sessions fill up with tool output nobody reads again, and a 500k-token session re-reads all of it on every message. The most expensive moment is coming back after lunch: the prompt cache has expired, so the next message re-sends everything at full price. `context-doctor` measures this on your own sessions and acts on it at the moments that pay.
 
 - **Tells you when to `/compact`, at the moment it pays.** When you come back to a large session after the cache expired, the every-prompt hook gives the model the numbers and it offers `/compact` once. Replayed over 133 days of the author's Claude Code history: 401 such returns, and compacting then would have saved **$4,053 net at list price, about $914 a month**. It works in every Claude Code surface, including the desktop app. [What it saves →](#what-it-saves)
+- **Compacts earlier, automatically, in every Claude Code surface.** Claude Code auto-compacts near the full window (measured: ~970k tokens on a 1M model), so long sessions re-read 400k-900k tokens on every message. `context-doctor compact-window` replays your history at smaller windows and, if you choose, sets Claude Code's own `autoCompactWindow`. On the author's last 30 days: **a 400k window would have cut input cost 55%** ($6,119 to $2,757), for 15 compactions a week instead of 5. A native setting, so it works in the desktop app too. [The trade-off →](#3-compacting-earlier-automatic)
 - **Autopilot for terminal and IDE sessions and API apps:** a local proxy that clears stale tool output only when the prompt cache is cold, so it never costs more. **9.8% less input cost, no session made more expensive**, in the same replay. (The desktop app's Code tab sets its own API address, so autopilot cannot reach it; `doctor` tells you if that is your case.)
 - **Counts Claude correctly.** Current Claude models pack 2.75 characters per token, not the 4 most tools assume, so estimates built on 4 undercount Claude by about 40%. The ratios were measured from the API's own counts; `context-doctor accuracy` re-checks them on yours.
 - **Works where you work:** Claude Code (terminal, IDE, desktop app, plugin), Cursor, Codex, Claude Desktop chat, any Anthropic or OpenAI API app, VS Code, CI. macOS, Linux and Windows, Node 20+. Local, keyless, no telemetry, MIT.
@@ -21,7 +22,7 @@ Built and maintained by [gAI Ventures](https://gai.ventures).
 npx context-doctor savings
 ```
 
-<img src="https://raw.githubusercontent.com/KushalP1/context-doctor/main/assets/savings.svg" alt="npx context-doctor savings: input billed, what /compact at cold resumes and autopilot would have saved" width="640">
+<img src="https://raw.githubusercontent.com/KushalP1/context-doctor/main/assets/savings.svg" alt="npx context-doctor savings: input billed, what /compact at cold resumes, autopilot and an earlier auto-compact window would have saved" width="640">
 
 That is the author's machine: every session there runs in the desktop app, so the first line is the one that applies. Yours is computed the same way, from your own transcripts: every session replayed request by request through the shipped code, against what you were actually billed. `context-doctor savings --share` prints a few lines with totals only (no project names or paths) if you want to post your number.
 
@@ -84,14 +85,26 @@ Each return counts only the messages up to the next return, and the compaction r
 
 The median session saves 1.9%, the best 37.7%: long sessions are where the money is (94% of input cost on that machine came from requests above 200k tokens). These sessions ran in the desktop app, which autopilot cannot reach, so for the author this is what the same sessions would have saved in a terminal; `context-doctor savings` separates the two for you.
 
+**3. Compacting earlier** <a id="3-compacting-earlier-automatic"></a>(automatic, every Claude Code surface, desktop app included). The offer in 1 is advice, and on the author's machine it was followed 1 time in 33. Claude Code has a native setting that needs nobody to follow anything: `autoCompactWindow` in `~/.claude/settings.json` makes it compact as if the window were that size. `context-doctor compact-window` replays each session request by request at several sizes, priced as the cache bills (each simulated compaction pays its own request and a 20k-token summary at the output rate), and changes nothing until you pick one:
+
+| Window | Input cost, last 30 days | Saved | Compactions a week |
+|---|---|---|---|
+| as now (~970k) | $6,119 | | 5.1 |
+| 600k | $3,570 | $2,549 (42%) | 6.5 |
+| **400k** | **$2,757** | **$3,362 (55%)** | **14.7** |
+| 300k | $2,353 | $3,766 (62%) | 24.5 |
+| 200k | $1,963 | $4,155 (68%) | 46.9 |
+
+29 sessions. The replay's baseline came within 9% of what the transcripts say was billed, on the low side. The cost is real: each compaction replaces the session's history with a summary, so a smaller window trades detail for money. That is why the command shows the table first and sets a window only when you name one (`context-doctor compact-window 400k`; `off` undoes it, and a backup of settings.json is kept).
+
 On a Claude subscription you do not pay list price; the same tokens come out of your usage limit instead. Anthropic does not publish how limits weight cached tokens, so read the dollars as the size of the effect, not as your bill.
 
 ## What happens on each platform
 
 | Where you work | Automatic, every request | What you get on top |
 |---|---|---|
-| **Claude Code** in the terminal, VS Code or JetBrains | **Autopilot** clears stale tool output (cold cache only, never more expensive). **Hook** on every prompt: real context size, largest waste, and a `/compact` offer when you return to a large session after the cache expired |
-| **Claude Code** in the desktop app's Code tab | **Hook**, as above, including the cold-resume `/compact` offer. Not autopilot: the app sets its own API address and ignores the one in settings | Same install options | Install via npm or as a **plugin** (`/plugin marketplace add KushalP1/context-doctor`). Status bar context meter, `/context-doctor:savings`, `session`, `watch`, `report`, dashboard |
+| **Claude Code** in the terminal, VS Code or JetBrains | **Autopilot** clears stale tool output (cold cache only, never more expensive). **Hook** on every prompt: real context size, largest waste, and a `/compact` offer when you return to a large session after the cache expired. **`compact-window`**, if you set one |
+| **Claude Code** in the desktop app's Code tab | **Hook**, as above, including the cold-resume `/compact` offer, shown to you as well as the model. **`compact-window`**, if you set one: Claude Code compacts earlier by itself. Not autopilot: the app sets its own API address and ignores the one in settings | Install via npm or as a **plugin** (`/plugin marketplace add KushalP1/context-doctor`). Status bar context meter, `/context-doctor:savings`, `session`, `watch`, `report`, dashboard |
 | **Cursor** (agent) | Cursor runs Claude Code's hooks, so the same every-prompt check fires inside Cursor | MCP tools, editor status bar extension, `cursor` profiler. With your own OpenAI key, autopilot too via a tokened tunnel ([how](#putting-the-proxy-on-a-public-url-cursor-with-your-own-openai-key-remote-apps)) |
 | **Codex** (ChatGPT app's Codex tab, IDE extension, CLI) | Every-prompt hook with the API's own token counts | MCP tools, skill, `session` reads Codex rollouts. On an API key, autopilot too (`OPENAI_BASE_URL`) |
 | **Your own apps on the Anthropic or OpenAI API** | Autopilot on `/v1/messages`, `/v1/chat/completions` and `/v1/responses` (`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`), or the full optimizing proxy | Exact usage and cache hit rates in `/stats`, prompt-cache placement advice |
@@ -103,6 +116,7 @@ Not claimed, because no process on your machine sends those requests: trimming i
 
 ## What's new
 
+- **0.25 Compact earlier, by itself**: the `/compact` offer at cold resumes was followed 1 time in 33 on the author's machine, so two changes. The hook now also shows you the notice (it went only to the model, which rarely raised it), with the dollar cost of the message you just sent. And `context-doctor compact-window` measures and sets Claude Code's own auto-compact window, which works without anyone acting on advice, in every surface including the desktop app: 55% less input cost at 400k on the author's last 30 days. `savings` shows it as a third lever.
 - **0.20 Autopilot**: stale tool output cleared from every Claude Code request, only when the prompt cache is cold, so it cannot cost more (measured: 9.8% less input cost, ~$1,080 a month on the author's usage, no session worse); runs as a login service on macOS, Linux and Windows; now also for GPT via OpenAI's Chat Completions and Responses APIs.
 - **0.24 A full audit, fixed**: the session parser now rebuilds API messages from Claude Code's one-row-per-block transcripts (it had split each reply into several messages, breaking tool pairing in exported conversations and inflating profiles); the proxy forwards every non-conversation endpoint and never re-encodes bodies it does not rewrite (model listing and file uploads failed or were corrupted through it); `report` and the dashboard no longer count compaction as tokens context-doctor saved, and MCP sketches no longer inflate them; `watch` follows plain conversation files; MCP inputs are bounded. 0.23: four dependency vulnerabilities patched, no false `/compact` alarm after compacting, `savings --share`.
 - **0.22 Honest about where each lever works, and a new one that works everywhere**: the every-prompt hook now offers `/compact` when you return to a large session after the cache expired (measured: ~$914 a month on the author's history), including in the desktop app. Found and fixed: autopilot cannot reach the desktop app's Code tab, and `doctor` now says so instead of reporting ✓; `savings` counted whole-file history as "last 30 days"; the hook quoted per-message cost at the uncached rate (10x too high). `--version` added.
@@ -170,7 +184,8 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | Command | What it does |
 |---|---|
 | `context-doctor install` / `uninstall` | Wire (or remove) everything: MCP for Claude Desktop/Code/Cursor/Codex, the Agent Skill, the every-prompt hook |
-| `context-doctor savings [--days n] [--share [--copy]]` | What your recent Claude Code sessions cost, and what `/compact` at cold resumes and autopilot would save, replayed through the shipped code against your actual billed usage. `--share` prints totals only (no project names or paths) to post. A bare `context-doctor` in a terminal shows the same |
+| `context-doctor savings [--days n] [--share [--copy]]` | What your recent Claude Code sessions cost, and what `/compact` at cold resumes, autopilot and an earlier auto-compact window would save, replayed through the shipped code against your actual billed usage. `--share` prints totals only (no project names or paths) to post. A bare `context-doctor` in a terminal shows the same |
+| `context-doctor compact-window [status\|off\|<size>]` | Replay your last 30 days at auto-compact windows from 200k to 800k: input cost, saving, and how many more compactions each means. `400k` (or `250000`, `0.4m`) sets Claude Code's `autoCompactWindow`, with a backup; `off` removes it. Works in every Claude Code surface, the desktop app included |
 | `context-doctor mcp [--http]` | The MCP server as a subcommand, for clients and registries that launch `npx -y context-doctor mcp` |
 | `context-doctor autopilot on\|off\|pause\|resume\|status` | Every new Claude Code session goes through the local proxy, which clears stale tool output only when the prompt cache is cold: measured 9.8% less input cost, no session worse |
 | `context-doctor instructions [--copy]` | The ~180-token standing rules (~120 on GPT) for claude.ai / ChatGPT preferences, for web and phones where no server runs |
@@ -241,7 +256,7 @@ context-doctor autopilot pause     # instant passthrough, nothing restarts
 context-doctor autopilot off       # remove it
 ```
 
-`autopilot on` runs the local proxy as a background service (launchd on macOS, a systemd user service on Linux, a logon task on Windows), waits until it answers, and only then points Claude Code at it through `env.ANTHROPIC_BASE_URL` in `~/.claude/settings.json`. Every Claude Code session started afterwards in a terminal or an IDE sends its requests through it. **Not the desktop app's Code tab:** it runs Claude Code "host-orchestrated", sets `ANTHROPIC_BASE_URL` from its own account configuration, and drops the same key from settings files (checked in Claude Code 2.1.284). `autopilot on`, `autopilot status` and `doctor` look at which surface your recent sessions ran in and warn when autopilot cannot reach them; for desktop sessions the cold-resume advice is the lever that works. Your login (subscription or API key) passes through untouched.
+`autopilot on` runs the local proxy as a background service (launchd on macOS, a systemd user service on Linux, a logon task on Windows), waits until it answers, and only then points Claude Code at it through `env.ANTHROPIC_BASE_URL` in `~/.claude/settings.json`. Every Claude Code session started afterwards in a terminal or an IDE sends its requests through it. **Not the desktop app's Code tab:** it runs Claude Code "host-orchestrated", sets `ANTHROPIC_BASE_URL` from its own account configuration, and drops the same key from settings files (checked in Claude Code 2.1.284). `autopilot on`, `autopilot status` and `doctor` look at which surface your recent sessions ran in and warn when autopilot cannot reach them; for desktop sessions the levers that work are the cold-resume advice and `compact-window`. Your login (subscription or API key) passes through untouched.
 
 **What it does to each request:** once old tool output adds up to 20k+ tokens (file reads, shell output, search and web results, screenshots inside them), it replaces that output with a one-line note, keeping the 3 most recent results. The tool call stays in the history, so the model can simply run it again if it needs the output. Your messages, its answers, answers you gave to its questions, subagent reports and MCP results are never touched.
 
