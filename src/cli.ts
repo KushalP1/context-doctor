@@ -24,6 +24,7 @@ import { buildImpactReport } from "./impact.js";
 import { measureTokenizer, renderTokenizer } from "./tokenizer-measure.js";
 import { autopilotOff, autopilotOn, autopilotPause, autopilotPaths, autopilotStatus, DEFAULT_AUTOPILOT_PORT } from "./autopilot.js";
 import { estimateSavings, renderSavings, renderShare } from "./savings.js";
+import { currentCompactWindow, estimateCompactWindows, MAX_WINDOW, MIN_WINDOW, parseWindow, renderCompactWindows, setCompactWindow } from "./compactwindow.js";
 import { renderPreferences, copyToClipboard, CHAT_PREFERENCES } from "./preferences.js";
 import { recordLedger } from "./ledger.js";
 import { runDoctor } from "./doctor.js";
@@ -58,6 +59,10 @@ Usage:
                                                 /compact at cold resumes and autopilot would save,
                                                 replayed and priced as billed. --share: totals only,
                                                 to paste. Also what a bare \`context-doctor\` shows
+  context-doctor compact-window [status|off|<size>]
+                                                Claude Code's own auto-compact window (e.g. 400k):
+                                                what each size would have saved on your sessions,
+                                                and set or remove it. Works in the desktop app too
   context-doctor autopilot on|off|pause|resume|status
                                                 Every new Claude Code session goes through the
                                                 local proxy, which clears stale tool output only
@@ -532,6 +537,34 @@ async function main(): Promise<void> {
     // main binary, so the server has to be a subcommand of it too.
     process.argv.splice(2, 1);
     await import("./mcp.js");
+    return;
+  }
+
+  if (args.command === "compact-window") {
+    const sub = args.file ?? "status";
+    if (sub === "off") {
+      setCompactWindow(undefined);
+      console.log("✓ autoCompactWindow removed from ~/.claude/settings.json: Claude Code compacts near the model's full window again (new sessions).");
+      return;
+    }
+    if (sub !== "status") {
+      const w = parseWindow(sub);
+      if (w === undefined || w < MIN_WINDOW || w > MAX_WINDOW) {
+        console.error(`Usage: context-doctor compact-window [status | off | <size>], size between 100k and 1m (e.g. 400k); got "${sub}".`);
+        process.exitCode = 1;
+        return;
+      }
+      setCompactWindow(w);
+      console.log(`✓ autoCompactWindow = ${w} in ~/.claude/settings.json (a .backup was kept).`);
+      console.log("  Claude Code sessions started from now on compact as if the window were that size,");
+      console.log("  in the terminal, IDEs and the desktop app. Check in a session with /context.");
+      console.log("  Undo: context-doctor compact-window off");
+      return;
+    }
+    const current = currentCompactWindow();
+    const windows = [200_000, 300_000, 400_000, 600_000, 800_000];
+    if (current && !windows.includes(current)) windows.push(current);
+    console.log(renderCompactWindows(estimateCompactWindows(windows.sort((a, b) => a - b), args.days ?? 30), current));
     return;
   }
 
