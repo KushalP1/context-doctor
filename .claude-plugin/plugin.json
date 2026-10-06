@@ -1,6 +1,6 @@
 {
   "name": "context-doctor",
-  "description": "Keeps Claude Code sessions lean: an every-prompt context check that tells the model its real context size and largest waste, MCP tools to profile and slim a conversation, and /context-doctor:savings to see what autopilot would save on your own sessions.",
+  "description": "Cut your Claude Code bill, measured on your own sessions: /context-doctor:savings shows the dollars, an every-prompt check names the waste, and /context-doctor:compact-window makes Claude Code compact earlier by itself.",
   "author": {
     "name": "gAI Ventures",
     "url": "https://gai.ventures"

@@ -1,7 +1,7 @@
 {
   "name": "context-doctor",
   "version": "0.26.0",
-  "description": "See what your Claude Code sessions cost and cut it: offers /compact when you return to a large session after the cache expired (every surface, desktop app included), and a cache-safe autopilot for terminal, IDE and API traffic. Token profiler, hooks, MCP tools and a Claude Code plugin.",
+  "description": "Cut your Claude Code bill, measured on your own sessions: `npx context-doctor savings` shows what each lever saves, then the hook, autopilot and an earlier auto-compact window do it. Also Cursor, Codex, Claude Desktop and any Anthropic or OpenAI API app. MCP server and Claude Code plugin.",
   "keywords": [
     "agent",
     "ai-agents",

@@ -2,7 +2,13 @@
 
 [![CI](https://github.com/KushalP1/context-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/KushalP1/context-doctor/actions) [![npm](https://img.shields.io/npm/v/context-doctor)](https://www.npmjs.com/package/context-doctor) [![npm downloads](https://img.shields.io/npm/dm/context-doctor)](https://www.npmjs.com/package/context-doctor) [![license: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE) ![macOS | Linux | Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
-**Keep every AI session's context lean, and see exactly what it costs you, without ever making it more expensive.**
+**Cut your Claude Code bill, measured on your own sessions.**
+
+```bash
+npx context-doctor savings
+```
+
+One command shows, in dollars, what your recent sessions cost and what each lever below would have saved on them. Then the levers do it: an every-prompt hook, an auto-compact window, and a proxy that never makes a request more expensive.
 
 Long agent sessions fill up with tool output nobody reads again, and a 500k-token session re-reads all of it on every message. The most expensive moment is coming back after lunch: the prompt cache has expired, so the next message re-sends everything at full price. `context-doctor` measures this on your own sessions and acts on it at the moments that pay.
 
@@ -14,6 +20,8 @@ Long agent sessions fill up with tool output nobody reads again, and a 500k-toke
 
 Built and maintained by [gAI Ventures](https://gai.ventures).
 
+> **Which context-doctor is this?** Several projects share the name. This one is [`context-doctor` on npm](https://www.npmjs.com/package/context-doctor) and `io.github.KushalP1/context-doctor` in the [official MCP Registry](https://registry.modelcontextprotocol.io): the one you run as `npx context-doctor`, and the one that prices what it saves on your own history.
+
 ## Quick start
 
 **See what it would save you first** (no install, reads your local Claude Code history):
@@ -24,7 +32,7 @@ npx context-doctor savings
 
 <img src="https://raw.githubusercontent.com/KushalP1/context-doctor/main/assets/savings.svg" alt="npx context-doctor savings: input billed, what /compact at cold resumes, autopilot and an earlier auto-compact window would have saved" width="640">
 
-That is the author's machine: every session there runs in the desktop app, so the first line is the one that applies. Yours is computed the same way, from your own transcripts: every session replayed request by request through the shipped code, against what you were actually billed. `context-doctor savings --share` prints a few lines with totals only (no project names or paths) if you want to post your number.
+That is the author's machine: every session there runs in the desktop app, which autopilot cannot reach, so lines 1 and 3 are the ones that apply. Yours is computed the same way, from your own transcripts: every session replayed request by request through the shipped code, against what you were actually billed. `context-doctor savings --share` prints a few lines with totals only (no project names or paths) if you want to post your number.
 
 **Then install it**, whichever way suits you:
 
