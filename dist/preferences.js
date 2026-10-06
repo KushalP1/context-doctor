@@ -16,8 +16,8 @@ export const CHAT_PREFERENCES = [
 ].join(" ");
 /** Where to paste, per app. Paths are the UI labels, not URLs, so they survive redesigns. */
 export const PREFERENCE_TARGETS = [
-    "claude.ai / Claude Desktop / Claude mobile: Settings > Profile > \"What personal preferences should Claude consider in responses?\"",
-    "ChatGPT: Settings > Personalization > Custom instructions > \"How would you like ChatGPT to respond?\"",
+    "claude.ai / Claude Desktop / Claude mobile: Settings > General > \"What personal preferences should Claude consider in responses?\"",
+    "ChatGPT: Settings > Personalization > Custom instructions > \"What traits should ChatGPT have?\"",
 ];
 /** Copy text to the system clipboard; false when no clipboard tool is available. */
 export function copyToClipboard(text, platform = process.platform) {

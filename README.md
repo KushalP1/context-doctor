@@ -337,7 +337,7 @@ Your API key still rides in the request headers, as before. The token protects t
 
 So "every chat inherently better" is true for Claude Code, Cursor, Codex and the proxy; for Claude Desktop it is "the rules ride in every chat and the checkup is one cheap tool call away"; and not a claim we make for the ChatGPT chat UI.
 
-**Where there is no hook and no MCP at all** (claude.ai on the web, the Claude and ChatGPT phone apps, plain ChatGPT): the app's per-account preferences are read on every turn, which is the closest those surfaces have to a hook. `context-doctor instructions --copy` puts the ~180-token rules on your clipboard and tells you where to paste them (claude.ai Settings > Profile; ChatGPT Settings > Personalization > Custom instructions).
+**Where there is no hook and no MCP at all** (claude.ai on the web, the Claude and ChatGPT phone apps, plain ChatGPT): the app's per-account preferences are read on every turn, which is the closest those surfaces have to a hook. `context-doctor instructions --copy` puts the ~180-token rules on your clipboard and tells you where to paste them (claude.ai Settings > General; ChatGPT Settings > Personalization > Custom instructions, "What traits should ChatGPT have?").
 
 **Do you need to configure anything by hand? Usually no:**
 
@@ -369,7 +369,7 @@ For any other MCP client, the server entry is:
 3. That call is cheap on purpose. Claude cannot export a Desktop chat, so it passes a **sketch**: how many turns, which blocks are large, repeated, stale or images, with one size hint each (~120 tokens). The server sizes it (usually within ±20%, measured; see "Why token counts are ~"), prices the per-turn re-read (on a subscription that is what spends your usage limit), and returns ranked findings with the action for each: "summarize *the nginx config* into the points still needed", "refer to *test output* by name", "offer a 300-token handoff summary for a fresh chat". The reply ends with an instruction to apply the top one, not just suggest it.
 4. One click instead of asking: the `context_checkup` prompt in the **+** menu sends that request for you.
 5. Say *"optimize it"* on an exported conversation and Claude applies the safe fixes; if you agree to pruning old history, **Claude itself writes the replacement summary** (that's the no-API-key summarization).
-6. For the same rules on your phone and on claude.ai, where no MCP server runs: `context-doctor instructions --copy`, then paste into Settings > Profile > personal preferences.
+6. For the same rules on your phone and on claude.ai, where no MCP server runs: `context-doctor instructions --copy`, then paste into Settings > General > personal preferences.
 
 What this does not do: read the chat behind Claude's back or trim it for you. Desktop chat has no hook API and no transcript on disk (checked in the app bundle, v2.2553). The model does the trimming, when the rules and the checkup tell it to.
 
@@ -385,7 +385,7 @@ Security note for step 2: the HTTP endpoint is unauthenticated — put it behind
 
 ### claude.ai on the web and the phone apps
 
-Your local MCP server can't reach the website, but the behavior can. Two options: `context-doctor instructions --copy` and paste into Settings > Profile > personal preferences (applies everywhere you are signed in, phone included), or upload `skills/context-doctor/SKILL.md` under Settings → Capabilities → Skills. Either way web and mobile conversations gain the same standing habits: summarize, don't re-quote, offer a handoff when heavy.
+Your local MCP server can't reach the website, but the behavior can. Two options: `context-doctor instructions --copy` and paste into Settings > General > personal preferences (applies everywhere you are signed in, phone included), or upload `skills/context-doctor/SKILL.md` under Settings → Capabilities → Skills. Either way web and mobile conversations gain the same standing habits: summarize, don't re-quote, offer a handoff when heavy.
 
 ### MCP tools
 
