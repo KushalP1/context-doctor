@@ -165,6 +165,24 @@ export async function runDoctor() {
     else {
         checks.push({ label: "Codex", status: "skip", detail: "not detected (ChatGPT's Codex agent, IDE extension or CLI)" });
     }
+    // Cursor: its agent gets the guidance through a native postToolUse hook
+    // (the Claude Code hook it also runs cannot add context there).
+    if (existsSync(join(homedir(), ".cursor"))) {
+        const hooksPath = join(homedir(), ".cursor", "hooks.json");
+        try {
+            const hooks = existsSync(hooksPath) ? JSON.parse(readFileSync(hooksPath, "utf8")) : {};
+            const ours = (hooks.hooks?.postToolUse ?? []).map((e) => e.command ?? "").find((c) => /(cli\.js|context-doctor(\.cmd|\.exe|\.bat)?)"?\s+hook\s*$/.test(c));
+            const missing = ours ? hookBinaryMissing(ours) : undefined;
+            checks.push(!ours
+                ? { label: "Cursor hook", status: "fail", detail: "not registered — run: context-doctor install" }
+                : missing
+                    ? { label: "Cursor hook", status: "fail", detail: `registered, but ${missing} no longer exists — re-run: context-doctor install` }
+                    : { label: "Cursor hook", status: "ok", detail: "registered in ~/.cursor/hooks.json (after each tool call in heavy chats)" });
+        }
+        catch (e) {
+            checks.push({ label: "Cursor hook", status: "fail", detail: `~/.cursor/hooks.json unreadable (${e.message})` });
+        }
+    }
     // Status line (opt-in, so absence is a note, not a failure)
     if (existsSync(settingsPath)) {
         try {

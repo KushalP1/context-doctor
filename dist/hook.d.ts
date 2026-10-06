@@ -1,5 +1,6 @@
 /**
- * Claude Code UserPromptSubmit hook: runs on EVERY query in Claude Code.
+ * Claude Code UserPromptSubmit hook: runs on EVERY query in Claude Code (and
+ * Codex, same format), and after every tool call in Cursor (postToolUse).
  *
  * Claude Code pipes hook input as JSON on stdin ({session_id, transcript_path,
  * prompt, ...}). We profile the session transcript; when the context is lean

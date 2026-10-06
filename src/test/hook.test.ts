@@ -156,7 +156,7 @@ test("state written by the older shared-map format is still honoured", async () 
   assert.equal(out, "", "an upgrade must not restart the nagging it had already suppressed");
 });
 
-test("Cursor's agent transcripts parse, and the hook answers Cursor's own payload", async () => {
+test("Cursor: its transcripts parse, the native postToolUse hook answers in Cursor's format, beforeSubmitPrompt stays silent", async () => {
   const { mkdtempSync, writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join, dirname } = await import("node:path");
@@ -165,9 +165,8 @@ test("Cursor's agent transcripts parse, and the hook answers Cursor's own payloa
   const { parseSessionFile } = await import("../session.js");
 
   // Cursor writes {role, message:{content}} per line — no type, no usage —
-  // to ~/.cursor/projects/<ws>/agent-transcripts/<id>/<id>.jsonl, and hands
-  // that path to hooks it loads from ~/.claude/settings.json. Until this shape
-  // parsed, the hook fired on every Cursor prompt and returned nothing.
+  // to ~/.cursor/projects/<ws>/agent-transcripts/<id>/<id>.jsonl, and passes
+  // that path to every hook as transcript_path.
   const dir = mkdtempSync(join(tmpdir(), "ctxdoc-cursor-hook-"));
   const transcript = join(dir, "conv.jsonl");
   const big = "a large tool result that sits in context forever ".repeat(2500);
@@ -185,20 +184,28 @@ test("Cursor's agent transcripts parse, and the hook answers Cursor's own payloa
   assert.equal(parsed.reportedInputTokens, undefined, "Cursor records no usage; the heuristic stands in");
 
   const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
-  const out = await new Promise<string>((resolve, reject) => {
+  const run = (payload: object) => new Promise<string>((resolve, reject) => {
     const child = execFile(
       process.execPath,
       [cli, "hook"],
       { env: { ...process.env, CONTEXT_DOCTOR_HOOK_STATE: join(dir, "state.json"), CONTEXT_DOCTOR_WARN_TOKENS: "5000" } },
       (err, stdout) => (err ? reject(err) : resolve(stdout))
     );
-    // The payload shape Cursor builds: hook_event_name, session_id, transcript_path, workspace_roots, prompt.
-    child.stdin?.end(JSON.stringify({ hook_event_name: "beforeSubmitPrompt", session_id: "conv-1", transcript_path: transcript, workspace_roots: [dir], prompt: "next", cursor_version: "2.4" }));
+    child.stdin?.end(JSON.stringify(payload));
   });
-  const result = JSON.parse(out) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
-  // Claude's nested shape: Cursor's compat layer unwraps hookSpecificOutput and reads additionalContext.
-  assert.equal(result.hookSpecificOutput.hookEventName, "UserPromptSubmit");
-  assert.match(result.hookSpecificOutput.additionalContext, /context is at ~\d+k tokens/);
-  assert.match(result.hookSpecificOutput.additionalContext, /Tool result at message #2/, "the oversized result is named");
-  assert.ok(result.hookSpecificOutput.additionalContext.length < 10_000, "under Cursor's additional_context cap");
+  const base = { conversation_id: "conv-1", transcript_path: transcript, workspace_roots: [dir], cursor_version: "3.1", model: "claude-4.5-sonnet" };
+
+  // beforeSubmitPrompt (how Cursor runs Claude Code's UserPromptSubmit hook)
+  // can only allow or block, so the hook does nothing there, and does not use
+  // up the once-per-growth warning on output Cursor would drop.
+  assert.equal(await run({ ...base, hook_event_name: "beforeSubmitPrompt", prompt: "next" }), "");
+  assert.equal(await run({ ...base, hook_event_name: "UserPromptSubmit", prompt: "next" }), "", "translated name, still Cursor");
+
+  const out = JSON.parse(await run({ ...base, hook_event_name: "postToolUse", tool_name: "Shell" })) as Record<string, string>;
+  assert.deepEqual(Object.keys(out), ["additional_context"], "Cursor's flat postToolUse output");
+  assert.match(out.additional_context, /accumulated ~\d+k tokens/);
+  assert.match(out.additional_context, /Tool result at message #2/, "the oversized result is named");
+  assert.doesNotMatch(out.additional_context, /% of the window|\$/, "no live-context share or price from a transcript that is neither");
+  assert.ok(out.additional_context.length < 10_000);
+  assert.equal(await run({ ...base, hook_event_name: "postToolUse", tool_name: "Shell" }), "", "rate-limited on the next tool call");
 });

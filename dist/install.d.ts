@@ -31,6 +31,16 @@ export declare function isEphemeralPath(path: string): boolean;
  * ours. Returns what happened so install can print the truth.
  */
 export declare function installStatusLine(): "installed" | "already" | "kept-foreign" | "no-claude-code";
+/**
+ * Cursor runs Claude Code's UserPromptSubmit hook as its own
+ * beforeSubmitPrompt, which can only allow or block a prompt: what the hook
+ * says never reaches Cursor's model. Cursor's postToolUse can add context
+ * (`additional_context`), and its input carries the agent transcript, so the
+ * check runs there, in Cursor's own ~/.cursor/hooks.json. It fires after every
+ * tool call, which the hook's stat-only fast path and regrowth gate make cheap.
+ */
+export declare function cursorHooksPath(): string;
+export declare function installCursorHook(): string | null;
 export declare function codexDir(): string;
 /**
  * Add or replace our [mcp_servers.context-doctor] table in config.toml without

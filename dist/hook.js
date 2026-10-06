@@ -1,5 +1,6 @@
 /**
- * Claude Code UserPromptSubmit hook: runs on EVERY query in Claude Code.
+ * Claude Code UserPromptSubmit hook: runs on EVERY query in Claude Code (and
+ * Codex, same format), and after every tool call in Cursor (postToolUse).
  *
  * Claude Code pipes hook input as JSON on stdin ({session_id, transcript_path,
  * prompt, ...}). We profile the session transcript; when the context is lean
@@ -145,13 +146,23 @@ export async function runHook() {
         }
         const input = JSON.parse(await readStdin());
         await heal;
+        // Cursor runs this hook twice over: Claude Code's UserPromptSubmit as its
+        // beforeSubmitPrompt (which cannot add context, so there is nothing to do),
+        // and natively after each tool call, where `additional_context` reaches
+        // the model. Codex and Claude Code send UserPromptSubmit.
+        // Cursor marks every hook input with cursor_version; any of its events but
+        // postToolUse would only spend the once-per-growth warning on output Cursor
+        // drops.
+        const cursor = input.hook_event_name === "postToolUse";
+        if (input.hook_event_name === "beforeSubmitPrompt" || (input.cursor_version && !cursor))
+            return;
         const transcriptPath = input.transcript_path;
         if (!transcriptPath || !existsSync(transcriptPath))
             return;
         // Fast path 1: a small transcript cannot exceed the threshold — exit on a
         // single stat() without reading the file. This is the every-prompt cost
         // for lean sessions: ~1ms.
-        const { config } = loadConfig(input.cwd ?? process.cwd());
+        const { config } = loadConfig(input.cwd ?? input.workspace_roots?.[0] ?? process.cwd());
         const threshold = warnThreshold(config.budget?.maxTokens);
         const sizeBytes = statSync(transcriptPath).size;
         if (sizeBytes < minBytesForWarn(threshold))
@@ -159,7 +170,7 @@ export async function runHook() {
         // Fast path 2: growth gate BEFORE parsing. If the file hasn't grown ~40%
         // since the last full parse, nothing new can trigger — exit without the
         // expensive read. Heavy-but-quiet sessions cost one stat + tiny state read.
-        const sessionId = input.session_id ?? transcriptPath;
+        const sessionId = input.session_id ?? input.conversation_id ?? transcriptPath;
         const prev = readSessionState(sessionId);
         // Cold resume: back on a large session after the cache expired. Checked
         // before the growth gate, because a return after idle involves no growth.
@@ -177,12 +188,19 @@ export async function runHook() {
         const emit = (lines) => {
             if (lines.length === 0 && !notice)
                 return;
+            const block = `<context-doctor>\n${lines.join("\n")}\n</context-doctor>`;
+            if (cursor) {
+                // Cursor's postToolUse has no user-facing field, so only the model's note goes out.
+                if (lines.length > 0)
+                    console.log(JSON.stringify({ additional_context: block }));
+                return;
+            }
             const out = {};
             // systemMessage is shown to the user in the app; additionalContext goes to the model.
             if (notice)
                 out.systemMessage = notice;
             if (lines.length > 0)
-                out.hookSpecificOutput = { hookEventName: "UserPromptSubmit", additionalContext: `<context-doctor>\n${lines.join("\n")}\n</context-doctor>` };
+                out.hookSpecificOutput = { hookEventName: "UserPromptSubmit", additionalContext: block };
             console.log(JSON.stringify(out));
         };
         if (prev.b > 0 && sizeBytes < prev.b * REGROWTH_FACTOR) {
@@ -195,7 +213,8 @@ export async function runHook() {
         const parsed = parseSessionFile(transcriptPath);
         if (parsed.messageCount === 0)
             return;
-        const profile = profileConversation(parseConversation(parsed.conversationJson), parsed.model);
+        const model = parsed.model ?? input.model;
+        const profile = profileConversation(parseConversation(parsed.conversationJson), model);
         // Prefer the API's own figure when the transcript carries it: it includes
         // the system prompt and tool schemas the transcript omits, so it is the
         // real context size rather than a message-only estimate.
@@ -208,15 +227,21 @@ export async function runHook() {
             emit(notes);
             return;
         }
-        const windowPct = profile.contextWindow ? (liveTokens / profile.contextWindow) * 100 : undefined;
+        const windowPct = !cursor && profile.contextWindow ? (liveTokens / profile.contextWindow) * 100 : undefined;
         // Agent sessions run on the prompt cache: a message normally re-reads the
         // context at the cached rate (0.1x) and pays the full rate only when the
         // cache has expired. Quoting the uncached figure alone overstated the
         // per-message cost tenfold (fixed in 0.22).
-        const pricing = pricingFor(parsed.model);
+        const pricing = pricingFor(model);
         const cachedUsd = pricing ? (liveTokens * pricing.cacheReadPerM) / 1e6 : undefined;
         const coldUsd = pricing ? (liveTokens * pricing.inputPerM * 1.25) / 1e6 : undefined;
-        const lines = [
+        // Cursor's agent transcript records tool calls but not their output, and
+        // keeps turns Cursor has since summarized, so it measures how much the chat
+        // has accumulated, not the live context: no window share or price for it.
+        const lines = cursor ? [
+            `This chat has accumulated ~${formatTokens(liveTokens)} tokens of messages and tool calls (tool output not counted; Cursor summarizes older turns itself, so the live context may differ).`,
+            "Practice context hygiene from here on: summarize large tool results instead of keeping them verbatim, reference earlier content rather than re-reading or re-quoting it, and keep responses lean.",
+        ] : [
             `This session's context is at ~${formatTokens(liveTokens)} tokens` +
                 (windowPct !== undefined ? ` (${windowPct.toFixed(0)}% of the window)` : "") +
                 (cachedUsd !== undefined ? `: each message re-reads it for ~${formatUsd(cachedUsd)} from the prompt cache, ~${formatUsd(coldUsd)} when the cache has expired` : "") +
@@ -233,7 +258,9 @@ export async function runHook() {
             lines.push(`Largest recoverable waste: ${topFinding.message} (${topFinding.suggestion})`);
         }
         if (liveTokens > threshold * 2) {
-            lines.push("If it fits the flow, offer the user a compaction of the older history.");
+            lines.push(cursor
+                ? "If the task changes, suggest the user start a new chat from a short summary of this one."
+                : "If it fits the flow, offer the user a compaction of the older history.");
         }
         emit([...notes, ...lines]);
     }

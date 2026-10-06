@@ -249,6 +249,50 @@ function installHookInto(settingsPath: string, gateDir: string): string | null {
 function uninstallHook(): void {
   uninstallHookFrom(join(homedir(), ".claude", "settings.json"), "Claude Code every-prompt hook");
   uninstallHookFrom(join(homedir(), ".codex", "hooks.json"), "Codex every-prompt hook");
+  uninstallCursorHook();
+}
+
+/**
+ * Cursor runs Claude Code's UserPromptSubmit hook as its own
+ * beforeSubmitPrompt, which can only allow or block a prompt: what the hook
+ * says never reaches Cursor's model. Cursor's postToolUse can add context
+ * (`additional_context`), and its input carries the agent transcript, so the
+ * check runs there, in Cursor's own ~/.cursor/hooks.json. It fires after every
+ * tool call, which the hook's stat-only fast path and regrowth gate make cheap.
+ */
+export function cursorHooksPath(): string {
+  return join(homedir(), ".cursor", "hooks.json");
+}
+
+const isOurCursorEntry = (e: unknown): boolean => /(cli\.js|context-doctor(\.cmd|\.exe|\.bat)?)"?\s+hook\s*$/.test(String((e as { command?: string })?.command ?? ""));
+
+export function installCursorHook(): string | null {
+  if (!existsSync(join(homedir(), ".cursor"))) return null;
+  const path = cursorHooksPath();
+  const config = readJson(path);
+  config.version = config.version ?? 1;
+  config.hooks = config.hooks ?? {};
+  const entries: Array<Record<string, any>> = config.hooks.postToolUse ?? [];
+  const want = hookCommand();
+  const ours = entries.filter(isOurCursorEntry);
+  if (ours.length === 1 && ours[0].command === want) return path; // already correct
+  config.hooks.postToolUse = [...entries.filter((e) => !isOurCursorEntry(e)), { command: want, timeout: 10 }];
+  writeJsonWithBackup(path, config);
+  return path;
+}
+
+function uninstallCursorHook(): void {
+  const path = cursorHooksPath();
+  if (!existsSync(path)) return;
+  const config = readJson(path);
+  const entries: Array<Record<string, any>> | undefined = config.hooks?.postToolUse;
+  if (!entries) return;
+  const filtered = entries.filter((e) => !isOurCursorEntry(e));
+  if (filtered.length === entries.length) return;
+  if (filtered.length === 0) delete config.hooks.postToolUse;
+  else config.hooks.postToolUse = filtered;
+  writeJsonWithBackup(path, config);
+  console.log("✓ Cursor after-tool-call hook removed");
 }
 
 function uninstallHookFrom(settingsPath: string, label: string): void {
@@ -453,6 +497,14 @@ export function runInstall(options: { statusLine?: boolean } = {}): InstallResul
     // the run; it is a failed target like any other.
     console.error(`✗ Claude Code every-prompt hook: ${(e as Error).message}`);
     failures.push("Claude Code hook");
+  }
+
+  try {
+    const cursorHook = installCursorHook();
+    if (cursorHook) console.log(`✓ Cursor after-tool-call hook installed (${cursorHook}) — Cursor's agent gets the same guidance in heavy sessions`);
+  } catch (e) {
+    console.error(`✗ Cursor hook: ${(e as Error).message}`);
+    failures.push("Cursor hook");
   }
 
   installCodex(entry, failures);
