@@ -384,7 +384,9 @@ export function startProxy(opts = {}) {
         console.error(`context-doctor proxy listening on http://${host}:${port}`);
         console.error(`  Anthropic apps/SDKs: export ANTHROPIC_BASE_URL=http://localhost:${port}${prefix}`);
         console.error(`  OpenAI apps/SDKs:    export OPENAI_BASE_URL=http://localhost:${port}${prefix}/v1`);
-        console.error(`  Every request's context is optimized in flight; savings are logged here.`);
+        console.error(opts.autopilot
+            ? `  Autopilot: stale re-runnable tool output is cleared only when the prompt cache is cold; savings are logged here.`
+            : `  Every request's context is optimized in flight; savings are logged here.`);
         console.error(`  Cumulative savings: http://localhost:${port}${prefix}/stats`);
         if (opts.token) {
             console.error(`  Token required: every path except /health must start with /t/<token>/.`);
