@@ -55,6 +55,16 @@ test("tools/call works statelessly over HTTP", async () => {
     });
     assert.ok(json.result.content[0].text.includes("CONTEXT DOCTOR"));
 });
+test("every tool is annotated read-only, so clients that gate on approval (Codex exec) can run it", async () => {
+    const { json } = await rpc({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} });
+    const tools = json.result.tools;
+    assert.equal(tools.length, 3);
+    for (const t of tools) {
+        assert.equal(t.annotations?.readOnlyHint, true, `${t.name} readOnlyHint`);
+        assert.equal(t.annotations?.destructiveHint, false, `${t.name} destructiveHint`);
+        assert.equal(t.annotations?.openWorldHint, false, `${t.name} openWorldHint`);
+    }
+});
 test("health endpoint responds; non-POST is rejected", async () => {
     const health = (await (await fetch(`http://127.0.0.1:${PORT}/health`)).json());
     assert.equal(health.ok, true);

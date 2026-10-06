@@ -68,7 +68,9 @@ function createServer() {
             })).max(500).describe("Only the blocks over ~500 tokens, repeated, or images. Plain turns need not be listed."),
         }).optional().describe("Coarse description of the conversation for chat apps. One size hint per block: lines for code, words for prose, chars (or tokens) for logs and tool output, which vary most per line."),
         model: z.string().optional().describe("Target model name for context-window math, e.g. claude-sonnet-5 or gpt-4o"),
-    }, async ({ conversation, sketch, model }) => {
+    }, 
+    // Pure: reads its input and returns text. Clients (Codex, ChatGPT) may skip approval for read-only tools.
+    { title: "Profile context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, async ({ conversation, sketch, model }) => {
         if (sketch) {
             return { content: [{ type: "text", text: runSketch({ ...sketch, model: sketch.model ?? model }) }] };
         }
@@ -87,7 +89,9 @@ function createServer() {
             .describe("Strategies to apply. Default: dedupe, trim-tool-results, strip-base64. Add trim-tool-calls to shrink big inline file writes, or prune-history for lossy compaction of old turns."),
         keep_recent: z.number().int().nonnegative().optional().describe("Messages at the tail to leave untouched (default 6; 0 = none)"),
         max_tool_result_tokens: z.number().int().positive().optional().describe("Token budget for trimmed tool results (default 300)"),
-    }, async ({ conversation, strategies, keep_recent, max_tool_result_tokens }) => {
+    }, 
+    // Pure: reads its input and returns text. Clients (Codex, ChatGPT) may skip approval for read-only tools.
+    { title: "Optimize context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, async ({ conversation, strategies, keep_recent, max_tool_result_tokens }) => {
         const result = optimizeConversation(conversation, {
             strategies: strategies,
             keepRecent: keep_recent,
@@ -148,7 +152,9 @@ function createServer() {
     }));
     server.tool("context_best_practices", "Get a curated checklist of context-management best practices, optionally specialized for a provider (anthropic, openai).", {
         provider: z.enum(["general", "anthropic", "openai"]).optional().describe("Provider to specialize tips for (default: general)"),
-    }, async ({ provider }) => {
+    }, 
+    // Pure: reads its input and returns text. Clients (Codex, ChatGPT) may skip approval for read-only tools.
+    { title: "Context best practices", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, async ({ provider }) => {
         const tips = [...BEST_PRACTICES.general, ...(provider && provider !== "general" ? BEST_PRACTICES[provider] : [])];
         return { content: [{ type: "text", text: tips.map((t, i) => `${i + 1}. ${t}`).join("\n") }] };
     });

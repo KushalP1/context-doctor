@@ -80,6 +80,8 @@ function createServer(): McpServer {
     }).optional().describe("Coarse description of the conversation for chat apps. One size hint per block: lines for code, words for prose, chars (or tokens) for logs and tool output, which vary most per line."),
     model: z.string().optional().describe("Target model name for context-window math, e.g. claude-sonnet-5 or gpt-4o"),
   },
+  // Pure: reads its input and returns text. Clients (Codex, ChatGPT) may skip approval for read-only tools.
+  { title: "Profile context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async ({ conversation, sketch, model }) => {
     if (sketch) {
       return { content: [{ type: "text", text: runSketch({ ...sketch, model: sketch.model ?? model }) }] };
@@ -105,6 +107,8 @@ server.tool(
     keep_recent: z.number().int().nonnegative().optional().describe("Messages at the tail to leave untouched (default 6; 0 = none)"),
     max_tool_result_tokens: z.number().int().positive().optional().describe("Token budget for trimmed tool results (default 300)"),
   },
+  // Pure: reads its input and returns text. Clients (Codex, ChatGPT) may skip approval for read-only tools.
+  { title: "Optimize context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async ({ conversation, strategies, keep_recent, max_tool_result_tokens }) => {
     const result = optimizeConversation(conversation, {
       strategies: strategies as any,
@@ -181,6 +185,8 @@ server.tool(
     {
       provider: z.enum(["general", "anthropic", "openai"]).optional().describe("Provider to specialize tips for (default: general)"),
     },
+    // Pure: reads its input and returns text. Clients (Codex, ChatGPT) may skip approval for read-only tools.
+    { title: "Context best practices", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async ({ provider }) => {
       const tips = [...BEST_PRACTICES.general, ...(provider && provider !== "general" ? BEST_PRACTICES[provider] : [])];
       return { content: [{ type: "text", text: tips.map((t, i) => `${i + 1}. ${t}`).join("\n") }] };
