@@ -47,10 +47,11 @@ import { estimateTokens } from "./tokens.js";
 export const CLEARABLE_TOOLS = new Set([
   // Claude Code
   "Read", "Bash", "BashOutput", "Grep", "Glob", "LS", "WebFetch", "WebSearch", "NotebookRead",
-  // Codex and other OpenAI-API agents
-  "shell", "exec_command", "local_shell", "read_file", "list_dir", "grep_search", "file_search", "web_search",
+  // Codex and other OpenAI-API agents. Codex's code mode runs every tool from
+  // one `exec` cell and polls long commands with `wait` (as Bash/BashOutput).
+  "shell", "exec_command", "local_shell", "read_file", "list_dir", "grep_search", "file_search", "web_search", "exec", "wait",
   // Cursor's agent
-  "Shell", "ReadFile", "rg", "run_terminal_cmd", "codebase_search",
+  "Shell", "ReadFile", "rg", "run_terminal_cmd", "codebase_search", "SemanticSearch", "ReadLints", "AwaitShell",
 ]);
 
 /** Tokens billed for one image inside a tool result (a full-size screenshot is ~1.6k on Claude). */

@@ -126,6 +126,18 @@ test("GPT: OpenAI Responses function_call_output items (Codex with an API key) a
   assert.ok(body.input.filter((x: any) => x.type === "function_call_output").slice(0, 9).every((x: any) => x.output.startsWith("[context-doctor")));
 });
 
+test("GPT: Codex code mode's custom_tool_call `exec` cells are cleared like shell output", () => {
+  const big = "src/app.ts:12: const x = 1\n".repeat(2000);
+  const input: any[] = [{ role: "user", content: "audit the repo" }];
+  for (let i = 0; i < 8; i++) {
+    input.push({ type: "custom_tool_call", call_id: `x${i}`, name: "exec", input: "const r = await tools.exec_command({cmd:\"rg TODO\"});text(r.output)" });
+    input.push({ type: "custom_tool_call_output", call_id: `x${i}`, output: big });
+  }
+  const r = new AutoClearer().apply({ model: "gpt-5.5", input }, 0);
+  assert.equal(r.newlyCleared, 5, "all but the 3 most recent");
+  assert.equal(input.filter((x) => x.type === "custom_tool_call_output").at(-1).output, big);
+});
+
 test("GPT: cache lifetime is taken as the longest OpenAI may keep it (1h, or 24h when asked)", () => {
   assert.equal(requestTtlMs(openaiChat(1)), 3_600_000);
   assert.equal(requestTtlMs(openaiResponses(1)), 3_600_000);
