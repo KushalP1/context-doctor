@@ -9,6 +9,8 @@
  * fully offline.
  */
 export type Provider = "anthropic" | "openai" | "google" | "generic";
+/** The largest window any model above has: no live context can exceed it. */
+export declare const LARGEST_WINDOW: number;
 export declare function contextWindowFor(model?: string): number | undefined;
 export declare function providerFor(model?: string): Provider;
 /**

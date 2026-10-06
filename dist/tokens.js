@@ -22,6 +22,8 @@ const MODEL_WINDOWS = [
     [/llama.*3/i, 128_000],
     [/mistral|mixtral/i, 32_000],
 ];
+/** The largest window any model above has: no live context can exceed it. */
+export const LARGEST_WINDOW = Math.max(...MODEL_WINDOWS.map(([, w]) => w));
 export function contextWindowFor(model) {
     if (!model)
         return undefined;

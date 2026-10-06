@@ -152,3 +152,25 @@ test("Cursor: its transcripts parse, the native postToolUse hook answers in Curs
     assert.ok(out.additional_context.length < 10_000);
     assert.equal(await run({ ...base, hook_event_name: "postToolUse", tool_name: "Shell" }), "", "rate-limited on the next tool call");
 });
+test("an estimate past the model's window is not reported as the live context", async () => {
+    // A history imported into Codex carries no API token counts, so the hook
+    // estimates from the transcript, which can hold far more than any window.
+    // It used to print "~8.5M tokens (2136% of the window)" with a price.
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join, dirname } = await import("node:path");
+    const { execFile } = await import("node:child_process");
+    const { fileURLToPath } = await import("node:url");
+    const dir = mkdtempSync(join(tmpdir(), "ctxdoc-overwindow-"));
+    const transcript = join(dir, "s.jsonl");
+    const turn = "a long imported answer that the client has long since trimmed away ".repeat(400);
+    writeFileSync(transcript, Array.from({ length: 160 }, (_, i) => JSON.stringify({ type: i % 2 ? "assistant" : "user", message: { role: i % 2 ? "assistant" : "user", content: turn } })).join("\n"));
+    const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
+    const out = await new Promise((resolve, reject) => {
+        const child = execFile(process.execPath, [cli, "hook"], { env: { ...process.env, CONTEXT_DOCTOR_HOOK_STATE: join(dir, "state.json") } }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
+        child.stdin?.end(JSON.stringify({ session_id: "imported", transcript_path: transcript, hook_event_name: "UserPromptSubmit", model: "gpt-4o" }));
+    });
+    const ctx = JSON.parse(out).hookSpecificOutput.additionalContext;
+    assert.match(ctx, /transcript holds ~[\d.]+[kM] tokens, more than the model's ~128k window/);
+    assert.doesNotMatch(ctx, /% of the window|\$/);
+});

@@ -20,7 +20,7 @@ import { recordLedger, statePath } from "./ledger.js";
 import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
 import { parseSessionFile } from "./session.js";
-import { formatTokens, CHARS_PER_TOKEN } from "./tokens.js";
+import { formatTokens, CHARS_PER_TOKEN, LARGEST_WINDOW } from "./tokens.js";
 import { ensureProxyUp } from "./autopilot.js";
 import { detectColdResume, renderColdResume, renderColdResumeNotice } from "./coldresume.js";
 import { formatUsd, pricingFor } from "./pricing.js";
@@ -228,7 +228,10 @@ export async function runHook(): Promise<void> {
     recordLedger({ ev: "check", sid: sessionId.slice(0, 12), tok: liveTokens, warn: shouldWarn });
     if (!shouldWarn) { emit(notes); return; }
 
-    const windowPct = !cursor && profile.contextWindow ? (liveTokens / profile.contextWindow) * 100 : undefined;
+    // An estimate past the window (no API figure, e.g. a history imported into
+    // Codex) is not the live context: the app must already be trimming it.
+    const overWindow = !cursor && parsed.reportedInputTokens === undefined && liveTokens > (profile.contextWindow ?? LARGEST_WINDOW);
+    const windowPct = !cursor && !overWindow && profile.contextWindow ? (liveTokens / profile.contextWindow) * 100 : undefined;
     // Agent sessions run on the prompt cache: a message normally re-reads the
     // context at the cached rate (0.1x) and pays the full rate only when the
     // cache has expired. Quoting the uncached figure alone overstated the
@@ -241,6 +244,9 @@ export async function runHook(): Promise<void> {
     // has accumulated, not the live context: no window share or price for it.
     const lines: string[] = cursor ? [
       `This chat has accumulated ~${formatTokens(liveTokens)} tokens of messages and tool calls (tool output not counted; Cursor summarizes older turns itself, so the live context may differ).`,
+      "Practice context hygiene from here on: summarize large tool results instead of keeping them verbatim, reference earlier content rather than re-reading or re-quoting it, and keep responses lean.",
+    ] : overWindow ? [
+      `This session's transcript holds ~${formatTokens(liveTokens)} tokens, more than ${profile.contextWindow ? `the model's ~${formatTokens(profile.contextWindow)}` : "any current model's"} window, so the app is already summarizing or dropping older turns; what the model sees is a part of it.`,
       "Practice context hygiene from here on: summarize large tool results instead of keeping them verbatim, reference earlier content rather than re-reading or re-quoting it, and keep responses lean.",
     ] : [
       `This session's context is at ~${formatTokens(liveTokens)} tokens` +

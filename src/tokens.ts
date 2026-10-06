@@ -26,6 +26,9 @@ const MODEL_WINDOWS: Array<[pattern: RegExp, window: number]> = [
   [/mistral|mixtral/i, 32_000],
 ];
 
+/** The largest window any model above has: no live context can exceed it. */
+export const LARGEST_WINDOW = Math.max(...MODEL_WINDOWS.map(([, w]) => w));
+
 export function contextWindowFor(model?: string): number | undefined {
   if (!model) return undefined;
   for (const [pattern, window] of MODEL_WINDOWS) {
