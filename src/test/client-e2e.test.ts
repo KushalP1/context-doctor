@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { freePort } from "./freeport.js";
 
 const mcpPath = join(dirname(fileURLToPath(import.meta.url)), "..", "mcp.js");
 
@@ -57,7 +58,7 @@ test("stdio: the transport Claude Desktop, Claude Code and Cursor use", async ()
 });
 
 test("streamable HTTP: the transport remote connectors use", async () => {
-  const port = 8300 + Math.floor(Math.random() * 500);
+  const port = await freePort();
   const child = spawn(process.execPath, [mcpPath, "--http", "--port", String(port)], { stdio: "ignore" });
   try {
     const deadline = Date.now() + 15000;

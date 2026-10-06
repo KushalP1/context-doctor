@@ -9,9 +9,10 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { freePort } from "./freeport.js";
 
 const mcpPath = join(dirname(fileURLToPath(import.meta.url)), "..", "mcp.js");
-const PORT = 8898;
+const PORT = await freePort();
 
 const child = spawn(process.execPath, [mcpPath, "--http", "--port", String(PORT)], { stdio: ["ignore", "ignore", "pipe"] });
 await new Promise<void>((resolve, reject) => {
@@ -87,7 +88,7 @@ test("clients that do not ask for SSE get JSON instead of a 406", async () => {
   const { fileURLToPath } = await import("node:url");
 
   const mcp = join(dirname(fileURLToPath(import.meta.url)), "..", "mcp.js");
-  const port = 8000 + Math.floor(Math.random() * 900);
+  const port = await freePort();
   const child = spawn(process.execPath, [mcp, "--http", "--port", String(port)], { stdio: "ignore" });
   try {
     // Wait for the listener rather than sleeping a fixed amount.
