@@ -105,7 +105,7 @@ On a Claude subscription you do not pay list price; the same tokens come out of 
 |---|---|---|
 | **Claude Code** in the terminal, VS Code or JetBrains | **Autopilot** clears stale tool output (cold cache only, never more expensive). **Hook** on every prompt: real context size, largest waste, and a `/compact` offer when you return to a large session after the cache expired. **`compact-window`**, if you set one |
 | **Claude Code** in the desktop app's Code tab | **Hook**, as above, including the cold-resume `/compact` offer, shown to you as well as the model. **`compact-window`**, if you set one: Claude Code compacts earlier by itself. Not autopilot: the app sets its own API address and ignores the one in settings | Install via npm or as a **plugin** (`/plugin marketplace add KushalP1/context-doctor`). Status bar context meter, `/context-doctor:savings`, `session`, `watch`, `report`, dashboard |
-| **Cursor** (agent) | Cursor runs Claude Code's hooks, so the same every-prompt check fires inside Cursor | MCP tools, editor status bar extension, `cursor` profiler. With your own OpenAI key, autopilot too via a tokened tunnel ([how](#putting-the-proxy-on-a-public-url-cursor-with-your-own-openai-key-remote-apps)) |
+| **Cursor** (agent) | A native **after-tool-call hook** (`~/.cursor/hooks.json`): in a heavy chat the agent gets the same hygiene guidance and the largest waste, once per 40% of growth. (Cursor's prompt hook can only allow or block a prompt, so this is the event where guidance reaches the model) | MCP tools, editor status bar extension, `cursor` profiler. With your own OpenAI key, autopilot too via a tokened tunnel ([how](#putting-the-proxy-on-a-public-url-cursor-with-your-own-openai-key-remote-apps)) |
 | **Codex** (ChatGPT app's Codex tab, IDE extension, CLI) | Every-prompt hook with the API's own token counts | MCP tools, skill, `session` reads Codex rollouts. On an API key, autopilot too (`OPENAI_BASE_URL`) |
 | **Your own apps on the Anthropic or OpenAI API** | Autopilot on `/v1/messages`, `/v1/chat/completions` and `/v1/responses` (`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`), or the full optimizing proxy | Exact usage and cache hit rates in `/stats`, prompt-cache placement advice |
 | **Claude Desktop chat** | Standing context rules in every chat; one cheap `profile_context` call the model makes past ~30 turns or on any cost question | One-click `.mcpb` install, `context_checkup` prompt |
@@ -116,6 +116,7 @@ Not claimed, because no process on your machine sends those requests: trimming i
 
 ## What's new
 
+- **0.26 Checked on every platform, three fixes**: tested end to end in Claude Code (terminal, desktop app, plugin from GitHub), Claude Desktop, Cursor, Codex on GPT-5.5, VS Code, the MCP server on every launch path, and the proxy on OpenAI's APIs. Found and fixed: Cursor's agent never received the hook's guidance (Cursor runs Claude Code's hook where output cannot add context), so `install` now adds a native Cursor hook; Codex blocked the MCP tools behind an approval it never grants in `codex exec`, so the tools are now marked read-only; autopilot skipped Codex's newest tools (`exec`, `wait`) and some of Cursor's. Also: a history imported into Codex no longer reads as "2136% of the window", and the chat-app settings paths are current.
 - **0.25 Compact earlier, by itself**: the `/compact` offer at cold resumes was followed 1 time in 33 on the author's machine, so two changes. The hook now also shows you the notice (it went only to the model, which rarely raised it), with the dollar cost of the message you just sent. And `context-doctor compact-window` measures and sets Claude Code's own auto-compact window, which works without anyone acting on advice, in every surface including the desktop app: 55% less input cost at 400k on the author's last 30 days. `savings` shows it as a third lever.
 - **0.20 Autopilot**: stale tool output cleared from every Claude Code request, only when the prompt cache is cold, so it cannot cost more (measured: 9.8% less input cost, ~$1,080 a month on the author's usage, no session worse); runs as a login service on macOS, Linux and Windows; now also for GPT via OpenAI's Chat Completions and Responses APIs.
 - **0.24 A full audit, fixed**: the session parser now rebuilds API messages from Claude Code's one-row-per-block transcripts (it had split each reply into several messages, breaking tool pairing in exported conversations and inflating profiles); the proxy forwards every non-conversation endpoint and never re-encodes bodies it does not rewrite (model listing and file uploads failed or were corrupted through it); `report` and the dashboard no longer count compaction as tokens context-doctor saved, and MCP sketches no longer inflate them; `watch` follows plain conversation files; MCP inputs are bounded. 0.23: four dependency vulnerabilities patched, no false `/compact` alarm after compacting, `savings --share`.
@@ -143,9 +144,10 @@ One run of `context-doctor install` writes these (each config edit makes a `.bac
 2. **Claude Code config** (`~/.claude.json`) — registers the MCP server
 3. **Cursor config** (`~/.cursor/mcp.json`) — registers the MCP server
 4. **Agent Skill** → `~/.claude/skills/context-doctor/` — context-hygiene playbook for Claude Code
-5. **Every-prompt hook** → `~/.claude/settings.json` — the per-query context check for Claude Code (Cursor runs it too)
-6. **Codex**, when present: MCP server in `~/.codex/config.toml`, the hook in `~/.codex/hooks.json`, the skill in `~/.codex/skills/`
-7. With `--statusline`: live context size, cache share and cost in Claude Code's status bar
+5. **Every-prompt hook** → `~/.claude/settings.json` — the per-query context check for Claude Code
+6. **Cursor hook**, when Cursor is present → `~/.cursor/hooks.json` (`postToolUse`) — the same check for Cursor's agent, after each tool call
+7. **Codex**, when present: MCP server in `~/.codex/config.toml`, the hook in `~/.codex/hooks.json`, the skill in `~/.codex/skills/`
+8. With `--statusline`: live context size, cache share and cost in Claude Code's status bar
 
 `context-doctor autopilot on` is separate and opt-in: it adds the background proxy service and one line (`env.ANTHROPIC_BASE_URL`) to `~/.claude/settings.json`, after the proxy has answered a health check.
 
@@ -329,10 +331,10 @@ Your API key still rides in the request headers, as before. The token protects t
 | Surface | Runs by itself | What that means |
 |---|---|---|
 | **Claude Code** | Yes: hook on every prompt, status line on every refresh | Past ~80k tokens the model receives hygiene guidance naming the largest waste; compaction is offered. Measured: 115 automatic checks, 48 warnings, across 32 sessions on one machine |
-| **Cursor** | **Yes**, since 0.15: Cursor loads Claude Code's hook config (`~/.claude/settings.json`) and runs the same hook on every agent prompt, passing its own transcript. Output is accepted through Cursor's Claude-compat layer | Same guidance as Claude Code, inside Cursor's agent, for everyone who ran `install`. Before 0.15 the hook fired but could not read Cursor's transcript format, so it said nothing |
+| **Cursor** | **Yes**, since 0.26: `install` adds a native `postToolUse` hook to `~/.cursor/hooks.json`; Cursor passes it the agent transcript, and its `additional_context` reaches the model | In a heavy chat, the agent gets hygiene guidance and the largest recoverable waste, once per 40% of growth. Cursor's transcript records tool calls but not their output, and keeps turns Cursor has since summarized, so the note gives the chat's accumulated size, with no window share or price. Corrected in 0.26: Cursor also runs Claude Code's hook, but as `beforeSubmitPrompt`, whose output can only allow or block the prompt, so from 0.15 to 0.25 the guidance never reached Cursor's model |
 | **API traffic through the proxy** | Yes: every request rewritten in flight | Fewer tokens, guaranteed, model not consulted |
 | **Claude Desktop** | The standing instruction in every chat (we confirmed in the app bundle that Desktop's `LocalMcpServerManager` reads it), a one-click `context_checkup` prompt, and since 0.17 a `profile_context` the model can actually afford to call from chat | Until 0.17 the tool wanted the whole conversation as its argument, so calling it from chat meant re-typing 50k tokens; nobody did, and Desktop's log showed zero calls in a month. Now the model passes a ~120-token **sketch** (turn count, the large or repeated blocks) and gets a sized estimate, findings and the fix to apply. Still a nudge, not a hook: Desktop chat has no hook API and no transcript on disk |
-| **Codex (OpenAI): ChatGPT.app's Codex tab, the Codex IDE extension, the `codex` CLI** | **Yes**, since 0.16: `install` writes the hook to `~/.codex/hooks.json`, the MCP server to `~/.codex/config.toml`, and the skill to `~/.codex/skills/`. Codex uses Claude Code's hook contract almost verbatim and passes its own rollout transcript, which carries the API's real usage figures | Same guidance as Claude Code, from measured tokens. One extra step, Codex's rule not ours: a new hook runs only after you trust it once (type `/hooks` in Codex). `session` and `session --list` read Codex rollouts too |
+| **Codex (OpenAI): ChatGPT.app's Codex tab, the Codex IDE extension, the `codex` CLI** | **Yes**, since 0.16: `install` writes the hook to `~/.codex/hooks.json`, the MCP server to `~/.codex/config.toml`, and the skill to `~/.codex/skills/`. Codex uses Claude Code's hook contract almost verbatim and passes its own rollout transcript, which carries the API's real usage figures | Same guidance as Claude Code, from measured tokens. One extra step, Codex's rule not ours: a new hook runs only after you trust it once (type `/hooks` in Codex). The MCP tools are marked read-only, so Codex runs them without an approval prompt, `codex exec` included. `session` and `session --list` read Codex rollouts too |
 | **ChatGPT chat UI** | No | No MCP, no hooks, no data path in the chat product itself. Use Codex, or a developer-mode connector at a URL you host |
 
 So "every chat inherently better" is true for Claude Code, Cursor, Codex and the proxy; for Claude Desktop it is "the rules ride in every chat and the checkup is one cheap tool call away"; and not a claim we make for the ChatGPT chat UI.
@@ -345,7 +347,7 @@ So "every chat inherently better" is true for Claude Code, Cursor, Codex and the
 |---|---|
 | Claude Desktop | `npx context-doctor install` writes the config — just restart the app. Or one click: download `context-doctor-<version>.mcpb` from the [latest release](https://github.com/KushalP1/context-doctor/releases) and open it (Settings > Extensions). The bundle runs on Desktop's own Node, no npm needed |
 | Claude Code | Same command — MCP + skill + every-prompt hook, all automatic |
-| Cursor | Same command — writes `~/.cursor/mcp.json`; the every-prompt hook is picked up from Claude Code's config, which Cursor reads |
+| Cursor | Same command — writes `~/.cursor/mcp.json` and the after-tool-call hook in `~/.cursor/hooks.json`. `context-doctor doctor` checks both |
 | Codex (OpenAI) | Same command — `~/.codex/config.toml`, `~/.codex/hooks.json`, `~/.codex/skills/`. Then, once, `/hooks` in Codex to trust the hook |
 | ChatGPT (developer mode) | **Manual + a reachable URL** — ChatGPT connects to servers over the internet, never local commands. Run `context-doctor-mcp --http` on a host/tunnel, then add the URL as a connector. Normal ChatGPT (no dev mode) has no MCP — use the CLI |
 
@@ -379,7 +381,7 @@ ChatGPT's MCP support differs fundamentally from Claude Desktop's: **it never sp
 
 1. **Normal ChatGPT (no developer mode): no MCP at all.** context-doctor still helps via the CLI: export the conversation and run `npx context-doctor analyze chat.json --model gpt-5` / `optimize` — no account settings required.
 2. **ChatGPT developer mode**: run our HTTP transport somewhere reachable — `context-doctor-mcp --http --port 8808` on a small host (bind `--host 0.0.0.0` there), or expose your machine temporarily with a tunnel (`ngrok http 8808`). Then Settings → Connectors → Advanced → Developer mode → add connector with URL `https://<your-host>/mcp`.
-3. Once connected, GPT gets the same three tools with the same trigger guidance: ask *"what's eating my context?"* → it calls `profile_context`; *"optimize it"* works the same, including GPT writing the pruning summary itself.
+3. Once connected, GPT gets the same three tools, each marked read-only (they only read their input and return text), with the same trigger guidance: ask *"what's eating my context?"* → it calls `profile_context`; *"optimize it"* works the same, including GPT writing the pruning summary itself.
 
 Security note for step 2: the HTTP endpoint is unauthenticated — put it behind your tunnel's auth or a reverse proxy if it stays up long-term.
 
@@ -454,7 +456,7 @@ ctx 801k/1.0M ▮▮▮▮▮▮▮▮░░ 80% ⚠ · cache 100% · $12.34
 
 Live context against the model's window, a warning mark from 70%, the share served from cache, and the session's cost. It reads the size from the status payload when Claude Code provides it, and otherwise from the last 256KB of the transcript (about 1ms on a 20MB file; 80ms end to end including Node startup). It is opt-in and polite: there is only one status line, so it never overwrites one you already have, and `uninstall` removes only its own. Any failure prints nothing rather than an error.
 
-This is the "editor status bar" roadmap item, delivered for the editor most users of this tool are actually in. A VS Code / Cursor extension for the same number remains future work.
+The same number in VS Code and Cursor's status bar: see [the editor extension](#the-same-number-inside-vs-code-and-cursor).
 
 ## Does a smaller context actually help? Measure it
 
@@ -662,6 +664,18 @@ Also keep the MCP server version in `src/mcp.ts` in sync with `package.json`, an
 ## Contributing
 
 Issues and PRs welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for the six rules that keep this tool trustworthy (no API keys, nothing leaves the machine, no silent data loss, measurements not guesses, the hot path stays cheap, tests with every change) and a list of good first issues. What is planned next lives in [ROADMAP.md](./ROADMAP.md).
+
+Two end-to-end checks beyond `npm test`, both run against a throwaway `HOME`:
+
+```bash
+HOME=$(mktemp -d) node scripts/smoke-mcp.mjs node dist/mcp.js
+```
+
+```bash
+HOME=$(mktemp -d) node scripts/smoke-openai-proxy.mjs
+```
+
+The first connects to the MCP server the way a client does (it takes any launch command, `npx -y context-doctor mcp` included, or `--http <url>`), lists the tools and prompt, calls every tool and checks that bad input is rejected. The second runs the proxy against a local mock of OpenAI: streaming, the Responses API, usage capture and autopilot.
 
 ## License
 

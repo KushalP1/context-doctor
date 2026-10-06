@@ -68,6 +68,17 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
+## Shipped in 0.26.0 — checked on every platform
+
+Each surface driven for real, not only through unit tests: the MCP server on every launch path (local build, plugin bundle, `mcp` subcommand, the published npm package, HTTP, the `.mcpb`), Claude Desktop's own MCP log, Claude Code 2.1.62 and 2.1.288 with the plugin installed from GitHub, Codex 0.153 running a real `codex exec` on GPT-5.5, Cursor 3.18, VS Code 1.133 activating the extension, and the proxy against a mock of OpenAI's Chat Completions and Responses APIs.
+
+- **Cursor's agent never received the guidance.** Cursor runs Claude Code's `UserPromptSubmit` hook as `beforeSubmitPrompt`, whose output can only allow or block a prompt (Cursor's hook docs); the 0.15 claim that its output was accepted was wrong. `install` now adds a native `postToolUse` hook to `~/.cursor/hooks.json`, whose `additional_context` reaches the model; the hook answers in Cursor's format, ignores Cursor's other events (so the once-per-growth warning is not spent on output Cursor drops), and `doctor` checks it. Cursor's transcript records tool calls but not their output (1,163 calls, no results, in the author's largest chat), so the note gives the accumulated size without a window share or price.
+- **Codex would not run the MCP tools non-interactively.** `codex exec` found the server and the model called `context_best_practices`, but Codex refused: "MCP tool call requires approval, but approval policy is never". Every tool is now annotated `readOnlyHint`, non-destructive, idempotent and closed-world; the same run completed.
+- **Autopilot skipped the tools agents use most now.** Codex's code mode runs everything from one `exec` cell (its most-used tool on the author's machine, 284 calls) and polls with `wait`; Cursor uses `SemanticSearch`, `ReadLints` and `AwaitShell`. All added to the re-runnable list.
+- **"~8.5M tokens (2136% of the window)".** A history imported into Codex carries no API token counts, so the hook estimated from the transcript and quoted a share and price. An estimate past the window (or 1M with no known model) now says the app is already trimming.
+- **Chat-app settings paths**: claude.ai keeps preferences under Settings > General, and ChatGPT's field is "What traits should ChatGPT have?".
+- `proxy --autopilot` printed the optimizing mode's banner. `scripts/smoke-mcp.mjs` and `scripts/smoke-openai-proxy.mjs` make the end-to-end checks repeatable.
+
 ## Shipped in 0.25.0 — compact earlier, without anyone following advice
 
 Measured first: since 0.22 the hook had offered `/compact` 33 times on the author's machine when a large session came back after the cache expired. It was followed once. The offer went only to the model, which mostly did not raise it, and advice that is not taken saves nothing.
