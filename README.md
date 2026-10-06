@@ -1,5 +1,6 @@
 # context-doctor 🩺
 
+[![AgentHub 已收录：context-doctor](https://myagenthub.cn/badge/io.github.KushalP1/context-doctor)](https://myagenthub.cn/p/io.github.KushalP1/context-doctor)
 [![CI](https://github.com/KushalP1/context-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/KushalP1/context-doctor/actions) [![npm](https://img.shields.io/npm/v/context-doctor)](https://www.npmjs.com/package/context-doctor) [![npm downloads](https://img.shields.io/npm/dm/context-doctor)](https://www.npmjs.com/package/context-doctor) [![license: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE) ![macOS | Linux | Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
 **Keep every AI session's context lean, and see exactly what it costs you, without ever making it more expensive.**
