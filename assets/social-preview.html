@@ -1,0 +1,59 @@
+<!doctype html>
+<!-- Source of assets/social-preview.png (GitHub's social preview, 1280x640).
+     Re-render: Chrome headless --screenshot --window-size=1280,640 on this file. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1280px; height: 640px; overflow: hidden; }
+  body {
+    background: radial-gradient(circle at 18% 20%, #16302a 0%, #0b1220 55%) #0b1220;
+    color: #e6edf3;
+    font-family: -apple-system, "SF Pro Display", "Segoe UI", Helvetica, Arial, sans-serif;
+    display: flex; align-items: center; gap: 56px; padding: 0 72px;
+  }
+  .left { flex: 1 1 0; }
+  .name { font: 600 30px ui-monospace, "SF Mono", Menlo, monospace; color: #7ee2b8; letter-spacing: -0.5px; }
+  h1 { font-size: 62px; line-height: 1.04; font-weight: 800; letter-spacing: -1.8px; margin-top: 22px; }
+  h1 span { color: #fbbf24; }
+  .cmd {
+    display: inline-block; margin-top: 34px; padding: 14px 22px; border-radius: 10px;
+    background: #111a2b; border: 1px solid #2a3850;
+    font: 600 26px ui-monospace, "SF Mono", Menlo, monospace; color: #e6edf3;
+  }
+  .cmd b { color: #7ee2b8; font-weight: 600; }
+  .where { margin-top: 26px; font-size: 21px; color: #93a4b8; }
+  .card {
+    flex: 0 0 470px; background: #0f172a; border: 1px solid #263349; border-radius: 14px;
+    padding: 22px 26px 26px; box-shadow: 0 30px 60px rgba(0,0,0,.45);
+    font: 19px ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .dots { display: flex; gap: 8px; margin-bottom: 18px; }
+  .dots i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+  .muted { color: #8696ab; font-size: 16px; }
+  .row { display: flex; justify-content: space-between; margin-top: 16px; }
+  .row .k { color: #e6edf3; }
+  .row .v { color: #fbbf24; font-weight: 700; }
+  .row .v small { color: #c9d4e2; font-weight: 400; }
+  .rule { border-top: 1px solid #263349; margin: 16px 0 2px; }
+</style>
+</head>
+<body>
+  <div class="left">
+    <div class="name">🩺 context-doctor</div>
+    <h1>Cut your Claude Code bill, <span>measured on your own sessions.</span></h1>
+    <div class="cmd"><b>$</b> npx context-doctor savings</div>
+    <div class="where">Claude Code · Cursor · Codex · Claude Desktop · API apps</div>
+  </div>
+  <div class="card">
+    <div class="dots"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+    <div class="muted">the author's last 30 days, 29 sessions</div>
+    <div class="row"><span class="k">Input billed</span><span class="v">$6,156</span></div>
+    <div class="rule"></div>
+    <div class="row"><span class="k">/compact on return</span><span class="v">$2,737 <small>(44%)</small></span></div>
+    <div class="row"><span class="k">Compact at 400k</span><span class="v">$3,383 <small>(55%)</small></span></div>
+    <div class="row"><span class="k">Autopilot (terminal)</span><span class="v"><small>never costs more</small></span></div>
+  </div>
+</body>
+</html>
