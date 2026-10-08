@@ -42,7 +42,8 @@ import { listCursorChats, parseCursorChat } from "./cursor.js";
 import { analyzeCacheUsage, renderCacheReport } from "./cache.js";
 import { renderToolTimings } from "./timing.js";
 import { packContext, readSources, renderPack } from "./pack.js";
-import { measureMcpSizes, overheadReport, renderOverhead } from "./overhead.js";
+import { measureBaseline, measureMcpSizes, overheadReport, renderOverhead } from "./overhead.js";
+import { applySplit, planSplit, renderSplit } from "./split.js";
 const HELP = `context-doctor — profile and optimize LLM context windows
 
 Usage:
@@ -97,6 +98,9 @@ Usage:
   context-doctor overhead [--days n] [--mcp]    What every request re-reads before your message:
                                                 measured first-request size, each CLAUDE.md /
                                                 AGENTS.md / rules file priced per month, findings
+  context-doctor overhead split <file> [--write]
+                                                Move a memory file's big sections to a reference
+                                                file, leaving pointers (plan first; --write backs up)
   context-doctor pack <files|dirs...> --query "<q>" [--max-tokens n]
                                                 Only the parts of big docs/code a question needs:
                                                 chunk along headings and declarations, rank, fit a
@@ -269,6 +273,12 @@ function parseArgs(argv) {
                 break;
             case "--mcp":
                 args.mcp = true;
+                break;
+            case "--write":
+                args.write = true;
+                break;
+            case "--min-tokens":
+                args.minTokens = numArg("--min-tokens", argv[++i], { min: 50, integer: true });
                 break;
             case "--ids":
                 args.ids = (argv[++i] ?? "").split(",").map((x) => x.trim()).filter(Boolean);
@@ -671,6 +681,27 @@ async function main() {
             trimBoundaryStep: loadedRc.config.trimBoundaryStep,
         });
         return; // server keeps the process alive
+    }
+    if (args.command === "overhead" && args.positionals?.[0] === "split") {
+        const file = args.positionals[1];
+        if (!file) {
+            console.error("usage: context-doctor overhead split <memory file> [--min-tokens 400] [--write]");
+            process.exit(1);
+        }
+        let plan;
+        try {
+            plan = planSplit(file, { minTokens: args.minTokens });
+        }
+        catch (e) {
+            console.error(`Could not read ${file}: ${e.message}`);
+            process.exit(1);
+        }
+        console.log(renderSplit(plan, measureBaseline(args.days ?? 30)?.usdPerKPerMonth));
+        if (args.write && plan.sections.some((s) => s.moved)) {
+            const { backup } = applySplit(plan);
+            console.log(`\nWritten. Backup: ${backup}\nUndo: mv "${backup}" "${file}" (and delete or trim ${plan.referencePath}).`);
+        }
+        return;
     }
     if (args.command === "overhead") {
         const report = overheadReport({ days: args.days });

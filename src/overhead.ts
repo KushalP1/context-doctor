@@ -252,7 +252,7 @@ export function overheadFindings(files: MemoryFile[], baseline?: Baseline): Over
       out.push({
         severity: f.tokens >= 5000 ? "warn" : "info",
         message: `${f.path} is ~${formatTokens(f.tokens)} tokens, read on every ${f.agent} request${f.agent === "Claude Code" ? cost(f.tokens) : ""}.`,
-        suggestion: "Keep rules the agent needs on most requests; move reference material into files it reads when relevant (link them by path, not @import).",
+        suggestion: `Keep rules the agent needs on most requests; move reference material to a file it reads when relevant. \`context-doctor overhead split ${f.path}\` shows the split first.`,
       });
     }
   }
