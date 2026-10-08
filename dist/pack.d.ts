@@ -57,6 +57,8 @@ export interface PackResult {
     chunks: Chunk[];
     /** Ids asked for that do not exist. */
     missingIds: string[];
+    /** What semantic ranking did, or why it was off (packContextSemantic only). */
+    semanticNote?: string;
     sources: Array<{
         name: string;
         tokens: number;
@@ -75,6 +77,14 @@ export declare function terms(text: string): string[];
 export declare function scoreChunks(chunks: Chunk[], query: string): void;
 /** Chunk, rank and select. Pure: give it text, get the plan back. */
 export declare function packContext(sources: PackSource[], opts?: PackOptions): PackResult;
+/**
+ * packContext with optional semantic re-ranking through a local Ollama
+ * (`semantic: true`, or a model name). Falls back to keyword ranking, with
+ * the reason in `semanticNote`, when no embedding model is available.
+ */
+export declare function packContextSemantic(sources: PackSource[], opts?: PackOptions & {
+    semantic?: boolean | string;
+}): Promise<PackResult>;
 /** Plain-text rendering for a model or a terminal. */
 export declare function renderPack(r: PackResult, { outlineLimit }?: {
     outlineLimit?: number;

@@ -22,7 +22,7 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 
 ## Verified 2026-10-08
 
-- `npm test`: 229 of 229 pass on macOS, Linux and Windows CI (Node 20/22/24); smoke: MCP, OpenAI proxy, Gemini proxy (Node 20/22 in CI, throwaway HOME).
+- `npm test`: 232 of 232 pass on macOS, Linux and Windows CI (Node 20/22/24); smoke: MCP, OpenAI proxy, Gemini proxy (Node 20/22 in CI, throwaway HOME).
 - MCP smoke over stdio and over streamable HTTP: handshake 119 ms, instructions delivered (690 chars, cap 700), all four tools and the checkup prompt, malformed input rejected.
 - OpenAI proxy smoke against a local mock: model listing passthrough, auth header untouched, incremental streaming, Responses API, usage capture, autopilot clearing.
 - `doctor` on the author's machine: Claude Desktop, Claude Code, Cursor and Codex wired; hooks registered in Claude Code, Codex and Cursor; status line, skill, ledger, autopilot up.
@@ -40,14 +40,14 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 | **Gemini CLI** | Gemini CLI 0.63 has hooks in Claude Code's shape (`BeforeAgent` is its prompt hook, `hookSpecificOutput.additionalContext` reaches the model) and records the API's promptTokenCount on every reply. `install` wires the MCP server and the hook in `~/.gemini/settings.json` (detected by settings.json, `~/.gemini/tmp` or `gemini` on PATH, not by `~/.gemini` alone, which Antigravity also creates); `session`, `watch` and the hook read its chats, rewrites by id and `$rewindTo` included; `doctor` checks it | ✅ Formats read from the 0.63.0 package; tests cover parsing, the hook's BeforeAgent answer, install and uninstall |
 | **Gemini API in the proxy and autopilot** | The proxy routes Google's API (by `x-goog-api-key`, `/v1beta` paths or `models/<m>:generateContent`) to `generativelanguage.googleapis.com`, reads exact usage from `usageMetadata`, and autopilot clears stale `functionResponse` parts on `generateContent` / `streamGenerateContent` when the cache is cold (Gemini CLI's tools added to the clearable list; ids derived per conversation when Gemini gives none; implicit caching's lifetime is unpublished, so an hour is assumed, the longer guess). Reaches Gemini CLI on an API key via `GOOGLE_GEMINI_BASE_URL`; Google sign-in traffic goes to another endpoint | ✅ `scripts/smoke-gemini-proxy.mjs` against a local mock: 8 checks (routing, key header, streaming, 5 of 8 stale results cleared, calls kept paired, usage). All three smoke scripts now run in CI |
 | **GitHub Action + `context-doctor ci`** | Memory files are a standing cost nobody reviews. `ci --base <ref>` compares CLAUDE.md, AGENTS.md, GEMINI.md, `.claude/rules`, always-applied Cursor rules and their `@imports` at HEAD against the base commit (via `git show`), prints a table and exits 1 over `--max-tokens` / `--max-increase`. `uses: KushalP1/context-doctor@<tag>` runs it on pull requests: job summary, one PR comment it keeps updating (found by a hidden marker), optional dollar figure from `requests-per-day` | ✅ Unit tests on a scratch repo; the action's step simulated locally; `memory-check.yml` runs the action on this repo's own PRs from the local build. Marketplace listing needs the owner to publish a release with the action |
+| **`pack --semantic`**: rank by meaning too, with a local Ollama | Keyword ranking misses paraphrase. With Ollama and an embedding model installed, the question and chunks are embedded and the two rankings merged by reciprocal rank fusion; chunk vectors are cached on disk by model and text hash. Opt-in, never required: without an embedding model pack stays lexical and names the command to run. Also `semantic: true` on `pack_context` | ✅ Tests against a fake Ollama: a query sharing no word with the answer is found, the second run embeds only the query, missing model and missing Ollama are notes. Real-model eval pending an embedding model on the author's machine |
 | Standing MCP instruction 5 | Chat apps and agents learn to call pack_context instead of reading a big file whole; the instructions stay under their 700-char cap | ✅ |
 
 ## Next: code can finish these, in order of expected saving
 
 | # | Item | Why | How we will know it works |
 |---|---|---|---|
-| 1 | **pack with optional local embeddings** | Lexical ranking misses paraphrase (the one miss in the eval above). Use Ollama's embeddings when it is running, never required | Same 10-question eval plus a paraphrase set: hits up, no regressions |
-| 2 | **Python package** with profile and pack | RAG pipelines (LangChain, LlamaIndex) chunk and stuff context in Python; the same budgeted packing belongs there | Parity tests against the TypeScript fixtures |
+| 1 | **Python package** with profile and pack | RAG pipelines (LangChain, LlamaIndex) chunk and stuff context in Python; the same budgeted packing belongs there | Parity tests against the TypeScript fixtures |
 
 ## Closed by measurement (2026-10-08): a large-paste notice in the hook
 

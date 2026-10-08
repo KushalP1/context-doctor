@@ -23,7 +23,7 @@ import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
 import { recordLedger } from "./ledger.js";
 import { runSketch } from "./sketch.js";
-import { packContext, readSources, renderPack } from "./pack.js";
+import { packContextSemantic, readSources, renderPack } from "./pack.js";
 /**
  * Server instructions are injected by MCP clients (Claude Desktop, Cursor, …)
  * into the system context of EVERY conversation where this server is enabled.
@@ -86,7 +86,7 @@ function createServer({ fileAccess = true } = {}) {
         const profile = profileConversation(parseConversation(conversation), model);
         return { content: [{ type: "text", text: renderProfile(profile) }] };
     });
-    server.tool("optimize_context", "Rewrite a conversation to reclaim tokens using deterministic strategies: dedupe repeated content, trim stale tool results, strip base64 blobs, optionally prune old history. Returns the slimmed conversation JSON plus a savings summary. No LLM calls — safe and inspectable. Call this after profile_context finds recoverable waste and the user wants it fixed; add the prune-history strategy only with the user's consent, then write the replacement summary yourself as the result instructs.", {
+    server.tool("optimize_context", "Rewrite a conversation to reclaim tokens with deterministic strategies (dedupe, trim stale tool results, strip base64; prune-history is optional and lossy). Returns the slimmed JSON and a savings summary; no LLM calls. Use after profile_context finds recoverable waste the user wants fixed. Add prune-history only with the user's consent, then write the replacement summary as the result instructs.", {
         conversation: z.string().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array)"),
         strategies: z.array(z.enum(STRATEGY_IDS)).optional()
             .describe("Strategies to apply. Default: dedupe, trim-tool-results, strip-base64. Add trim-tool-calls to shrink big inline file writes, or prune-history for lossy compaction of old turns."),
@@ -136,16 +136,17 @@ function createServer({ fileAccess = true } = {}) {
         }
         return { content };
     });
-    server.tool("pack_context", "Read only the parts of large files a question needs: chunks files or folders along headings, declarations and paragraphs, ranks them against `query` (offline BM25) and returns the best that fit `max_tokens`, each with an id and line range. No query: an outline to pick from with `ids`. Use instead of reading a big doc, log or folder whole when you are not editing it. Reads text, code, PDF, Word, PowerPoint and ODT.", {
+    server.tool("pack_context", "Read only the parts of large files a question needs: chunks files or folders along their structure, ranks the chunks against `query` and returns the best that fit `max_tokens`, each with an id and line range. No query: an outline; pick with `ids`. Use instead of reading a big doc, log or folder whole when not editing it. Text, code, PDF, Word, PowerPoint, ODT.", {
         paths: z.array(z.string()).max(50).optional().describe("Files or folders (absolute, or relative to the server's cwd)"),
         text: z.string().optional().describe("Raw text to pack instead of files"),
         query: z.string().optional().describe("The question; omit for an outline"),
         max_tokens: z.number().int().positive().max(200_000).optional().describe("Budget, default 4000"),
         ids: z.array(z.string()).max(200).optional().describe("Chunk ids from an outline or result, e.g. docs/guide.md#4"),
         model: z.string().optional().describe("Model the budget is counted for (default Claude)"),
+        semantic: z.boolean().optional().describe("Also rank by meaning (local Ollama embeddings)"),
     }, 
     // Reads files, never writes. Clients (Codex, ChatGPT) may skip approval for read-only tools.
-    { title: "Pack context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, async ({ paths, text, query, max_tokens, ids, model }) => {
+    { title: "Pack context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, async ({ paths, text, query, max_tokens, ids, model, semantic }) => {
         const err = (t) => ({ content: [{ type: "text", text: t }], isError: true });
         if (paths?.length && !fileAccess) {
             return err("This server runs over HTTP and does not read files. Pass the document as `text`.");
@@ -156,7 +157,7 @@ function createServer({ fileAccess = true } = {}) {
         if (sources.length === 0) {
             return err(skipped.length ? `Nothing readable: ${skipped.join("; ")}` : "Pass `paths` (files or folders) or `text`.");
         }
-        const result = packContext(sources, { query, budget: max_tokens, ids, model });
+        const result = await packContextSemantic(sources, { query, budget: max_tokens, ids, model, semantic });
         const note = skipped.length ? `\nSkipped: ${skipped.slice(0, 10).join("; ")}${skipped.length > 10 ? ` (+${skipped.length - 10} more)` : ""}` : "";
         return { content: [{ type: "text", text: renderPack(result) + note }] };
     });

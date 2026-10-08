@@ -66,6 +66,8 @@ export interface PackResult {
   chunks: Chunk[];
   /** Ids asked for that do not exist. */
   missingIds: string[];
+  /** What semantic ranking did, or why it was off (packContextSemantic only). */
+  semanticNote?: string;
   sources: Array<{ name: string; tokens: number; chunks: number; selected: number }>;
 }
 
@@ -267,12 +269,34 @@ export function scoreChunks(chunks: Chunk[], query: string): void {
 
 /** Chunk, rank and select. Pure: give it text, get the plan back. */
 export function packContext(sources: PackSource[], opts: PackOptions = {}): PackResult {
-  const budget = Math.max(1, opts.budget ?? DEFAULT_BUDGET);
   const perSource = sources.map((s) => chunkSource(s, opts));
-  const chunks = perSource.flat();
   const query = opts.query?.trim() || undefined;
-  if (query) scoreChunks(chunks, query);
+  if (query) scoreChunks(perSource.flat(), query);
+  return select(sources, perSource, query, opts);
+}
 
+/**
+ * packContext with optional semantic re-ranking through a local Ollama
+ * (`semantic: true`, or a model name). Falls back to keyword ranking, with
+ * the reason in `semanticNote`, when no embedding model is available.
+ */
+export async function packContextSemantic(sources: PackSource[], opts: PackOptions & { semantic?: boolean | string } = {}): Promise<PackResult> {
+  const perSource = sources.map((s) => chunkSource(s, opts));
+  const query = opts.query?.trim() || undefined;
+  let semanticNote: string | undefined;
+  if (query) {
+    scoreChunks(perSource.flat(), query);
+    if (opts.semantic) {
+      const { semanticRerank } = await import("./embed.js");
+      semanticNote = (await semanticRerank(perSource.flat(), query, { model: typeof opts.semantic === "string" ? opts.semantic : undefined })).note;
+    }
+  }
+  return { ...select(sources, perSource, query, opts), semanticNote };
+}
+
+function select(sources: PackSource[], perSource: Chunk[][], query: string | undefined, opts: PackOptions): PackResult {
+  const budget = Math.max(1, opts.budget ?? DEFAULT_BUDGET);
+  const chunks = perSource.flat();
   const pick: Chunk[] = [];
   const missingIds: string[] = [];
   let used = 0;
@@ -340,6 +364,7 @@ export function renderPack(r: PackResult, { outlineLimit = 60 }: { outlineLimit?
       `, budget ${formatTokens(r.budget)}.`
   );
   if (r.missingIds.length) out.push(`Unknown ids: ${r.missingIds.join(", ")}.`);
+  if (r.semanticNote) out.push(`(${r.semanticNote})`);
   if (r.selected.length === 0) {
     out.push("No chunk matched. Choose from the outline by id, or rephrase with words the document would use.");
     out.push(...outline(r.chunks, outlineLimit));

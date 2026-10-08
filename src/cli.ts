@@ -42,7 +42,7 @@ import { startDashboard } from "./dashboard.js";
 import { listCursorChats, parseCursorChat } from "./cursor.js";
 import { analyzeCacheUsage, renderCacheReport } from "./cache.js";
 import { renderToolTimings } from "./timing.js";
-import { packContext, readSources, renderPack } from "./pack.js";
+import { packContextSemantic, readSources, renderPack } from "./pack.js";
 import { measureBaseline, measureMcpSizes, overheadReport, renderOverhead } from "./overhead.js";
 import { applySplit, planSplit, renderSplit } from "./split.js";
 import { ciReport, renderCiMarkdown, renderCiText } from "./ci.js";
@@ -111,7 +111,10 @@ Usage:
                                                 Only the parts of big docs/code a question needs:
                                                 chunk along headings and declarations, rank, fit a
                                                 token budget (default 4000). No --query: an outline
-                                                to pick from (--ids a#2,b#5). Offline, no API key
+                                                to pick from (--ids a#2,b#5). Offline, no API key.
+                                                --semantic: also rank by meaning with a local
+                                                Ollama embedding model, when one is installed
+                                                (--embed-model <name> picks it)
   context-doctor watch [file]                   Live-monitor a growing session/agent trace: running
                                                 token/cost line per change, new findings as they appear
                                                 (--interval-ms n, default 2000)
@@ -210,6 +213,7 @@ interface Args {
   ids?: string[];
   mcp?: boolean;
   write?: boolean;
+  semantic?: boolean | string;
   base?: string;
   markdown?: boolean;
   maxIncrease?: number;
@@ -259,6 +263,8 @@ function parseArgs(argv: string[]): Args {
       case "--chunk-tokens": args.chunkTokens = numArg("--chunk-tokens", argv[++i], { min: 50, integer: true }); break;
       case "--mcp": args.mcp = true; break;
       case "--write": args.write = true; break;
+      case "--semantic": args.semantic = args.semantic || true; break;
+      case "--embed-model": args.semantic = argv[++i]; break;
       case "--base": args.base = argv[++i]; break;
       case "--markdown": args.markdown = true; break;
       case "--max-increase": args.maxIncrease = numArg("--max-increase", argv[++i], { min: 0, integer: true }); break;
@@ -722,7 +728,7 @@ async function main(): Promise<void> {
       : readSources(paths);
     for (const s of skipped) console.error(`context-doctor: skipped ${s}`);
     if (sources.length === 0) process.exit(1);
-    const result = packContext(sources, { query: args.query, budget: args.maxTokens, ids: args.ids, maxChunkTokens: args.chunkTokens, model: args.model });
+    const result = await packContextSemantic(sources, { query: args.query, budget: args.maxTokens, ids: args.ids, maxChunkTokens: args.chunkTokens, model: args.model, semantic: args.semantic });
     console.log(args.json ? JSON.stringify({ ...result, chunks: undefined, outline: result.chunks.map(({ text, ...c }) => c) }, null, 2) : renderPack(result));
     return;
   }
