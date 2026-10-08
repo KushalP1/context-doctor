@@ -6,6 +6,8 @@
  * Every config edit is a careful JSON merge with a .backup file written first.
  * `context-doctor uninstall` reverses it.
  */
+export declare function geminiSettingsPath(): string;
+export declare function geminiCliPresent(): boolean;
 /**
  * How to invoke the published package as an MCP server on a given platform.
  *

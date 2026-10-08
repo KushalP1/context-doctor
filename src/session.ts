@@ -13,6 +13,7 @@ import { readdirSync, readFileSync, statSync, existsSync, openSync, readSync, cl
 import { StringDecoder } from "node:string_decoder";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { isGeminiChat, listGeminiChats, parseGeminiChat } from "./gemini.js";
 
 export interface SessionInfo {
   path: string;
@@ -144,6 +145,7 @@ export function listSessions(limit = 20): SessionInfo[] {
     };
     walk(codexRoot, 0);
   }
+  sessions.push(...listGeminiChats());
   return sessions.sort((a, b) => b.modifiedAt.getTime() - a.modifiedAt.getTime()).slice(0, limit);
 }
 
@@ -342,6 +344,7 @@ function asBlocks(content: unknown): unknown[] {
 }
 
 export function parseSessionFile(path: string): ParsedSession {
+  if (isGeminiChat(path)) return parseGeminiChat(path);
   // ChatGPT exports are one big JSON array, not JSONL — and small enough to
   // read whole. Only peek first, so multi-hundred-MB JSONL is never slurped.
   if (startsWithArray(path)) {

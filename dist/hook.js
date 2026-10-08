@@ -199,8 +199,10 @@ export async function runHook() {
             // systemMessage is shown to the user in the app; additionalContext goes to the model.
             if (notice)
                 out.systemMessage = notice;
+            // Gemini CLI's prompt hook is BeforeAgent; it reads the same output shape.
+            const event = input.hook_event_name === "BeforeAgent" ? "BeforeAgent" : "UserPromptSubmit";
             if (lines.length > 0)
-                out.hookSpecificOutput = { hookEventName: "UserPromptSubmit", additionalContext: block };
+                out.hookSpecificOutput = { hookEventName: event, additionalContext: block };
             console.log(JSON.stringify(out));
         };
         if (prev.b > 0 && sizeBytes < prev.b * REGROWTH_FACTOR) {

@@ -15,14 +15,14 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 | Claude Desktop chat | standing MCP instructions (now incl. pack_context) | profile_context sketch, pack_context on local files, checkup prompt | no hook API, no transcript on disk |
 | Cursor agent | native postToolUse hook | MCP tools, cursor profiler, editor extension | Cursor's own models never pass through a local process |
 | Codex (app, IDE, CLI) | every-prompt hook | MCP tools (read-only, no approval needed), session | autopilot only with an API key |
-| Gemini CLI | — | overhead sizes GEMINI.md; MCP tools work as in any MCP client | no hook or proxy route yet (see Next) |
+| Gemini CLI | every-prompt hook (`BeforeAgent`, with the API's own token counts) | MCP tools, session, watch, overhead (GEMINI.md) | proxy route and autopilot (see Next) |
 | claude.ai, ChatGPT, phone apps | standing preferences (`instructions --copy`) | analyze an exported chat | nothing runs there |
 | Your own API apps (Anthropic, OpenAI) | autopilot or the optimizing proxy | library: profile, optimize, pack | Google's API not proxied yet |
 | CI | `analyze --fail-over-budget` | — | no packaged GitHub Action yet |
 
 ## Verified 2026-10-08
 
-- `npm test`: 219 of 219 pass (Node 20/22 in CI, throwaway HOME).
+- `npm test`: 224 of 224 pass (Node 20/22 in CI, throwaway HOME).
 - MCP smoke over stdio and over streamable HTTP: handshake 119 ms, instructions delivered (690 chars, cap 700), all four tools and the checkup prompt, malformed input rejected.
 - OpenAI proxy smoke against a local mock: model listing passthrough, auth header untouched, incremental streaming, Responses API, usage capture, autopilot clearing.
 - `doctor` on the author's machine: Claude Desktop, Claude Code, Cursor and Codex wired; hooks registered in Claude Code, Codex and Cursor; status line, skill, ledger, autopilot up.
@@ -37,13 +37,14 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 | **MCP schema tax in `overhead`** | Each MCP server's tool definitions ride on every request; transcripts never show them. Calls per server come from the transcripts (including servers the app or connectors provide, which no config lists); `--mcp` launches each configured server once and sizes its definitions; unused servers are flagged with their monthly cost. Claude Code's tool search defers definitions, and the report says when it does | ✅ Author's machine: tool search in 49 of 75 sessions, so definitions are mostly deferred; 15 app-provided servers seen. context-doctor's own definitions trimmed to stay under a tested 2,400-token cap |
 | **`overhead split <file>`** | Turns a finding into a fix: a memory file's large or code-heavy sections move word for word to `<name>.reference.md`, leaving one pointer per run of moved sections (a plain path, read on demand, not an @import). Link-list sections are indexes and stay; an auto-memory `MEMORY.md` keeps only its index. A plan first; `--write` backs up the original | ✅ On a copy of the author's auto-memory index: ~3.4k → ~1.7k tokens a request (~$28/month), every line kept |
 | **`withContextDoctor(client)`**: autopilot inside the app | API apps that cannot route through a local proxy (serverless, edge, managed hosts) wrap their Anthropic or OpenAI SDK client instead. Same AutoClearer as the proxy; the request is cloned first so the app's own history is never rewritten; a conversation the process has not seen counts as warm, so a fresh instance never clears blind | ✅ Unit tests plus a run with the real `@anthropic-ai/sdk` and `openai` packages against a local mock: create and stream, chat and responses; a cold return went out at 135k of the app's 354k chars |
+| **Gemini CLI** | Gemini CLI 0.63 has hooks in Claude Code's shape (`BeforeAgent` is its prompt hook, `hookSpecificOutput.additionalContext` reaches the model) and records the API's promptTokenCount on every reply. `install` wires the MCP server and the hook in `~/.gemini/settings.json` (detected by settings.json, `~/.gemini/tmp` or `gemini` on PATH, not by `~/.gemini` alone, which Antigravity also creates); `session`, `watch` and the hook read its chats, rewrites by id and `$rewindTo` included; `doctor` checks it | ✅ Formats read from the 0.63.0 package; tests cover parsing, the hook's BeforeAgent answer, install and uninstall |
 | Standing MCP instruction 5 | Chat apps and agents learn to call pack_context instead of reading a big file whole; the instructions stay under their 700-char cap | ✅ |
 
 ## Next: code can finish these, in order of expected saving
 
 | # | Item | Why | How we will know it works |
 |---|---|---|---|
-| 1 | **Gemini**: proxy route for `generateContent` and Gemini CLI wiring | Gemini CLI reads GEMINI.md and supports MCP; the proxy and pricing already know Gemini models. Check what hook surface Gemini CLI exposes before promising an every-prompt check | `doctor` shows Gemini CLI wired; smoke script against a local mock of the Gemini API |
+| 1 | **Gemini API in the proxy and autopilot** | Gemini CLI honours `GOOGLE_GEMINI_BASE_URL`, so the proxy can carry it; autopilot needs Gemini's request shape (`contents[].parts[].functionResponse`) and its implicit-cache pricing | Smoke script against a local mock of `generateContent` / `streamGenerateContent`; a replay of Gemini chats shows no session made more expensive |
 | 2 | **GitHub Action** on the Marketplace | Comment the context-size and overhead change on every PR that touches prompts, CLAUDE.md or agent configs; fail over a budget | Used on this repo's own PRs |
 | 3 | **pack with optional local embeddings** | Lexical ranking misses paraphrase (the one miss in the eval above). Use Ollama's embeddings when it is running, never required | Same 10-question eval plus a paraphrase set: hits up, no regressions |
 | 4 | **Python package** with profile and pack | RAG pipelines (LangChain, LlamaIndex) chunk and stuff context in Python; the same budgeted packing belongs there | Parity tests against the TypeScript fixtures |

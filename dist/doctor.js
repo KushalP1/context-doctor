@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ledgerPath, recordLedger } from "./ledger.js";
 import { loadConfig } from "./config.js";
+import { geminiCliPresent, geminiSettingsPath } from "./install.js";
 function claudeDesktopConfigPath() {
     switch (platform()) {
         case "darwin": return join(homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
@@ -164,6 +165,32 @@ export async function runDoctor() {
     }
     else {
         checks.push({ label: "Codex", status: "skip", detail: "not detected (ChatGPT's Codex agent, IDE extension or CLI)" });
+    }
+    // Gemini CLI: MCP server and the BeforeAgent hook, both in ~/.gemini/settings.json.
+    if (geminiCliPresent()) {
+        try {
+            const path = geminiSettingsPath();
+            const settings = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
+            checks.push(settings.mcpServers?.["context-doctor"]
+                ? { label: "Gemini CLI MCP", status: "ok", detail: "wired in ~/.gemini/settings.json" }
+                : { label: "Gemini CLI MCP", status: "fail", detail: "Gemini CLI detected but not wired — run: context-doctor install" });
+            const entries = settings.hooks?.BeforeAgent ?? [];
+            const ours = entries.map((e) => e.hooks?.[0]?.command ?? "").find((c) => /context-doctor|cli\.js"?\s+hook/.test(c));
+            const missing = ours ? hookBinaryMissing(ours) : undefined;
+            checks.push(!ours
+                ? { label: "Gemini CLI hook", status: "fail", detail: "not registered — run: context-doctor install" }
+                : missing
+                    ? { label: "Gemini CLI hook", status: "fail", detail: `registered, but ${missing} no longer exists — re-run: context-doctor install` }
+                    : settings.hooksConfig?.enabled === false
+                        ? { label: "Gemini CLI hook", status: "fail", detail: "registered, but hooksConfig.enabled is false in ~/.gemini/settings.json" }
+                        : { label: "Gemini CLI hook", status: "ok", detail: "BeforeAgent hook in ~/.gemini/settings.json" });
+        }
+        catch (e) {
+            checks.push({ label: "Gemini CLI", status: "fail", detail: `~/.gemini/settings.json unreadable (${e.message})` });
+        }
+    }
+    else {
+        checks.push({ label: "Gemini CLI", status: "skip", detail: "not detected" });
     }
     // Cursor: its agent gets the guidance through a native postToolUse hook
     // (the Claude Code hook it also runs cannot add context there).

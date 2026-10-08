@@ -25,7 +25,18 @@ function targets() {
         { name: "Claude Desktop", configPath: desktop, detect: () => existsSync(dirname(desktop)) },
         { name: "Claude Code", configPath: claudeCode, detect: () => existsSync(claudeCode) || existsSync(join(homedir(), ".claude")) },
         { name: "Cursor", configPath: cursor, detect: () => existsSync(join(homedir(), ".cursor")) },
+        { name: "Gemini CLI", configPath: geminiSettingsPath(), detect: geminiCliPresent },
     ];
+}
+// -- Gemini CLI: MCP servers and hooks both live in ~/.gemini/settings.json,
+// hooks in Claude Code's shape under the event BeforeAgent (its prompt hook).
+// ~/.gemini alone is not enough to call it present: Google's Antigravity IDE
+// creates it too, without the CLI.
+export function geminiSettingsPath() {
+    return join(homedir(), ".gemini", "settings.json");
+}
+export function geminiCliPresent() {
+    return existsSync(geminiSettingsPath()) || existsSync(join(homedir(), ".gemini", "tmp")) || binOnPath("gemini") !== null;
 }
 /**
  * The server command to write into configs.
@@ -204,12 +215,12 @@ function installHook() {
  * ({hooks:{UserPromptSubmit:[{hooks:[{type:"command",command}]}]}}), so one
  * writer serves both; only the path differs.
  */
-function installHookInto(settingsPath, gateDir) {
+function installHookInto(settingsPath, gateDir, event = "UserPromptSubmit") {
     if (!existsSync(gateDir))
         return null; // that app is not on this machine
     const settings = readJson(settingsPath);
     settings.hooks = settings.hooks ?? {};
-    const entries = settings.hooks.UserPromptSubmit ?? [];
+    const entries = settings.hooks[event] ?? [];
     const want = hookCommand();
     // Re-running install must REPAIR a stale entry, not skip it. Earlier versions
     // wrote a version-pinned node binary; if we only checked "is it present?" an
@@ -223,20 +234,21 @@ function installHookInto(settingsPath, gateDir) {
         // Replace every entry of ours with exactly one correct entry.
         const others = entries.filter((e) => !isOurHookEntry(e));
         others.push({ hooks: [{ type: "command", command: want }] });
-        settings.hooks.UserPromptSubmit = others;
+        settings.hooks[event] = others;
         writeJsonWithBackup(settingsPath, settings);
         return settingsPath;
     }
     else {
         return settingsPath; // already correct — leave the file untouched
     }
-    settings.hooks.UserPromptSubmit = entries;
+    settings.hooks[event] = entries;
     writeJsonWithBackup(settingsPath, settings);
     return settingsPath;
 }
 function uninstallHook() {
     uninstallHookFrom(join(homedir(), ".claude", "settings.json"), "Claude Code every-prompt hook");
     uninstallHookFrom(join(homedir(), ".codex", "hooks.json"), "Codex every-prompt hook");
+    uninstallHookFrom(geminiSettingsPath(), "Gemini CLI every-prompt hook", "BeforeAgent");
     uninstallCursorHook();
 }
 /**
@@ -285,18 +297,18 @@ function uninstallCursorHook() {
     writeJsonWithBackup(path, config);
     console.log("✓ Cursor after-tool-call hook removed");
 }
-function uninstallHookFrom(settingsPath, label) {
+function uninstallHookFrom(settingsPath, label, event = "UserPromptSubmit") {
     if (!existsSync(settingsPath))
         return;
     const settings = readJson(settingsPath);
-    const entries = settings.hooks?.UserPromptSubmit;
+    const entries = settings.hooks?.[event];
     if (!entries)
         return;
     const filtered = entries.filter((e) => !isOurHookEntry(e));
     if (filtered.length !== entries.length) {
-        settings.hooks.UserPromptSubmit = filtered;
+        settings.hooks[event] = filtered;
         if (filtered.length === 0)
-            delete settings.hooks.UserPromptSubmit;
+            delete settings.hooks[event];
         writeJsonWithBackup(settingsPath, settings);
         console.log(`✓ ${label} removed`);
     }
@@ -441,7 +453,7 @@ export function runInstall(options = {}) {
     const entry = serverEntry();
     const found = targets().filter((t) => t.detect());
     if (found.length === 0 && !existsSync(codexDir())) {
-        console.log("No supported AI apps detected (Claude Desktop, Claude Code, Cursor).");
+        console.log("No supported AI apps detected (Claude Desktop, Claude Code, Cursor, Codex, Gemini CLI).");
         console.log("Manual setup — add to your app's MCP config:");
         console.log(JSON.stringify({ mcpServers: { "context-doctor": entry } }, null, 2));
         return { failures: [] };
@@ -497,6 +509,17 @@ export function runInstall(options = {}) {
         failures.push("Cursor hook");
     }
     installCodex(entry, failures);
+    if (geminiCliPresent()) {
+        try {
+            const hook = installHookInto(geminiSettingsPath(), join(homedir(), ".gemini"), "BeforeAgent");
+            if (hook)
+                console.log(`✓ Gemini CLI every-prompt hook installed (${hook})`);
+        }
+        catch (e) {
+            console.error(`✗ Gemini CLI hook: ${e.message}`);
+            failures.push("Gemini CLI hook");
+        }
+    }
     if (options.statusLine) {
         try {
             switch (installStatusLine()) {
