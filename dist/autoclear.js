@@ -48,6 +48,8 @@ export const CLEARABLE_TOOLS = new Set([
     // Codex and other OpenAI-API agents. Codex's code mode runs every tool from
     // one `exec` cell and polls long commands with `wait` (as Bash/BashOutput).
     "shell", "exec_command", "local_shell", "read_file", "list_dir", "grep_search", "file_search", "web_search", "exec", "wait",
+    // Gemini CLI
+    "read_many_files", "run_shell_command", "glob", "search_file_content", "list_directory", "web_fetch", "google_web_search",
     // Cursor's agent
     "Shell", "ReadFile", "rg", "run_terminal_cmd", "codebase_search", "SemanticSearch", "ReadLints", "AwaitShell",
 ]);
@@ -84,6 +86,9 @@ function resultTokens(content, model) {
  *    the request sets prompt_cache_retention "24h".
  */
 export function requestTtlMs(body) {
+    // Gemini: implicit caching's lifetime is not published, explicit caches default to an hour.
+    if (Array.isArray(body.contents))
+        return HOUR;
     const openai = Array.isArray(body.input) || (Array.isArray(body.messages) && isOpenAIChat(body.messages));
     if (openai)
         return body.prompt_cache_retention === "24h" ? 24 * HOUR : HOUR;
@@ -97,6 +102,37 @@ export function viewOf(body) {
     const toolName = new Map();
     const results = [];
     let firstToolId = "";
+    // Gemini generateContent: contents[].parts[] with functionCall / functionResponse.
+    // Ids are optional there, so a missing one is derived from its position
+    // (stable: history only grows) and scoped to the conversation, because the
+    // cleared set is keyed by id and positions repeat across conversations.
+    if (Array.isArray(body.contents)) {
+        const units = body.contents;
+        const firstUser = units.find((u) => u?.role === "user")?.parts;
+        const scope = createHash("sha1").update(JSON.stringify(firstUser ?? "").slice(0, 4000)).digest("hex").slice(0, 10);
+        units.forEach((u, i) => {
+            if (!Array.isArray(u?.parts))
+                return;
+            const parts = u.parts;
+            parts.forEach((p, j) => {
+                const call = p?.functionCall;
+                const resp = p?.functionResponse;
+                if (call && typeof call === "object") {
+                    const id = typeof call.id === "string" && call.id ? call.id : `gemini:${scope}:${i}:${j}`;
+                    toolName.set(id, String(call.name ?? ""));
+                    firstToolId ||= id;
+                }
+                else if (resp && typeof resp === "object") {
+                    const id = typeof resp.id === "string" && resp.id ? resp.id : `gemini:${scope}:${i}:${j}`;
+                    // The response names its tool, so it classifies on its own.
+                    if (!toolName.has(id))
+                        toolName.set(id, String(resp.name ?? ""));
+                    results.push({ unit: i, id, content: resp.response, set: (note) => { parts[j] = { ...p, functionResponse: { ...resp, response: { output: note } } }; } });
+                }
+            });
+        });
+        return { format: "gemini", units, toolName, results, firstUser, firstToolId, ttlMs: requestTtlMs(body) };
+    }
     if (Array.isArray(body.input)) {
         const units = body.input;
         units.forEach((it, i) => {
@@ -180,13 +216,14 @@ export class AutoClearer {
      * Rewrite `body` in place: an Anthropic Messages, OpenAI Chat Completions or
      * OpenAI Responses request. Never throws; anything unrecognised is left alone.
      */
-    apply(body, now = Date.now()) {
+    apply(body, now = Date.now(), modelHint) {
         const none = (reason, cold = false) => ({ changed: false, newlyCleared: 0, tokensRemoved: 0, cold, reason, firstChanged: -1 });
         try {
             const view = viewOf(body);
             if (!view)
                 return none("no messages");
-            const model = typeof body.model === "string" ? body.model : undefined;
+            // Gemini puts the model in the URL, not the body; the proxy passes it.
+            const model = typeof body.model === "string" ? body.model : modelHint;
             const key = conversationKey(view);
             const conv = this.convs.get(key);
             const cold = conv ? now - conv.last > view.ttlMs : !this.opts.unseenIsWarm;

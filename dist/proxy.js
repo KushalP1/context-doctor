@@ -48,16 +48,31 @@ export function stripToken(url, token) {
  * tokens. Until 0.24 those got a 404 and broke the feature for that client.
  * Unknown paths go to Anthropic when the request says it is one (Anthropic
  * clients always send anthropic-version, or x-api-key), else to OpenAI.
+ * Google's Gemini API (GOOGLE_GEMINI_BASE_URL) is recognised by its key
+ * header, its /v1beta paths, or a `model:method` path such as
+ * /v1/models/gemini-3-pro:generateContent.
  */
 export function upstreamFor(url, opts, headers = {}) {
     const anthropic = opts.anthropicUpstream ?? "https://api.anthropic.com";
     const openai = opts.openaiUpstream ?? "https://api.openai.com";
+    if (isGeminiRequest(url, headers))
+        return opts.googleUpstream ?? "https://generativelanguage.googleapis.com";
     if (url.startsWith("/v1/messages"))
         return anthropic;
     if (url.startsWith("/v1/chat/completions") || url.startsWith("/v1/responses") || url.startsWith("/v1/embeddings"))
         return openai;
     return headers["anthropic-version"] !== undefined || headers["x-api-key"] !== undefined ? anthropic : openai;
 }
+export function isGeminiRequest(url, headers = {}) {
+    return (headers["x-goog-api-key"] !== undefined ||
+        /^\/(upload\/)?v1(beta|alpha)\d*\//.test(url) ||
+        /^\/v1\/[^?]*:(generateContent|streamGenerateContent|countTokens|embedContent|batchEmbedContents)/.test(url));
+}
+/** The model a Gemini request names in its path (…/models/<model>:generateContent). */
+export function geminiModelFromUrl(url) {
+    return /\/models\/([^/:?]+):/.exec(url)?.[1];
+}
+const GEMINI_CONVERSATION = /\/models\/[^/:?]+:(generateContent|streamGenerateContent)(\?|$)/;
 /** Pull exact usage out of a response body — JSON or SSE, either provider. */
 function extractUsage(text) {
     const last = (re) => {
@@ -67,8 +82,8 @@ function extractUsage(text) {
             v = Number(m[1]);
         return v;
     };
-    const input = Math.max(last(/"input_tokens"\s*:\s*(\d+)/g), last(/"prompt_tokens"\s*:\s*(\d+)/g));
-    const output = Math.max(last(/"output_tokens"\s*:\s*(\d+)/g), last(/"completion_tokens"\s*:\s*(\d+)/g));
+    const input = Math.max(last(/"input_tokens"\s*:\s*(\d+)/g), last(/"prompt_tokens"\s*:\s*(\d+)/g), last(/"promptTokenCount"\s*:\s*(\d+)/g));
+    const output = Math.max(last(/"output_tokens"\s*:\s*(\d+)/g), last(/"completion_tokens"\s*:\s*(\d+)/g), last(/"candidatesTokenCount"\s*:\s*(\d+)/g));
     if (input < 0 && output < 0)
         return null;
     return { input: Math.max(input, 0), output: Math.max(output, 0) };
@@ -159,7 +174,8 @@ export function startProxy(opts = {}) {
             const isMeasurement = url.startsWith("/v1/messages/count_tokens");
             let note = "passthrough";
             if (opts.autopilot) {
-                if (req.method === "POST" && body && !isMeasurement && /^\/v1\/(messages|chat\/completions|responses)(\?|$)/.test(url)) {
+                const gemini = GEMINI_CONVERSATION.test(url);
+                if (req.method === "POST" && body && !isMeasurement && (gemini || /^\/v1\/(messages|chat\/completions|responses)(\?|$)/.test(url))) {
                     const ap = stats.autopilot;
                     ap.paused = Boolean(opts.autopilotPauseFile && existsSync(opts.autopilotPauseFile));
                     if (ap.paused) {
@@ -168,7 +184,8 @@ export function startProxy(opts = {}) {
                     else {
                         try {
                             const parsed = JSON.parse(body);
-                            const r = clearer.apply(parsed);
+                            const urlModel = gemini ? geminiModelFromUrl(url) : undefined;
+                            const r = clearer.apply(parsed, Date.now(), urlModel);
                             ap.requests++;
                             ap.lastReason = r.reason;
                             if (r.newlyCleared > 0) {
@@ -183,7 +200,7 @@ export function startProxy(opts = {}) {
                                 ap.tokensRemoved += r.tokensRemoved;
                                 stats.optimizedRequests++;
                                 stats.tokensSaved += r.tokensRemoved;
-                                const pricing = pricingFor(typeof parsed.model === "string" ? parsed.model : undefined);
+                                const pricing = pricingFor(typeof parsed.model === "string" ? parsed.model : urlModel);
                                 // What autopilot removes would mostly have been cached reads: price it so.
                                 if (pricing)
                                     stats.estUsdSaved += (r.tokensRemoved / 1e6) * pricing.cacheReadPerM;

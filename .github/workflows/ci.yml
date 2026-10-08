@@ -33,6 +33,15 @@ jobs:
         run: |
           node dist/cli.js analyze examples/sample-conversation.json --model claude-sonnet-5
           node dist/cli.js optimize examples/sample-conversation.json --out smoke-out.json
+      - name: End to end (MCP over stdio, OpenAI and Gemini through the proxy, against local mocks)
+        # The scripts spawn dist/cli.js by URL pathname, which is not a valid path on Windows.
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          export HOME=$(mktemp -d)
+          node scripts/smoke-mcp.mjs node dist/mcp.js
+          node scripts/smoke-openai-proxy.mjs
+          node scripts/smoke-gemini-proxy.mjs
       - name: Verify committed dist/ is in sync with src/
         shell: bash
         run: git diff --exit-code -- dist

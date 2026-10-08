@@ -289,6 +289,9 @@ function parseArgs(argv) {
             case "--upstream-openai":
                 args.upstreamOpenai = argv[++i];
                 break;
+            case "--upstream-google":
+                args.upstreamGoogle = argv[++i];
+                break;
             default: positional.push(a);
         }
     }
@@ -675,6 +678,7 @@ async function main() {
             autopilotPauseFile: args.autopilotPauseFile,
             anthropicUpstream: args.upstreamAnthropic,
             openaiUpstream: args.upstreamOpenai,
+            googleUpstream: args.upstreamGoogle,
             strategies: args.strategies.length > 0 ? args.strategies : loadedRc.config.strategies,
             keepRecent: args.keepRecent ?? loadedRc.config.keepRecent,
             maxToolResultTokens: args.maxToolTokens ?? loadedRc.config.maxToolResultTokens,

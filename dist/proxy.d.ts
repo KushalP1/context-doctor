@@ -45,6 +45,7 @@ export interface ProxyOptions extends OptimizeOptions {
     autopilotPauseFile?: string;
     anthropicUpstream?: string;
     openaiUpstream?: string;
+    googleUpstream?: string;
 }
 /** Reported by /health so `autopilot status` can tell an outdated service from a current one. */
 export declare const PROXY_VERSION = "0.26.0";
@@ -61,8 +62,14 @@ export declare function stripToken(url: string, token: string): string | undefin
  * tokens. Until 0.24 those got a 404 and broke the feature for that client.
  * Unknown paths go to Anthropic when the request says it is one (Anthropic
  * clients always send anthropic-version, or x-api-key), else to OpenAI.
+ * Google's Gemini API (GOOGLE_GEMINI_BASE_URL) is recognised by its key
+ * header, its /v1beta paths, or a `model:method` path such as
+ * /v1/models/gemini-3-pro:generateContent.
  */
 export declare function upstreamFor(url: string, opts: ProxyOptions, headers?: http.IncomingHttpHeaders): string;
+export declare function isGeminiRequest(url: string, headers?: http.IncomingHttpHeaders): boolean;
+/** The model a Gemini request names in its path (…/models/<model>:generateContent). */
+export declare function geminiModelFromUrl(url: string): string | undefined;
 export interface ProxyStats {
     startedAt: string;
     requests: number;

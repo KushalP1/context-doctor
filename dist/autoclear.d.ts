@@ -88,7 +88,7 @@ interface Found {
  * as Codex with an API key sends).
  */
 interface View {
-    format: "anthropic" | "openai-chat" | "openai-responses";
+    format: "anthropic" | "openai-chat" | "openai-responses" | "gemini";
     units: Array<Record<string, unknown>>;
     toolName: Map<string, string>;
     results: Array<Omit<Found, "tokens">>;
@@ -119,7 +119,7 @@ export declare class AutoClearer {
      * Rewrite `body` in place: an Anthropic Messages, OpenAI Chat Completions or
      * OpenAI Responses request. Never throws; anything unrecognised is left alone.
      */
-    apply(body: Record<string, unknown>, now?: number): AutoClearResult;
+    apply(body: Record<string, unknown>, now?: number, modelHint?: string): AutoClearResult;
     /**
      * Warm cache: clearing rewrites everything after the first cleared result
      * at the write rate (1.25x instead of 0.1x: 1.15x extra, once), and saves
