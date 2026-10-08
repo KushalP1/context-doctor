@@ -14,6 +14,7 @@
  *  - the memory files that load in a directory, sized with Claude's ratios and
  *    priced per month from the user's own request and cold-start counts.
  */
+import { type McpServerConfig, type McpServerSize, type McpUsage } from "./mcpschema.js";
 export type Agent = "Claude Code" | "Codex" | "Cursor" | "Gemini CLI";
 export interface MemoryFile {
     agent: Agent;
@@ -44,7 +45,13 @@ export interface OverheadReport {
     baseline?: Baseline;
     files: MemoryFile[];
     findings: OverheadFinding[];
-    mcpServers: string[];
+    mcp: McpSection;
+}
+export interface McpSection {
+    configs: McpServerConfig[];
+    usage: McpUsage;
+    /** Present when the servers were launched and asked for their tools (`--mcp`). */
+    sizes?: McpServerSize[];
 }
 /** Every memory file the four agents load for a session started in `cwd`. */
 export declare function findMemoryFiles(cwd?: string, home?: string): MemoryFile[];
@@ -56,12 +63,14 @@ export declare function findMemoryFiles(cwd?: string, home?: string): MemoryFile
 export declare function measureBaseline(days?: number, paths?: string[]): Baseline | undefined;
 /** What is worth changing in the memory files. */
 export declare function overheadFindings(files: MemoryFile[], baseline?: Baseline): OverheadFinding[];
-/** MCP servers Claude Code starts in `cwd`: user scope, project scope (~/.claude.json) and .mcp.json. */
-export declare function claudeMcpServers(cwd?: string, home?: string): string[];
 export declare function overheadReport(opts?: {
     cwd?: string;
     home?: string;
     days?: number;
     paths?: string[];
 }): OverheadReport;
+/** Launch each configured server and size its tool definitions, then add the findings they support. */
+export declare function measureMcpSizes(r: OverheadReport): Promise<void>;
+/** Configured servers nobody called: their definitions ride on every request for nothing. */
+export declare function mcpFindings(m: McpSection, baseline?: Baseline): OverheadFinding[];
 export declare function renderOverhead(r: OverheadReport, home?: string): string;

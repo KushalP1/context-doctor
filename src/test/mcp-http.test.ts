@@ -161,3 +161,18 @@ test("the standing instruction is action-shaped and small, and the checkup promp
     await client.close();
   }
 });
+
+test("the tool definitions stay small: they ride on every request in clients that load them up front", async () => {
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
+  const { estimateTokens } = await import("../tokens.js");
+  const client = new Client({ name: "size-check", version: "1" });
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: ["dist/mcp.js"] }));
+  try {
+    const { tools } = await client.listTools();
+    const total = tools.reduce((s, t) => s + estimateTokens(JSON.stringify({ name: t.name, description: t.description, input_schema: t.inputSchema }), "claude"), 0);
+    assert.ok(total <= 2400, `tool definitions are ~${total} Claude tokens; keep them under 2,400`);
+  } finally {
+    await client.close();
+  }
+});

@@ -161,14 +161,14 @@ server.tool(
 
   server.tool(
     "pack_context",
-    "Read only the parts of large files a question needs. Splits files or folders into chunks along their structure (markdown headings, code declarations, paragraphs), ranks them against `query` (BM25, offline) and returns the best chunks that fit `max_tokens`, each with an id and line range, plus the next-best ids. Without a query it returns an outline (id, lines, tokens, heading per chunk) to choose from with `ids`. Use it instead of reading a big document, log or codebase whole when you only need to answer a question from it; read whole files when you will edit them. Reads text, PDF, Word (.docx/.doc/.rtf), PowerPoint and ODT files; scanned PDFs without a text layer cannot be read.",
+    "Read only the parts of large files a question needs: chunks files or folders along headings, declarations and paragraphs, ranks them against `query` (offline BM25) and returns the best that fit `max_tokens`, each with an id and line range. No query: an outline to pick from with `ids`. Use instead of reading a big doc, log or folder whole when you are not editing it. Reads text, code, PDF, Word, PowerPoint and ODT.",
     {
-      paths: z.array(z.string()).max(50).optional().describe("Files or folders on this machine (absolute, or relative to the server's working directory). Folders are read recursively, skipping node_modules, .git and build output."),
-      text: z.string().optional().describe("Raw text to pack instead of files, e.g. a document the client holds."),
-      query: z.string().optional().describe("The question the context is for. Omit to get an outline."),
-      max_tokens: z.number().int().positive().max(200_000).optional().describe("Token budget for the returned chunks (default 4000)."),
-      ids: z.array(z.string()).max(200).optional().describe("Chunk ids from an earlier outline or result, e.g. [\"docs/guide.md#4\"]."),
-      model: z.string().optional().describe("Model whose tokenizer the budget is in (default: Claude's, the most conservative)."),
+      paths: z.array(z.string()).max(50).optional().describe("Files or folders (absolute, or relative to the server's cwd)"),
+      text: z.string().optional().describe("Raw text to pack instead of files"),
+      query: z.string().optional().describe("The question; omit for an outline"),
+      max_tokens: z.number().int().positive().max(200_000).optional().describe("Budget, default 4000"),
+      ids: z.array(z.string()).max(200).optional().describe("Chunk ids from an outline or result, e.g. docs/guide.md#4"),
+      model: z.string().optional().describe("Model the budget is counted for (default Claude)"),
     },
     // Reads files, never writes. Clients (Codex, ChatGPT) may skip approval for read-only tools.
     { title: "Pack context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },

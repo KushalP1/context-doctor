@@ -21,6 +21,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { forEachLine, listSessions } from "./session.js";
 import { estimateTokens, formatTokens } from "./tokens.js";
 import { formatUsd, pricingFor } from "./pricing.js";
+import { claudeMcpConfigs, mcpUsage, measureServer, toolPrefixName, type McpServerConfig, type McpServerSize, type McpUsage } from "./mcpschema.js";
 
 export type Agent = "Claude Code" | "Codex" | "Cursor" | "Gemini CLI";
 
@@ -56,7 +57,14 @@ export interface OverheadReport {
   baseline?: Baseline;
   files: MemoryFile[];
   findings: OverheadFinding[];
-  mcpServers: string[];
+  mcp: McpSection;
+}
+
+export interface McpSection {
+  configs: McpServerConfig[];
+  usage: McpUsage;
+  /** Present when the servers were launched and asked for their tools (`--mcp`). */
+  sizes?: McpServerSize[];
 }
 
 const TTL_MS = 3_600_000;
@@ -291,30 +299,38 @@ export function overheadFindings(files: MemoryFile[], baseline?: Baseline): Over
   return out;
 }
 
-/** MCP servers Claude Code starts in `cwd`: user scope, project scope (~/.claude.json) and .mcp.json. */
-export function claudeMcpServers(cwd = process.cwd(), home = homedir()): string[] {
-  const names = new Set<string>();
-  try {
-    const cfg = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8"));
-    for (const n of Object.keys(cfg.mcpServers ?? {})) names.add(n);
-    for (const n of Object.keys(cfg.projects?.[resolve(cwd)]?.mcpServers ?? {})) names.add(n);
-  } catch {
-    /* absent */
-  }
-  try {
-    for (const n of Object.keys(JSON.parse(readFileSync(join(cwd, ".mcp.json"), "utf8")).mcpServers ?? {})) names.add(n);
-  } catch {
-    /* absent */
-  }
-  return [...names].sort();
-}
-
 export function overheadReport(opts: { cwd?: string; home?: string; days?: number; paths?: string[] } = {}): OverheadReport {
   const cwd = opts.cwd ?? process.cwd();
   const home = opts.home ?? homedir();
   const files = findMemoryFiles(cwd, home);
   const baseline = measureBaseline(opts.days ?? 30, opts.paths);
-  return { cwd, baseline, files, findings: overheadFindings(files, baseline), mcpServers: claudeMcpServers(cwd, home) };
+  const mcp: McpSection = { configs: claudeMcpConfigs(cwd, home), usage: mcpUsage(opts.days ?? 30, opts.paths) };
+  return { cwd, baseline, files, findings: overheadFindings(files, baseline), mcp };
+}
+
+/** Launch each configured server and size its tool definitions, then add the findings they support. */
+export async function measureMcpSizes(r: OverheadReport): Promise<void> {
+  r.mcp.sizes = await Promise.all(r.mcp.configs.map((c) => measureServer(c)));
+  r.findings.push(...mcpFindings(r.mcp, r.baseline));
+}
+
+/** Configured servers nobody called: their definitions ride on every request for nothing. */
+export function mcpFindings(m: McpSection, baseline?: Baseline): OverheadFinding[] {
+  const out: OverheadFinding[] = [];
+  const deferred = m.usage.sessions > 0 && m.usage.toolSearchSessions / m.usage.sessions >= 0.5;
+  for (const c of m.configs) {
+    const size = m.sizes?.find((s) => s.name === c.name);
+    const calls = m.usage.calls.get(toolPrefixName(c.name)) ?? 0;
+    const tokens = size?.schemaTokens === undefined ? undefined : deferred ? size.nameTokens! : size.schemaTokens;
+    if (calls > 0 || tokens === undefined || tokens < 200) continue;
+    const usd = baseline?.usdPerKPerMonth ? ` (~${formatUsd((tokens / 1000) * baseline.usdPerKPerMonth)}/month)` : "";
+    out.push({
+      severity: tokens >= 2000 ? "warn" : "info",
+      message: `MCP server "${c.name}" (${c.scope}) was not called in ${m.usage.sessions} sessions, yet adds ~${formatTokens(tokens)} tokens to every request${deferred ? " even deferred" : ""}${usd}.`,
+      suggestion: `Remove it where you do not use it (claude mcp remove ${c.name}${c.scope === "user" ? " -s user" : ""}), or scope it to the projects that need it.`,
+    });
+  }
+  return out;
 }
 
 export function renderOverhead(r: OverheadReport, home = homedir()): string {
@@ -337,7 +353,7 @@ export function renderOverhead(r: OverheadReport, home = homedir()): string {
   } else {
     out.push("No Claude Code sessions in the period to measure; memory files are sized below.");
   }
-  if (r.mcpServers.length) out.push(`MCP servers configured for Claude Code here: ${r.mcpServers.join(", ")} (their tool schemas are part of the rest).`);
+  out.push(...renderMcp(r));
   out.push("", "Memory files loaded in this directory", "─".repeat(56));
   if (r.files.length === 0) out.push("  none");
   for (const f of r.files) {
@@ -348,4 +364,35 @@ export function renderOverhead(r: OverheadReport, home = homedir()): string {
   if (r.findings.length === 0) out.push("  Nothing to trim. The memory files are lean.");
   for (const f of r.findings) out.push(`${f.severity === "warn" ? "▲" : "ℹ"} ${f.message.replace(home, "~")}`, `   → ${f.suggestion}`);
   return out.join("\n");
+}
+
+function renderMcp(r: OverheadReport): string[] {
+  const { configs, usage, sizes } = r.mcp;
+  if (configs.length === 0 && usage.calls.size === 0) return [];
+  const out = ["", "MCP servers", "─".repeat(56)];
+  const deferred = usage.sessions > 0 && usage.toolSearchSessions / usage.sessions >= 0.5;
+  out.push(
+    deferred
+      ? `Tool search was used in ${usage.toolSearchSessions} of ${usage.sessions} sessions: Claude Code defers MCP definitions, so a server costs about its tool names until the model looks one up.`
+      : `Tool search was used in ${usage.toolSearchSessions} of ${usage.sessions} sessions: MCP definitions mostly load in full, on every request.`
+  );
+  const configured = new Set(configs.map((c) => toolPrefixName(c.name)));
+  for (const c of configs) {
+    const s = sizes?.find((x) => x.name === c.name);
+    const calls = usage.calls.get(toolPrefixName(c.name)) ?? 0;
+    const size = !sizes
+      ? "size: run with --mcp"
+      : s?.error
+        ? s.error
+        : `${s!.tools} tools, ~${formatTokens(s!.schemaTokens!)} tokens of definitions (names ~${formatTokens(s!.nameTokens!)})`;
+    out.push(`  ${c.name.padEnd(22)} ${c.scope.padEnd(9)} ${String(calls).padStart(6)} calls  ${size}`);
+  }
+  const app = [...usage.calls.entries()].filter(([n]) => !configured.has(n)).sort((a, b) => b[1] - a[1]);
+  if (app.length) {
+    out.push(`  Provided by the app or connectors (not in your config; toggle them in the app):`);
+    for (const [n, calls] of app.slice(0, 10)) out.push(`  ${n.padEnd(38)} ${String(calls).padStart(6)} calls`);
+    if (app.length > 10) out.push(`  … ${app.length - 10} more`);
+  }
+  if (!sizes && configs.length) out.push(`  \`context-doctor overhead --mcp\` launches the ${configs.length} configured server(s) once to size their definitions.`);
+  return out;
 }

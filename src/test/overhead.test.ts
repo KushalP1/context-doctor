@@ -66,6 +66,6 @@ test("baseline: first request minus the first message, priced from requests and 
   // Sonnet: 1 warm read at $0.30/M + 2 cold writes at 1.25 x $3/M, per 1k tokens, scaled to a month.
   const expected = ((1000 * (1 * 0.3 + 2 * 1.25 * 3)) / 1e6) * (30 / 30);
   assert.ok(Math.abs(b.usdPerKPerMonth! - expected) < 1e-9);
-  const text = renderOverhead({ cwd: proj, baseline: b, files: findMemoryFiles(proj, home), findings: [], mcpServers: [] }, home);
+  const text = renderOverhead({ cwd: proj, baseline: b, files: findMemoryFiles(proj, home), findings: [], mcp: { configs: [], usage: { calls: new Map(), sessions: 0, toolSearchSessions: 0 } } }, home);
   assert.match(text, /median ~30k tokens/);
 });

@@ -42,7 +42,7 @@ import { listCursorChats, parseCursorChat } from "./cursor.js";
 import { analyzeCacheUsage, renderCacheReport } from "./cache.js";
 import { renderToolTimings } from "./timing.js";
 import { packContext, readSources, renderPack } from "./pack.js";
-import { overheadReport, renderOverhead } from "./overhead.js";
+import { measureMcpSizes, overheadReport, renderOverhead } from "./overhead.js";
 const HELP = `context-doctor — profile and optimize LLM context windows
 
 Usage:
@@ -94,7 +94,7 @@ Usage:
                                                 were resolved, and what it saves
   context-doctor accuracy                       Measure the token heuristic against the API's own
                                                 counts recorded in your transcripts (--limit n)
-  context-doctor overhead [--days n]            What every request re-reads before your message:
+  context-doctor overhead [--days n] [--mcp]    What every request re-reads before your message:
                                                 measured first-request size, each CLAUDE.md /
                                                 AGENTS.md / rules file priced per month, findings
   context-doctor pack <files|dirs...> --query "<q>" [--max-tokens n]
@@ -266,6 +266,9 @@ function parseArgs(argv) {
                 break;
             case "--chunk-tokens":
                 args.chunkTokens = numArg("--chunk-tokens", argv[++i], { min: 50, integer: true });
+                break;
+            case "--mcp":
+                args.mcp = true;
                 break;
             case "--ids":
                 args.ids = (argv[++i] ?? "").split(",").map((x) => x.trim()).filter(Boolean);
@@ -671,7 +674,9 @@ async function main() {
     }
     if (args.command === "overhead") {
         const report = overheadReport({ days: args.days });
-        console.log(args.json ? JSON.stringify(report, null, 2) : renderOverhead(report));
+        if (args.mcp)
+            await measureMcpSizes(report);
+        console.log(args.json ? JSON.stringify(report, (_k, v) => (v instanceof Map ? Object.fromEntries(v) : v), 2) : renderOverhead(report));
         return;
     }
     if (args.command === "pack") {
