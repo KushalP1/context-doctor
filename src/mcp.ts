@@ -161,7 +161,7 @@ server.tool(
 
   server.tool(
     "pack_context",
-    "Read only the parts of large files a question needs. Splits files or folders into chunks along their structure (markdown headings, code declarations, paragraphs), ranks them against `query` (BM25, offline) and returns the best chunks that fit `max_tokens`, each with an id and line range, plus the next-best ids. Without a query it returns an outline (id, lines, tokens, heading per chunk) to choose from with `ids`. Use it instead of reading a big document, log or codebase whole when you only need to answer a question from it; read whole files when you will edit them. Text files only (convert PDFs first).",
+    "Read only the parts of large files a question needs. Splits files or folders into chunks along their structure (markdown headings, code declarations, paragraphs), ranks them against `query` (BM25, offline) and returns the best chunks that fit `max_tokens`, each with an id and line range, plus the next-best ids. Without a query it returns an outline (id, lines, tokens, heading per chunk) to choose from with `ids`. Use it instead of reading a big document, log or codebase whole when you only need to answer a question from it; read whole files when you will edit them. Reads text, PDF, Word (.docx/.doc/.rtf), PowerPoint and ODT files; scanned PDFs without a text layer cannot be read.",
     {
       paths: z.array(z.string()).max(50).optional().describe("Files or folders on this machine (absolute, or relative to the server's working directory). Folders are read recursively, skipping node_modules, .git and build output."),
       text: z.string().optional().describe("Raw text to pack instead of files, e.g. a document the client holds."),

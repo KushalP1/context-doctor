@@ -16,6 +16,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, extname, join, relative } from "node:path";
 import { estimateTokens, formatTokens } from "./tokens.js";
+import { EXTRACTABLE, extractText } from "./extract.js";
 const DEFAULT_BUDGET = 4000;
 const DEFAULT_CHUNK_TOKENS = 400;
 /** Claude's tokenizer produces the most tokens per char; a budget in its terms never overruns another's. */
@@ -340,15 +341,26 @@ export function readSources(paths, cwd = process.cwd()) {
             skipped.push(`${p}: too large (${Math.round(st.size / 1024)} KB)`);
             return;
         }
+        const rel = relative(cwd, p);
+        const name = rel && !rel.startsWith("..") ? rel : p;
+        if (EXTRACTABLE.has(extname(p).toLowerCase())) {
+            const got = extractText(p);
+            if ("error" in got)
+                skipped.push(`${p}: ${got.error}`);
+            else {
+                bytes += st.size;
+                sources.push({ name, text: got.text });
+            }
+            return;
+        }
         const buf = readFileSync(p);
         if (buf.subarray(0, 8000).includes(0)) {
             if (top)
-                skipped.push(`${p}: binary (pack reads text files; convert PDFs and Office files to text first)`);
+                skipped.push(`${p}: binary (pack reads text, PDF and Word/PowerPoint/ODT files)`);
             return;
         }
         bytes += st.size;
-        const rel = relative(cwd, p);
-        sources.push({ name: rel && !rel.startsWith("..") ? rel : p, text: buf.toString("utf8") });
+        sources.push({ name, text: buf.toString("utf8") });
     };
     for (const p of paths) {
         if (!existsSync(p))

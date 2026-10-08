@@ -22,7 +22,7 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 
 ## Verified 2026-10-08
 
-- `npm test`: 204 of 204 pass (Node 20/22 in CI, throwaway HOME).
+- `npm test`: 207 of 207 pass (Node 20/22 in CI, throwaway HOME).
 - MCP smoke over stdio and over streamable HTTP: handshake 119 ms, instructions delivered (690 chars, cap 700), all four tools and the checkup prompt, malformed input rejected.
 - OpenAI proxy smoke against a local mock: model listing passthrough, auth header untouched, incremental streaming, Responses API, usage capture, autopilot clearing.
 - `doctor` on the author's machine: Claude Desktop, Claude Code, Cursor and Codex wired; hooks registered in Claude Code, Codex and Cursor; status line, skill, ledger, autopilot up.
@@ -33,6 +33,7 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 |---|---|---|
 | **`pack` / `pack_context`**: only the chunks of big files a question needs | The cheapest token never enters the context. A 60k-token manual pasted to answer one question is paid on that message and every one after it. Chunks follow the document (headings, code declarations, paragraphs), BM25 ranks them, a budget caps them, ids and line ranges let the model ask for more; no query returns an outline. Offline, no key. Over HTTP the tool reads no files | ✅ CLI + MCP tool + library. On this repo (README + src, ~305k tokens): 9 of 10 questions answered from a 2k-token pack (0.6%) |
 | **`overhead`**: what every request re-reads before your message | Front matter (system prompt, tools, MCP schemas, skills, CLAUDE.md, rules, auto memory) is re-read on every request and re-written after every cold start; transcripts never show it. Measured from each session's first request, memory files found per agent (Claude Code, Codex, Cursor, Gemini CLI) and priced per month from your own request and cold-start counts | ✅ On the author's last 30 days: 71 sessions start at a median ~54k tokens; each 1k tokens of it costs ~$17/month at list price; the 3.4k-token auto-memory index alone ~$57/month |
+| **pack reads PDFs, Word, PowerPoint and ODT** | Most big documents people paste are PDFs and Word files. No new dependency: `pdftotext` where installed, PDFKit (via `osascript`) and `textutil` on macOS, `unzip` for docx/pptx/odt elsewhere; a reason naming what to install when nothing works | ✅ Tested with a generated PDF through both pdftotext and the PDFKit fallback, and a docx through textutil |
 | Standing MCP instruction 5 | Chat apps and agents learn to call pack_context instead of reading a big file whole; the instructions stay under their 700-char cap | ✅ |
 
 ## Next: code can finish these, in order of expected saving
@@ -41,13 +42,12 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 |---|---|---|---|
 | 1 | **MCP schema tax in `overhead`** | Each MCP server adds its tool schemas to every request; ten servers can cost more than the conversation. Autopilot already sees the `tools` array on every request it carries: record tokens per server (`mcp__<server>__*`) and show them next to the memory files, with "used in the last 30 days: yes/no" from the transcripts | `overhead` lists per-server tokens and $/month; servers never called are flagged |
 | 2 | **`overhead --split`** | Turning a finding into a fix: write a lean CLAUDE.md / MEMORY.md plus a reference file the agent opens when needed. Written only with `--write`, with a backup, and shown as a diff first (no silent rewriting) | Re-run `overhead`: memory tokens drop; `experiment` shows task pass rate unchanged |
-| 3 | **pack for PDFs and Office files** without dependencies | Most "big documents" people paste are PDFs. Use what the OS already has (`pdftotext` when installed, `textutil` on macOS, `mdls` fallbacks) and say plainly when nothing is available | Fixture PDFs and DOCX pack on macOS and Linux CI |
-| 4 | **Large-paste notice in the hook** | When a prompt itself carries a 10k+ token paste, give the model the size and the instruction to work from extracted points, and save the paste to a file pack can query later. Measure first: does it reduce the following turns' re-quoting? | Replay on local sessions with large pastes; ship only if later turns get smaller |
-| 5 | **In-process SDK wrappers** (`withContextDoctor(new Anthropic())`, OpenAI too) | Autopilot for API apps that cannot route through a local proxy (serverless, edge, managed hosts) | Same replay numbers as the proxy, on the same fixtures |
-| 6 | **Gemini**: proxy route for `generateContent` and Gemini CLI wiring | Gemini CLI reads GEMINI.md and supports MCP; the proxy and pricing already know Gemini models. Check what hook surface Gemini CLI exposes before promising an every-prompt check | `doctor` shows Gemini CLI wired; smoke script against a local mock of the Gemini API |
-| 7 | **GitHub Action** on the Marketplace | Comment the context-size and overhead change on every PR that touches prompts, CLAUDE.md or agent configs; fail over a budget | Used on this repo's own PRs |
-| 8 | **pack with optional local embeddings** | Lexical ranking misses paraphrase (the one miss in the eval above). Use Ollama's embeddings when it is running, never required | Same 10-question eval plus a paraphrase set: hits up, no regressions |
-| 9 | **Python package** with profile and pack | RAG pipelines (LangChain, LlamaIndex) chunk and stuff context in Python; the same budgeted packing belongs there | Parity tests against the TypeScript fixtures |
+| 3 | **Large-paste notice in the hook** | When a prompt itself carries a 10k+ token paste, give the model the size and the instruction to work from extracted points, and save the paste to a file pack can query later. Measure first: does it reduce the following turns' re-quoting? | Replay on local sessions with large pastes; ship only if later turns get smaller |
+| 4 | **In-process SDK wrappers** (`withContextDoctor(new Anthropic())`, OpenAI too) | Autopilot for API apps that cannot route through a local proxy (serverless, edge, managed hosts) | Same replay numbers as the proxy, on the same fixtures |
+| 5 | **Gemini**: proxy route for `generateContent` and Gemini CLI wiring | Gemini CLI reads GEMINI.md and supports MCP; the proxy and pricing already know Gemini models. Check what hook surface Gemini CLI exposes before promising an every-prompt check | `doctor` shows Gemini CLI wired; smoke script against a local mock of the Gemini API |
+| 6 | **GitHub Action** on the Marketplace | Comment the context-size and overhead change on every PR that touches prompts, CLAUDE.md or agent configs; fail over a budget | Used on this repo's own PRs |
+| 7 | **pack with optional local embeddings** | Lexical ranking misses paraphrase (the one miss in the eval above). Use Ollama's embeddings when it is running, never required | Same 10-question eval plus a paraphrase set: hits up, no regressions |
+| 8 | **Python package** with profile and pack | RAG pipelines (LangChain, LlamaIndex) chunk and stuff context in Python; the same budgeted packing belongs there | Parity tests against the TypeScript fixtures |
 
 ## Later / research
 
