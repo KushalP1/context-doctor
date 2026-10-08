@@ -116,7 +116,7 @@ On a Claude subscription you do not pay list price; the same tokens come out of 
 | **Claude Code** in the desktop app's Code tab | **Hook**, as above, including the cold-resume `/compact` offer, shown to you as well as the model. **`compact-window`**, if you set one: Claude Code compacts earlier by itself. Not autopilot: the app sets its own API address and ignores the one in settings | Install via npm or as a **plugin** (`/plugin marketplace add KushalP1/context-doctor`). Status bar context meter, `/context-doctor:savings`, `session`, `watch`, `report`, dashboard |
 | **Cursor** (agent) | A native **after-tool-call hook** (`~/.cursor/hooks.json`): in a heavy chat the agent gets the same hygiene guidance and the largest waste, once per 40% of growth. (Cursor's prompt hook can only allow or block a prompt, so this is the event where guidance reaches the model) | MCP tools, editor status bar extension, `cursor` profiler. With your own OpenAI key, autopilot too via a tokened tunnel ([how](#putting-the-proxy-on-a-public-url-cursor-with-your-own-openai-key-remote-apps)) |
 | **Codex** (ChatGPT app's Codex tab, IDE extension, CLI) | Every-prompt hook with the API's own token counts | MCP tools, skill, `session` reads Codex rollouts. On an API key, autopilot too (`OPENAI_BASE_URL`) |
-| **Your own apps on the Anthropic or OpenAI API** | Autopilot on `/v1/messages`, `/v1/chat/completions` and `/v1/responses` (`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`), or the full optimizing proxy | Exact usage and cache hit rates in `/stats`, prompt-cache placement advice |
+| **Your own apps on the Anthropic or OpenAI API** | Autopilot on `/v1/messages`, `/v1/chat/completions` and `/v1/responses` (`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`), or the full optimizing proxy; no proxy possible (serverless, edge)? `withContextDoctor(client)` runs autopilot inside the SDK client | Exact usage and cache hit rates in `/stats`, prompt-cache placement advice |
 | **Claude Desktop chat** | Standing context rules in every chat; one cheap `profile_context` call the model makes past ~30 turns or on any cost question; `pack_context` instead of reading a big local file whole | One-click `.mcpb` install, `context_checkup` prompt |
 | **claude.ai, ChatGPT, the phone apps** | Your account's standing preferences (`context-doctor instructions --copy`) | Profile an exported chat with `analyze` |
 | **CI** | `analyze --fail-over-budget` fails a build whose prompts outgrow a budget | `.contextdoctorrc` budgets and presets |
@@ -165,7 +165,7 @@ MCP servers are part of the same overhead: each one's tool definitions ride on e
 
 ## What's new
 
-- **0.27 (on main) Keep waste out**: `pack` and the `pack_context` MCP tool put only the chunks of big files (text, code, PDF, Word, PowerPoint) a question needs into the context, within a budget; `overhead` measures and prices the front matter every request re-reads (system prompt, tools, CLAUDE.md, rules, memory, AGENTS.md, Cursor rules, GEMINI.md). MCP servers sized and their use counted; `overhead split` turns a heavy memory file into a lean one plus a reference file. Re-verified on every surface: 216 tests, MCP over stdio and HTTP, the OpenAI proxy, and a live `doctor`.
+- **0.27 (on main) Keep waste out**: `pack` and the `pack_context` MCP tool put only the chunks of big files (text, code, PDF, Word, PowerPoint) a question needs into the context, within a budget; `overhead` measures and prices the front matter every request re-reads (system prompt, tools, CLAUDE.md, rules, memory, AGENTS.md, Cursor rules, GEMINI.md). MCP servers sized and their use counted; `overhead split` turns a heavy memory file into a lean one plus a reference file. `withContextDoctor(client)` runs autopilot inside an Anthropic or OpenAI SDK client, for apps with no proxy. Re-verified on every surface: 219 tests, MCP over stdio and HTTP, the OpenAI proxy, and a live `doctor`.
 - **0.26 Checked on every platform, three fixes**: tested end to end in Claude Code (terminal, desktop app, plugin from GitHub), Claude Desktop, Cursor, Codex on GPT-5.5, VS Code, the MCP server on every launch path, and the proxy on OpenAI's APIs. Found and fixed: Cursor's agent never received the hook's guidance (Cursor runs Claude Code's hook where output cannot add context), so `install` now adds a native Cursor hook; Codex blocked the MCP tools behind an approval it never grants in `codex exec`, so the tools are now marked read-only; autopilot skipped Codex's newest tools (`exec`, `wait`) and some of Cursor's. Also: a history imported into Codex no longer reads as "2136% of the window", and the chat-app settings paths are current.
 - **0.25 Compact earlier, by itself**: the `/compact` offer at cold resumes was followed 1 time in 33 on the author's machine, so two changes. The hook now also shows you the notice (it went only to the model, which rarely raised it), with the dollar cost of the message you just sent. And `context-doctor compact-window` measures and sets Claude Code's own auto-compact window, which works without anyone acting on advice, in every surface including the desktop app: 55% less input cost at 400k on the author's last 30 days. `savings` shows it as a third lever.
 - **0.20 Autopilot**: stale tool output cleared from every Claude Code request, only when the prompt cache is cold, so it cannot cost more (measured: 9.8% less input cost, ~$1,080 a month on the author's usage, no session worse); runs as a login service on macOS, Linux and Windows; now also for GPT via OpenAI's Chat Completions and Responses APIs.
@@ -463,11 +463,22 @@ const { conversation, tokensBefore, tokensAfter } = optimizeConversation(chatJso
   strategies: ["dedupe", "trim-tool-results", "strip-base64"],
 });
 
+// Autopilot without a proxy: wrap the SDK client (Anthropic or OpenAI)
+import Anthropic from "@anthropic-ai/sdk";
+import { withContextDoctor, contextDoctorStats } from "context-doctor";
+const client = withContextDoctor(new Anthropic());       // use exactly as before
+await client.messages.create({ model, max_tokens, messages });
+console.log(contextDoctorStats(client));                 // { requests, changed, tokensRemoved }
+
 // RAG-style context packing: chunk, rank, fit a budget (no embeddings, no key)
 import { packContext, renderPack } from "context-doctor";
 const packed = packContext([{ name: "manual.md", text: manual }], { query: "rotate the signing key", budget: 3000 });
 console.log(packed.selected.map((c) => `${c.id} L${c.startLine}-${c.endLine}`), renderPack(packed));
 ```
+
+### Autopilot inside your app: `withContextDoctor`
+
+For apps that cannot send traffic through a local proxy (serverless and edge functions, managed hosts), wrap the SDK client. `messages.create` / `stream`, `chat.completions.create` / `stream` / `parse` and `responses.create` / `stream` / `parse` (beta namespaces too) go through the same autopilot as the proxy: stale tool output is cleared only when the prompt cache is cold. Each request is cloned before it changes, so the history your app holds is never rewritten; only the copy on the wire is slimmer. State lives in the process: one long-lived process per conversation stream behaves like the proxy, and a conversation the process has not seen counts as warm, so a fresh serverless instance never clears blind (pass `statePath` on shared storage if many instances serve the same conversations). Tested with the real `@anthropic-ai/sdk` and `openai` packages.
 
 ## Subagents: their own windows, your bill
 
@@ -687,7 +698,7 @@ One honest caveat worth knowing: a transcript stores the conversation, **not** t
 
 ## Roadmap
 
-See [ROADMAP.md](./ROADMAP.md) for the full plan, the per-surface coverage table and the measurements behind every shipped item. Next, in order of expected saving: the MCP schema tax per server in `overhead`; a measured large-paste notice in the hook; in-process SDK wrappers for API apps that cannot use a proxy; Gemini CLI and Gemini API support; a GitHub Action; optional local embeddings for `pack`; a Python package for RAG pipelines. Non-goals, permanently: cloud services, telemetry, silent history rewriting, mandatory API keys.
+See [ROADMAP.md](./ROADMAP.md) for the full plan, the per-surface coverage table and the measurements behind every shipped item. Next, in order of expected saving: the MCP schema tax per server in `overhead`; Gemini CLI and Gemini API support; a GitHub Action; optional local embeddings for `pack`; a Python package for RAG pipelines. Non-goals, permanently: cloud services, telemetry, silent history rewriting, mandatory API keys.
 
 Contributions welcome — this project is small on purpose. Open an issue before a big PR.
 

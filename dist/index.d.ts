@@ -30,3 +30,4 @@ export * from "./pack.js";
 export * from "./overhead.js";
 export * from "./split.js";
 export * from "./mcpschema.js";
+export * from "./wrap.js";

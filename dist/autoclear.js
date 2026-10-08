@@ -171,6 +171,7 @@ export class AutoClearer {
             keepRecent: options.keepRecent ?? 3,
             minClearTokens: options.minClearTokens ?? 20_000,
             paybackSafety: options.paybackSafety ?? 0,
+            unseenIsWarm: options.unseenIsWarm ?? false,
             statePath: options.statePath,
         };
         this.load();
@@ -188,7 +189,7 @@ export class AutoClearer {
             const model = typeof body.model === "string" ? body.model : undefined;
             const key = conversationKey(view);
             const conv = this.convs.get(key);
-            const cold = !conv || now - conv.last > view.ttlMs;
+            const cold = conv ? now - conv.last > view.ttlMs : !this.opts.unseenIsWarm;
             this.convs.set(key, { last: now, requests: (conv?.requests ?? 0) + 1 });
             if (this.convs.size > 2000)
                 this.convs.delete(this.convs.keys().next().value);

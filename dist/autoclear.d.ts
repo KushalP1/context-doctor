@@ -53,6 +53,13 @@ export interface AutoClearOptions {
     paybackSafety?: number;
     /** Where cleared ids persist so a restart does not un-clear (and re-bill) them. */
     statePath?: string;
+    /**
+     * Treat a conversation this instance has never seen as warm-cached (so
+     * nothing is cleared on it). The proxy sees every request and leaves this
+     * off; an in-process wrapper in a fresh process cannot know whether another
+     * process just sent the conversation, so it turns this on.
+     */
+    unseenIsWarm?: boolean;
 }
 export interface AutoClearResult {
     changed: boolean;

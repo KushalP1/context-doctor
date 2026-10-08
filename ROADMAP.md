@@ -22,7 +22,7 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 
 ## Verified 2026-10-08
 
-- `npm test`: 216 of 216 pass (Node 20/22 in CI, throwaway HOME).
+- `npm test`: 219 of 219 pass (Node 20/22 in CI, throwaway HOME).
 - MCP smoke over stdio and over streamable HTTP: handshake 119 ms, instructions delivered (690 chars, cap 700), all four tools and the checkup prompt, malformed input rejected.
 - OpenAI proxy smoke against a local mock: model listing passthrough, auth header untouched, incremental streaming, Responses API, usage capture, autopilot clearing.
 - `doctor` on the author's machine: Claude Desktop, Claude Code, Cursor and Codex wired; hooks registered in Claude Code, Codex and Cursor; status line, skill, ledger, autopilot up.
@@ -36,18 +36,21 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 | **pack reads PDFs, Word, PowerPoint and ODT** | Most big documents people paste are PDFs and Word files. No new dependency: `pdftotext` where installed, PDFKit (via `osascript`) and `textutil` on macOS, `unzip` for docx/pptx/odt elsewhere; a reason naming what to install when nothing works | ✅ Tested with a generated PDF through both pdftotext and the PDFKit fallback, and a docx through textutil |
 | **MCP schema tax in `overhead`** | Each MCP server's tool definitions ride on every request; transcripts never show them. Calls per server come from the transcripts (including servers the app or connectors provide, which no config lists); `--mcp` launches each configured server once and sizes its definitions; unused servers are flagged with their monthly cost. Claude Code's tool search defers definitions, and the report says when it does | ✅ Author's machine: tool search in 49 of 75 sessions, so definitions are mostly deferred; 15 app-provided servers seen. context-doctor's own definitions trimmed to stay under a tested 2,400-token cap |
 | **`overhead split <file>`** | Turns a finding into a fix: a memory file's large or code-heavy sections move word for word to `<name>.reference.md`, leaving one pointer per run of moved sections (a plain path, read on demand, not an @import). Link-list sections are indexes and stay; an auto-memory `MEMORY.md` keeps only its index. A plan first; `--write` backs up the original | ✅ On a copy of the author's auto-memory index: ~3.4k → ~1.7k tokens a request (~$28/month), every line kept |
+| **`withContextDoctor(client)`**: autopilot inside the app | API apps that cannot route through a local proxy (serverless, edge, managed hosts) wrap their Anthropic or OpenAI SDK client instead. Same AutoClearer as the proxy; the request is cloned first so the app's own history is never rewritten; a conversation the process has not seen counts as warm, so a fresh instance never clears blind | ✅ Unit tests plus a run with the real `@anthropic-ai/sdk` and `openai` packages against a local mock: create and stream, chat and responses; a cold return went out at 135k of the app's 354k chars |
 | Standing MCP instruction 5 | Chat apps and agents learn to call pack_context instead of reading a big file whole; the instructions stay under their 700-char cap | ✅ |
 
 ## Next: code can finish these, in order of expected saving
 
 | # | Item | Why | How we will know it works |
 |---|---|---|---|
-| 1 | **Large-paste notice in the hook** | When a prompt itself carries a 10k+ token paste, give the model the size and the instruction to work from extracted points, and save the paste to a file pack can query later. Measure first: does it reduce the following turns' re-quoting? | Replay on local sessions with large pastes; ship only if later turns get smaller |
-| 2 | **In-process SDK wrappers** (`withContextDoctor(new Anthropic())`, OpenAI too) | Autopilot for API apps that cannot route through a local proxy (serverless, edge, managed hosts) | Same replay numbers as the proxy, on the same fixtures |
-| 3 | **Gemini**: proxy route for `generateContent` and Gemini CLI wiring | Gemini CLI reads GEMINI.md and supports MCP; the proxy and pricing already know Gemini models. Check what hook surface Gemini CLI exposes before promising an every-prompt check | `doctor` shows Gemini CLI wired; smoke script against a local mock of the Gemini API |
-| 4 | **GitHub Action** on the Marketplace | Comment the context-size and overhead change on every PR that touches prompts, CLAUDE.md or agent configs; fail over a budget | Used on this repo's own PRs |
-| 5 | **pack with optional local embeddings** | Lexical ranking misses paraphrase (the one miss in the eval above). Use Ollama's embeddings when it is running, never required | Same 10-question eval plus a paraphrase set: hits up, no regressions |
-| 6 | **Python package** with profile and pack | RAG pipelines (LangChain, LlamaIndex) chunk and stuff context in Python; the same budgeted packing belongs there | Parity tests against the TypeScript fixtures |
+| 1 | **Gemini**: proxy route for `generateContent` and Gemini CLI wiring | Gemini CLI reads GEMINI.md and supports MCP; the proxy and pricing already know Gemini models. Check what hook surface Gemini CLI exposes before promising an every-prompt check | `doctor` shows Gemini CLI wired; smoke script against a local mock of the Gemini API |
+| 2 | **GitHub Action** on the Marketplace | Comment the context-size and overhead change on every PR that touches prompts, CLAUDE.md or agent configs; fail over a budget | Used on this repo's own PRs |
+| 3 | **pack with optional local embeddings** | Lexical ranking misses paraphrase (the one miss in the eval above). Use Ollama's embeddings when it is running, never required | Same 10-question eval plus a paraphrase set: hits up, no regressions |
+| 4 | **Python package** with profile and pack | RAG pipelines (LangChain, LlamaIndex) chunk and stuff context in Python; the same budgeted packing belongs there | Parity tests against the TypeScript fixtures |
+
+## Closed by measurement (2026-10-08): a large-paste notice in the hook
+
+The idea: when a prompt itself carries a big paste, tell the model to work from extracted points. Across 2,233 prompts in 75 local Claude Code sessions, 51 carried 5k+ tokens and 10 carried 10k+ (largest 14k), in sessions that run to hundreds of thousands of tokens. A notice cannot take a paste back out of history, so the most it could save is a few percent of a few sessions, paid for with a line of context on every large prompt. `pack` is the better answer: the document never needs pasting.
 
 ## Later / research
 
