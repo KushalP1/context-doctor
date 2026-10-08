@@ -1,10 +1,78 @@
 # context-doctor roadmap
 
-Guiding principles, in priority order: **dead simple for everyone** · **works always, everywhere** · **provably saves tokens, dollars, latency** · **never needs an API key for core function**.
+**Goal:** no one pays for tokens that do nothing. context-doctor measures where context goes on your own machine, in every app you use, and removes the waste at the moments it pays: before it enters the context (pack, overhead), while it sits there (hook, autopilot, compact-window) and after the fact (profile, optimize, savings).
+
+Guiding principles, in priority order: **dead simple for everyone** · **works always, everywhere** · **provably saves tokens, dollars, latency** · **never needs an API key for core function**. Every claim in the README is a measurement on real sessions; an idea that does not survive measurement is closed here with the numbers (see "Closed by measurement" in the history).
 
 Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/issues).
 
-## v0.5 — Trust & automation (shipped in 0.5.0 unless noted)
+## Where it works today
+
+| Surface | Runs by itself | On request | Gap |
+|---|---|---|---|
+| Claude Code, terminal and IDE | every-prompt hook, autopilot proxy, compact-window, status line | savings, session, watch, report, pack, overhead, MCP tools, plugin | — |
+| Claude Code, desktop app Code tab | hook (incl. cold-resume `/compact` offer), compact-window | same as above | autopilot: the app sets its own API address |
+| Claude Desktop chat | standing MCP instructions (now incl. pack_context) | profile_context sketch, pack_context on local files, checkup prompt | no hook API, no transcript on disk |
+| Cursor agent | native postToolUse hook | MCP tools, cursor profiler, editor extension | Cursor's own models never pass through a local process |
+| Codex (app, IDE, CLI) | every-prompt hook | MCP tools (read-only, no approval needed), session | autopilot only with an API key |
+| Gemini CLI | — | overhead sizes GEMINI.md; MCP tools work as in any MCP client | no hook or proxy route yet (see Next) |
+| claude.ai, ChatGPT, phone apps | standing preferences (`instructions --copy`) | analyze an exported chat | nothing runs there |
+| Your own API apps (Anthropic, OpenAI) | autopilot or the optimizing proxy | library: profile, optimize, pack | Google's API not proxied yet |
+| CI | `analyze --fail-over-budget` | — | no packaged GitHub Action yet |
+
+## Verified 2026-10-08
+
+- `npm test`: 204 of 204 pass (Node 20/22 in CI, throwaway HOME).
+- MCP smoke over stdio and over streamable HTTP: handshake 119 ms, instructions delivered (690 chars, cap 700), all four tools and the checkup prompt, malformed input rejected.
+- OpenAI proxy smoke against a local mock: model listing passthrough, auth header untouched, incremental streaming, Responses API, usage capture, autopilot clearing.
+- `doctor` on the author's machine: Claude Desktop, Claude Code, Cursor and Codex wired; hooks registered in Claude Code, Codex and Cursor; status line, skill, ledger, autopilot up.
+
+## Now: shipped on main for 0.27
+
+| Item | Why | Status |
+|---|---|---|
+| **`pack` / `pack_context`**: only the chunks of big files a question needs | The cheapest token never enters the context. A 60k-token manual pasted to answer one question is paid on that message and every one after it. Chunks follow the document (headings, code declarations, paragraphs), BM25 ranks them, a budget caps them, ids and line ranges let the model ask for more; no query returns an outline. Offline, no key. Over HTTP the tool reads no files | ✅ CLI + MCP tool + library. On this repo (README + src, ~305k tokens): 9 of 10 questions answered from a 2k-token pack (0.6%) |
+| **`overhead`**: what every request re-reads before your message | Front matter (system prompt, tools, MCP schemas, skills, CLAUDE.md, rules, auto memory) is re-read on every request and re-written after every cold start; transcripts never show it. Measured from each session's first request, memory files found per agent (Claude Code, Codex, Cursor, Gemini CLI) and priced per month from your own request and cold-start counts | ✅ On the author's last 30 days: 71 sessions start at a median ~54k tokens; each 1k tokens of it costs ~$17/month at list price; the 3.4k-token auto-memory index alone ~$57/month |
+| Standing MCP instruction 5 | Chat apps and agents learn to call pack_context instead of reading a big file whole; the instructions stay under their 700-char cap | ✅ |
+
+## Next: code can finish these, in order of expected saving
+
+| # | Item | Why | How we will know it works |
+|---|---|---|---|
+| 1 | **MCP schema tax in `overhead`** | Each MCP server adds its tool schemas to every request; ten servers can cost more than the conversation. Autopilot already sees the `tools` array on every request it carries: record tokens per server (`mcp__<server>__*`) and show them next to the memory files, with "used in the last 30 days: yes/no" from the transcripts | `overhead` lists per-server tokens and $/month; servers never called are flagged |
+| 2 | **`overhead --split`** | Turning a finding into a fix: write a lean CLAUDE.md / MEMORY.md plus a reference file the agent opens when needed. Written only with `--write`, with a backup, and shown as a diff first (no silent rewriting) | Re-run `overhead`: memory tokens drop; `experiment` shows task pass rate unchanged |
+| 3 | **pack for PDFs and Office files** without dependencies | Most "big documents" people paste are PDFs. Use what the OS already has (`pdftotext` when installed, `textutil` on macOS, `mdls` fallbacks) and say plainly when nothing is available | Fixture PDFs and DOCX pack on macOS and Linux CI |
+| 4 | **Large-paste notice in the hook** | When a prompt itself carries a 10k+ token paste, give the model the size and the instruction to work from extracted points, and save the paste to a file pack can query later. Measure first: does it reduce the following turns' re-quoting? | Replay on local sessions with large pastes; ship only if later turns get smaller |
+| 5 | **In-process SDK wrappers** (`withContextDoctor(new Anthropic())`, OpenAI too) | Autopilot for API apps that cannot route through a local proxy (serverless, edge, managed hosts) | Same replay numbers as the proxy, on the same fixtures |
+| 6 | **Gemini**: proxy route for `generateContent` and Gemini CLI wiring | Gemini CLI reads GEMINI.md and supports MCP; the proxy and pricing already know Gemini models. Check what hook surface Gemini CLI exposes before promising an every-prompt check | `doctor` shows Gemini CLI wired; smoke script against a local mock of the Gemini API |
+| 7 | **GitHub Action** on the Marketplace | Comment the context-size and overhead change on every PR that touches prompts, CLAUDE.md or agent configs; fail over a budget | Used on this repo's own PRs |
+| 8 | **pack with optional local embeddings** | Lexical ranking misses paraphrase (the one miss in the eval above). Use Ollama's embeddings when it is running, never required | Same 10-question eval plus a paraphrase set: hits up, no regressions |
+| 9 | **Python package** with profile and pack | RAG pipelines (LangChain, LlamaIndex) chunk and stuff context in Python; the same budgeted packing belongs there | Parity tests against the TypeScript fixtures |
+
+## Later / research
+
+- Per-subagent context budgets and a report of which subagent tasks pay for themselves.
+- A prompt-cache breakpoint planner for API apps: where to put `cache_control` given the measured request mix.
+- Cross-session duplicate detection: the same file read into ten sessions a day.
+- A cost-per-task view in `report` (session cost divided by commits or closed tasks), local only.
+
+## Waiting on the owner's accounts
+
+| Item | State | Owner's step |
+|---|---|---|
+| **Sign the `.mcpb`** | Signing is in `build:mcpb` and the release workflow; `mcpb verify` gates the release. Tested end to end with a self-signed certificate | Obtain a code-signing certificate from a trusted CA; add `MCPB_CERT` / `MCPB_KEY` |
+| **Publish the extension** | Marketplace metadata, icon, listing and changelog ready; the `vscode-v*` workflow publishes to both marketplaces and attaches the `.vsix` | Create the `gai-ventures` publisher and an Open VSX account; add `VSCE_PAT` / `OVSX_PAT`; push a `vscode-v*` tag |
+| Move repo to the **gAI-ventures org** | Redirects keep old links working | The org owner transfers it on GitHub |
+
+## Non-goals
+
+- **Cloud service / accounts / telemetry**: everything stays on the user's machine, permanently.
+- **Silent history rewriting**: lossy changes remain consent-only, with the host model writing summaries.
+- **API keys for core function**: optional adapters may accept a key; nothing core ever requires one.
+
+## History: what shipped, with the measurements behind it
+
+### v0.5 — Trust & automation (shipped in 0.5.0 unless noted)
 
 | Item | Why | Status |
 |---|---|---|
@@ -13,7 +81,7 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 | **`context-doctor watch`** — live session monitor | Tail a running session/agent trace; status line per growth event, findings surfaced as they appear. The real-time counterpart to `session` | ✅ |
 | Move repo to the **gAI-ventures org** | Attribution home; auto-redirects keep old links working | ⏳ needs the org owner to transfer on GitHub |
 
-## v0.6 — Accuracy (shipped in 0.6.0 unless noted)
+### v0.6 — Accuracy (shipped in 0.6.0 unless noted)
 
 | Item | Why | Status |
 |---|---|---|
@@ -21,7 +89,7 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 | **Semantic near-duplicate detection** | Exact-hash dedupe misses "same doc pasted with a different lead-in"; sampled-shingle Jaccard flags ≥60%-similar pairs with estimated savings | ✅ |
 | **More session formats** | ChatGPT data-export (conversations.json) ✅ and Cursor chat history (`context-doctor cursor`, both SQLite shapes) ✅ | ✅ |
 
-## v0.7 — Proxy pro (shipped in 0.7.0)
+### v0.7 — Proxy pro (shipped in 0.7.0)
 
 | Item | Why | Status |
 |---|---|---|
@@ -29,7 +97,7 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 | **Prompt-cache advisor** | Watches real Anthropic sequences: flags large stable prefixes without `cache_control` and prefix churn that silently re-bills the cache; advisories in `/stats.advice` + logs | ✅ |
 | **Per-route/per-model strategy config** | `proxy --config file.json` with `routes[]` (modelPrefix → strategies/keepRecent/maxToolResultTokens); first match wins | ✅ |
 
-## v1.0 — Platform (code shipped in 0.8.0)
+### v1.0 — Platform (code shipped in 0.8.0)
 
 | Item | Why | Status |
 |---|---|---|
@@ -41,7 +109,7 @@ The **1.0.0 version tag is deliberately not taken yet**: it should mean "the CLI
 surface and rc schema are stable and we will not break them", and that promise is
 worth making after real-world use, not on the day the features land.
 
-## Shipped since v1.0 planning (0.9.x)
+### Shipped since v1.0 planning (0.9.x)
 
 | Item | Why |
 |---|---|
@@ -55,7 +123,7 @@ worth making after real-world use, not on the day the features land.
 | **`--redact`** | Profiles can be pasted into issues with content and paths masked and the numbers intact |
 | **Faster profiling** | Near-duplicate pairs whose shingle-set sizes make the threshold unreachable are skipped: 271ms → 160ms on an 8.5MB session, identical findings |
 
-## Shipped in 0.12.0 — durability and the biggest real waste
+### Shipped in 0.12.0 — durability and the biggest real waste
 
 | Item | Why |
 |---|---|
@@ -68,7 +136,7 @@ worth making after real-world use, not on the day the features land.
 | **Readable findings** | Repeated findings of one kind collapse into a single line instead of burying the other kinds |
 | **Node 20+** | Node 18 went EOL in April 2025 and its CI jobs hung indefinitely, so `engines: >=18` was a promise we could not keep. CI now covers exactly what package.json claims, on three OSes |
 
-## Shipped in 0.26.0 — checked on every platform
+### Shipped in 0.26.0 — checked on every platform
 
 Each surface driven for real, not only through unit tests: the MCP server on every launch path (local build, plugin bundle, `mcp` subcommand, the published npm package, HTTP, the `.mcpb`), Claude Desktop's own MCP log, Claude Code 2.1.62 and 2.1.288 with the plugin installed from GitHub, Codex 0.153 running a real `codex exec` on GPT-5.5, Cursor 3.18, VS Code 1.133 activating the extension, and the proxy against a mock of OpenAI's Chat Completions and Responses APIs.
 
@@ -79,7 +147,7 @@ Each surface driven for real, not only through unit tests: the MCP server on eve
 - **Chat-app settings paths**: claude.ai keeps preferences under Settings > General, and ChatGPT's field is "What traits should ChatGPT have?".
 - `proxy --autopilot` printed the optimizing mode's banner. `scripts/smoke-mcp.mjs` and `scripts/smoke-openai-proxy.mjs` make the end-to-end checks repeatable.
 
-## Shipped in 0.25.0 — compact earlier, without anyone following advice
+### Shipped in 0.25.0 — compact earlier, without anyone following advice
 
 Measured first: since 0.22 the hook had offered `/compact` 33 times on the author's machine when a large session came back after the cache expired. It was followed once. The offer went only to the model, which mostly did not raise it, and advice that is not taken saves nothing.
 
@@ -89,7 +157,7 @@ Measured first: since 0.22 the hook had offered `/compact` 33 times on the autho
 - **`report` shows whether the offer is acted on**: offers, and how many a compaction followed within the hour (3 of 34 on the author's machine, counting Claude Code's own auto-compactions), and points to `compact-window` when it is rarely followed. Also fixed: on Windows, `report` never matched recent sessions to their hook history (it split paths on `/` only).
 - **Plugin skill `/context-doctor:compact-window`**: compare sizes and set one from inside Claude Code, only on the user's say-so.
 
-## Shipped in 0.24.0 — a module-by-module audit
+### Shipped in 0.24.0 — a module-by-module audit
 
 Each module checked against real data and hostile input, not only its tests:
 
@@ -102,7 +170,7 @@ Each module checked against real data and hostile input, not only its tests:
 - **Tests**: a savings fixture used fixed September dates and fell out of the 30-day window on 3 October; fixtures are relative now, and the watch test waits for output instead of sleeping.
 - **Checked clean**: all 178 local sessions and rollouts and 20 Cursor chats parse and profile without error; MCP tools reject malformed arguments with clear errors; the dashboard, `experiment --dry-run` and the editor extension work.
 
-## Shipped in 0.23.0 — audit fixes and the share loop
+### Shipped in 0.23.0 — audit fixes and the share loop
 
 - **Security:** 4 transitive vulnerabilities under the MCP SDK patched (fast-uri high; hono, qs, ip-address moderate). hono's `parseBody` memory exhaustion applied to `context-doctor-mcp --http`. `npm audit`: 0.
 - **Cold resume after /compact:** the hook read the last reply's usage even when the session had been compacted since, so coming back hours after `/compact` warned about the old (e.g. 800k) size of a now-small context. It now stops at a compact boundary. (Found by reading the code; the live note fired correctly on this session at 807k after 43 idle hours.)
@@ -111,7 +179,7 @@ Each module checked against real data and hostile input, not only its tests:
 - **`savings` fits 80 columns** (it ran to ~95 and wrapped); **`savings --share [--copy]`** prints totals only, tested to contain no project names or paths; the README shows the real output as a rendered terminal image (`scripts/render-terminal-svg.mjs`).
 - **Checked:** every CLI command in a clean home (no crashes, no stack traces); install/doctor/uninstall round trip with existing user settings (kept intact, ours fully removed); README and roadmap anchors; hook time on the three largest real sessions (0.12–0.16 s per prompt, 0.8–1.7 s on a full re-parse of 86–343 MB).
 
-## Shipped in 0.22.0 — an audit of what actually works, and a lever that does in the desktop app
+### Shipped in 0.22.0 — an audit of what actually works, and a lever that does in the desktop app
 
 Asked: "make it better, make sure everything works." Audited on the author's machine first:
 
@@ -121,7 +189,7 @@ Asked: "make it better, make sure everything works." Audited on the author's mac
 - **Cost quoted at the wrong rate**: the hook priced a cached session's per-message cost at the uncached rate (10x too high), and `report` and autopilot's counter priced cached tokens at the full input rate. Both now use the cached rate.
 - **Checked live on every surface**: this Claude Code session's MCP tool (sketch), the published npm package in a clean home (`savings`, `doctor`, `npx -y context-doctor mcp`), Codex (`codex mcp list` shows it enabled), Cursor's config, a fresh plugin install from GitHub (MCP `✓ Connected`), the Claude Desktop MCP server (connected; the model has not called it since 0.17, so chat apps remain a nudge). `--version` was missing, and is added.
 
-## Shipped in 0.21.0 — see it before you install it, install it where you already are
+### Shipped in 0.21.0 — see it before you install it, install it where you already are
 
 Asked: "can we make anything better so more people download and use this?" Measured first: downloads were rising (350 on 25 Sep), but npm search ranked context-doctor outside the top 50 for every generic query ("claude code context", "context window", "token usage"), so new users were not finding it by searching, and a first run printed help text.
 
@@ -131,13 +199,13 @@ Asked: "can we make anything better so more people download and use this?" Measu
 - **`npm version` syncs every version string** (server.json, the MCP server, the proxy), rebuilds `dist/` and stages it, so a release is one command.
 - **Fixed:** with autopilot off, the every-prompt hook health-checked port `undefined` and printed a Node deprecation warning, and `autopilot status` would have reported a dead proxy instead of "off".
 
-## Shipped in 0.20.1 — releases that finish themselves
+### Shipped in 0.20.1 — releases that finish themselves
 
 - **One tag, every channel.** `v*` tags run the suite, publish to npm through trusted publishing (npm is restricting tokens that bypass 2FA, so the workflow authenticates by OIDC and needs no stored token), and create a GitHub release with the Claude Desktop bundle attached, its notes taken from this file. A missing secret is a notice, not a red run (the v0.17.0 tag failed red for exactly that).
 - **Signed Desktop bundle, when a certificate exists.** `build:mcpb` signs with `MCPB_CERT` / `MCPB_KEY` (PEM files or text) and requires `mcpb verify` to pass, which chains the certificate to the OS trust store the way Desktop does. Found while testing: a self-signed certificate never passes `verify` by design, so the self-signed mode (`MCPB_SELF_SIGNED=1`) checks the signature block instead and is for pipeline tests only. The bundle now carries an icon.
 - **Extension 0.2.0, marketplace-ready**: icon, categories, listing README and changelog; `vscode-v*` tags publish to the VS Code Marketplace and Open VSX when their tokens exist and always attach the `.vsix` to a release.
 
-## Shipped in 0.20.0 — autopilot: lean context in every Claude Code session, never more expensive
+### Shipped in 0.20.0 — autopilot: lean context in every Claude Code session, never more expensive
 
 Asked: "auto-optimize every session I run, and make sure performance only improves." Measured before building:
 
@@ -147,7 +215,7 @@ Asked: "auto-optimize every session I run, and make sure performance only improv
 - **AutoClearer** follows that design with one change for "never worse": batches are taken only when the cache is cold anyway (idle past the request's own TTL, 1 hour here; 444 of 19,824 gaps). Replaying every session through the shipped class: 9.8% less cache-weighted input, no session worse. Warm-cache payback rules gained 0.1% and lost on one session, so they are opt-in.
 - **Service + wiring**: launchd / systemd --user / logon task; `/health` must answer before settings.json is touched; the hook restarts a dead proxy before the prompt's request (0.6 s, measured); `pause` is an instant passthrough. Overhead 7 ms on a 2.9 MB request. Verified that settings.json `env` overrides the base URL the desktop app injects.
 
-## Shipped in 0.19.0 — the estimator was undercounting Claude by ~40%
+### Shipped in 0.19.0 — the estimator was undercounting Claude by ~40%
 
 Picked up as "calibrate the sketch against exact usage"; the calibration found a bigger problem underneath.
 
@@ -159,16 +227,16 @@ Picked up as "calibrate the sketch against exact usage"; the calibration found a
 - **`accuracy` gained a tokenizer check** that re-runs both measurements per model on the user's own sessions.
 - **The sketch** now sizes in measured chars (exchange 2,060, code line 42, log line 56, word 6.3) converted per model, and states its measured error (total from turn count -20% to +9%; code by lines ±25%) instead of ±30%.
 
-## Shipped in 0.18.0 — the proxy on a public URL
+### Shipped in 0.18.0 — the proxy on a public URL
 
 - **`proxy --token <secret>`** (also `CONTEXT_DOCTOR_PROXY_TOKEN`). Every path except `/health` must start with `/t/<secret>/`, compared in constant time, stripped before routing; a wrong or missing prefix is a 401 with no upstream call. This is the prerequisite for the Cursor BYO-key item: in Cursor 3.18.25 the OpenAI base-URL override is sent to Cursor's backend inside the model configuration and Cursor's *servers* call it (only the key-verification ping is client-side), so the proxy must be on a public URL, and an unauthenticated relay must not be. Cursor can set a URL but not a header, so the secret rides in the path. README documents the tunnel + Cursor settings path.
 - Not available to us: Cursor's "local mode" (`CURSOR_LOCAL_AGENT_BASE_URL`, client-side inference against any OpenAI-compatible gateway) is compiled to `localMode: false` in the consumer build.
 
-## Closed by measurement in 0.18.0 — Cursor `beforeReadFile` trimming
+### Closed by measurement in 0.18.0 — Cursor `beforeReadFile` trimming
 
 The item assumed the hook could rewrite file content. In Cursor 3.18.25 the `beforeReadFile` response validator accepts only `permission: allow|deny` and `user_message`; the local agent runtime reads the same two fields and nothing else. The only inherent action is to deny a read and tell the agent why. Then the measurement, on 735 `Read` calls across 13 real Cursor agent transcripts: Cursor's agent already ranges 82% of its reads (`offset`/`limit`); whole-file reads have a median size of 4.6 KB and a p90 of 26 KB; 6 of 735 reads exceeded ~10k tokens and none exceeded 200 KB. A deny guard would fire on under 1% of reads, save 10-25k tokens each time, and break a workflow whenever its threshold was wrong. Not shipped. Cursor's transcript also never contains tool results, which is why the hook there reports estimated sizes only.
 
-## Shipped in 0.17.0 — Claude Desktop, as far as it can go
+### Shipped in 0.17.0 — Claude Desktop, as far as it can go
 
 - **Why the tool was never called from chat.** Desktop's log showed zero `tools/call` in a month with the server loaded. The instruction said "call profile_context", but the tool's only input was the full conversation JSON, which a chat model cannot export and would have to re-type. An impossible instruction is not a nudge.
 - **`sketch` input**: turn count plus the blocks that matter (large, repeated, stale, image, base64) with one size hint each, ~120 output tokens. The server sizes it, prices the per-turn re-read, ranks findings and tells the model to apply the top one. Server instructions, tool description and the `context_checkup` prompt all point chat apps at it.
@@ -176,14 +244,14 @@ The item assumed the hook could rewrite file content. In Cursor 3.18.25 the `bef
 - **`context-doctor instructions --copy`**: the same rules for claude.ai / ChatGPT per-account preferences, read on every turn on web and phones where no server runs.
 - **`.mcpb` bundle** (`npm run build:mcpb`, 3.1 MB, validated in CI and uploaded as an artifact): one-click install through Desktop's Extensions UI on Desktop's own Node, no npm.
 
-## Shipped in 0.16.0 — GPT, through Codex
+### Shipped in 0.16.0 — GPT, through Codex
 
 | Item | Why |
 |---|---|
 | **Codex support** | Asked: "can we make it work for GPT?" The ChatGPT chat UI cannot be made inherent (no MCP, no hooks, no data path; checked). Codex can: the agent bundled in ChatGPT.app (binary 0.153.4), the IDE extension and the CLI implement Claude Code's hook contract almost verbatim (`hooks.json`, `hookSpecificOutput.additionalContext`, `transcript_path`), `[mcp_servers.*]` in `config.toml`, and `SKILL.md`. `install` wires all three; rollouts parse with the API's own usage (40/40 real sessions, tool timings via `call_id`); `session --list` includes them; `doctor` checks them. Codex's one-time hook trust (`/hooks`) is stated at install |
 | **`config.toml` editing without a TOML library** | The file is the user's. Everything outside `[mcp_servers.context-doctor]` is copied byte for byte; re-running replaces rather than duplicates; removal restores the file. Tested with our table first, last and in the middle |
 
-## Shipped in 0.15.0 — what actually runs by itself, and one surface that now does
+### Shipped in 0.15.0 — what actually runs by itself, and one surface that now does
 
 | Item | Why |
 |---|---|
@@ -191,37 +259,37 @@ The item assumed the hook could rewrite file content. In Cursor 3.18.25 the `bef
 | **Desktop instruction is action-shaped** | From "offer to run profile_context" to "past ~30 turns / 3+ large pastes / any cost question, call profile_context BEFORE answering". Still ~150 tokens. Plus a `context_checkup` MCP prompt in Desktop's + menu |
 | **README says which surfaces are inherent** | Claude Code, Cursor and the proxy act without the model's cooperation; Claude Desktop is a strong nudge; ChatGPT is on-demand only. The previous "every chat inherently better" was true for fewer surfaces than it implied |
 
-## Shipped in 0.14.3 — the editor extension
+### Shipped in 0.14.3 — the editor extension
 
 | Item | Why |
 |---|---|
 | **VS Code / Cursor extension** (`vscode/`) | The last roadmap item. Live context, share of window and cache share in the editor's status bar, from the newest Claude Code transcript for the open folder; warning colour past a configurable threshold; click to run `session`. Self-contained (no dependency on the npm package, so it works on a machine that never installed it), pure core with its own tests, built and packaged in CI, installed and verified in both VS Code and Cursor locally. Marketplace publishing is the owner's step |
 
-## Shipped in 0.14.2 — subagents were never in the transcript
+### Shipped in 0.14.2 — subagents were never in the transcript
 
 | Item | Why |
 |---|---|
 | **Subagent accounting** | Blocked for weeks on "no sidechain entries in any transcript". Wrong place to look: Claude Code writes each subagent to its own file under `<session>/subagents/`. 195 of them on one machine, 19 sessions, final contexts summing to 28M tokens, about $1,844 at list price, none of it ever shown. `session` now lists them with task, calls, final context, duration and cache-aware cost, compares the total against the parent's own total input cost, and flags subagents that ended above 200k tokens |
 
-## Shipped in 0.14.1 — context health where the work happens
+### Shipped in 0.14.1 — context health where the work happens
 
 | Item | Why |
 |---|---|
 | **Claude Code status line** | `install --statusline` wires `context-doctor statusline` into Claude Code's `statusLine`, so live context vs window, a warning from 70%, cache share and cost sit in the status bar while you type. Reads the status payload when Claude Code provides the size, else the last 256KB of the transcript (~1ms; 80ms end to end). Never overwrites a status line you already have; uninstall removes only its own; any failure prints nothing. The roadmap's "editor status bar", for the editor most users of this tool are in |
 
-## Shipped in 0.14.0 — the experiment the critics asked for
+### Shipped in 0.14.0 — the experiment the critics asked for
 
 | Item | Why |
 |---|---|
 | **`context-doctor experiment`** | The one honest answer to "does a smaller context actually help": the same task, from the same commit, in a fresh session and forked from an existing one (`--resume --fork-session`, so the real session is untouched), same model and tools, with the bill, cache split, wall clock and a `--check` pass/fail side by side. The verdict weighs cost against passing, because a cheaper failure is not a saving. It is the only command that spends money, so it caps spend per arm, refuses a dirty tree, refuses to run inside Claude Code, and has a dry run. Tested end to end against a stub `claude` |
 
-## Shipped in 0.13.9 — the estimator learns from your own exact counts
+### Shipped in 0.13.9 — the estimator learns from your own exact counts
 
 | Item | Why |
 |---|---|
 | **Calibration from `--exact`** | Shipping a tokenizer would break the no-key, no-dependency default, and transcript deltas cannot calibrate anything (see 0.13.0). What can: the one clean comparison a user makes when they run `analyze --exact`, a true count for the exact bytes just estimated. That ratio is now remembered per model family on this machine and applied to later estimates, printed in the profile header so scaled numbers never pass as raw. Out-of-range samples are ignored; an env switch disables it. Tests run with it disabled by construction, via a runner script that also stops a new test file from being left out of the suite |
 
-## Closed by measurement in 0.13.8 — `trim-tool-calls` stays opt-in
+### Closed by measurement in 0.13.8 — `trim-tool-calls` stays opt-in
 
 The question was whether trimming a completed tool call can confuse a live agent.
 Across 42 sessions: 73 large writes, 18 later edited, and 16 of those edits had no
@@ -231,27 +299,27 @@ outside any recent-message window. Default stays off. What shipped instead: the
 offline optimizer, which can see the rest of the conversation, now keeps exactly
 those writes and trims the 63% that are never touched again.
 
-## Shipped in 0.13.7 — the advisor says where
+### Shipped in 0.13.7 — the advisor says where
 
 | Item | Why |
 |---|---|
 | **Cache breakpoint placement** | The proxy used to say a breakpoint was missing. It now says where: for a large system/tools prefix, the last tool definition (or last system block); for the conversation, it fingerprints each message across consecutive requests, finds the run that was byte-identical to the previous call, and names the exact message to mark along with the tokens that run re-bills each turn. Only when the run clears Anthropic's ~1024-token caching floor, and never for a request that already carries `cache_control` |
 
-## Shipped in 0.13.6 — two small roadmap items, one measured
+### Shipped in 0.13.6 — two small roadmap items, one measured
 
 | Item | Why |
 |---|---|
 | **Trim step is a documented knob, not a magic number** | Tried to find "the right" step as a function of conversation size. Measured instead: at 400 turns, step 10 → 21% of turns invalidate the cache with ~2 stale results waiting; 20 → 12% and ~4; 40 → 10% and ~9. Adaptive steps were worse everywhere because a changing step moves the boundary itself. So: default stays 10, `trimBoundaryStep` in `.contextdoctorrc` and `OptimizeOptions`, numbers in the README |
 | **Windows sandboxing is structural** | One shared `sandboxEnv`/`withSandboxHome` helper and a guard test that reads every test source and fails the suite if any sets HOME without USERPROFILE. Verified it bites by planting an offender |
 
-## Shipped in 0.13.5 — the two things r/ClaudeCode asked for
+### Shipped in 0.13.5 — the two things r/ClaudeCode asked for
 
 | Item | Why |
 |---|---|
 | **Where the time goes** | `session` now reports wall clock per tool from the timestamps on every transcript entry (tool_use → tool_result). On one real session: Bash was 87% of 146 minutes of waiting, median 1.3s, slowest 22.5m. The caveat travels with the number: the gap includes waiting on permission prompts. The concern that it would also contain model generation turned out not to apply: the model has finished emitting the call before the call's own timestamp is written, and its next turn starts after the result's |
 | **Retry vs re-read** | Identical tool calls split by what happened to the previous attempt. Measured across 42 sessions: 15 retries (1 loop of 3+) against 151 re-reads, so ~90% of "repeated calls" were the model forgetting it already had the answer, and the old advice ("cache results") was right for those and wrong for the retries, where the answer is in the first error |
 
-## Shipped in 0.13.0 — measurement, presets, and a cache bug
+### Shipped in 0.13.0 — measurement, presets, and a cache bug
 
 | Item | Why |
 |---|---|
@@ -261,7 +329,7 @@ those writes and trims the 63% that are never touched again.
 | **Shell file reads** | `cat`/`head`/`tail`/`less` count as reads. 16 real findings across 6 local sessions that were previously invisible |
 | **Cache-aware trimming** | The trim boundary moved every turn, invalidating the prompt cache on 22 of 24 turns and paying the 1.25x write price to save a few hundred tokens. Quantized: 8 of 24, trimming undiminished |
 
-### One roadmap item did not survive contact with the data
+#### One roadmap item did not survive contact with the data
 
 **"Calibrate the heuristic from ground truth"** assumed transcripts record what is
 sent. They do not. A turn with 5,595 characters of visible content is billed
@@ -272,18 +340,3 @@ the estimator to noise. Calibration needs a real tokenizer, not this data.
 
 **Subagent accounting** is unblocked only by a sample: none of the 39 local
 sessions contain sidechain traffic, so the field shapes would be guesswork.
-
-## Next candidates
-
-Nothing left that code can finish. npm publishing by trusted publishing is done (every release since 0.22 went out by OIDC, with provenance). The two remaining items are built, tested and wired into CI; each waits on an account only the owner can create (see "Releasing" in the README for exactly where each secret goes):
-
-| Item | State | Owner's step |
-|---|---|---|
-| **Sign the `.mcpb`** | Signing is in `build:mcpb` and the release workflow; `mcpb verify` gates the release. Tested end to end with a self-signed certificate | Obtain a code-signing certificate from a trusted CA; add `MCPB_CERT` / `MCPB_KEY` |
-| **Publish the extension** | 0.2.0 has marketplace metadata, icon, listing README and changelog; the `vscode-v*` workflow publishes to both marketplaces and attaches the `.vsix` to a release | Create the `gai-ventures` publisher and an Open VSX account; add `VSCE_PAT` / `OVSX_PAT`; push `vscode-v0.2.0` |
-
-## Non-goals
-
-- **Cloud service / accounts / telemetry** — everything stays on the user's machine, permanently.
-- **Silent history rewriting** — lossy changes remain consent-only, with the host model writing summaries.
-- **API keys for core function** — optional adapters may accept a key; nothing core ever requires one.

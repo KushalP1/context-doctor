@@ -15,6 +15,7 @@ Long agent sessions fill up with tool output nobody reads again, and a 500k-toke
 - **Tells you when to `/compact`, at the moment it pays.** When you come back to a large session after the cache expired, the every-prompt hook gives the model the numbers and it offers `/compact` once. Replayed over 133 days of the author's Claude Code history: 401 such returns, and compacting then would have saved **$4,053 net at list price, about $914 a month**. It works in every Claude Code surface, including the desktop app. [What it saves →](#what-it-saves)
 - **Compacts earlier, automatically, in every Claude Code surface.** Claude Code auto-compacts near the full window (measured: ~970k tokens on a 1M model), so long sessions re-read 400k-900k tokens on every message. `context-doctor compact-window` replays your history at smaller windows and, if you choose, sets Claude Code's own `autoCompactWindow`. On the author's last 30 days: **a 400k window would have cut input cost 55%** ($6,119 to $2,757), for 15 compactions a week instead of 5. A native setting, so it works in the desktop app too. [The trade-off →](#3-compacting-earlier-automatic)
 - **Autopilot for terminal and IDE sessions and API apps:** a local proxy that clears stale tool output only when the prompt cache is cold, so it never costs more. **9.8% less input cost, no session made more expensive**, in the same replay. (The desktop app's Code tab sets its own API address, so autopilot cannot reach it; `doctor` tells you if that is your case.)
+- **Keeps waste out in the first place.** `context-doctor pack` (and the `pack_context` MCP tool) puts only the chunks of a big document, log or codebase that a question needs into the context, within a token budget: 9 of 10 questions about this repo answered from 0.6% of its tokens. `context-doctor overhead` measures what every request re-reads before your message (system prompt, tools, CLAUDE.md, rules, memory) and prices each memory file per month. [How →](#before-it-enters-the-context-pack-and-overhead)
 - **Counts Claude correctly.** Current Claude models pack 2.75 characters per token, not the 4 most tools assume, so estimates built on 4 undercount Claude by about 40%. The ratios were measured from the API's own counts; `context-doctor accuracy` re-checks them on yours.
 - **Works where you work:** Claude Code (terminal, IDE, desktop app, plugin), Cursor, Codex, Claude Desktop chat, any Anthropic or OpenAI API app, VS Code, CI. macOS, Linux and Windows, Node 20+. Local, keyless, no telemetry, MIT.
 
@@ -116,14 +117,51 @@ On a Claude subscription you do not pay list price; the same tokens come out of 
 | **Cursor** (agent) | A native **after-tool-call hook** (`~/.cursor/hooks.json`): in a heavy chat the agent gets the same hygiene guidance and the largest waste, once per 40% of growth. (Cursor's prompt hook can only allow or block a prompt, so this is the event where guidance reaches the model) | MCP tools, editor status bar extension, `cursor` profiler. With your own OpenAI key, autopilot too via a tokened tunnel ([how](#putting-the-proxy-on-a-public-url-cursor-with-your-own-openai-key-remote-apps)) |
 | **Codex** (ChatGPT app's Codex tab, IDE extension, CLI) | Every-prompt hook with the API's own token counts | MCP tools, skill, `session` reads Codex rollouts. On an API key, autopilot too (`OPENAI_BASE_URL`) |
 | **Your own apps on the Anthropic or OpenAI API** | Autopilot on `/v1/messages`, `/v1/chat/completions` and `/v1/responses` (`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`), or the full optimizing proxy | Exact usage and cache hit rates in `/stats`, prompt-cache placement advice |
-| **Claude Desktop chat** | Standing context rules in every chat; one cheap `profile_context` call the model makes past ~30 turns or on any cost question | One-click `.mcpb` install, `context_checkup` prompt |
+| **Claude Desktop chat** | Standing context rules in every chat; one cheap `profile_context` call the model makes past ~30 turns or on any cost question; `pack_context` instead of reading a big local file whole | One-click `.mcpb` install, `context_checkup` prompt |
 | **claude.ai, ChatGPT, the phone apps** | Your account's standing preferences (`context-doctor instructions --copy`) | Profile an exported chat with `analyze` |
 | **CI** | `analyze --fail-over-budget` fails a build whose prompts outgrow a budget | `.contextdoctorrc` budgets and presets |
 
 Not claimed, because no process on your machine sends those requests: trimming inside Claude Desktop chat, claude.ai, ChatGPT, Cursor's own subscription models, or Codex signed in with ChatGPT. Those get the rules and the measurements above, not autopilot.
 
+## Before it enters the context: pack and overhead
+
+Everything above slims context that is already there. Two commands stop it getting in.
+
+**`pack`: only the parts of a document a question needs.** A 60k-token manual pasted to answer one question is paid on that message and re-read on every message after it. `pack` splits files and folders along their own structure (markdown headings, top-level code declarations, paragraphs; one-line logs and minified files are cut too), ranks the chunks against your question with BM25, and returns the best ones that fit a budget. Every chunk carries an id and its line range, and the result names the next-best ids, so asking for more is one call. Without a question you get an outline to pick from.
+
+```bash
+context-doctor pack docs/ README.md --query "how do I rotate the signing key" --max-tokens 3000
+context-doctor pack big-manual.md                     # outline: id, lines, tokens, heading per chunk
+context-doctor pack big-manual.md --ids big-manual.md#12,big-manual.md#13
+cat server.log | context-doctor pack - -q "timeout upstream"
+```
+
+```
+$ context-doctor pack README.md src -q "how is the ledger kept from growing" --max-tokens 2000
+PACKED ~1.9k of ~315k tokens (1%) from 80 files: 7 of 1026 chunks for "how is the ledger kept from growing", budget 2.0k.
+
+── src/ledger.ts#6 · L108-128 · export function recordLedger(entry: Omit<LedgerEntry, "ts">): void { · ~404
+...
+── src/test/ledger.test.ts#1 · L1-22 · The ledger is capped, and everything it feeds is a LIFETIME total. · ~409
+...
+Not included: 1019 chunk(s). Next best: src/watch.ts#1 (...); src/test/compactwindow.test.ts#4 (...)
+```
+
+In Claude Desktop, Claude Code, Cursor and Codex the same thing is the `pack_context` MCP tool, and the standing instructions tell the model to use it when it needs to answer from a large file it is not editing. Ranking is lexical, offline and keyless; it misses pure paraphrase, which is what the outline is for. Measured on this repository (README plus source, ~305k tokens): 9 of 10 factual questions were answered from a 2k-token pack. Text files only for now; convert PDFs first. Over HTTP (the ChatGPT connector mode) the tool reads no files, only text you pass.
+
+**`overhead`: what every request re-reads before your message.** The system prompt, tool and MCP schemas, skills and your memory files ride on every request: cached, so each read is cheap, but read on every request of every session and written again at full price after each cold start. Transcripts never show them. `overhead` measures the fixed part from the first request of each recent Claude Code session (the API's own count, minus your first message), lists every memory file each agent loads in the current directory (Claude Code's CLAUDE.md with its `@imports`, rules and auto memory; Codex's AGENTS.md; Cursor's always-applied rules; GEMINI.md), and prices each per month from your own request and cold-start counts.
+
+```
+Claude Code, last 30 days: 71 sessions start at a median ~54k tokens (p90 ~62k) before the first message.
+Memory files loaded here are ~3.4k of that; the rest is Claude Code's system prompt, tools, skills and MCP schemas.
+At your usage (14,104 requests, 249 cold starts, claude-fable-5-1 list prices) every 1k tokens of it costs ~$16.97 a month;
+```
+
+Findings point at files over 2k tokens, paragraphs loaded twice from two files, and long code blocks that could live in a file the agent opens when it needs them.
+
 ## What's new
 
+- **0.27 (on main) Keep waste out**: `pack` and the `pack_context` MCP tool put only the chunks of big files a question needs into the context, within a budget; `overhead` measures and prices the front matter every request re-reads (system prompt, tools, CLAUDE.md, rules, memory, AGENTS.md, Cursor rules, GEMINI.md). Re-verified on every surface: 204 tests, MCP over stdio and HTTP, the OpenAI proxy, and a live `doctor`.
 - **0.26 Checked on every platform, three fixes**: tested end to end in Claude Code (terminal, desktop app, plugin from GitHub), Claude Desktop, Cursor, Codex on GPT-5.5, VS Code, the MCP server on every launch path, and the proxy on OpenAI's APIs. Found and fixed: Cursor's agent never received the hook's guidance (Cursor runs Claude Code's hook where output cannot add context), so `install` now adds a native Cursor hook; Codex blocked the MCP tools behind an approval it never grants in `codex exec`, so the tools are now marked read-only; autopilot skipped Codex's newest tools (`exec`, `wait`) and some of Cursor's. Also: a history imported into Codex no longer reads as "2136% of the window", and the chat-app settings paths are current.
 - **0.25 Compact earlier, by itself**: the `/compact` offer at cold resumes was followed 1 time in 33 on the author's machine, so two changes. The hook now also shows you the notice (it went only to the model, which rarely raised it), with the dollar cost of the message you just sent. And `context-doctor compact-window` measures and sets Claude Code's own auto-compact window, which works without anyone acting on advice, in every surface including the desktop app: 55% less input cost at 400k on the author's last 30 days. `savings` shows it as a third lever.
 - **0.20 Autopilot**: stale tool output cleared from every Claude Code request, only when the prompt cache is cold, so it cannot cost more (measured: 9.8% less input cost, ~$1,080 a month on the author's usage, no session worse); runs as a login service on macOS, Linux and Windows; now also for GPT via OpenAI's Chat Completions and Responses APIs.
@@ -199,6 +237,8 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | `context-doctor mcp [--http]` | The MCP server as a subcommand, for clients and registries that launch `npx -y context-doctor mcp` |
 | `context-doctor autopilot on\|off\|pause\|resume\|status` | Every new Claude Code session goes through the local proxy, which clears stale tool output only when the prompt cache is cold: measured 9.8% less input cost, no session worse |
 | `context-doctor instructions [--copy]` | The ~180-token standing rules (~120 on GPT) for claude.ai / ChatGPT preferences, for web and phones where no server runs |
+| `context-doctor pack <files\|dirs\|-> --query "…"` | Only the chunks of big documents, logs or code a question needs, ranked and fit to `--max-tokens` (default 4000). No query: an outline; `--ids a#2,b#5` picks chunks from it. Offline, no key |
+| `context-doctor overhead [--days n]` | What every request re-reads before your message: measured first-request size, each memory file (CLAUDE.md and imports, rules, auto memory, AGENTS.md, Cursor rules, GEMINI.md) priced per month, findings |
 | `context-doctor analyze <file>` | Profile a conversation: token breakdown, findings, cost + latency estimates. `--fail-over-budget` exits 1 on a breach, for CI |
 | `context-doctor optimize <file>` | Apply the safe fixes; add `--strategy trim-tool-calls` for big inline file writes, `--strategy prune-history` for consented lossy compaction |
 | `context-doctor session [file]` | Profile a Claude Code session: live context, findings, **measured tokens and prompt-cache economics**, **where the wall clock went** per tool, and **what its subagents cost** (their own windows, your bill; never in the parent's profile). Also reads ChatGPT data exports (`conversations.json`) |
@@ -403,6 +443,7 @@ Your local MCP server can't reach the website, but the behavior can. Two options
 |---|---|
 | `profile_context` | Token breakdown by category, largest messages, findings with estimated savings. Takes either `conversation` (full JSON or text) or `sketch` (turns + large/repeated blocks, for chat apps) |
 | `optimize_context` | Rewrites the conversation: dedupe, trim stale tool results, strip base64, optional history pruning |
+| `pack_context` | Only the chunks of large local files or folders (or passed `text`) that a question needs, within `max_tokens`; outline without a query; `ids` to fetch more. Reads no files over HTTP |
 | `context_best_practices` | Curated checklist, optionally specialized for Anthropic / OpenAI |
 
 ## Use it as a library
@@ -416,6 +457,11 @@ console.log(profile.totalTokens, profile.findings);
 const { conversation, tokensBefore, tokensAfter } = optimizeConversation(chatJson, {
   strategies: ["dedupe", "trim-tool-results", "strip-base64"],
 });
+
+// RAG-style context packing: chunk, rank, fit a budget (no embeddings, no key)
+import { packContext, renderPack } from "context-doctor";
+const packed = packContext([{ name: "manual.md", text: manual }], { query: "rotate the signing key", budget: 3000 });
+console.log(packed.selected.map((c) => `${c.id} L${c.startLine}-${c.endLine}`), renderPack(packed));
 ```
 
 ## Subagents: their own windows, your bill
@@ -636,7 +682,7 @@ One honest caveat worth knowing: a transcript stores the conversation, **not** t
 
 ## Roadmap
 
-See [ROADMAP.md](./ROADMAP.md) for the full plan with rationale. Headlines: **v0.5** trust & automation (tag-based publishing, `doctor` self-check, live `watch`), **v0.6** accuracy (exact tokenizers, semantic dedupe, more session formats), **v0.7** proxy pro (response accounting, prompt-cache advisor), **v1.0** budgets + local dashboard. Non-goals, permanently: cloud services, telemetry, silent history rewriting, mandatory API keys.
+See [ROADMAP.md](./ROADMAP.md) for the full plan, the per-surface coverage table and the measurements behind every shipped item. Next, in order of expected saving: the MCP schema tax per server in `overhead`; `overhead --split` to turn a heavy CLAUDE.md into a lean one plus a reference file (shown as a diff, written only on request); `pack` for PDFs and Office files with tools the OS already has; a measured large-paste notice in the hook; in-process SDK wrappers for API apps that cannot use a proxy; Gemini CLI and Gemini API support; a GitHub Action; optional local embeddings for `pack`; a Python package for RAG pipelines. Non-goals, permanently: cloud services, telemetry, silent history rewriting, mandatory API keys.
 
 Contributions welcome — this project is small on purpose. Open an issue before a big PR.
 
