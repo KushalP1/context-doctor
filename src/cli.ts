@@ -43,6 +43,7 @@ import { listCursorChats, parseCursorChat } from "./cursor.js";
 import { analyzeCacheUsage, renderCacheReport } from "./cache.js";
 import { renderToolTimings } from "./timing.js";
 import { packContext, readSources, renderPack } from "./pack.js";
+import { overheadReport, renderOverhead } from "./overhead.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -95,6 +96,9 @@ Usage:
                                                 were resolved, and what it saves
   context-doctor accuracy                       Measure the token heuristic against the API's own
                                                 counts recorded in your transcripts (--limit n)
+  context-doctor overhead [--days n]            What every request re-reads before your message:
+                                                measured first-request size, each CLAUDE.md /
+                                                AGENTS.md / rules file priced per month, findings
   context-doctor pack <files|dirs...> --query "<q>" [--max-tokens n]
                                                 Only the parts of big docs/code a question needs:
                                                 chunk along headings and declarations, rank, fit a
@@ -645,6 +649,12 @@ async function main(): Promise<void> {
       trimBoundaryStep: loadedRc.config.trimBoundaryStep,
     });
     return; // server keeps the process alive
+  }
+
+  if (args.command === "overhead") {
+    const report = overheadReport({ days: args.days });
+    console.log(args.json ? JSON.stringify(report, null, 2) : renderOverhead(report));
+    return;
   }
 
   if (args.command === "pack") {
