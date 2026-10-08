@@ -57,7 +57,7 @@ export interface ProxyOptions extends OptimizeOptions {
 }
 
 /** Reported by /health so `autopilot status` can tell an outdated service from a current one. */
-export const PROXY_VERSION = "0.26.0";
+export const PROXY_VERSION = "0.27.0";
 
 /** Connection-level headers that must not be forwarded. */
 const SKIP_REQUEST_HEADERS = new Set(["host", "content-length", "connection", "transfer-encoding", "accept-encoding", "expect"]);

@@ -1,6 +1,6 @@
 {
   "name": "context-doctor",
-  "version": "0.26.0",
+  "version": "0.27.0",
   "description": "Cut your Claude Code bill, measured on your own sessions: `npx context-doctor savings` shows what each lever saves, then the hook, autopilot and an earlier auto-compact window do it. Also Cursor, Codex, Claude Desktop and any Anthropic or OpenAI API app. MCP server and Claude Code plugin.",
   "keywords": [
     "agent",

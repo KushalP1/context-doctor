@@ -48,7 +48,7 @@ export interface ProxyOptions extends OptimizeOptions {
     googleUpstream?: string;
 }
 /** Reported by /health so `autopilot status` can tell an outdated service from a current one. */
-export declare const PROXY_VERSION = "0.26.0";
+export declare const PROXY_VERSION = "0.27.0";
 /**
  * Remove a leading `/t/<token>` from a request path, or return undefined when
  * the prefix is absent or the token differs. The comparison is constant time

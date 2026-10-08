@@ -27,7 +27,7 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 - OpenAI proxy smoke against a local mock: model listing passthrough, auth header untouched, incremental streaming, Responses API, usage capture, autopilot clearing.
 - `doctor` on the author's machine: Claude Desktop, Claude Code, Cursor and Codex wired; hooks registered in Claude Code, Codex and Cursor; status line, skill, ledger, autopilot up.
 
-## Now: shipped on main for 0.27
+## Now: shipped in 0.27.0
 
 | Item | Why | Status |
 |---|---|---|
