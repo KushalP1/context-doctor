@@ -44,6 +44,7 @@ import { renderToolTimings } from "./timing.js";
 import { packContext, readSources, renderPack } from "./pack.js";
 import { measureBaseline, measureMcpSizes, overheadReport, renderOverhead } from "./overhead.js";
 import { applySplit, planSplit, renderSplit } from "./split.js";
+import { ciReport, renderCiMarkdown, renderCiText } from "./ci.js";
 const HELP = `context-doctor — profile and optimize LLM context windows
 
 Usage:
@@ -98,6 +99,9 @@ Usage:
   context-doctor overhead [--days n] [--mcp]    What every request re-reads before your message:
                                                 measured first-request size, each CLAUDE.md /
                                                 AGENTS.md / rules file priced per month, findings
+  context-doctor ci [--base <ref>] [--max-tokens n] [--max-increase n] [--markdown]
+                                                For pull requests: memory files (CLAUDE.md, AGENTS.md,
+                                                GEMINI.md, rules) at HEAD vs base; exit 1 over budget
   context-doctor overhead split <file> [--write]
                                                 Move a memory file's big sections to a reference
                                                 file, leaving pointers (plan first; --write backs up)
@@ -276,6 +280,18 @@ function parseArgs(argv) {
                 break;
             case "--write":
                 args.write = true;
+                break;
+            case "--base":
+                args.base = argv[++i];
+                break;
+            case "--markdown":
+                args.markdown = true;
+                break;
+            case "--max-increase":
+                args.maxIncrease = numArg("--max-increase", argv[++i], { min: 0, integer: true });
+                break;
+            case "--requests-per-day":
+                args.requestsPerDay = numArg("--requests-per-day", argv[++i], { min: 1 });
                 break;
             case "--min-tokens":
                 args.minTokens = numArg("--min-tokens", argv[++i], { min: 50, integer: true });
@@ -685,6 +701,13 @@ async function main() {
             trimBoundaryStep: loadedRc.config.trimBoundaryStep,
         });
         return; // server keeps the process alive
+    }
+    if (args.command === "ci") {
+        const report = ciReport({ base: args.base, maxTokens: args.maxTokens, maxIncrease: args.maxIncrease });
+        console.log(args.json ? JSON.stringify(report, null, 2) : args.markdown ? renderCiMarkdown(report, { model: args.model, requestsPerDay: args.requestsPerDay }) : renderCiText(report));
+        if (report.breaches.length)
+            process.exitCode = 1;
+        return;
     }
     if (args.command === "overhead" && args.positionals?.[0] === "split") {
         const file = args.positionals[1];

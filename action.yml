@@ -1,0 +1,90 @@
+name: context-doctor memory check
+description: On every pull request, measure the agent memory files (CLAUDE.md, AGENTS.md, GEMINI.md, rules) every request re-reads, comment the change, and fail over a token budget.
+author: gAI Ventures
+branding:
+  icon: activity
+  color: green
+
+inputs:
+  max-tokens:
+    description: Fail when the memory files together exceed this many tokens. Empty = no limit.
+    required: false
+    default: ""
+  max-increase:
+    description: Fail when a pull request grows them by more than this many tokens. Empty = no limit.
+    required: false
+    default: ""
+  requests-per-day:
+    description: Your team's agent requests a day, to price the change in dollars. Empty = tokens only.
+    required: false
+    default: ""
+  model:
+    description: Model whose cached-read price is used for the dollar figure.
+    required: false
+    default: claude-sonnet-5
+  comment:
+    description: Post (and keep updating) one comment on the pull request. Needs `pull-requests: write`.
+    required: false
+    default: "true"
+  version:
+    description: context-doctor version from npm.
+    required: false
+    default: latest
+
+outputs:
+  head-tokens:
+    description: Memory-file tokens at the head of the pull request.
+    value: ${{ steps.check.outputs.head-tokens }}
+  delta-tokens:
+    description: Change against the base branch.
+    value: ${{ steps.check.outputs.delta-tokens }}
+
+runs:
+  using: composite
+  steps:
+    - id: check
+      shell: bash
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        MAX_TOKENS: ${{ inputs.max-tokens }}
+        MAX_INCREASE: ${{ inputs.max-increase }}
+        REQUESTS_PER_DAY: ${{ inputs.requests-per-day }}
+        MODEL: ${{ inputs.model }}
+        CD_VERSION: ${{ inputs.version }}
+      run: |
+        set +e
+        args=()
+        if [ -n "$BASE_SHA" ]; then
+          # Shallow checkouts lack the base commit; fetch just that one.
+          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          args+=(--base "$BASE_SHA")
+        fi
+        [ -n "$MAX_TOKENS" ] && args+=(--max-tokens "$MAX_TOKENS")
+        [ -n "$MAX_INCREASE" ] && args+=(--max-increase "$MAX_INCREASE")
+        [ -n "$REQUESTS_PER_DAY" ] && args+=(--requests-per-day "$REQUESTS_PER_DAY")
+        cd_cmd=(npx -y "context-doctor@$CD_VERSION")
+        [ "$CD_VERSION" = "local" ] && cd_cmd=(node "$GITHUB_ACTION_PATH/dist/cli.js")
+        "${cd_cmd[@]}" ci "${args[@]}" --model "$MODEL" --markdown > "$RUNNER_TEMP/context-doctor.md"
+        status=$?
+        "${cd_cmd[@]}" ci "${args[@]}" --json > "$RUNNER_TEMP/context-doctor.json" 2>/dev/null
+        node -e 'const r=require(process.argv[1]);console.log(`head-tokens=${r.headTotal}`);console.log(`delta-tokens=${r.headTotal-r.baseTotal}`)' "$RUNNER_TEMP/context-doctor.json" >> "$GITHUB_OUTPUT" 2>/dev/null
+        cat "$RUNNER_TEMP/context-doctor.md" >> "$GITHUB_STEP_SUMMARY"
+        echo "status=$status" >> "$GITHUB_OUTPUT"
+    - if: inputs.comment == 'true' && github.event.pull_request.number
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        # One comment per PR, found by its marker and edited on each push (never another tool's comment).
+        id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --jq '.[] | select(.body | contains("<!-- context-doctor -->")) | .id' 2>/dev/null | tail -1)
+        if [ -n "$id" ]; then
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$RUNNER_TEMP/context-doctor.md" >/dev/null
+        else
+          gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@"$RUNNER_TEMP/context-doctor.md" >/dev/null
+        fi || echo "::warning::context-doctor could not comment (give the workflow pull-requests: write)"
+    - if: steps.check.outputs.status != '0'
+      shell: bash
+      run: |
+        echo "::error::context-doctor: agent memory files are over budget (see the job summary)"
+        exit 1

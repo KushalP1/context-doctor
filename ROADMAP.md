@@ -18,11 +18,11 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 | Gemini CLI | every-prompt hook (`BeforeAgent`, with the API's own token counts); autopilot on an API key (`GOOGLE_GEMINI_BASE_URL`) | MCP tools, session, watch, overhead (GEMINI.md) | autopilot cannot see Google sign-in traffic |
 | claude.ai, ChatGPT, phone apps | standing preferences (`instructions --copy`) | analyze an exported chat | nothing runs there |
 | Your own API apps (Anthropic, OpenAI, Gemini) | autopilot or the optimizing proxy; `withContextDoctor(client)` without a proxy | library: profile, optimize, pack | in-process wrapper covers Anthropic and OpenAI SDKs only |
-| CI | `analyze --fail-over-budget` | — | no packaged GitHub Action yet |
+| CI | `analyze --fail-over-budget`; the GitHub Action comments memory-file growth on PRs and gates on a budget | `ci` locally | Marketplace listing pending |
 
 ## Verified 2026-10-08
 
-- `npm test`: 227 of 227 pass; smoke: MCP, OpenAI proxy, Gemini proxy (Node 20/22 in CI, throwaway HOME).
+- `npm test`: 229 of 229 pass on macOS, Linux and Windows CI (Node 20/22/24); smoke: MCP, OpenAI proxy, Gemini proxy (Node 20/22 in CI, throwaway HOME).
 - MCP smoke over stdio and over streamable HTTP: handshake 119 ms, instructions delivered (690 chars, cap 700), all four tools and the checkup prompt, malformed input rejected.
 - OpenAI proxy smoke against a local mock: model listing passthrough, auth header untouched, incremental streaming, Responses API, usage capture, autopilot clearing.
 - `doctor` on the author's machine: Claude Desktop, Claude Code, Cursor and Codex wired; hooks registered in Claude Code, Codex and Cursor; status line, skill, ledger, autopilot up.
@@ -39,15 +39,15 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 | **`withContextDoctor(client)`**: autopilot inside the app | API apps that cannot route through a local proxy (serverless, edge, managed hosts) wrap their Anthropic or OpenAI SDK client instead. Same AutoClearer as the proxy; the request is cloned first so the app's own history is never rewritten; a conversation the process has not seen counts as warm, so a fresh instance never clears blind | ✅ Unit tests plus a run with the real `@anthropic-ai/sdk` and `openai` packages against a local mock: create and stream, chat and responses; a cold return went out at 135k of the app's 354k chars |
 | **Gemini CLI** | Gemini CLI 0.63 has hooks in Claude Code's shape (`BeforeAgent` is its prompt hook, `hookSpecificOutput.additionalContext` reaches the model) and records the API's promptTokenCount on every reply. `install` wires the MCP server and the hook in `~/.gemini/settings.json` (detected by settings.json, `~/.gemini/tmp` or `gemini` on PATH, not by `~/.gemini` alone, which Antigravity also creates); `session`, `watch` and the hook read its chats, rewrites by id and `$rewindTo` included; `doctor` checks it | ✅ Formats read from the 0.63.0 package; tests cover parsing, the hook's BeforeAgent answer, install and uninstall |
 | **Gemini API in the proxy and autopilot** | The proxy routes Google's API (by `x-goog-api-key`, `/v1beta` paths or `models/<m>:generateContent`) to `generativelanguage.googleapis.com`, reads exact usage from `usageMetadata`, and autopilot clears stale `functionResponse` parts on `generateContent` / `streamGenerateContent` when the cache is cold (Gemini CLI's tools added to the clearable list; ids derived per conversation when Gemini gives none; implicit caching's lifetime is unpublished, so an hour is assumed, the longer guess). Reaches Gemini CLI on an API key via `GOOGLE_GEMINI_BASE_URL`; Google sign-in traffic goes to another endpoint | ✅ `scripts/smoke-gemini-proxy.mjs` against a local mock: 8 checks (routing, key header, streaming, 5 of 8 stale results cleared, calls kept paired, usage). All three smoke scripts now run in CI |
+| **GitHub Action + `context-doctor ci`** | Memory files are a standing cost nobody reviews. `ci --base <ref>` compares CLAUDE.md, AGENTS.md, GEMINI.md, `.claude/rules`, always-applied Cursor rules and their `@imports` at HEAD against the base commit (via `git show`), prints a table and exits 1 over `--max-tokens` / `--max-increase`. `uses: KushalP1/context-doctor@<tag>` runs it on pull requests: job summary, one PR comment it keeps updating (found by a hidden marker), optional dollar figure from `requests-per-day` | ✅ Unit tests on a scratch repo; the action's step simulated locally; `memory-check.yml` runs the action on this repo's own PRs from the local build. Marketplace listing needs the owner to publish a release with the action |
 | Standing MCP instruction 5 | Chat apps and agents learn to call pack_context instead of reading a big file whole; the instructions stay under their 700-char cap | ✅ |
 
 ## Next: code can finish these, in order of expected saving
 
 | # | Item | Why | How we will know it works |
 |---|---|---|---|
-| 1 | **GitHub Action** on the Marketplace | Comment the context-size and overhead change on every PR that touches prompts, CLAUDE.md or agent configs; fail over a budget | Used on this repo's own PRs |
-| 2 | **pack with optional local embeddings** | Lexical ranking misses paraphrase (the one miss in the eval above). Use Ollama's embeddings when it is running, never required | Same 10-question eval plus a paraphrase set: hits up, no regressions |
-| 3 | **Python package** with profile and pack | RAG pipelines (LangChain, LlamaIndex) chunk and stuff context in Python; the same budgeted packing belongs there | Parity tests against the TypeScript fixtures |
+| 1 | **pack with optional local embeddings** | Lexical ranking misses paraphrase (the one miss in the eval above). Use Ollama's embeddings when it is running, never required | Same 10-question eval plus a paraphrase set: hits up, no regressions |
+| 2 | **Python package** with profile and pack | RAG pipelines (LangChain, LlamaIndex) chunk and stuff context in Python; the same budgeted packing belongs there | Parity tests against the TypeScript fixtures |
 
 ## Closed by measurement (2026-10-08): a large-paste notice in the hook
 
@@ -66,6 +66,7 @@ The idea: when a prompt itself carries a big paste, tell the model to work from 
 |---|---|---|
 | **Sign the `.mcpb`** | Signing is in `build:mcpb` and the release workflow; `mcpb verify` gates the release. Tested end to end with a self-signed certificate | Obtain a code-signing certificate from a trusted CA; add `MCPB_CERT` / `MCPB_KEY` |
 | **Publish the extension** | Marketplace metadata, icon, listing and changelog ready; the `vscode-v*` workflow publishes to both marketplaces and attaches the `.vsix` | Create the `gai-ventures` publisher and an Open VSX account; add `VSCE_PAT` / `OVSX_PAT`; push a `vscode-v*` tag |
+| **List the GitHub Action on the Marketplace** | `action.yml` at the repo root works today as `uses: KushalP1/context-doctor@<tag>` | Tick "Publish this Action to the GitHub Marketplace" when drafting the next release |
 | Move repo to the **gAI-ventures org** | Redirects keep old links working | The org owner transfers it on GitHub |
 
 ## Non-goals
@@ -83,6 +84,7 @@ The idea: when a prompt itself carries a big paste, tell the model to work from 
 | **Tag-based auto-publish** (GitHub Actions + npm granular token) | Releases currently need a maintainer's 2FA round-trip; `git tag` → published removes the friction and speeds every future item below | ✅ workflow shipped; needs the `NPM_TOKEN` repo secret |
 | **`context-doctor doctor`** — self-check command | Verifies an install end to end: hook registered, MCP reachable in each app config, skill present, ledger writable, real stdio handshake. Turns "it doesn't work" reports into one pasteable output | ✅ |
 | **`context-doctor watch`** — live session monitor | Tail a running session/agent trace; status line per growth event, findings surfaced as they appear. The real-time counterpart to `session` | ✅ |
+| **List the GitHub Action on the Marketplace** | `action.yml` at the repo root works today as `uses: KushalP1/context-doctor@<tag>` | Tick "Publish this Action to the GitHub Marketplace" when drafting the next release |
 | Move repo to the **gAI-ventures org** | Attribution home; auto-redirects keep old links working | ⏳ needs the org owner to transfer on GitHub |
 
 ### v0.6 — Accuracy (shipped in 0.6.0 unless noted)

@@ -1,0 +1,23 @@
+# Runs this repository's own GitHub Action on its pull requests, from the
+# checked-out build, so a change to action.yml or `ci` is exercised before release.
+name: Memory check
+
+on:
+  pull_request:
+
+jobs:
+  memory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci && npm run build
+      - uses: ./
+        with:
+          version: local
+          comment: "false"
+          max-increase: "4000"

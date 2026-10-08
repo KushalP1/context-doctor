@@ -9,7 +9,9 @@
  * gets a reason that names what to install, never a silent skip.
  */
 import { spawnSync } from "node:child_process";
-import { extname } from "node:path";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, extname, join } from "node:path";
 export const EXTRACTABLE = new Set([".pdf", ".docx", ".doc", ".rtf", ".odt", ".pptx"]);
 const RUN = { encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024 };
 function run(cmd, args) {
@@ -22,6 +24,28 @@ function run(cmd, args) {
     }
 }
 const PDFKIT_JXA = 'ObjC.import("PDFKit"); function run(a) { const d = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(a[0])); return d.isNil() ? "" : d.string.js }';
+/**
+ * pdftotext comes in two families (poppler, and Xpdf as shipped with some
+ * Windows toolchains) that disagree on `-enc` names and on writing to stdout,
+ * so try the common form, then without the encoding flag, then via a file.
+ */
+function pdftotext(path) {
+    const direct = run("pdftotext", ["-enc", "UTF-8", path, "-"]) ?? run("pdftotext", [path, "-"]);
+    if (direct)
+        return direct;
+    const out = join(mkdtempSync(join(tmpdir(), "cd-pdf-")), "out.txt");
+    try {
+        spawnSync("pdftotext", [path, out], RUN);
+        const text = existsSync(out) ? readFileSync(out, "utf8") : "";
+        return text.trim() ? text : undefined;
+    }
+    catch {
+        return undefined;
+    }
+    finally {
+        rmSync(dirname(out), { recursive: true, force: true });
+    }
+}
 /** Paragraph-ish text from zipped XML: one paragraph per closing p/slide-text tag, entities decoded. */
 function fromZippedXml(path, members) {
     const xml = run("unzip", ["-p", path, ...members]);
@@ -42,7 +66,7 @@ export function extractText(path) {
     let text;
     if (ext === ".pdf") {
         // Form feeds separate pages; as blank lines they become paragraph boundaries.
-        text = run("pdftotext", ["-enc", "UTF-8", path, "-"])?.replace(/\f/g, "\n\n");
+        text = pdftotext(path)?.replace(/\f/g, "\n\n");
         if (!text && mac)
             text = run("osascript", ["-l", "JavaScript", "-e", PDFKIT_JXA, path]);
         if (!text) {

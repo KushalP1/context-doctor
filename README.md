@@ -166,7 +166,7 @@ MCP servers are part of the same overhead: each one's tool definitions ride on e
 
 ## What's new
 
-- **0.27 (on main) Keep waste out**: `pack` and the `pack_context` MCP tool put only the chunks of big files (text, code, PDF, Word, PowerPoint) a question needs into the context, within a budget; `overhead` measures and prices the front matter every request re-reads (system prompt, tools, CLAUDE.md, rules, memory, AGENTS.md, Cursor rules, GEMINI.md). MCP servers sized and their use counted; `overhead split` turns a heavy memory file into a lean one plus a reference file. `withContextDoctor(client)` runs autopilot inside an Anthropic or OpenAI SDK client, for apps with no proxy. Gemini joins: `install` wires Gemini CLI's MCP server and every-prompt hook, `session` and `watch` read its chats, and the proxy and autopilot carry Google's Gemini API. Re-verified on every surface: 227 tests, plus MCP, OpenAI and Gemini end-to-end smoke runs, now in CI, MCP over stdio and HTTP, the OpenAI proxy, and a live `doctor`.
+- **0.27 (on main) Keep waste out**: `pack` and the `pack_context` MCP tool put only the chunks of big files (text, code, PDF, Word, PowerPoint) a question needs into the context, within a budget; `overhead` measures and prices the front matter every request re-reads (system prompt, tools, CLAUDE.md, rules, memory, AGENTS.md, Cursor rules, GEMINI.md). MCP servers sized and their use counted; `overhead split` turns a heavy memory file into a lean one plus a reference file. `withContextDoctor(client)` runs autopilot inside an Anthropic or OpenAI SDK client, for apps with no proxy. Gemini joins: `install` wires Gemini CLI's MCP server and every-prompt hook, `session` and `watch` read its chats, and the proxy and autopilot carry Google's Gemini API. A GitHub Action (and `context-doctor ci`) reports memory-file growth on every pull request and gates on a budget. Re-verified on every surface: 229 tests on macOS, Linux and Windows, plus MCP, OpenAI and Gemini end-to-end smoke runs, now in CI, MCP over stdio and HTTP, the OpenAI proxy, and a live `doctor`.
 - **0.26 Checked on every platform, three fixes**: tested end to end in Claude Code (terminal, desktop app, plugin from GitHub), Claude Desktop, Cursor, Codex on GPT-5.5, VS Code, the MCP server on every launch path, and the proxy on OpenAI's APIs. Found and fixed: Cursor's agent never received the hook's guidance (Cursor runs Claude Code's hook where output cannot add context), so `install` now adds a native Cursor hook; Codex blocked the MCP tools behind an approval it never grants in `codex exec`, so the tools are now marked read-only; autopilot skipped Codex's newest tools (`exec`, `wait`) and some of Cursor's. Also: a history imported into Codex no longer reads as "2136% of the window", and the chat-app settings paths are current.
 - **0.25 Compact earlier, by itself**: the `/compact` offer at cold resumes was followed 1 time in 33 on the author's machine, so two changes. The hook now also shows you the notice (it went only to the model, which rarely raised it), with the dollar cost of the message you just sent. And `context-doctor compact-window` measures and sets Claude Code's own auto-compact window, which works without anyone acting on advice, in every surface including the desktop app: 55% less input cost at 400k on the author's last 30 days. `savings` shows it as a third lever.
 - **0.20 Autopilot**: stale tool output cleared from every Claude Code request, only when the prompt cache is cold, so it cannot cost more (measured: 9.8% less input cost, ~$1,080 a month on the author's usage, no session worse); runs as a login service on macOS, Linux and Windows; now also for GPT via OpenAI's Chat Completions and Responses APIs.
@@ -245,6 +245,7 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | `context-doctor pack <files\|dirs\|-> --query "…"` | Only the chunks of big documents, logs or code a question needs, ranked and fit to `--max-tokens` (default 4000). No query: an outline; `--ids a#2,b#5` picks chunks from it. Offline, no key |
 | `context-doctor overhead [--days n] [--mcp]` | What every request re-reads before your message: measured first-request size, each memory file (CLAUDE.md and imports, rules, auto memory, AGENTS.md, Cursor rules, GEMINI.md) priced per month, MCP calls per server; `--mcp` sizes each configured server's tool definitions and flags unused ones |
 | `context-doctor overhead split <file> [--write]` | Move a memory file's big or code-heavy sections word for word to `<name>.reference.md`, leaving pointers; indexes stay. A plan until `--write`, which backs up first |
+| `context-doctor ci [--base <ref>] [--max-tokens n] [--max-increase n]` | Memory files (CLAUDE.md, AGENTS.md, GEMINI.md, rules, their imports) at HEAD vs a base commit; exit 1 over budget. What the GitHub Action runs |
 | `context-doctor analyze <file>` | Profile a conversation: token breakdown, findings, cost + latency estimates. `--fail-over-budget` exits 1 on a breach, for CI |
 | `context-doctor optimize <file>` | Apply the safe fixes; add `--strategy trim-tool-calls` for big inline file writes, `--strategy prune-history` for consented lossy compaction |
 | `context-doctor session [file]` | Profile a Claude Code session: live context, findings, **measured tokens and prompt-cache economics**, **where the wall clock went** per tool, and **what its subagents cost** (their own windows, your bill; never in the parent's profile). Also reads ChatGPT data exports (`conversations.json`) |
@@ -644,6 +645,29 @@ A cache read bills at ~10% of input while a write bills at ~125%, so a session t
 
 ## Enforce a budget in CI
 
+**Memory files on every pull request.** CLAUDE.md, AGENTS.md, GEMINI.md and rules are re-read by every request of everyone working in the repository, so their growth deserves review. The repository is also a GitHub Action:
+
+```yaml
+# .github/workflows/context.yml
+on: pull_request
+permissions:
+  contents: read
+  pull-requests: write   # for the comment
+jobs:
+  memory:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: KushalP1/context-doctor@v0.27.0
+        with:
+          max-increase: "2000"        # fail a PR that adds more than 2k tokens
+          requests-per-day: "5000"    # optional: price the change
+```
+
+It compares the memory files and their `@imports` at the PR head with the base branch, writes the table to the job summary, keeps one PR comment up to date, and fails over budget. Locally: `context-doctor ci --base origin/main`.
+
+**Conversation fixtures.**
+
 ```bash
 npx context-doctor analyze conversation.json --fail-over-budget
 ```
@@ -699,7 +723,7 @@ One honest caveat worth knowing: a transcript stores the conversation, **not** t
 
 ## Roadmap
 
-See [ROADMAP.md](./ROADMAP.md) for the full plan, the per-surface coverage table and the measurements behind every shipped item. Next, in order of expected saving: the MCP schema tax per server in `overhead`; a GitHub Action; optional local embeddings for `pack`; a Python package for RAG pipelines. Non-goals, permanently: cloud services, telemetry, silent history rewriting, mandatory API keys.
+See [ROADMAP.md](./ROADMAP.md) for the full plan, the per-surface coverage table and the measurements behind every shipped item. Next, in order of expected saving: the MCP schema tax per server in `overhead`; optional local embeddings for `pack`; a Python package for RAG pipelines. Non-goals, permanently: cloud services, telemetry, silent history rewriting, mandatory API keys.
 
 Contributions welcome — this project is small on purpose. Open an issue before a big PR.
 

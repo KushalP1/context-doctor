@@ -10,7 +10,9 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { extname } from "node:path";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, extname, join } from "node:path";
 
 export const EXTRACTABLE = new Set([".pdf", ".docx", ".doc", ".rtf", ".odt", ".pptx"]);
 
@@ -27,6 +29,26 @@ function run(cmd: string, args: string[]): string | undefined {
 
 const PDFKIT_JXA =
   'ObjC.import("PDFKit"); function run(a) { const d = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(a[0])); return d.isNil() ? "" : d.string.js }';
+
+/**
+ * pdftotext comes in two families (poppler, and Xpdf as shipped with some
+ * Windows toolchains) that disagree on `-enc` names and on writing to stdout,
+ * so try the common form, then without the encoding flag, then via a file.
+ */
+function pdftotext(path: string): string | undefined {
+  const direct = run("pdftotext", ["-enc", "UTF-8", path, "-"]) ?? run("pdftotext", [path, "-"]);
+  if (direct) return direct;
+  const out = join(mkdtempSync(join(tmpdir(), "cd-pdf-")), "out.txt");
+  try {
+    spawnSync("pdftotext", [path, out], RUN);
+    const text = existsSync(out) ? readFileSync(out, "utf8") : "";
+    return text.trim() ? text : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    rmSync(dirname(out), { recursive: true, force: true });
+  }
+}
 
 /** Paragraph-ish text from zipped XML: one paragraph per closing p/slide-text tag, entities decoded. */
 function fromZippedXml(path: string, members: string[]): string | undefined {
@@ -48,7 +70,7 @@ export function extractText(path: string): { text: string } | { error: string } 
   let text: string | undefined;
   if (ext === ".pdf") {
     // Form feeds separate pages; as blank lines they become paragraph boundaries.
-    text = run("pdftotext", ["-enc", "UTF-8", path, "-"])?.replace(/\f/g, "\n\n");
+    text = pdftotext(path)?.replace(/\f/g, "\n\n");
     if (!text && mac) text = run("osascript", ["-l", "JavaScript", "-e", PDFKIT_JXA, path]);
     if (!text) {
       return { error: mac ? "no text layer (scanned PDF?) or unreadable" : "needs pdftotext (install poppler-utils), or the PDF has no text layer" };
