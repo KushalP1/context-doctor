@@ -24,7 +24,8 @@ function fixture() {
 test("finds each agent's memory files, follows @imports, and skips rules that are not always applied", () => {
     const { home, proj } = fixture();
     const files = findMemoryFiles(proj, home);
-    const rel = files.map((f) => `${f.agent}:${f.path.replace(home, "~")}:${f.via}`);
+    // Compared with forward slashes, so the same assertions hold on Windows.
+    const rel = files.map((f) => `${f.agent}:${f.path.replace(home, "~").replace(/\\/g, "/")}:${f.via}`);
     assert.ok(rel.includes("Claude Code:~/.claude/CLAUDE.md:user"));
     assert.ok(rel.includes("Claude Code:~/.claude/rules/style.md:rules"));
     assert.ok(rel.includes("Claude Code:~/work/app/CLAUDE.md:project"));
