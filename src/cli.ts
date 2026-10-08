@@ -42,6 +42,7 @@ import { startDashboard } from "./dashboard.js";
 import { listCursorChats, parseCursorChat } from "./cursor.js";
 import { analyzeCacheUsage, renderCacheReport } from "./cache.js";
 import { renderToolTimings } from "./timing.js";
+import { packContext, readSources, renderPack } from "./pack.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -94,6 +95,11 @@ Usage:
                                                 were resolved, and what it saves
   context-doctor accuracy                       Measure the token heuristic against the API's own
                                                 counts recorded in your transcripts (--limit n)
+  context-doctor pack <files|dirs...> --query "<q>" [--max-tokens n]
+                                                Only the parts of big docs/code a question needs:
+                                                chunk along headings and declarations, rank, fit a
+                                                token budget (default 4000). No --query: an outline
+                                                to pick from (--ids a#2,b#5). Offline, no API key
   context-doctor watch [file]                   Live-monitor a growing session/agent trace: running
                                                 token/cost line per change, new findings as they appear
                                                 (--interval-ms n, default 2000)
@@ -185,6 +191,10 @@ interface Args {
   redact: boolean;
   failOverBudget: boolean;
   config?: string;
+  query?: string;
+  maxTokens?: number;
+  chunkTokens?: number;
+  ids?: string[];
 }
 
 function parseArgs(argv: string[]): Args {
@@ -224,6 +234,10 @@ function parseArgs(argv: string[]): Args {
       case "--autopilot-state": args.autopilotState = argv[++i]; break;
       case "--autopilot-pause-file": args.autopilotPauseFile = argv[++i]; break;
       case "--config": args.config = argv[++i]; break;
+      case "-q": case "--query": args.query = argv[++i]; break;
+      case "--max-tokens": args.maxTokens = numArg("--max-tokens", argv[++i], { min: 1, integer: true }); break;
+      case "--chunk-tokens": args.chunkTokens = numArg("--chunk-tokens", argv[++i], { min: 50, integer: true }); break;
+      case "--ids": args.ids = (argv[++i] ?? "").split(",").map((x) => x.trim()).filter(Boolean); break;
       case "--upstream-anthropic": args.upstreamAnthropic = argv[++i]; break;
       case "--upstream-openai": args.upstreamOpenai = argv[++i]; break;
       default: positional.push(a);
@@ -631,6 +645,22 @@ async function main(): Promise<void> {
       trimBoundaryStep: loadedRc.config.trimBoundaryStep,
     });
     return; // server keeps the process alive
+  }
+
+  if (args.command === "pack") {
+    const paths = args.positionals ?? [];
+    if (paths.length === 0) {
+      console.error('usage: context-doctor pack <files|dirs...> --query "<question>" [--max-tokens 4000] [--ids a#2,b#5] [--json]');
+      process.exit(1);
+    }
+    const { sources, skipped } = paths.includes("-")
+      ? { sources: [{ name: "stdin", text: readFileSync(0, "utf8") }], skipped: [] as string[] }
+      : readSources(paths);
+    for (const s of skipped) console.error(`context-doctor: skipped ${s}`);
+    if (sources.length === 0) process.exit(1);
+    const result = packContext(sources, { query: args.query, budget: args.maxTokens, ids: args.ids, maxChunkTokens: args.chunkTokens, model: args.model });
+    console.log(args.json ? JSON.stringify({ ...result, chunks: undefined, outline: result.chunks.map(({ text, ...c }) => c) }, null, 2) : renderPack(result));
+    return;
   }
 
   if (!args.command || !args.file) {

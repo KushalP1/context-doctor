@@ -11,5 +11,6 @@
  *   profile_context   — analyze a conversation/prompt, report token breakdown + findings
  *   optimize_context  — apply safe strategies, return the slimmed conversation
  *   context_best_practices — curated checklist for a given provider/use case
+ *   pack_context      — only the chunks of big files a question needs, within a token budget
  */
 export {};

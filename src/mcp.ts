@@ -11,6 +11,7 @@
  *   profile_context   — analyze a conversation/prompt, report token breakdown + findings
  *   optimize_context  — apply safe strategies, return the slimmed conversation
  *   context_best_practices — curated checklist for a given provider/use case
+ *   pack_context      — only the chunks of big files a question needs, within a token budget
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -23,6 +24,7 @@ import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
 import { recordLedger } from "./ledger.js";
 import { runSketch } from "./sketch.js";
+import { packContext, readSources, renderPack } from "./pack.js";
 
 /**
  * Server instructions are injected by MCP clients (Claude Desktop, Cursor, …)
@@ -40,10 +42,11 @@ import { runSketch } from "./sketch.js";
 // thresholds keep it from firing on every turn, which would cost more context
 // than it saves.
 const SERVER_INSTRUCTIONS = `Context hygiene rules (always on):
-1. Summarize any paste or tool result over ~2k tokens into the points you will use, then work from the summary; never carry it verbatim.
-2. Reference earlier content by name; never re-quote it. Never inline base64.
-3. When the conversation passes ~30 turns, or holds 3+ large pastes, or the user asks about tokens, cost, speed or limits: call profile_context BEFORE answering and act on its top finding. In a chat app pass a \`sketch\` (turn count + the large/repeated blocks, ~120 tokens), not the conversation. Do not estimate token counts yourself.
-4. If optimize_context returns a pruned-turns digest, you write the ≤150-token replacement summary.`;
+1. Summarize any paste or tool result over ~2k tokens into the points you need; never carry it verbatim.
+2. Refer to earlier content by name; never re-quote it or inline base64.
+3. Past ~30 turns or 3+ large pastes, or when asked about tokens, cost, speed or limits: call profile_context BEFORE answering and act on its top finding. In a chat app pass a \`sketch\` (turns + large/repeated blocks), not the conversation. Do not estimate token counts yourself.
+4. If optimize_context returns a pruned-turns digest, write its ≤150-token summary.
+5. To answer from a large file or folder you won't edit, call pack_context with the question; don't read it whole.`;
 
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"] as const;
 
@@ -52,7 +55,7 @@ const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-b
  * stateless HTTP mode can hand every request its own server, per the MCP SDK's
  * recommended pattern.
  */
-function createServer(): McpServer {
+function createServer({ fileAccess = true }: { fileAccess?: boolean } = {}): McpServer {
   const server = new McpServer(
     { name: "context-doctor", version: "0.26.0" },
     { instructions: SERVER_INSTRUCTIONS }
@@ -154,6 +157,35 @@ server.tool(
     }
     return { content };
   }
+  );
+
+  server.tool(
+    "pack_context",
+    "Read only the parts of large files a question needs. Splits files or folders into chunks along their structure (markdown headings, code declarations, paragraphs), ranks them against `query` (BM25, offline) and returns the best chunks that fit `max_tokens`, each with an id and line range, plus the next-best ids. Without a query it returns an outline (id, lines, tokens, heading per chunk) to choose from with `ids`. Use it instead of reading a big document, log or codebase whole when you only need to answer a question from it; read whole files when you will edit them. Text files only (convert PDFs first).",
+    {
+      paths: z.array(z.string()).max(50).optional().describe("Files or folders on this machine (absolute, or relative to the server's working directory). Folders are read recursively, skipping node_modules, .git and build output."),
+      text: z.string().optional().describe("Raw text to pack instead of files, e.g. a document the client holds."),
+      query: z.string().optional().describe("The question the context is for. Omit to get an outline."),
+      max_tokens: z.number().int().positive().max(200_000).optional().describe("Token budget for the returned chunks (default 4000)."),
+      ids: z.array(z.string()).max(200).optional().describe("Chunk ids from an earlier outline or result, e.g. [\"docs/guide.md#4\"]."),
+      model: z.string().optional().describe("Model whose tokenizer the budget is in (default: Claude's, the most conservative)."),
+    },
+    // Reads files, never writes. Clients (Codex, ChatGPT) may skip approval for read-only tools.
+    { title: "Pack context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async ({ paths, text, query, max_tokens, ids, model }) => {
+      const err = (t: string) => ({ content: [{ type: "text" as const, text: t }], isError: true });
+      if (paths?.length && !fileAccess) {
+        return err("This server runs over HTTP and does not read files. Pass the document as `text`.");
+      }
+      const { sources, skipped } = paths?.length ? readSources(paths) : { sources: [], skipped: [] as string[] };
+      if (text) sources.push({ name: "text", text });
+      if (sources.length === 0) {
+        return err(skipped.length ? `Nothing readable: ${skipped.join("; ")}` : "Pass `paths` (files or folders) or `text`.");
+      }
+      const result = packContext(sources, { query, budget: max_tokens, ids, model });
+      const note = skipped.length ? `\nSkipped: ${skipped.slice(0, 10).join("; ")}${skipped.length > 10 ? ` (+${skipped.length - 10} more)` : ""}` : "";
+      return { content: [{ type: "text", text: renderPack(result) + note }] };
+    }
   );
 
   // A prompt shows up in Claude Desktop's "+" menu, so a user can run a checkup
@@ -285,7 +317,7 @@ if (argv.includes("--http")) {
       }
 
       // Fresh server + transport per request (stateless — nothing shared).
-      const server = createServer();
+      const server = createServer({ fileAccess: false });
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         // A client that never asked for a stream gets plain JSON back.

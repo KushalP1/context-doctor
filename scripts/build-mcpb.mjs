@@ -45,10 +45,11 @@ const manifest = {
   version: pkg.version,
   description: "See what is eating your context and reclaim it: token breakdown, wasted-context findings, one-click checkup.",
   long_description:
-    "Adds three tools and a checkup prompt to Claude Desktop. profile_context measures the conversation " +
+    "Adds four tools and a checkup prompt to Claude Desktop. profile_context measures the conversation " +
     "(pass a sketch in chat: turn count plus the large or repeated blocks), finds duplicates, oversized pastes, " +
     "base64 blobs and long history, and tells Claude what to summarize or drop. optimize_context rewrites an " +
-    "exported conversation with deterministic, inspectable strategies. context_best_practices is a checklist. " +
+    "exported conversation with deterministic, inspectable strategies. pack_context reads only the parts of a big file or folder a question needs, within a token budget. " +
+    "context_best_practices is a checklist. " +
     "Standing hygiene rules ride in every chat where the extension is enabled. Nothing leaves your machine.",
   author: { name: pkg.author?.name ?? pkg.author ?? "gAI Ventures", url: "https://github.com/KushalP1" },
   repository: { type: "git", url: "https://github.com/KushalP1/context-doctor" },
@@ -66,6 +67,7 @@ const manifest = {
   tools: [
     { name: "profile_context", description: "Token breakdown and wasted-context findings for a conversation or a sketch of it" },
     { name: "optimize_context", description: "Rewrite an exported conversation to reclaim tokens with deterministic strategies" },
+    { name: "pack_context", description: "Only the chunks of large files or folders a question needs, ranked and fit to a token budget" },
     { name: "context_best_practices", description: "Curated context-management checklist, optionally per provider" },
   ],
   prompts: [

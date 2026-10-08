@@ -59,7 +59,7 @@ test("tools/call works statelessly over HTTP", async () => {
 test("every tool is annotated read-only, so clients that gate on approval (Codex exec) can run it", async () => {
     const { json } = await rpc({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} });
     const tools = json.result.tools;
-    assert.equal(tools.length, 3);
+    assert.equal(tools.length, 4);
     for (const t of tools) {
         assert.equal(t.annotations?.readOnlyHint, true, `${t.name} readOnlyHint`);
         assert.equal(t.annotations?.destructiveHint, false, `${t.name} destructiveHint`);

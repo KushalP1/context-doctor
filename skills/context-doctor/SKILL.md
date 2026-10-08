@@ -28,9 +28,10 @@ Proactively (do not wait to be asked):
 If the `context-doctor` MCP tools are available:
 - `profile_context` — pass a conversation JSON (OpenAI or Anthropic format) or raw text; returns a token breakdown, largest messages, findings with estimated savings.
 - `optimize_context` — applies deterministic fixes (dedupe, trim stale tool results, strip base64; opt-in `trim-tool-calls` for big inline file writes and `prune-history`). When the result contains pruned-turn source material and asks for a summary, **you write that summary** (≤150 tokens, dense, factual) and place it where the stub indicates — this is how summarization works without any API key.
+- `pack_context` — before reading a large document, log or folder to answer a question (not to edit it), pass `paths` and the `query`: it returns only the best-matching chunks within `max_tokens` (default 4000), each with an id and line range, plus the next-best ids. No query = an outline to pick from with `ids`.
 - `context_best_practices` — provider-specific checklist to share with the user.
 
-If the tools are not connected, the CLI does the same: `npx context-doctor analyze <file> --model <model>` and `npx context-doctor optimize <file>`. For always-on optimization of the user's own apps: `npx context-doctor proxy` then point `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` at it.
+If the tools are not connected, the CLI does the same: `npx context-doctor analyze <file> --model <model>` and `npx context-doctor optimize <file>`, and `npx context-doctor pack <files> --query "<question>"` for big documents. For always-on optimization of the user's own apps: `npx context-doctor proxy` then point `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` at it.
 
 ## When the user pastes a conversation or asks about their token usage
 

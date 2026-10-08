@@ -54,7 +54,7 @@ check(/Context hygiene rules/.test(instructions), "instructions delivered", `${i
 
 const { tools } = await client.listTools();
 const names = tools.map((t) => t.name).sort();
-check(["context_best_practices", "optimize_context", "profile_context"].every((n) => names.includes(n)), "tools listed", names.join(", "));
+check(["context_best_practices", "optimize_context", "pack_context", "profile_context"].every((n) => names.includes(n)), "tools listed", names.join(", "));
 const { prompts } = await client.listPrompts();
 check(prompts.some((p) => p.name === "context_checkup"), "prompt listed", prompts.map((p) => p.name).join(", "));
 const prompt = await client.getPrompt({ name: "context_checkup", arguments: {} });
@@ -77,6 +77,14 @@ for (const provider of ["general", "anthropic", "openai"]) {
   const tips = await client.callTool({ name: "context_best_practices", arguments: { provider } });
   check(!tips.isError && text(tips).length > 100, `context_best_practices (${provider})`);
 }
+
+// pack_context: a query returns ranked chunks; no query returns an outline.
+// Over HTTP the server reads no files, so the smoke passes text there.
+const doc = Array.from({ length: 30 }, (_, i) => `## Section ${i}\n\n${i === 17 ? "Rotate the signing key with the keyctl command." : "Nothing about that here. ".repeat(40)}`).join("\n\n");
+const packed = await client.callTool({ name: "pack_context", arguments: { text: doc, query: "how to rotate the signing key", max_tokens: 600 } });
+check(!packed.isError && /keyctl/.test(text(packed)) && /^PACKED/.test(text(packed)), "pack_context (query) finds the section", text(packed).split("\n")[0]);
+const outlined = await client.callTool({ name: "pack_context", arguments: { text: doc } });
+check(!outlined.isError && /^OUTLINE/.test(text(outlined)) && /text#18/.test(text(outlined)), "pack_context (no query) returns an outline");
 
 // Malformed input must come back as a clear error, not a crash or a confident report.
 const bad = await client.callTool({ name: "profile_context", arguments: { sketch: { turns: -1 } } }).catch((e) => ({ isError: true, content: [{ text: String(e.message ?? e) }] }));

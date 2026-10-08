@@ -31,7 +31,7 @@ const conversation = JSON.stringify({
 async function exercise(client: Client): Promise<void> {
   assert.ok((client.getInstructions() ?? "").length > 100, "standing instructions must reach the client — that is what makes plain chat work");
   const { tools } = await client.listTools();
-  assert.deepEqual(tools.map((t) => t.name).sort(), ["context_best_practices", "optimize_context", "profile_context"]);
+  assert.deepEqual(tools.map((t) => t.name).sort(), ["context_best_practices", "optimize_context", "pack_context", "profile_context"]);
 
   const profile = await client.callTool({ name: "profile_context", arguments: { conversation, model: "claude-sonnet-5" } });
   const profileText = (profile.content as Array<{ text?: string }>).map((c) => c.text ?? "").join("\n");
