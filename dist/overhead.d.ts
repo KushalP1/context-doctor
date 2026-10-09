@@ -29,6 +29,7 @@ export interface OverheadFinding {
     suggestion: string;
 }
 export interface Baseline {
+    agent: Agent;
     sessions: number;
     /** Median tokens of the first request, minus the first user message. */
     median: number;
@@ -42,7 +43,10 @@ export interface Baseline {
 }
 export interface OverheadReport {
     cwd: string;
+    /** Claude Code's baseline (memory-file prices for Claude Code are quoted against it). */
     baseline?: Baseline;
+    /** Every agent with sessions in the period: Claude Code, Codex, Gemini CLI. */
+    baselines: Baseline[];
     files: MemoryFile[];
     findings: OverheadFinding[];
     mcp: McpSection;
@@ -56,13 +60,16 @@ export interface McpSection {
 /** Every memory file the four agents load for a session started in `cwd`. */
 export declare function findMemoryFiles(cwd?: string, home?: string): MemoryFile[];
 /**
- * Fixed overhead per session, measured: the first main-chain request's input
- * (input + cache read + cache write) minus the first user message, plus the
+ * Fixed overhead per session and agent, measured: each session's first
+ * request (the API's own count) minus the first user message, plus the
  * request and cold-start counts that turn tokens into a monthly bill.
+ * Claude Code, Codex and Gemini CLI sessions, newest `days` only.
  */
+export declare function measureBaselines(days?: number, paths?: string[]): Baseline[];
+/** Claude Code's baseline (the one memory-file prices are quoted against). */
 export declare function measureBaseline(days?: number, paths?: string[]): Baseline | undefined;
 /** What is worth changing in the memory files. */
-export declare function overheadFindings(files: MemoryFile[], baseline?: Baseline): OverheadFinding[];
+export declare function overheadFindings(files: MemoryFile[], baselines?: Baseline | Baseline[]): OverheadFinding[];
 export declare function overheadReport(opts?: {
     cwd?: string;
     home?: string;

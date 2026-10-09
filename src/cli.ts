@@ -43,7 +43,7 @@ import { listCursorChats, parseCursorChat } from "./cursor.js";
 import { analyzeCacheUsage, renderCacheReport } from "./cache.js";
 import { renderToolTimings } from "./timing.js";
 import { packContextSemantic, readSources, renderPack } from "./pack.js";
-import { measureBaseline, measureMcpSizes, overheadReport, renderOverhead } from "./overhead.js";
+import { measureBaselines, measureMcpSizes, overheadReport, renderOverhead } from "./overhead.js";
 import { applySplit, planSplit, renderSplit } from "./split.js";
 import { ciReport, renderCiMarkdown, renderCiText } from "./ci.js";
 
@@ -702,7 +702,9 @@ async function main(): Promise<void> {
       console.error(`Could not read ${file}: ${(e as Error).message}`);
       process.exit(1);
     }
-    console.log(renderSplit(plan, measureBaseline(args.days ?? 30)?.usdPerKPerMonth));
+    // Price the file at the rate of the agent that loads it.
+    const agent = /AGENTS(\.override)?\.md$/i.test(file) ? "Codex" : /GEMINI\.md$/i.test(file) ? "Gemini CLI" : "Claude Code";
+    console.log(renderSplit(plan, measureBaselines(args.days ?? 30).find((b) => b.agent === agent)?.usdPerKPerMonth));
     if (args.write && plan.sections.some((s) => s.moved)) {
       const { backup } = applySplit(plan);
       console.log(`\nWritten. Backup: ${backup}\nUndo: mv "${backup}" "${file}" (and delete or trim ${plan.referencePath}).`);

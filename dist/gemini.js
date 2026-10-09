@@ -62,7 +62,7 @@ function resultText(call) {
     return typeof call?.resultDisplay === "string" ? call.resultDisplay : r === undefined ? "" : JSON.stringify(r);
 }
 /** The ordered, de-duplicated, rewind-applied messages of a chat file. */
-function readMessages(path) {
+export function readGeminiMessages(path) {
     const order = [];
     const byId = new Map();
     let anon = 0;
@@ -115,7 +115,7 @@ export function parseGeminiChat(path) {
     const usageSamples = [];
     let model;
     let reportedInputTokens;
-    for (const m of readMessages(path)) {
+    for (const m of readGeminiMessages(path)) {
         if (m.type === "user") {
             const t = text(m.content);
             if (t)

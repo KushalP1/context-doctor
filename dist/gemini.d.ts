@@ -18,6 +18,8 @@
 import { type ParsedSession, type SessionInfo } from "./session.js";
 /** True when the file's first record looks like a Gemini CLI chat (cheap: reads 4 KB). */
 export declare function isGeminiChat(path: string): boolean;
+/** The ordered, de-duplicated, rewind-applied messages of a chat file. */
+export declare function readGeminiMessages(path: string): any[];
 export declare function parseGeminiChat(path: string): ParsedSession;
 /** Gemini CLI chats on this machine: ~/.gemini/tmp/<project>/chats/session-*.json[l]. */
 export declare function listGeminiChats(home?: string): SessionInfo[];

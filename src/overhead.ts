@@ -19,8 +19,9 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { forEachLine, listSessions } from "./session.js";
-import { estimateTokens, formatTokens } from "./tokens.js";
+import { estimateTokens, formatTokens, providerFor } from "./tokens.js";
 import { formatUsd, pricingFor } from "./pricing.js";
+import { isGeminiChat, readGeminiMessages } from "./gemini.js";
 import { claudeMcpConfigs, mcpUsage, measureServer, toolPrefixName, type McpServerConfig, type McpServerSize, type McpUsage } from "./mcpschema.js";
 
 export type Agent = "Claude Code" | "Codex" | "Cursor" | "Gemini CLI";
@@ -40,6 +41,7 @@ export interface OverheadFinding {
 }
 
 export interface Baseline {
+  agent: Agent;
   sessions: number;
   /** Median tokens of the first request, minus the first user message. */
   median: number;
@@ -54,7 +56,10 @@ export interface Baseline {
 
 export interface OverheadReport {
   cwd: string;
+  /** Claude Code's baseline (memory-file prices for Claude Code are quoted against it). */
   baseline?: Baseline;
+  /** Every agent with sessions in the period: Claude Code, Codex, Gemini CLI. */
+  baselines: Baseline[];
   files: MemoryFile[];
   findings: OverheadFinding[];
   mcp: McpSection;
@@ -181,53 +186,131 @@ export function findMemoryFiles(cwd = process.cwd(), home = homedir()): MemoryFi
  * (input + cache read + cache write) minus the first user message, plus the
  * request and cold-start counts that turn tokens into a monthly bill.
  */
-export function measureBaseline(days = 30, paths?: string[]): Baseline | undefined {
-  const since = Date.now() - days * 86_400_000;
-  const files = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
-  const firsts: number[] = [];
-  let requests = 0, coldStarts = 0;
-  const models = new Map<string, number>();
-  for (const path of files) {
-    let firstUser: string | undefined;
-    let first: number | undefined;
-    let lastId: string | undefined;
-    let prevAt: number | undefined;
-    forEachLine(path, (line) => {
-      let e: any;
-      try { e = JSON.parse(line); } catch { return; }
-      if (!e || e.isSidechain) return;
-      if (e.type === "user" && first === undefined && firstUser === undefined && !e.isMeta) {
-        const c = e.message?.content;
-        const text = typeof c === "string" ? c : Array.isArray(c) ? c.filter((b: any) => b?.type === "text").map((b: any) => b.text).join("\n") : "";
-        if (text) firstUser = text;
-        return;
-      }
-      if (e.type !== "assistant" || !e.message?.usage || e.message.id === lastId) return;
-      lastId = e.message.id;
-      const u = e.message.usage;
-      const prompt = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+/** One session's fixed overhead and request times, whatever agent wrote it. */
+interface SessionUsage {
+  agent: Agent;
+  /** First request's input minus the first real user message. */
+  first?: number;
+  reqs: Array<{ at: number; model?: string }>;
+}
+
+function textOf(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((b: any) => (typeof b === "string" ? b : typeof b?.text === "string" ? b.text : "")).filter(Boolean).join("\n");
+}
+
+/** Claude Code: usage rows on assistant messages (one per API reply id). */
+function claudeUsage(path: string): SessionUsage {
+  const out: SessionUsage = { agent: "Claude Code", reqs: [] };
+  let firstUser: string | undefined;
+  let lastId: string | undefined;
+  forEachLine(path, (line) => {
+    let e: any;
+    try { e = JSON.parse(line); } catch { return; }
+    if (!e || e.isSidechain) return;
+    if (e.type === "user" && out.first === undefined && firstUser === undefined && !e.isMeta) {
+      const text = textOf(e.message?.content);
+      if (text) firstUser = text;
+      return;
+    }
+    if (e.type !== "assistant" || !e.message?.usage || e.message.id === lastId) return;
+    lastId = e.message.id;
+    const u = e.message.usage;
+    const prompt = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+    const at = Date.parse(e.timestamp);
+    if (!(prompt > 0) || !Number.isFinite(at)) return;
+    out.first ??= Math.max(0, prompt - estimateTokens(firstUser ?? "", CLAUDE));
+    out.reqs.push({ at, model: e.message.model });
+  });
+  return out;
+}
+
+/**
+ * Codex rollouts: token_count events carry each request's input (cached part
+ * included). Codex sends AGENTS.md and its environment as user messages;
+ * those are overhead, so the first real prompt is the one subtracted.
+ */
+function codexUsage(path: string): SessionUsage {
+  const out: SessionUsage = { agent: "Codex", reqs: [] };
+  let firstUser: string | undefined;
+  let model: string | undefined;
+  forEachLine(path, (line) => {
+    let e: any;
+    try { e = JSON.parse(line); } catch { return; }
+    const p = e?.payload;
+    if (!p) return;
+    if (e.type === "turn_context" && typeof p.model === "string") model = p.model;
+    if (e.type === "response_item" && p.type === "message" && p.role === "user" && firstUser === undefined) {
+      const text = textOf(p.content);
+      if (text && !/^\s*(<user_instructions>|<environment_context>|# AGENTS\.md)/.test(text)) firstUser = text;
+    }
+    if (e.type === "event_msg" && p.type === "token_count") {
+      const input = Number(p.info?.last_token_usage?.input_tokens);
       const at = Date.parse(e.timestamp);
-      if (!(prompt > 0) || !Number.isFinite(at)) return;
-      if (first === undefined) first = Math.max(0, prompt - estimateTokens(firstUser ?? "", CLAUDE));
-      if (at >= since) {
+      if (!(input > 0) || !Number.isFinite(at)) return;
+      out.first ??= Math.max(0, input - estimateTokens(firstUser ?? "", model));
+      out.reqs.push({ at, model });
+    }
+  });
+  return out;
+}
+
+/** Gemini CLI chats: each gemini message records its request's promptTokenCount. */
+function geminiUsage(path: string): SessionUsage {
+  const out: SessionUsage = { agent: "Gemini CLI", reqs: [] };
+  let firstUser: string | undefined;
+  for (const m of readGeminiMessages(path)) {
+    if (m?.type === "user" && firstUser === undefined) firstUser = textOf(m.content) || undefined;
+    if (m?.type !== "gemini") continue;
+    const input = Number(m.tokens?.input);
+    const at = Date.parse(m.timestamp);
+    if (!(input > 0) || !Number.isFinite(at)) continue;
+    out.first ??= Math.max(0, input - estimateTokens(firstUser ?? "", m.model));
+    out.reqs.push({ at, model: m.model });
+  }
+  return out;
+}
+
+function usageOf(path: string): SessionUsage {
+  if (isGeminiChat(path)) return geminiUsage(path);
+  if (/[\\/]\.codex[\\/]/.test(path)) return codexUsage(path);
+  return claudeUsage(path);
+}
+
+/** Cache writes cost 1.25x input on Anthropic; OpenAI and Google charge no write premium. */
+function writeMultiplier(model?: string): number {
+  return providerFor(model) === "anthropic" ? 1.25 : 1;
+}
+
+function aggregate(agent: Agent, sessions: SessionUsage[], since: number, days: number): Baseline | undefined {
+  const firsts: number[] = [];
+  let requests = 0, coldStarts = 0, warm = 0;
+  const models = new Map<string, number>();
+  for (const s of sessions) {
+    if (s.first !== undefined && s.first > 1000) firsts.push(s.first);
+    let prevAt: number | undefined;
+    for (const r of s.reqs) {
+      if (r.at >= since) {
         requests++;
-        if (prevAt === undefined || at - prevAt > TTL_MS) coldStarts++;
-        if (e.message.model) models.set(e.message.model, (models.get(e.message.model) ?? 0) + 1);
+        if (prevAt === undefined || r.at - prevAt > TTL_MS) coldStarts++;
+        else warm++;
+        if (r.model) models.set(r.model, (models.get(r.model) ?? 0) + 1);
       }
-      prevAt = at;
-    });
-    if (first !== undefined && first > 1000) firsts.push(first);
+      prevAt = r.at;
+    }
   }
   if (firsts.length === 0) return undefined;
   firsts.sort((a, b) => a - b);
   const model = [...models.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   const price = pricingFor(model);
-  // Each overhead token is a cache read on warm requests and a cache write
-  // (1.25x input) after every cold start.
+  // Each overhead token is a cache read on warm requests and a full-price
+  // write (with the provider's premium) after every cold start.
   const usdPerKPerMonth = price
-    ? ((1000 * ((requests - coldStarts) * price.cacheReadPerM + coldStarts * 1.25 * price.inputPerM)) / 1e6) * (30 / days)
+    ? ((1000 * (warm * price.cacheReadPerM + coldStarts * writeMultiplier(model) * price.inputPerM)) / 1e6) * (30 / days)
     : undefined;
   return {
+    agent,
     sessions: firsts.length,
     median: firsts[Math.floor(firsts.length / 2)],
     p90: firsts[Math.min(firsts.length - 1, Math.floor(firsts.length * 0.9))],
@@ -239,19 +322,54 @@ export function measureBaseline(days = 30, paths?: string[]): Baseline | undefin
   };
 }
 
+/**
+ * Fixed overhead per session and agent, measured: each session's first
+ * request (the API's own count) minus the first user message, plus the
+ * request and cold-start counts that turn tokens into a monthly bill.
+ * Claude Code, Codex and Gemini CLI sessions, newest `days` only.
+ */
+export function measureBaselines(days = 30, paths?: string[]): Baseline[] {
+  const since = Date.now() - days * 86_400_000;
+  const files = paths ?? listSessions(10_000).filter((s) => s.modifiedAt.getTime() >= since).map((s) => s.path);
+  const byAgent = new Map<Agent, SessionUsage[]>();
+  for (const path of files) {
+    let u: SessionUsage;
+    try {
+      u = usageOf(path);
+    } catch {
+      continue;
+    }
+    (byAgent.get(u.agent) ?? byAgent.set(u.agent, []).get(u.agent)!).push(u);
+  }
+  const order: Agent[] = ["Claude Code", "Codex", "Gemini CLI"];
+  return order.flatMap((a) => {
+    const b = byAgent.has(a) ? aggregate(a, byAgent.get(a)!, since, days) : undefined;
+    return b ? [b] : [];
+  });
+}
+
+/** Claude Code's baseline (the one memory-file prices are quoted against). */
+export function measureBaseline(days = 30, paths?: string[]): Baseline | undefined {
+  return measureBaselines(days, paths).find((b) => b.agent === "Claude Code");
+}
+
 function normalize(s: string): string {
   return s.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 /** What is worth changing in the memory files. */
-export function overheadFindings(files: MemoryFile[], baseline?: Baseline): OverheadFinding[] {
+export function overheadFindings(files: MemoryFile[], baselines?: Baseline | Baseline[]): OverheadFinding[] {
   const out: OverheadFinding[] = [];
-  const cost = (tok: number) => (baseline?.usdPerKPerMonth ? ` (~${formatUsd((tok / 1000) * baseline.usdPerKPerMonth)}/month at your usage)` : "");
+  const list = Array.isArray(baselines) ? baselines : baselines ? [baselines] : [];
+  const cost = (tok: number, agent: Agent) => {
+    const b = list.find((x) => x.agent === agent);
+    return b?.usdPerKPerMonth ? ` (~${formatUsd((tok / 1000) * b.usdPerKPerMonth)}/month at your usage)` : "";
+  };
   for (const f of files) {
     if (f.tokens >= 2000) {
       out.push({
         severity: f.tokens >= 5000 ? "warn" : "info",
-        message: `${f.path} is ~${formatTokens(f.tokens)} tokens, read on every ${f.agent} request${f.agent === "Claude Code" ? cost(f.tokens) : ""}.`,
+        message: `${f.path} is ~${formatTokens(f.tokens)} tokens, read on every ${f.agent} request${cost(f.tokens, f.agent)}.`,
         suggestion: `Keep rules the agent needs on most requests; move reference material to a file it reads when relevant. \`context-doctor overhead split ${f.path}\` shows the split first.`,
       });
     }
@@ -303,9 +421,12 @@ export function overheadReport(opts: { cwd?: string; home?: string; days?: numbe
   const cwd = opts.cwd ?? process.cwd();
   const home = opts.home ?? homedir();
   const files = findMemoryFiles(cwd, home);
-  const baseline = measureBaseline(opts.days ?? 30, opts.paths);
-  const mcp: McpSection = { configs: claudeMcpConfigs(cwd, home), usage: mcpUsage(opts.days ?? 30, opts.paths) };
-  return { cwd, baseline, files, findings: overheadFindings(files, baseline), mcp };
+  const baselines = measureBaselines(opts.days ?? 30, opts.paths);
+  const baseline = baselines.find((b) => b.agent === "Claude Code");
+  // MCP usage comes from Claude Code transcripts only (the tool-name scheme is theirs).
+  const claudePaths = opts.paths?.filter((p) => !isGeminiChat(p) && !/[\\/]\.codex[\\/]/.test(p));
+  const mcp: McpSection = { configs: claudeMcpConfigs(cwd, home), usage: mcpUsage(opts.days ?? 30, claudePaths) };
+  return { cwd, baseline, baselines, files, findings: overheadFindings(files, baselines), mcp };
 }
 
 /** Launch each configured server and size its tool definitions, then add the findings they support. */
@@ -353,11 +474,22 @@ export function renderOverhead(r: OverheadReport, home = homedir()): string {
   } else {
     out.push("No Claude Code sessions in the period to measure; memory files are sized below.");
   }
+  for (const o of r.baselines.filter((x) => x.agent !== "Claude Code")) {
+    const tokens = r.files.filter((f) => f.agent === o.agent).reduce((s, f) => s + f.tokens, 0);
+    out.push(
+      "",
+      `${o.agent}, last ${o.days} days: ${o.sessions} sessions start at a median ~${formatTokens(o.median)} tokens (p90 ~${formatTokens(o.p90)}); ${tokens ? `memory files loaded here ~${formatTokens(tokens)} of it` : "no memory files of its own here"}.` +
+        (o.usdPerKPerMonth !== undefined
+          ? ` Each 1k tokens ~${formatUsd(o.usdPerKPerMonth)} a month (${o.requests.toLocaleString("en-US")} requests, ${o.coldStarts.toLocaleString("en-US")} cold starts, ${o.model} list prices).`
+          : "")
+    );
+  }
   out.push(...renderMcp(r));
   out.push("", "Memory files loaded in this directory", "─".repeat(56));
   if (r.files.length === 0) out.push("  none");
   for (const f of r.files) {
-    const usd = f.agent === "Claude Code" && b?.usdPerKPerMonth !== undefined ? `  ${formatUsd((f.tokens / 1000) * b.usdPerKPerMonth)}/mo` : "";
+    const fb = r.baselines.find((x) => x.agent === f.agent);
+    const usd = fb?.usdPerKPerMonth !== undefined ? `  ${formatUsd((f.tokens / 1000) * fb.usdPerKPerMonth)}/mo` : "";
     out.push(`  ${f.agent.padEnd(11)} ~${formatTokens(f.tokens).padStart(5)}${usd.padEnd(12)}  ${short(f.path)}${f.via === "project" ? "" : `  (${f.via})`}`);
   }
   out.push("", `Findings (${r.findings.length})`, "─".repeat(56));

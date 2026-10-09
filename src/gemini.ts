@@ -61,7 +61,7 @@ function resultText(call: any): string {
 }
 
 /** The ordered, de-duplicated, rewind-applied messages of a chat file. */
-function readMessages(path: string): any[] {
+export function readGeminiMessages(path: string): any[] {
   const order: string[] = [];
   const byId = new Map<string, any>();
   let anon = 0;
@@ -106,7 +106,7 @@ export function parseGeminiChat(path: string): ParsedSession {
   const usageSamples: UsageSample[] = [];
   let model: string | undefined;
   let reportedInputTokens: number | undefined;
-  for (const m of readMessages(path)) {
+  for (const m of readGeminiMessages(path)) {
     if (m.type === "user") {
       const t = text(m.content);
       if (t) messages.push({ role: "user", content: t });
