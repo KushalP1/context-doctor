@@ -15,19 +15,28 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 | Claude Desktop chat | standing MCP instructions (now incl. pack_context) | profile_context sketch, pack_context on local files, checkup prompt | no hook API, no transcript on disk |
 | Cursor agent | native postToolUse hook | MCP tools, cursor profiler, editor extension | Cursor's own models never pass through a local process |
 | Codex (app, IDE, CLI) | every-prompt hook | MCP tools (read-only, no approval needed), session | autopilot only with an API key |
-| Gemini CLI | every-prompt hook (`BeforeAgent`, with the API's own token counts); autopilot on an API key (`GOOGLE_GEMINI_BASE_URL`) | MCP tools, session, watch, overhead (GEMINI.md) | autopilot cannot see Google sign-in traffic |
+| Gemini CLI | every-prompt hook (`BeforeAgent`, with the API's own token counts); autopilot on an API key (`GOOGLE_GEMINI_BASE_URL`) | MCP tools, session, watch, overhead (GEMINI.md and the measured start-of-session cost) | autopilot cannot see Google sign-in traffic |
 | claude.ai, ChatGPT, phone apps | standing preferences (`instructions --copy`) | analyze an exported chat | nothing runs there |
-| Your own API apps (Anthropic, OpenAI, Gemini) | autopilot or the optimizing proxy; `withContextDoctor(client)` without a proxy | library: profile, optimize, pack | in-process wrapper covers Anthropic and OpenAI SDKs only |
+| Your own API apps (Anthropic, OpenAI, Gemini) | autopilot or the optimizing proxy; `withContextDoctor(client)` without a proxy (Anthropic, OpenAI and Google Gen AI SDKs) | library: profile, optimize, pack | — |
 | CI | `analyze --fail-over-budget`; the GitHub Action comments memory-file growth on PRs and gates on a budget | `ci` locally | Marketplace listing pending |
 
 ## Verified 2026-10-08
 
-- `npm test`: 232 of 232 pass on macOS, Linux and Windows CI (Node 20/22/24); smoke: MCP, OpenAI proxy, Gemini proxy (Node 20/22 in CI, throwaway HOME).
+- `npm test`: 235 of 235 pass on macOS, Linux and Windows CI (Node 20/22/24); smoke: MCP, OpenAI proxy, Gemini proxy (Node 20/22 in CI, throwaway HOME).
 - MCP smoke over stdio and over streamable HTTP: handshake 119 ms, instructions delivered (690 chars, cap 700), all four tools and the checkup prompt, malformed input rejected.
 - OpenAI proxy smoke against a local mock: model listing passthrough, auth header untouched, incremental streaming, Responses API, usage capture, autopilot clearing.
 - `doctor` on the author's machine: Claude Desktop, Claude Code, Cursor and Codex wired; hooks registered in Claude Code, Codex and Cursor; status line, skill, ledger, autopilot up.
 
-## Now: shipped in 0.27.0
+## Shipped in 0.28.0
+
+| Item | Why | Status |
+|---|---|---|
+| **Plugin skills** `/context-doctor:overhead` and `/context-doctor:pack` | Most Claude Code users install the plugin; the two newest levers were CLI-only there | ✅ |
+| **`pack` reads folders as git does** | A folder inside a repository is listed with `git ls-files` (tracked plus untracked-not-ignored), so `.gitignore`'d build output, data dumps and secrets never enter a pack; outside git the old walk remains | ✅ Test on a scratch repo |
+| **`withContextDoctor` for Google's `@google/genai`** | `models.generateContent` / `generateContentStream` get autopilot in process. Only the history field is cloned now, so an `AbortSignal` or callable tools in a request's config pass through | ✅ Unit test plus the real SDK against a local mock (a cold return went out at 183k of the app's 482k chars) |
+| **`overhead` for Codex and Gemini CLI** | Each agent's start-of-session cost from the API's own counts (Codex token_count events, Gemini promptTokenCount); Codex's AGENTS.md-as-user-message counted as overhead; priced with each provider's cache rules (no write premium on OpenAI or Google); memory files and `overhead split` priced at the loading agent's rate | ✅ Tests; on the author's machine 2 Codex sessions start at ~15k tokens |
+
+## Shipped in 0.27.0
 
 | Item | Why | Status |
 |---|---|---|
