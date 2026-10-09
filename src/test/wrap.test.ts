@@ -70,3 +70,25 @@ test("OpenAI-shaped clients are wrapped too, and other methods pass through", as
   assert.deepEqual(calls, ["chat", "responses"]);
   assert.equal(contextDoctorStats(wrapped)!.requests, 2);
 });
+
+test("Google Gen AI clients: generateContent histories are slimmed on a copy; config (with an AbortSignal) passes through", async () => {
+  const sent: any[] = [];
+  const client = { models: { generateContent: async (p: any) => (sent.push(p), { text: "ok" }), generateContentStream: async (p: any) => (sent.push(p), []) } };
+  const clearer = new AutoClearer({ unseenIsWarm: true });
+  const contents: any[] = [{ role: "user", parts: [{ text: "fix the build" }] }];
+  for (let i = 0; i < 8; i++) {
+    contents.push({ role: "model", parts: [{ functionCall: { name: "run_shell_command", args: { command: `make ${i}` } } }] });
+    contents.push({ role: "user", parts: [{ functionResponse: { name: "run_shell_command", response: { output: "build log line\n".repeat(3000) } } }] });
+  }
+  const params = { model: "gemini-3-pro", contents, config: { abortSignal: new AbortController().signal, temperature: 0 } };
+  clearer.apply({ model: params.model, contents: structuredClone(contents) }, Date.now() - 2 * 3_600_000); // seen 2 h ago: cold now
+  const wrapped = withContextDoctor(client, { clearer });
+  const before = JSON.stringify(contents);
+  await wrapped.models.generateContent(params);
+  assert.equal(JSON.stringify(contents), before, "the app's history was not mutated");
+  assert.equal(sent[0].config, params.config, "config is passed as is, not cloned");
+  assert.ok(JSON.stringify(sent[0].contents).length < before.length / 2);
+  await wrapped.models.generateContentStream({ model: "gemini-3-pro", contents: "plain string prompt" });
+  assert.equal(sent[1].contents, "plain string prompt");
+  assert.equal(contextDoctorStats(wrapped)!.changed, 1);
+});

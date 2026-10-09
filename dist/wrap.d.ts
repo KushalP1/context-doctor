@@ -7,9 +7,12 @@
  *   import { withContextDoctor } from "context-doctor";
  *   const client = withContextDoctor(new Anthropic());
  *
- * Works on the official Anthropic and OpenAI SDK clients (and anything shaped
- * like them): messages.create/stream, chat.completions.create/stream/parse and
- * responses.create/stream/parse, beta namespaces included. Each request goes
+ * Works on the official Anthropic, OpenAI and Google Gen AI SDK clients (and
+ * anything shaped like them): messages.create/stream,
+ * chat.completions.create/stream/parse, responses.create/stream/parse (beta
+ * namespaces included) and models.generateContent/generateContentStream.
+ * Gemini chat sessions (ai.chats) keep their history inside the SDK, out of
+ * reach; use generateContent with your own history to get autopilot. Each request goes
  * through the same AutoClearer the proxy uses: stale tool output is cleared
  * only when the prompt cache is cold, so a request never costs more.
  *

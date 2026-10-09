@@ -7,9 +7,12 @@
  *   import { withContextDoctor } from "context-doctor";
  *   const client = withContextDoctor(new Anthropic());
  *
- * Works on the official Anthropic and OpenAI SDK clients (and anything shaped
- * like them): messages.create/stream, chat.completions.create/stream/parse and
- * responses.create/stream/parse, beta namespaces included. Each request goes
+ * Works on the official Anthropic, OpenAI and Google Gen AI SDK clients (and
+ * anything shaped like them): messages.create/stream,
+ * chat.completions.create/stream/parse, responses.create/stream/parse (beta
+ * namespaces included) and models.generateContent/generateContentStream.
+ * Gemini chat sessions (ai.chats) keep their history inside the SDK, out of
+ * reach; use generateContent with your own history to get autopilot. Each request goes
  * through the same AutoClearer the proxy uses: stale tool output is cleared
  * only when the prompt cache is cold, so a request never costs more.
  *
@@ -41,6 +44,9 @@ const WRAPPED = new Set([
   "responses.create",
   "responses.stream",
   "responses.parse",
+  // Google's @google/genai: ai.models.generateContent({ model, contents, config })
+  "models.generateContent",
+  "models.generateContentStream",
 ]);
 const PARENTS = new Set([...WRAPPED].flatMap((p) => p.split(".").slice(0, -1).map((_, i, a) => a.slice(0, i + 1).join("."))));
 
@@ -71,14 +77,20 @@ export function withContextDoctor<T extends object>(client: T, options: WrapOpti
 
   const prepare = (method: string, params: unknown): unknown => {
     if (!params || typeof params !== "object" || Array.isArray(params)) return params;
+    // Copy the top level and deep-clone only the history, the one part
+    // autopilot rewrites: the rest can hold things that do not clone
+    // (an AbortSignal or callable tools in @google/genai's config).
+    stats.requests++;
+    const src = params as Record<string, unknown>;
+    const field = ["messages", "input", "contents"].find((k) => Array.isArray(src[k]));
+    if (!field) return params;
     let body: Record<string, unknown>;
     try {
-      body = structuredClone(params as Record<string, unknown>);
+      body = { ...src, [field]: structuredClone(src[field]) };
     } catch {
-      return params; // something uncloneable (a function, a stream): leave the request alone
+      return params; // something uncloneable inside the history: leave the request alone
     }
     const result = clearer.apply(body);
-    stats.requests++;
     if (result.changed) {
       stats.changed++;
       stats.tokensRemoved += result.tokensRemoved;
