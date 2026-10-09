@@ -1,58 +1,66 @@
 # context-doctor 🩺
 
-[![CI](https://github.com/KushalP1/context-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/KushalP1/context-doctor/actions) [![npm](https://img.shields.io/npm/v/context-doctor)](https://www.npmjs.com/package/context-doctor) [![npm downloads](https://img.shields.io/npm/dm/context-doctor)](https://www.npmjs.com/package/context-doctor) [![license: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE) ![macOS | Linux | Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
+[![CI](https://github.com/KushalP1/context-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/KushalP1/context-doctor/actions) [![npm](https://img.shields.io/npm/v/context-doctor)](https://www.npmjs.com/package/context-doctor) [![npm downloads](https://img.shields.io/npm/dm/context-doctor)](https://www.npmjs.com/package/context-doctor) [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.KushalP1%2Fcontext--doctor-blue)](https://registry.modelcontextprotocol.io) [![license: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE) ![macOS | Linux | Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
-**Cut your Claude Code bill, measured on your own sessions.**
+**See where your AI agent's tokens go, and stop paying for the ones that do nothing.**
 
-```bash
-npx context-doctor savings
-```
+AI agents re-send their whole context on every message: old tool output, pasted files, long instructions. A 500k-token session pays for all of it again each time, and at full price after a coffee break, when the prompt cache has expired. context-doctor measures that waste on your own sessions, in dollars, and removes it at the moments it pays: before it enters the context, while it sits there, and on every request.
 
-One command shows, in dollars, what your recent sessions cost and what each lever below would have saved on them. Then the levers do it: an every-prompt hook, an auto-compact window, and a proxy that never makes a request more expensive.
-
-Long agent sessions fill up with tool output nobody reads again, and a 500k-token session re-reads all of it on every message. The most expensive moment is coming back after lunch: the prompt cache has expired, so the next message re-sends everything at full price. `context-doctor` measures this on your own sessions and acts on it at the moments that pay.
-
-- **Tells you when to `/compact`, at the moment it pays.** When you come back to a large session after the cache expired, the every-prompt hook gives the model the numbers and it offers `/compact` once. Replayed over 133 days of the author's Claude Code history: 401 such returns, and compacting then would have saved **$4,053 net at list price, about $914 a month**. It works in every Claude Code surface, including the desktop app. [What it saves →](#what-it-saves)
-- **Compacts earlier, automatically, in every Claude Code surface.** Claude Code auto-compacts near the full window (measured: ~970k tokens on a 1M model), so long sessions re-read 400k-900k tokens on every message. `context-doctor compact-window` replays your history at smaller windows and, if you choose, sets Claude Code's own `autoCompactWindow`. On the author's last 30 days: **a 400k window would have cut input cost 55%** ($6,119 to $2,757), for 15 compactions a week instead of 5. A native setting, so it works in the desktop app too. [The trade-off →](#3-compacting-earlier-automatic)
-- **Autopilot for terminal and IDE sessions and API apps:** a local proxy that clears stale tool output only when the prompt cache is cold, so it never costs more. **9.8% less input cost, no session made more expensive**, in the same replay. (The desktop app's Code tab sets its own API address, so autopilot cannot reach it; `doctor` tells you if that is your case.)
-- **Keeps waste out in the first place.** `context-doctor pack` (and the `pack_context` MCP tool) puts only the chunks of a big document, log or codebase that a question needs into the context, within a token budget: 9 of 10 questions about this repo answered from 0.6% of its tokens. `context-doctor overhead` measures what every request re-reads before your message (system prompt, tools, CLAUDE.md, rules, memory) and prices each memory file per month. [How →](#before-it-enters-the-context-pack-and-overhead)
-- **Counts Claude correctly.** Current Claude models pack 2.75 characters per token, not the 4 most tools assume, so estimates built on 4 undercount Claude by about 40%. The ratios were measured from the API's own counts; `context-doctor accuracy` re-checks them on yours.
-- **Works where you work:** Claude Code (terminal, IDE, desktop app, plugin), Cursor, Codex, Gemini CLI, Claude Desktop chat, any Anthropic or OpenAI API app, VS Code, CI. macOS, Linux and Windows, Node 20+. Local, keyless, no telemetry, MIT.
-
-Built and maintained by [gAI Ventures](https://gai.ventures).
-
-> **Which context-doctor is this?** Several projects share the name. This one is [`context-doctor` on npm](https://www.npmjs.com/package/context-doctor) and `io.github.KushalP1/context-doctor` in the [official MCP Registry](https://registry.modelcontextprotocol.io): the one you run as `npx context-doctor`, and the one that prices what it saves on your own history.
-
-## Quick start
-
-**See what it would save you first** (no install, reads your local Claude Code history):
+It runs on your machine, needs no API key, sends no telemetry, and works with **Claude Code, Claude Desktop, Cursor, Codex, Gemini CLI**, any app on the **Anthropic, OpenAI or Gemini API**, and **CI**. MIT licensed, Node 20+, macOS, Linux and Windows.
 
 ```bash
-npx context-doctor savings
+npx context-doctor savings     # what your recent sessions cost, and what each fix would have saved
 ```
 
 <img src="https://raw.githubusercontent.com/KushalP1/context-doctor/main/assets/savings.svg" alt="npx context-doctor savings: input billed, what /compact at cold resumes, autopilot and an earlier auto-compact window would have saved" width="640">
 
-That is the author's machine: every session there runs in the desktop app, which autopilot cannot reach, so lines 1 and 3 are the ones that apply. Yours is computed the same way, from your own transcripts: every session replayed request by request through the shipped code, against what you were actually billed. `context-doctor savings --share` prints a few lines with totals only (no project names or paths) if you want to post your number.
+## Quick start
 
-**Then install it**, whichever way suits you:
+Pick where you work. Each takes about a minute and is fully reversible.
 
-```bash
-# Everything, every app it finds (Claude Code, Cursor, Codex, Claude Desktop)
-npm install -g context-doctor
-context-doctor install
-context-doctor autopilot on     # every new Claude Code session keeps its context lean
-```
+| You use | Do this |
+|---|---|
+| **Claude Code** (terminal, IDE, desktop app) | Inside Claude Code: `/plugin marketplace add KushalP1/context-doctor`, then `/plugin install context-doctor@context-doctor`. You get the every-prompt check, the MCP tools and `/context-doctor:savings`, `:checkup`, `:overhead`, `:pack`, `:autopilot`, `:compact-window` |
+| **Everything on this machine at once** | `npm install -g context-doctor && context-doctor install` wires Claude Code, Claude Desktop, Cursor, Codex and Gemini CLI. `context-doctor doctor` checks it; `context-doctor uninstall` removes it |
+| **Claude Desktop, Cursor or any MCP client** | Add the server to the client's MCP config (or install the one-click `.mcpb` from the [latest release](https://github.com/KushalP1/context-doctor/releases/latest) in Claude Desktop):<br>`{"mcpServers": {"context-doctor": {"command": "npx", "args": ["-y", "context-doctor", "mcp"]}}}` |
+| **claude.ai, ChatGPT, phone apps** | `npx context-doctor instructions --copy`, then paste into the app's personal preferences |
+| **Your own app on an LLM API** | Run `npx context-doctor proxy --autopilot` and point `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` (add `/v1`) or `GOOGLE_GEMINI_BASE_URL` at `http://localhost:8787`. No proxy possible? Wrap the SDK client: `withContextDoctor(new Anthropic())` |
+| **GitHub pull requests** | `uses: KushalP1/context-doctor@v0.27.0` comments how much a PR grows CLAUDE.md, AGENTS.md and rules, and can fail over a budget ([setup](#enforce-a-budget-in-ci)) |
 
-```text
-# Or as a Claude Code plugin, from inside Claude Code
-/plugin marketplace add KushalP1/context-doctor
-/plugin install context-doctor@context-doctor
-```
+## What it does
 
-The plugin brings the every-prompt check, the MCP tools, and `/context-doctor:savings`, `/context-doctor:checkup`, `/context-doctor:autopilot` and `/context-doctor:compact-window`. It needs no npm step: the MCP server ships as one self-contained file, so it also works on Claude Code versions that do not install plugin dependencies.
+**Measure, in dollars, on your own history**
+- `savings`: what your recent Claude Code sessions cost and what each fix below would have saved, replayed request by request against what you were billed.
+- `overhead`: what every request re-reads before your message (system prompt, tools, MCP servers, CLAUDE.md, rules, memory), each file priced per month.
+- `session`, `watch`, `analyze`, `report`, `dashboard`: token breakdown and wasted-context findings for any session, conversation file or agent trace.
 
-`context-doctor autopilot status` shows what autopilot did; `context-doctor doctor` checks the whole setup. Everything is reversible: `context-doctor autopilot off`, `context-doctor uninstall`, or `/plugin uninstall`.
+**Keep waste out of the context**
+- `pack` (and the `pack_context` MCP tool): only the chunks of a big document, PDF, log or codebase that a question needs, within a token budget, instead of the whole thing.
+- `overhead split`: turns a heavy CLAUDE.md or memory file into a lean one plus a reference file the agent opens when needed, word for word, nothing lost.
+- `ci` and the GitHub Action: review memory-file growth like any other cost.
+
+**Remove waste automatically**
+- An every-prompt hook (Claude Code, Codex, Gemini CLI; Cursor after each tool call) tells the model its real context size and the largest waste, and offers `/compact` when you return to a big session after the cache expired.
+- `compact-window`: sets Claude Code's own auto-compact window, measured on your history first. Works in the desktop app too.
+- Autopilot: a local proxy (or SDK wrapper) that clears stale tool output only when the prompt cache is cold, so a request never costs more.
+
+## What it has measured
+
+On the author's own Claude Code history (mostly Opus and Fable models with the 1M window, priced at API list prices; `savings` computes yours the same way):
+
+- **Compacting when you come back after the cache expired:** 401 such returns in 133 days; compacting then would have saved **$4,053 net, about $914 a month**. [Details →](#what-it-saves)
+- **A 400k auto-compact window instead of ~970k:** **55% less input cost** over 30 days ($6,119 to $2,757), for 15 compactions a week instead of 5. [The trade-off →](#3-compacting-earlier-automatic)
+- **Autopilot:** **9.8% less input cost, no session made more expensive.**
+- **pack:** 9 of 10 questions about this repository answered from **0.6% of its tokens**. [How →](#before-it-enters-the-context-pack-and-overhead)
+- **Counting Claude correctly:** current Claude models pack 2.75 characters per token, not the 4 most tools assume, so estimates built on 4 undercount Claude by about 40%. `context-doctor accuracy` re-checks the ratio on your own sessions.
+
+On a Claude subscription you do not pay list price; the same tokens come out of your usage limit instead, so read the dollars as the size of the effect.
+
+Built and maintained by [gAI Ventures](https://gai.ventures).
+
+> **Which context-doctor is this?** Several projects share the name. This one is [`context-doctor` on npm](https://www.npmjs.com/package/context-doctor) and `io.github.KushalP1/context-doctor` in the [official MCP Registry](https://registry.modelcontextprotocol.io).
+
+A profile looks like this (`npx context-doctor analyze conversation.json`, or `session` for your latest Claude Code session):
 
 ```
 Where the tokens go
