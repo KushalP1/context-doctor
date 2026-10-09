@@ -13,6 +13,7 @@
  * and no model calls. Lexical ranking misses pure paraphrase; the outline that
  * comes with every result lets the model pick sections by heading when it does.
  */
+import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, extname, join, relative } from "node:path";
 import { estimateTokens, formatTokens } from "./tokens.js";
@@ -333,6 +334,19 @@ export const PACK_LIMITS = { files: 500, fileBytes: 5 * 1024 * 1024, totalBytes:
  * folders, binaries, and anything past the size limits) into sources.
  * `skipped` says what was left out and why, so nothing vanishes silently.
  */
+/** Files git would consider part of the repository under `dir` (relative to it), or undefined outside git. */
+function gitFiles(dir) {
+    try {
+        const r = spawnSync("git", ["-C", dir, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 30_000 });
+        if (r.status !== 0 || typeof r.stdout !== "string")
+            return undefined;
+        // --cached lists files deleted from the work tree too; only what exists is read.
+        return r.stdout.split("\0").filter((f) => f && existsSync(join(dir, f))).sort();
+    }
+    catch {
+        return undefined;
+    }
+}
 export function readSources(paths, cwd = process.cwd()) {
     const sources = [];
     const skipped = [];
@@ -354,6 +368,15 @@ export function readSources(paths, cwd = process.cwd()) {
         if (st.isDirectory()) {
             if (!top && (SKIP_DIRS.has(basename(p)) || basename(p).startsWith(".")))
                 return;
+            // Inside a git repository the repository says what is source: tracked
+            // files plus untracked ones not ignored, so .gitignore'd build output,
+            // data dumps and secrets stay out. Elsewhere, walk with SKIP_DIRS.
+            const listed = top ? gitFiles(p) : undefined;
+            if (listed) {
+                for (const f of listed)
+                    visit(join(p, f), false);
+                return;
+            }
             for (const e of readdirSync(p).sort())
                 visit(join(p, e), false);
             return;

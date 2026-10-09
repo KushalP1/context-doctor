@@ -94,11 +94,6 @@ export declare const PACK_LIMITS: {
     fileBytes: number;
     totalBytes: number;
 };
-/**
- * Read files and directories (recursively, skipping build and dependency
- * folders, binaries, and anything past the size limits) into sources.
- * `skipped` says what was left out and why, so nothing vanishes silently.
- */
 export declare function readSources(paths: string[], cwd?: string): {
     sources: PackSource[];
     skipped: string[];

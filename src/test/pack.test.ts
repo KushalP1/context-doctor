@@ -3,6 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chunkSource, packContext, readSources, renderPack, terms } from "../pack.js";
@@ -102,4 +103,20 @@ test("readSources walks folders, skips dependencies and binaries, and says what 
   assert.deepEqual(sources.map((s) => s.name), ["a.md"]);
   assert.ok(skipped.some((s) => /img\.png: binary/.test(s)));
   assert.ok(skipped.some((s) => /missing\.md: not found/.test(s)));
+});
+
+test("inside a git repository a folder is read as git sees it: .gitignore'd files stay out", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cd-pack-git-"));
+  const git = (...a: string[]) => spawnSync("git", a, { cwd: dir });
+  if (git("init", "-q").status !== 0) return; // no git on this machine
+  writeFileSync(join(dir, ".gitignore"), "out/\nsecrets.env\n");
+  mkdirSync(join(dir, "out"));
+  writeFileSync(join(dir, "out", "bundle.js"), "built");
+  writeFileSync(join(dir, "secrets.env"), "KEY=x");
+  writeFileSync(join(dir, "notes.md"), "# Notes\n\nuntracked but not ignored");
+  mkdirSync(join(dir, "src"));
+  writeFileSync(join(dir, "src", "a.ts"), "export const a = 1;");
+  git("add", "src/a.ts");
+  const names = readSources([dir], dir).sources.map((s) => s.name.replace(/\\/g, "/")).sort();
+  assert.deepEqual(names, [".gitignore", "notes.md", "src/a.ts"]);
 });
