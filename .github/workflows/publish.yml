@@ -79,7 +79,7 @@ jobs:
     # the published npm package's mcpName, so it runs after the npm job.
     needs: npm
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     permissions:
       contents: read
       id-token: write
@@ -91,9 +91,10 @@ jobs:
           V="$(node -p "require('./package.json').version")"
           # npm takes a little while to serve a version it just accepted; the
           # v0.22.0 run checked seconds after publishing and skipped. Wait.
-          for i in $(seq 1 30); do npm view "context-doctor@$V" version >/dev/null 2>&1 && break; sleep 10; done
+          # npm's registry can take well over 5 minutes to serve a new version (0.28.0 did).
+          for i in $(seq 1 90); do npm view "context-doctor@$V" version >/dev/null 2>&1 && break; sleep 10; done
           if ! npm view "context-doctor@$V" version >/dev/null 2>&1; then
-            echo "::warning::context-doctor@$V is not on npm after 5 minutes, and the registry checks the npm package; skipped. Re-run with Run workflow."; exit 0
+            echo "::warning::context-doctor@$V is not on npm after 15 minutes, and the registry checks the npm package; skipped. Re-run with Run workflow."; exit 0
           fi
           ./mcp-publisher login github-oidc
           if ./mcp-publisher publish 2>publish.err; then
