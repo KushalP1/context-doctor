@@ -46,6 +46,7 @@ import { packContextSemantic, readSources, renderPack } from "./pack.js";
 import { measureBaselines, measureMcpSizes, overheadReport, renderOverhead } from "./overhead.js";
 import { applySplit, planSplit, renderSplit } from "./split.js";
 import { ciReport, renderCiMarkdown, renderCiText } from "./ci.js";
+import { renderReads, repeatedReads } from "./reads.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -104,6 +105,8 @@ Usage:
   context-doctor ci [--base <ref>] [--max-tokens n] [--max-increase n] [--markdown]
                                                 For pull requests: memory files (CLAUDE.md, AGENTS.md,
                                                 GEMINI.md, rules) at HEAD vs base; exit 1 over budget
+  context-doctor reads [--days n] [--limit n]   Files read into session after session: reads, tokens,
+                                                cost, and whether a CLAUDE.md summary or pack pays
   context-doctor overhead split <file> [--write]
                                                 Move a memory file's big sections to a reference
                                                 file, leaving pointers (plan first; --write backs up)
@@ -680,6 +683,12 @@ async function main(): Promise<void> {
       trimBoundaryStep: loadedRc.config.trimBoundaryStep,
     });
     return; // server keeps the process alive
+  }
+
+  if (args.command === "reads") {
+    const report = repeatedReads(args.days ?? 30);
+    console.log(args.json ? JSON.stringify(report, null, 2) : renderReads(report, args.limit ?? 15));
+    return;
   }
 
   if (args.command === "ci") {

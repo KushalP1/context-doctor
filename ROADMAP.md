@@ -56,8 +56,7 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 
 | # | Item | Why | How we will know it works |
 |---|---|---|---|
-| 1 | **Cross-session duplicate reads** | The same files are read into many sessions a day; each read is paid again. Count them from transcripts and point at the files worth a summary in memory or a `pack` | `report` lists the top repeated files with tokens and sessions; a replay prices them |
-| 2 | **Cost per task** in `report` | Session cost divided by the commits made during it, per project, local only | Matches a hand count on a few sessions |
+| 1 | **Cost per task** in `report` | Session cost divided by the commits made during it, per project, local only | Matches a hand count on a few sessions |
 
 ## Closed by measurement (2026-10-08): a large-paste notice in the hook
 
@@ -90,6 +89,7 @@ The idea: when a prompt itself carries a big paste, tell the model to work from 
 
 | Item | Why | Status |
 |---|---|---|
+| **`context-doctor reads`**: files read into session after session | Agents re-read the same orientation files every session. Counted from transcripts per file: sessions, reads, tokens (images billed as images, not their base64) and the floor of the cost; a file read in most of its project's sessions is flagged as worth a few lines in CLAUDE.md, the rest pointed at `pack` | ✅ Measured on the author's last 30 days: 1,435 reads in 76 sessions, ~2.6M tokens; only 7 files were read in 3+ sessions, 8% of read tokens and about $1.70 at the floor. Cross-session repetition is small there; the larger waste is re-reading within a session (one file read 100 times in 3 sessions), which `session` already flags as `repeated_file_read` |
 | **Python package** (`python/`, `pip install context-doctor` once published) | RAG pipelines chunk and stuff context in Python. The port gives them `pack_context`, `pack_documents` (LangChain documents, LlamaIndex nodes, strings, duck-typed: no dependencies), `estimate_tokens`, a message `profile_messages`, and `python -m context_doctor pack` | ✅ Parity with the TypeScript, byte for byte: 42 token estimates, 19 number formats, 579 chunks across 14 chunkings (markdown, code, logs, Unicode, one-line logs), 7 full packs and their rendered output. Tested on Python 3.9, 3.11 and 3.14 here; CI runs 3.9 and 3.13 on Linux, macOS and Windows and fails if the fixtures fall behind the TypeScript. Wheel built and installed in a clean venv. Publishing waits on the owner's PyPI trusted publisher |
 
 ## History: what shipped, with the measurements behind it

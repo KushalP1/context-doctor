@@ -33,6 +33,7 @@ Pick where you work. Each takes about a minute and is fully reversible.
 **Measure, in dollars, on your own history**
 - `savings`: what your recent Claude Code sessions cost and what each fix below would have saved, replayed request by request against what you were billed.
 - `overhead`: what every request re-reads before your message (system prompt, tools, MCP servers, CLAUDE.md, rules, memory), each file priced per month.
+- `reads`: the files read into session after session, and whether a CLAUDE.md summary or `pack` would pay.
 - `session`, `watch`, `analyze`, `report`, `dashboard`: token breakdown and wasted-context findings for any session, conversation file or agent trace.
 
 **Keep waste out of the context**

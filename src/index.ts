@@ -39,3 +39,4 @@ export * from "./split.js";
 export * from "./mcpschema.js";
 export * from "./wrap.js";
 export * from "./ci.js";
+export * from "./reads.js";
