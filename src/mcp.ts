@@ -57,7 +57,7 @@ const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-b
  */
 function createServer({ fileAccess = true }: { fileAccess?: boolean } = {}): McpServer {
   const server = new McpServer(
-    { name: "context-doctor", version: "0.28.0" },
+    { name: "context-doctor", version: "0.29.0" },
     { instructions: SERVER_INSTRUCTIONS }
   );
 
