@@ -25,6 +25,7 @@ Pick where you work. Each takes about a minute and is fully reversible.
 | **Claude Desktop, Cursor or any MCP client** | Add the server to the client's MCP config (or install the one-click `.mcpb` from the [latest release](https://github.com/KushalP1/context-doctor/releases/latest) in Claude Desktop):<br>`{"mcpServers": {"context-doctor": {"command": "npx", "args": ["-y", "context-doctor", "mcp"]}}}` |
 | **claude.ai, ChatGPT, phone apps** | `npx context-doctor instructions --copy`, then paste into the app's personal preferences |
 | **Your own app on an LLM API** | Run `npx context-doctor proxy --autopilot` and point `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` (add `/v1`) or `GOOGLE_GEMINI_BASE_URL` at `http://localhost:8787`. No proxy possible? Wrap the SDK client: `withContextDoctor(new Anthropic())` |
+| **Python / RAG pipelines** | `pip install context-doctor` (after the first PyPI release; until then `pip install "git+https://github.com/KushalP1/context-doctor#subdirectory=python"`), then `pack_documents(retrieved_docs, question, budget=4000)` trims LangChain or LlamaIndex results to the chunks that matter. [Python README](./python/README.md) |
 | **GitHub pull requests** | `uses: KushalP1/context-doctor@v0.27.0` comments how much a PR grows CLAUDE.md, AGENTS.md and rules, and can fail over a budget ([setup](#enforce-a-budget-in-ci)) |
 
 ## What it does

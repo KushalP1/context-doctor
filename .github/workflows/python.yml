@@ -1,0 +1,41 @@
+name: Python
+
+on:
+  push:
+    branches: [main]
+    paths: ["python/**", "src/pack.ts", "src/tokens.ts", "scripts/gen-python-parity.mjs", ".github/workflows/python.yml"]
+  pull_request:
+    paths: ["python/**", "src/pack.ts", "src/tokens.ts", "scripts/gen-python-parity.mjs", ".github/workflows/python.yml"]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit and parity tests
+        working-directory: python
+        shell: bash
+        env:
+          PYTHONPATH: src
+        run: python -m unittest discover -s tests -v
+  # The fixtures must come from the TypeScript as it is now, or parity means nothing.
+  fixtures-fresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci && npm run build
+      - run: node scripts/gen-python-parity.mjs && git diff --exit-code -- python/tests/parity.json

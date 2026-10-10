@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "context-doctor"
+version = "0.1.0"
+description = "Budgeted context packing for LLM apps and RAG pipelines: only the chunks a question needs, within a token budget. No dependencies, no API key. Python port of the context-doctor npm package."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [{ name = "gAI Ventures" }]
+keywords = ["llm", "rag", "context-window", "tokens", "chunking", "langchain", "llamaindex", "claude", "openai", "prompt"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Text Processing",
+]
+
+[project.urls]
+Homepage = "https://github.com/KushalP1/context-doctor"
+Source = "https://github.com/KushalP1/context-doctor/tree/main/python"
+"npm package" = "https://www.npmjs.com/package/context-doctor"
+
+[tool.setuptools.packages.find]
+where = ["src"]

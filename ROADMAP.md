@@ -56,7 +56,8 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 
 | # | Item | Why | How we will know it works |
 |---|---|---|---|
-| 1 | **Python package** with profile and pack | RAG pipelines (LangChain, LlamaIndex) chunk and stuff context in Python; the same budgeted packing belongs there | Parity tests against the TypeScript fixtures |
+| 1 | **Cross-session duplicate reads** | The same files are read into many sessions a day; each read is paid again. Count them from transcripts and point at the files worth a summary in memory or a `pack` | `report` lists the top repeated files with tokens and sessions; a replay prices them |
+| 2 | **Cost per task** in `report` | Session cost divided by the commits made during it, per project, local only | Matches a hand count on a few sessions |
 
 ## Closed by measurement (2026-10-08): a large-paste notice in the hook
 
@@ -76,6 +77,7 @@ The idea: when a prompt itself carries a big paste, tell the model to work from 
 | **Sign the `.mcpb`** | Signing is in `build:mcpb` and the release workflow; `mcpb verify` gates the release. Tested end to end with a self-signed certificate | Obtain a code-signing certificate from a trusted CA; add `MCPB_CERT` / `MCPB_KEY` |
 | **Publish the extension** | Marketplace metadata, icon, listing and changelog ready; the `vscode-v*` workflow publishes to both marketplaces and attaches the `.vsix` | Create the `gai-ventures` publisher and an Open VSX account; add `VSCE_PAT` / `OVSX_PAT`; push a `vscode-v*` tag |
 | **List the GitHub Action on the Marketplace** | `action.yml` at the repo root works today as `uses: KushalP1/context-doctor@<tag>` | Tick "Publish this Action to the GitHub Marketplace" when drafting the next release |
+| **Publish the Python package to PyPI** | `publish-python.yml` publishes `python/` by trusted publishing on a `py-v*` tag; the name `context-doctor` is free on PyPI | On pypi.org, add a pending trusted publisher: project `context-doctor`, owner `KushalP1`, repo `context-doctor`, workflow `publish-python.yml`; then push tag `py-v0.1.0` |
 | Move repo to the **gAI-ventures org** | Redirects keep old links working | The org owner transfers it on GitHub |
 
 ## Non-goals
@@ -83,6 +85,12 @@ The idea: when a prompt itself carries a big paste, tell the model to work from 
 - **Cloud service / accounts / telemetry**: everything stays on the user's machine, permanently.
 - **Silent history rewriting**: lossy changes remain consent-only, with the host model writing summaries.
 - **API keys for core function**: optional adapters may accept a key; nothing core ever requires one.
+
+## Shipped on main for 0.29 (Python package awaiting the owner's PyPI step)
+
+| Item | Why | Status |
+|---|---|---|
+| **Python package** (`python/`, `pip install context-doctor` once published) | RAG pipelines chunk and stuff context in Python. The port gives them `pack_context`, `pack_documents` (LangChain documents, LlamaIndex nodes, strings, duck-typed: no dependencies), `estimate_tokens`, a message `profile_messages`, and `python -m context_doctor pack` | ✅ Parity with the TypeScript, byte for byte: 42 token estimates, 19 number formats, 579 chunks across 14 chunkings (markdown, code, logs, Unicode, one-line logs), 7 full packs and their rendered output. Tested on Python 3.9, 3.11 and 3.14 here; CI runs 3.9 and 3.13 on Linux, macOS and Windows and fails if the fixtures fall behind the TypeScript. Wheel built and installed in a clean venv. Publishing waits on the owner's PyPI trusted publisher |
 
 ## History: what shipped, with the measurements behind it
 
