@@ -46,6 +46,7 @@ import { measureBaselines, measureMcpSizes, overheadReport, renderOverhead } fro
 import { applySplit, planSplit, renderSplit } from "./split.js";
 import { ciReport, renderCiMarkdown, renderCiText } from "./ci.js";
 import { renderReads, repeatedReads } from "./reads.js";
+import { costPerTask, renderTasks } from "./tasks.js";
 const HELP = `context-doctor — profile and optimize LLM context windows
 
 Usage:
@@ -103,6 +104,8 @@ Usage:
   context-doctor ci [--base <ref>] [--max-tokens n] [--max-increase n] [--markdown]
                                                 For pull requests: memory files (CLAUDE.md, AGENTS.md,
                                                 GEMINI.md, rules) at HEAD vs base; exit 1 over budget
+  context-doctor tasks [--days n]               Cost per commit, per project: session cost at list
+                                                price vs commits made during the sessions
   context-doctor reads [--days n] [--limit n]   Files read into session after session: reads, tokens,
                                                 cost, and whether a CLAUDE.md summary or pack pays
   context-doctor overhead split <file> [--write]
@@ -713,6 +716,11 @@ async function main() {
             trimBoundaryStep: loadedRc.config.trimBoundaryStep,
         });
         return; // server keeps the process alive
+    }
+    if (args.command === "tasks") {
+        const report = costPerTask(args.days ?? 30);
+        console.log(args.json ? JSON.stringify(report, null, 2) : renderTasks(report, args.limit ?? 12));
+        return;
     }
     if (args.command === "reads") {
         const report = repeatedReads(args.days ?? 30);
