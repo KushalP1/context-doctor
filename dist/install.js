@@ -68,11 +68,35 @@ function serverEntry() {
  * wrapper that every working Windows MCP config uses.
  *
  * Exported so the platform branch is testable from any host OS.
+ *
+ * npx resolves its first operand as a PACKAGE name. context-doctor-mcp is
+ * only a bin inside the context-doctor package, so `npx -y context-doctor-mcp`
+ * asked npm for a package that does not exist: unless a global install
+ * happened to put that command on PATH, every app got a server that never
+ * started. The main bin's `mcp` subcommand is the same server.
  */
 export function npxLauncher(platformName) {
     return platformName === "win32"
-        ? { command: "cmd", args: ["/c", "npx", "-y", "context-doctor-mcp"] }
-        : { command: "npx", args: ["-y", "context-doctor-mcp"] };
+        ? { command: "cmd", args: ["/c", "npx", "-y", "context-doctor", "mcp"] }
+        : { command: "npx", args: ["-y", "context-doctor", "mcp"] };
+}
+/**
+ * True for the launcher installs before 0.31.2 wrote: npx asked to run a
+ * package named context-doctor-mcp, which is not on npm. npx does fall back
+ * to a command of that name already on PATH, so it starts where a global
+ * install provides one; everywhere else npm answers 404.
+ */
+export function launcherNamesMissingPackage(entry) {
+    if (!entry)
+        return false;
+    const words = [String(entry.command ?? ""), ...(Array.isArray(entry.args) ? entry.args.map(String) : [])];
+    const npx = words.findIndex((w) => /(^|[\\/])npx(\.cmd)?$/i.test(w));
+    if (npx === -1)
+        return false;
+    const rest = words.slice(npx + 1);
+    if (rest.some((w) => w === "-p" || w.startsWith("--package")))
+        return false;
+    return rest.find((w) => !w.startsWith("-")) === "context-doctor-mcp";
 }
 export function readJson(path) {
     if (!existsSync(path))
@@ -84,10 +108,26 @@ export function readJson(path) {
         throw new Error(`${path} exists but is not valid JSON — fix or remove it first (${e.message})`);
     }
 }
-export function writeJsonWithBackup(path, data) {
-    mkdirSync(dirname(path), { recursive: true });
+/**
+ * Config files already backed up (or found absent) in this process.
+ *
+ * One install writes ~/.claude/settings.json up to three times (prompt hook,
+ * compaction hook, status line). Copying before every write left a .backup
+ * that already held our own first write, so the user's original was gone
+ * before the run even finished. The first write of a run keeps the original.
+ */
+const backedUp = new Set();
+/** Copy `path` to its .context-doctor.backup, once per run. */
+export function backupOnce(path) {
+    if (backedUp.has(path))
+        return;
+    backedUp.add(path);
     if (existsSync(path))
         copyFileSync(path, path + ".context-doctor.backup");
+}
+export function writeJsonWithBackup(path, data) {
+    mkdirSync(dirname(path), { recursive: true });
+    backupOnce(path);
     writeFileSync(path, JSON.stringify(data, null, 2));
 }
 /**
@@ -95,7 +135,7 @@ export function writeJsonWithBackup(path, data) {
  * Used to prefer a global `context-doctor` install for the hook: a stable
  * location that survives both package updates and Node upgrades.
  */
-function binOnPath(name) {
+export function binOnPath(name) {
     const exts = platform() === "win32" ? [".cmd", ".exe", ".bat", ""] : [""];
     for (const dir of (process.env.PATH ?? "").split(delimiter)) {
         if (!dir)
@@ -344,41 +384,131 @@ function installSkillInto(skillDest) {
 export function codexDir() {
     return join(homedir(), ".codex");
 }
+// Our key as TOML allows it to be written: bare or quoted, any spacing.
+const OUR_KEY = String.raw `\s*mcp_servers\s*\.\s*(?:context-doctor|"context-doctor"|'context-doctor')\s*`;
+/** Our table's header, with or without a trailing comment. */
+const OUR_HEADER = new RegExp(String.raw `^\s*\[${OUR_KEY}\]\s*(?:#.*)?$`);
+/** A subtable of ours, e.g. [mcp_servers.context-doctor.env]. */
+const OUR_SUBHEADER = new RegExp(String.raw `^\s*\[${OUR_KEY}\.[^\]]*\]\s*(?:#.*)?$`);
+const ANY_HEADER = /^\s*\[/;
+/**
+ * [start, end) line ranges of our tables (and, when asked, our subtables).
+ *
+ * A table runs to the next header, except that comment lines directly above
+ * that header describe IT: they stay with the next table rather than being
+ * deleted along with ours.
+ */
+function codexTableRanges(lines, withSubtables) {
+    const ranges = [];
+    for (let i = 0; i < lines.length; i++) {
+        if (!OUR_HEADER.test(lines[i]) && !(withSubtables && OUR_SUBHEADER.test(lines[i])))
+            continue;
+        let end = i + 1;
+        while (end < lines.length && !ANY_HEADER.test(lines[end]))
+            end++;
+        if (end < lines.length) {
+            let k = end;
+            while (k > i + 1 && /^\s*(#.*)?$/.test(lines[k - 1]))
+                k--;
+            // Blank lines after our last key are ours; the comments after them are not.
+            while (k < end && lines[k].trim() === "")
+                k++;
+            end = k;
+        }
+        ranges.push([i, end]);
+        i = end - 1;
+    }
+    return ranges;
+}
+/**
+ * Lines that define context-doctor WITHOUT a header of its own:
+ *   [mcp_servers] context-doctor = { command = "npx", ... }   (inline table)
+ *   [mcp_servers] context-doctor.command = "npx"               (dotted keys)
+ *   mcp_servers.context-doctor.command = "npx"                 (dotted, at the root)
+ * Appending a [mcp_servers.context-doctor] table next to any of these defines
+ * the key twice, which is invalid TOML, so these are refused instead.
+ */
+function inlineCodexDefinition(lines) {
+    const found = [];
+    let table = ""; // "" = the root table; null = inside an array of tables
+    const norm = (s) => s.replace(/\s+/g, "").replace(/["']/g, "");
+    lines.forEach((line, i) => {
+        if (/^\s*\[\[/.test(line)) {
+            table = null;
+            return;
+        }
+        const header = line.match(/^\s*\[([^\[\]]*)\]\s*(?:#.*)?$/);
+        if (header) {
+            table = norm(header[1]);
+            return;
+        }
+        const key = line.match(/^\s*([A-Za-z0-9_\-."' ]+?)\s*=/)?.[1];
+        if (key === undefined || table === null)
+            return;
+        const full = norm(table ? `${table}.${key}` : key);
+        const ours = full === "mcp_servers.context-doctor" || full.startsWith("mcp_servers.context-doctor.");
+        if ((table === "mcp_servers" || table === "") && ours)
+            found.push(i);
+        else if (table === "" && full === "mcp_servers" && /["']?context-doctor["']?\s*=/.test(line))
+            found.push(i);
+    });
+    return found;
+}
+function refuseInlineCodexDefinition(lines) {
+    const at = inlineCodexDefinition(lines);
+    if (at.length > 0) {
+        throw new Error(`config.toml defines context-doctor as an inline table or dotted keys (line ${at[0] + 1}), which cannot be edited safely line by line; ` +
+            "replace it with a [mcp_servers.context-doctor] table, or delete it, and re-run. Nothing was changed.");
+    }
+}
 /**
  * Add or replace our [mcp_servers.context-doctor] table in config.toml without
  * a TOML library: the file is the user's, so everything outside our own table
  * is copied through byte for byte. Our table is delimited by its header and the
- * next header (or EOF).
+ * next header (or EOF). Our subtables (e.g. an env the user added) are kept.
  */
 export function upsertCodexMcpTable(toml, entry) {
-    const header = "[mcp_servers.context-doctor]";
-    const table = `${header}\n` +
+    const table = `[mcp_servers.context-doctor]\n` +
         `command = ${JSON.stringify(entry.command)}\n` +
         `args = [${entry.args.map((a) => JSON.stringify(a)).join(", ")}]\n`;
     const lines = toml.split("\n");
-    const start = lines.findIndex((l) => l.trim() === header);
-    if (start === -1) {
+    refuseInlineCodexDefinition(lines);
+    const [first, ...duplicates] = codexTableRanges(lines, false);
+    if (!first) {
         const sep = toml.length === 0 || toml.endsWith("\n\n") ? "" : toml.endsWith("\n") ? "\n" : "\n\n";
         return toml + sep + table;
     }
-    let end = start + 1;
-    while (end < lines.length && !/^\s*\[/.test(lines[end]))
-        end++;
-    // Trim trailing blank lines inside our block so we do not accumulate them.
-    const before = lines.slice(0, start).join("\n");
-    const after = lines.slice(end).join("\n");
+    // A second table of ours is what earlier versions appended after a header
+    // they did not recognise; it makes the file invalid, so repair it here.
+    const kept = lines.filter((_, i) => !duplicates.some(([s, e]) => i >= s && i < e));
+    const before = kept.slice(0, first[0]).join("\n");
+    const after = kept.slice(first[1]).join("\n");
     return `${before}${before.length ? "\n" : ""}${table}${after.length ? "\n" + after : ""}`;
 }
 export function removeCodexMcpTable(toml) {
-    const header = "[mcp_servers.context-doctor]";
     const lines = toml.split("\n");
-    const start = lines.findIndex((l) => l.trim() === header);
-    if (start === -1)
+    refuseInlineCodexDefinition(lines);
+    // Subtables go too: a [mcp_servers.context-doctor.env] left alone defines
+    // a server with no command, which Codex reports as broken.
+    const ranges = codexTableRanges(lines, true);
+    if (ranges.length === 0)
         return toml;
-    let end = start + 1;
-    while (end < lines.length && !/^\s*\[/.test(lines[end]))
-        end++;
-    return [...lines.slice(0, start), ...lines.slice(end)].join("\n").replace(/\n{3,}/g, "\n\n");
+    return lines.filter((_, i) => !ranges.some(([s, e]) => i >= s && i < e)).join("\n").replace(/\n{3,}/g, "\n\n");
+}
+/**
+ * The command and args of our Codex server, or undefined when config.toml
+ * does not define one. Reads the inline forms too: Codex runs those fine.
+ */
+export function codexMcpEntry(toml) {
+    const lines = toml.split("\n");
+    const [first] = codexTableRanges(lines, false);
+    const inline = inlineCodexDefinition(lines);
+    if (!first && inline.length === 0)
+        return undefined;
+    const text = first ? lines.slice(first[0] + 1, first[1]).join("\n") : inline.map((i) => lines[i]).join("\n");
+    const command = text.match(/(?:^|[\s{,.])command\s*=\s*(["'])(.*?)\1/m)?.[2];
+    const argsText = text.match(/(?:^|[\s{,.])args\s*=\s*\[([^\]]*)\]/m)?.[1] ?? "";
+    return { command, args: [...argsText.matchAll(/(["'])(.*?)\1/g)].map((m) => m[2]) };
 }
 function installCodex(entry, failures) {
     const dir = codexDir();
@@ -389,8 +519,7 @@ function installCodex(entry, failures) {
         const current = existsSync(configPath) ? readFileSync(configPath, "utf8") : "";
         const next = upsertCodexMcpTable(current, entry);
         if (next !== current) {
-            if (existsSync(configPath))
-                copyFileSync(configPath, configPath + ".context-doctor.backup");
+            backupOnce(configPath);
             writeFileSync(configPath, next);
         }
         console.log(`✓ Codex: MCP server added (${configPath})`);
@@ -430,7 +559,7 @@ function uninstallCodex() {
             const current = readFileSync(configPath, "utf8");
             const next = removeCodexMcpTable(current);
             if (next !== current) {
-                copyFileSync(configPath, configPath + ".context-doctor.backup");
+                backupOnce(configPath);
                 writeFileSync(configPath, next);
                 console.log("✓ Codex: MCP server removed");
             }
@@ -561,7 +690,70 @@ export function runInstall(options = {}) {
     }
     return { failures };
 }
-export function runUninstall() {
+/**
+ * Autopilot points Claude Code at a local proxy (env.ANTHROPIC_BASE_URL in
+ * settings.json), kept alive by a login service and by this package's hook.
+ * Uninstalling around it left that address in place with nothing behind it,
+ * so every new Claude Code session failed to reach the API. It is switched
+ * off first, exactly as `autopilot off` does it (setting before service).
+ */
+async function uninstallAutopilot() {
+    const { autopilotOff, autopilotPaths, proxyUrl, DEFAULT_AUTOPILOT_PORT } = await import("./autopilot.js");
+    const paths = autopilotPaths();
+    // Only for a home that has autopilot: removing the service addresses
+    // systemd and the Windows task scheduler by NAME, not by anything under
+    // this home, so a home without autopilot must never reach them.
+    if (!existsSync(paths.config))
+        return;
+    // The port, read before `off` deletes the file; a damaged file usually
+    // still names it.
+    let port = DEFAULT_AUTOPILOT_PORT;
+    try {
+        port = Number(readFileSync(paths.config, "utf8").match(/"port"\s*:\s*(\d+)/)?.[1] ?? port);
+    }
+    catch {
+        /* unreadable: the default port */
+    }
+    try {
+        // `autopilot pause` is advice for someone keeping the package; not here.
+        for (const line of await autopilotOff(paths))
+            if (!line.includes("autopilot pause"))
+                console.log(line);
+    }
+    catch (e) {
+        console.error(`✗ Autopilot: ${e.message} (run: context-doctor autopilot off)`);
+        return;
+    }
+    // `off` restores only what a readable config describes. A damaged one
+    // leaves the proxy address in settings.json, which is the dead-port case.
+    try {
+        const settings = readJson(paths.settings);
+        if (settings.env?.ANTHROPIC_BASE_URL === proxyUrl(port)) {
+            delete settings.env.ANTHROPIC_BASE_URL;
+            if (Object.keys(settings.env).length === 0)
+                delete settings.env;
+            writeJsonWithBackup(paths.settings, settings);
+            console.log(`✓ Claude Code no longer routed through ${proxyUrl(port)} (autopilot's config could not say what address, if any, it had replaced)`);
+        }
+    }
+    catch (e) {
+        console.error(`✗ Autopilot: ${e.message}`);
+    }
+}
+/** Everything of ours under ~/.claude besides configs: state, ledger, autopilot bookkeeping. */
+const OUR_CLAUDE_FILES = [
+    ".context-doctor-hook-state.json",
+    ".context-doctor-hook-state.d",
+    ".context-doctor-ledger.jsonl",
+    ".context-doctor-calibration.json",
+    ".context-doctor-autopilot-cleared.json",
+    ".context-doctor-autopilot-paused",
+    ".context-doctor-proxy.log",
+    ".context-doctor-proxy-restart",
+];
+export async function runUninstall() {
+    // First: if anything below fails, Claude Code must still reach the API.
+    await uninstallAutopilot();
     for (const target of targets().filter((t) => t.detect())) {
         try {
             if (!existsSync(target.configPath))
@@ -585,11 +777,12 @@ export function runUninstall() {
     uninstallHook();
     uninstallStatusLine();
     uninstallCodex();
-    // Remove our bookkeeping files too — uninstall means gone.
-    for (const file of [".context-doctor-hook-state.json", ".context-doctor-ledger.jsonl"]) {
+    // Remove our bookkeeping files too — uninstall means gone. The hook's
+    // per-session state is a directory, one small file per session.
+    for (const file of OUR_CLAUDE_FILES) {
         const p = join(homedir(), ".claude", file);
         if (existsSync(p)) {
-            rmSync(p);
+            rmSync(p, { recursive: true, force: true });
             console.log(`✓ Removed ${file}`);
         }
     }

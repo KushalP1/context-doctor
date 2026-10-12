@@ -43,6 +43,12 @@ export interface LoadedConfig {
     path?: string;
     /** Settings that will be silently ignored, if any. */
     warnings?: string[];
+    /**
+     * Set when the rc file at `path` exists but cannot be used at all (not
+     * JSON, or not an object): none of its settings are in effect. `path` is
+     * still given, so a caller can name the file instead of reporting none.
+     */
+    error?: string;
 }
 /**
  * Report anything in an rc file that will be silently ignored.

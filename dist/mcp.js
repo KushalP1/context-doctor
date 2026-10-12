@@ -5,7 +5,7 @@
  * Plug into Claude Desktop, ChatGPT desktop (developer mode), Cursor, or any
  * MCP client:
  *
- *   { "mcpServers": { "context-doctor": { "command": "npx", "args": ["-y", "context-doctor-mcp"] } } }
+ *   { "mcpServers": { "context-doctor": { "command": "npx", "args": ["-y", "context-doctor", "mcp"] } } }
  *
  * Tools:
  *   profile_context   — analyze a conversation/prompt, report token breakdown + findings

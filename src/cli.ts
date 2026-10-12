@@ -682,7 +682,7 @@ async function main(): Promise<void> {
   }
 
   if (args.command === "uninstall") {
-    runUninstall();
+    await runUninstall();
     return;
   }
 

@@ -22,13 +22,15 @@ interface StatusInput {
         total_cost_usd?: number;
     };
     context_window?: {
+        /** Not read: stale after /compact (and a running total in some versions). */
         total_input_tokens?: number;
         context_window_size?: number;
+        /** The last request's usage; null right after /compact, /clear and in a new session. */
         current_usage?: {
             input_tokens?: number;
             cache_read_input_tokens?: number;
             cache_creation_input_tokens?: number;
-        };
+        } | null;
     };
 }
 interface LiveUsage {

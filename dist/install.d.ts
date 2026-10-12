@@ -17,13 +17,37 @@ export declare function geminiCliPresent(): boolean;
  * wrapper that every working Windows MCP config uses.
  *
  * Exported so the platform branch is testable from any host OS.
+ *
+ * npx resolves its first operand as a PACKAGE name. context-doctor-mcp is
+ * only a bin inside the context-doctor package, so `npx -y context-doctor-mcp`
+ * asked npm for a package that does not exist: unless a global install
+ * happened to put that command on PATH, every app got a server that never
+ * started. The main bin's `mcp` subcommand is the same server.
  */
 export declare function npxLauncher(platformName: string): {
     command: string;
     args: string[];
 };
+/**
+ * True for the launcher installs before 0.31.2 wrote: npx asked to run a
+ * package named context-doctor-mcp, which is not on npm. npx does fall back
+ * to a command of that name already on PATH, so it starts where a global
+ * install provides one; everywhere else npm answers 404.
+ */
+export declare function launcherNamesMissingPackage(entry: {
+    command?: unknown;
+    args?: unknown;
+} | undefined): boolean;
 export declare function readJson(path: string): Record<string, any>;
+/** Copy `path` to its .context-doctor.backup, once per run. */
+export declare function backupOnce(path: string): void;
 export declare function writeJsonWithBackup(path: string, data: Record<string, any>): void;
+/**
+ * Find an executable on PATH without shelling out (works on Windows too).
+ * Used to prefer a global `context-doctor` install for the hook: a stable
+ * location that survives both package updates and Node upgrades.
+ */
+export declare function binOnPath(name: string): string | null;
 /** Paths npm may delete at any time: the npx cache and the npm cache itself. */
 export declare function isEphemeralPath(path: string): boolean;
 /**
@@ -48,13 +72,21 @@ export declare function codexDir(): string;
  * Add or replace our [mcp_servers.context-doctor] table in config.toml without
  * a TOML library: the file is the user's, so everything outside our own table
  * is copied through byte for byte. Our table is delimited by its header and the
- * next header (or EOF).
+ * next header (or EOF). Our subtables (e.g. an env the user added) are kept.
  */
 export declare function upsertCodexMcpTable(toml: string, entry: {
     command: string;
     args: string[];
 }): string;
 export declare function removeCodexMcpTable(toml: string): string;
+/**
+ * The command and args of our Codex server, or undefined when config.toml
+ * does not define one. Reads the inline forms too: Codex runs those fine.
+ */
+export declare function codexMcpEntry(toml: string): {
+    command?: string;
+    args: string[];
+} | undefined;
 /** Outcome of an install run, so the CLI can set a truthful exit code. */
 export interface InstallResult {
     /** Detected targets that could not be configured, with the reason. */
@@ -73,4 +105,4 @@ export interface InstallResult {
 export declare function runInstall(options?: {
     statusLine?: boolean;
 }): InstallResult;
-export declare function runUninstall(): void;
+export declare function runUninstall(): Promise<void>;

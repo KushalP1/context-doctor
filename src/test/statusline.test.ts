@@ -17,7 +17,8 @@ const cliPath = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
 test("uses the payload's context window when present, the transcript tail when not", () => {
   const fromPayload = renderStatusLine({
     model: { id: "claude-sonnet-5" },
-    context_window: { total_input_tokens: 150_000, context_window_size: 1_000_000 },
+    // current_usage is the context; total_input_tokens (a running total) is ignored.
+    context_window: { total_input_tokens: 9_000_000, context_window_size: 1_000_000, current_usage: { input_tokens: 150_000 } },
     cost: { total_cost_usd: 0.5 },
   });
   assert.match(fromPayload ?? "", /ctx 150k\/1\.0M .* 15%/);

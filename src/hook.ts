@@ -49,10 +49,21 @@ const REGROWTH_FACTOR = 1.4;
  * hold that many tokens of context. Lean sessions cost one stat() call — the
  * transcript is never even read. (This used 4 bytes per token until 0.19,
  * which let Claude sessions past the threshold take the fast path.)
+ *
+ * The threshold is compared with the API's figure, which also counts what the
+ * transcript never holds: system prompt, tool schemas, memory files. Sized as
+ * if the transcript were the whole context, the gate hid sessions from low
+ * thresholds (a 60k budget saw nothing until 144 KB; half of one machine's
+ * sessions passed 60k live tokens below that). So that front matter is
+ * allowed for first. Measured on 78 Claude Code sessions with several MCP
+ * servers: first requests carried 27k-70k tokens, of which up to 43k could
+ * not have come from the transcript at its densest; 50k covers that. Lean
+ * sessions below the remaining byte count still cost one stat().
  */
 const DENSEST_CHARS_PER_TOKEN = Math.min(...Object.values(CHARS_PER_TOKEN).map((r) => Math.min(r.prose, r.code)));
+const FRONT_MATTER_ALLOWANCE = 50_000;
 function minBytesForWarn(threshold: number): number {
-  return Math.floor(threshold * DENSEST_CHARS_PER_TOKEN);
+  return Math.floor(Math.max(0, threshold - FRONT_MATTER_ALLOWANCE) * DENSEST_CHARS_PER_TOKEN);
 }
 
 /** Per-session state: last-warned token count + file size at last full parse. */
@@ -240,7 +251,11 @@ export async function runHook(): Promise<void> {
 
     // Record this parse so the next prompts take fast path 2.
     const shouldWarn = liveTokens >= threshold && liveTokens >= prev.t * REGROWTH_FACTOR;
-    writeSessionState(sessionId, { t: shouldWarn ? liveTokens : prev.t, b: sizeBytes, cr });
+    // The regrowth bar follows the context DOWN as well: after a compaction it
+    // is measured from the compacted size. Kept at the old peak, the next
+    // warning needed 1.4x a size the session no longer had (seen: warned at
+    // 843k, compacted, then regrew to 809k without a word).
+    writeSessionState(sessionId, { t: shouldWarn ? liveTokens : Math.min(prev.t, liveTokens), b: sizeBytes, cr });
     recordLedger({ ev: "check", sid: sessionId.slice(0, 12), tok: liveTokens, warn: shouldWarn });
     if (!shouldWarn) { emit(notes); return; }
 

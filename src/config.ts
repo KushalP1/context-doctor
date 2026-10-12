@@ -51,6 +51,12 @@ export interface LoadedConfig {
   path?: string;
   /** Settings that will be silently ignored, if any. */
   warnings?: string[];
+  /**
+   * Set when the rc file at `path` exists but cannot be used at all (not
+   * JSON, or not an object): none of its settings are in effect. `path` is
+   * still given, so a caller can name the file instead of reporting none.
+   */
+  error?: string;
 }
 
 /** Candidate rc paths: cwd upwards, then the home directory. */
@@ -158,10 +164,13 @@ export function loadConfig(startDir: string = process.cwd(), onWarn?: (msg: stri
         return { config: parsed, path, warnings };
       }
       onWarn?.(`${path}: expected a JSON object — ignoring`);
+      return { config: {}, path, error: "expected a JSON object" };
     } catch (e) {
       onWarn?.(`${path}: ${(e as Error).message} — ignoring`);
+      // Returning no path made `doctor` report "no .contextdoctorrc" for a
+      // file that exists with a typo in it: the one case worth reporting.
+      return { config: {}, path, error: (e as Error).message };
     }
-    return { config: {} };
   }
   return { config: {} };
 }

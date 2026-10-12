@@ -710,7 +710,7 @@ async function main() {
         return;
     }
     if (args.command === "uninstall") {
-        runUninstall();
+        await runUninstall();
         return;
     }
     if (args.command === "proxy") {

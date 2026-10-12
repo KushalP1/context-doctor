@@ -13,7 +13,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ledgerPath } from "./ledger.js";
 import { loadConfig } from "./config.js";
-import { geminiCliPresent, geminiSettingsPath } from "./install.js";
+import { binOnPath, codexMcpEntry, geminiCliPresent, geminiSettingsPath, launcherNamesMissingPackage } from "./install.js";
 import { describeDesktopUsage, desktopUsage } from "./desktopusage.js";
 function claudeDesktopConfigPath() {
     switch (platform()) {
@@ -22,14 +22,30 @@ function claudeDesktopConfigPath() {
         default: return join(homedir(), ".config", "Claude", "claude_desktop_config.json");
     }
 }
-function checkMcpEntry(appName, configPath) {
+/**
+ * The verdict on a pre-0.31.2 launcher, `npx -y context-doctor-mcp`. No npm
+ * package has that name; npx only falls back to a command of that name on
+ * PATH. With a global install that keeps it working (until that install
+ * goes); without one npm answers 404 and the app shows no tools, no error.
+ */
+function missingPackageCheck(label) {
+    return binOnPath("context-doctor-mcp")
+        ? { label, status: "warn", detail: "MCP entry runs `npx context-doctor-mcp`, which starts only through your global install (no npm package has that name) — re-run: context-doctor install" }
+        : { label, status: "fail", detail: "MCP entry runs `npx context-doctor-mcp`, a package that does not exist on npm, so the server never starts — re-run: context-doctor install" };
+}
+function checkMcpEntry(appName, configPath, plugin = false) {
+    const viaPlugin = { label: appName, status: "ok", detail: "MCP server provided by the context-doctor plugin" };
     if (!existsSync(configPath))
-        return { label: appName, status: "skip", detail: "app not detected (config file absent)" };
+        return plugin ? viaPlugin : { label: appName, status: "skip", detail: "app not detected (config file absent)" };
     try {
         const config = JSON.parse(readFileSync(configPath, "utf8"));
         const entry = config.mcpServers?.["context-doctor"];
+        if (!entry && plugin)
+            return viaPlugin;
         if (!entry)
             return { label: appName, status: "fail", detail: `no context-doctor entry in ${configPath} — run: context-doctor install` };
+        if (launcherNamesMissingPackage(entry))
+            return missingPackageCheck(appName);
         // Absolute-path entries must point at a file that still exists. Launcher
         // forms (npx, and Windows' cmd /c npx) resolve at spawn time, not now.
         const launcher = entry.command === "npx" || entry.command === "cmd";
@@ -69,6 +85,46 @@ function hookBinaryMissing(command) {
             return path;
     }
     return null;
+}
+/**
+ * Claude Code's settings files, lowest precedence first: user, project,
+ * local. A later file's value for a key wins, as in Claude Code itself.
+ */
+function claudeSettingsLayers() {
+    const paths = [
+        join(homedir(), ".claude", "settings.json"),
+        join(process.cwd(), ".claude", "settings.json"),
+        join(process.cwd(), ".claude", "settings.local.json"),
+    ];
+    return [...new Set(paths)].flatMap((p) => {
+        try {
+            return existsSync(p) ? [JSON.parse(readFileSync(p, "utf8"))] : [];
+        }
+        catch {
+            return []; // an unreadable user settings.json is reported by the hook check
+        }
+    });
+}
+/**
+ * Is the context-doctor plugin enabled? Plugins are switched on with
+ * enabledPlugins: {"<plugin>@<marketplace>": true}; ours is named
+ * context-doctor in whichever marketplace it came from. A plugin brings its
+ * own MCP server and hooks, so neither ~/.claude.json nor settings.json's
+ * hooks mention us, and those checks failed on a working plugin install.
+ */
+function pluginEnabled(layers) {
+    const state = new Map();
+    for (const s of layers) {
+        for (const [key, on] of Object.entries((s.enabledPlugins ?? {}))) {
+            if (key.startsWith("context-doctor@"))
+                state.set(key, on === true);
+        }
+    }
+    return [...state.values()].some(Boolean);
+}
+/** Claude Code's disableAllHooks: when true, no hook of anyone's runs. */
+function hooksDisabled(layers) {
+    return layers.reduce((off, s) => (typeof s.disableAllHooks === "boolean" ? s.disableAllHooks : off), false);
 }
 /** Spawn our own MCP server and run the initialize handshake over stdio. */
 function checkMcpHandshake() {
@@ -113,16 +169,31 @@ export async function runDoctor() {
     const desktop = desktopUsage();
     if (desktop)
         checks.push({ label: "Desktop chat tool use", status: "ok", detail: describeDesktopUsage(desktop, recentSurfaces(7).get("claude-desktop") ?? 0) });
-    checks.push(checkMcpEntry("Claude Code", join(homedir(), ".claude.json")));
+    const layers = claudeSettingsLayers();
+    const plugin = pluginEnabled(layers);
+    checks.push(checkMcpEntry("Claude Code", join(homedir(), ".claude.json"), plugin));
     checks.push(checkMcpEntry("Cursor", join(homedir(), ".cursor", "mcp.json")));
-    // Hook registration
+    // Hook registration. ~/.claude without a settings.json is Claude Code with
+    // no hook registered, not Claude Code absent.
     const settingsPath = join(homedir(), ".claude", "settings.json");
-    if (existsSync(settingsPath)) {
+    if (existsSync(settingsPath) || existsSync(join(homedir(), ".claude"))) {
         try {
-            const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+            const settings = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, "utf8")) : {};
             const entries = settings.hooks?.UserPromptSubmit ?? [];
             const ours = entries.map((e) => e.hooks?.[0]?.command ?? "").find((c) => /context-doctor|cli\.js"?\s+hook/.test(c));
-            if (!ours) {
+            if (hooksDisabled(layers)) {
+                // Registered or not, nothing runs: say that first, it is the fix.
+                checks.push({
+                    label: "Every-prompt hook",
+                    status: "fail",
+                    detail: `${ours || plugin ? "registered" : "not registered"}, and disableAllHooks is true in Claude Code's settings, so Claude Code runs no hooks at all; remove that setting${ours || plugin ? "" : ", then run: context-doctor install"}`,
+                });
+            }
+            else if (!ours && plugin) {
+                checks.push({ label: "Every-prompt hook", status: "ok", detail: "provided by the context-doctor plugin" });
+                checks.push({ label: "Compaction hook", status: "ok", detail: "PreCompact: provided by the context-doctor plugin" });
+            }
+            else if (!ours) {
                 checks.push({ label: "Every-prompt hook", status: "fail", detail: "not registered — run: context-doctor install" });
             }
             else {
@@ -134,7 +205,7 @@ export async function runDoctor() {
                     ? { label: "Every-prompt hook", status: "fail", detail: `registered, but ${missing} no longer exists — re-run: context-doctor install` }
                     : { label: "Every-prompt hook", status: "ok", detail: "registered in ~/.claude/settings.json; command resolves" });
                 const pre = settings.hooks?.PreCompact ?? [];
-                const preOurs = pre.some((e) => /context-doctor|cli\.js"?\s+hook/.test(e.hooks?.[0]?.command ?? ""));
+                const preOurs = plugin || pre.some((e) => /context-doctor|cli\.js"?\s+hook/.test(e.hooks?.[0]?.command ?? ""));
                 checks.push(preOurs
                     ? { label: "Compaction hook", status: "ok", detail: "PreCompact: each compaction's summary keeps the session's files, open tasks, your instructions and failing commands" }
                     : { label: "Compaction hook", status: "warn", detail: "not registered: compactions use generic instructions; run context-doctor install" });
@@ -151,9 +222,14 @@ export async function runDoctor() {
     const codexHome = join(homedir(), ".codex");
     if (existsSync(codexHome)) {
         const toml = existsSync(join(codexHome, "config.toml")) ? readFileSync(join(codexHome, "config.toml"), "utf8") : "";
-        checks.push(toml.includes("[mcp_servers.context-doctor]")
-            ? { label: "Codex MCP", status: "ok", detail: "wired in ~/.codex/config.toml" }
-            : { label: "Codex MCP", status: "fail", detail: "Codex detected but not wired — run: context-doctor install" });
+        // Parsed rather than searched for one exact header: a quoted key or a
+        // trailing comment is the same table to Codex.
+        const codexEntry = codexMcpEntry(toml);
+        checks.push(!codexEntry
+            ? { label: "Codex MCP", status: "fail", detail: "Codex detected but not wired — run: context-doctor install" }
+            : launcherNamesMissingPackage(codexEntry)
+                ? missingPackageCheck("Codex MCP")
+                : { label: "Codex MCP", status: "ok", detail: "wired in ~/.codex/config.toml" });
         try {
             const hooksPath = join(codexHome, "hooks.json");
             const hooks = existsSync(hooksPath) ? JSON.parse(readFileSync(hooksPath, "utf8")) : {};
@@ -181,9 +257,12 @@ export async function runDoctor() {
         try {
             const path = geminiSettingsPath();
             const settings = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
-            checks.push(settings.mcpServers?.["context-doctor"]
-                ? { label: "Gemini CLI MCP", status: "ok", detail: "wired in ~/.gemini/settings.json" }
-                : { label: "Gemini CLI MCP", status: "fail", detail: "Gemini CLI detected but not wired — run: context-doctor install" });
+            const geminiEntry = settings.mcpServers?.["context-doctor"];
+            checks.push(!geminiEntry
+                ? { label: "Gemini CLI MCP", status: "fail", detail: "Gemini CLI detected but not wired — run: context-doctor install" }
+                : launcherNamesMissingPackage(geminiEntry)
+                    ? missingPackageCheck("Gemini CLI MCP")
+                    : { label: "Gemini CLI MCP", status: "ok", detail: "wired in ~/.gemini/settings.json" });
             const entries = settings.hooks?.BeforeAgent ?? [];
             const ours = entries.map((e) => e.hooks?.[0]?.command ?? "").find((c) => /context-doctor|cli\.js"?\s+hook/.test(c));
             const missing = ours ? hookBinaryMissing(ours) : undefined;
@@ -229,7 +308,9 @@ export async function runDoctor() {
                 const missing = hookBinaryMissing(cmd);
                 checks.push(missing
                     ? { label: "Status line", status: "fail", detail: `configured, but ${missing} no longer exists — re-run: context-doctor install --statusline` }
-                    : { label: "Status line", status: "ok", detail: "live context in Claude Code's status bar" });
+                    : hooksDisabled(layers)
+                        ? { label: "Status line", status: "fail", detail: "configured, but disableAllHooks also turns off custom status lines" }
+                        : { label: "Status line", status: "ok", detail: "live context in Claude Code's status bar" });
             }
             else {
                 checks.push({ label: "Status line", status: "skip", detail: cmd ? "you have your own statusLine (left alone)" : "not enabled (optional: context-doctor install --statusline)" });
@@ -259,7 +340,12 @@ export async function runDoctor() {
     // Project config: a setting that is silently ignored looks exactly like the
     // feature being broken, so name it here rather than leaving it to be guessed.
     const loaded = loadConfig(process.cwd());
-    if (loaded.path) {
+    if (loaded.path && loaded.error) {
+        // A file with a typo used to read as "no .contextdoctorrc": the budget the
+        // user wrote is silently not in force, which is the case worth naming.
+        checks.push({ label: "Project config", status: "fail", detail: `${loaded.path} cannot be read (${loaded.error}): every setting in it is ignored until it parses as a JSON object` });
+    }
+    else if (loaded.path) {
         const warnings = loaded.warnings ?? [];
         checks.push(warnings.length === 0
             ? { label: "Project config", status: "ok", detail: `${loaded.path} — all settings understood` }
@@ -273,11 +359,40 @@ export async function runDoctor() {
     // dead proxy or a settings file pointing elsewhere is a real problem.
     {
         const paths = autopilotPaths();
+        // A truncated file used to throw at JSON.parse here, before a single line
+        // of the report was printed: one damaged file hid every other check.
+        let cfg;
+        let damage = "";
+        if (existsSync(paths.config)) {
+            try {
+                const parsed = JSON.parse(readFileSync(paths.config, "utf8"));
+                if (typeof parsed?.port === "number")
+                    cfg = parsed;
+                else
+                    damage = "no port in it";
+            }
+            catch (e) {
+                damage = e.message;
+            }
+        }
         if (!existsSync(paths.config)) {
             checks.push({ label: "Autopilot", status: "skip", detail: "off (context-doctor autopilot on: clears stale tool output in every new Claude Code session)" });
         }
+        else if (!cfg) {
+            let routedTo;
+            try {
+                routedTo = JSON.parse(readFileSync(paths.settings, "utf8"))?.env?.ANTHROPIC_BASE_URL;
+            }
+            catch { /* reported by the hook check */ }
+            checks.push({
+                label: "Autopilot",
+                status: "fail",
+                detail: `${paths.config} is damaged (${damage}). Run: context-doctor autopilot off` +
+                    (routedTo ? `, then remove env.ANTHROPIC_BASE_URL (${routedTo}) from ~/.claude/settings.json if it is the proxy` : "") +
+                    "; autopilot on starts it again cleanly",
+            });
+        }
         else {
-            const cfg = JSON.parse(readFileSync(paths.config, "utf8"));
             const installed = typeof cfg.cli === "string" ? installedVersion(cfg.cli) : undefined;
             const h = await health(cfg.port);
             let routed = false;
