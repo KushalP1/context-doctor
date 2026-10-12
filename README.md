@@ -45,6 +45,7 @@ Pick where you work. Each takes about a minute and is fully reversible.
 - `ci` and the GitHub Action: review memory-file growth like any other cost.
 
 **Remove waste automatically**
+- A compaction hook (`PreCompact`) tells each Claude Code compaction what the session cannot lose (files changed, open tasks, your instructions, failing tests), so compacting saves tokens without losing the thread. `context-doctor compactions` measures, on your own history, whether sessions work worse after compacting.
 - An every-prompt hook (Claude Code, Codex, Gemini CLI; Cursor after each tool call) tells the model its real context size and the largest waste, and offers `/compact` when you return to a big session after the cache expired.
 - `compact-window`: sets Claude Code's own auto-compact window, measured on your history first. Works in the desktop app too.
 - Autopilot: a local proxy (or SDK wrapper) that clears stale tool output only when the prompt cache is cold, so a request never costs more.
@@ -179,6 +180,7 @@ MCP servers are part of the same overhead: each one's tool definitions ride on e
 
 ## What's new
 
+- **0.31 Save tokens without losing quality**: a PreCompact hook makes every Claude Code compaction keep the session's changed files, open tasks, your instructions and still-failing tests; `context-doctor compactions` measures re-reads, tool errors and corrections before and after each compaction on your history; `compact-window` now charges the re-reads to every compaction it simulates.
 - **0.30 Where the money goes, and a self-healing service**: `context-doctor subagents` compares each subagent's bill with the same work done in the parent session; `cache-plan` places Anthropic `cache_control` breakpoints in an API request and prices them. Fixes from a local audit: the autopilot service now restarts itself onto a newly installed version, `doctor` no longer writes fake hook checks into the activity ledger, and `<synthetic>` placeholder messages no longer hide a session's model.
 - **0.29 Python, and where the work goes**: a dependency-free Python package (`python/`) with `pack_documents` for LangChain and LlamaIndex results, `pack_context`, `estimate_tokens` and `profile_messages`, held byte for byte to the TypeScript by parity tests. `context-doctor reads` shows the files read into session after session; `context-doctor tasks` shows cost per commit per project, from your own transcripts.
 - **0.28 Wider reach**: `/context-doctor:overhead` and `/context-doctor:pack` in the Claude Code plugin; `pack` reads a folder inside a git repository the way git does, so `.gitignore`'d build output and secrets stay out; `withContextDoctor` wraps Google's `@google/genai` client too; `overhead` measures the fixed start-of-session cost of Codex and Gemini CLI sessions as well as Claude Code's, priced with each provider's cache rules.

@@ -34,8 +34,10 @@ export interface CompactWindowReport {
     /** Compactions that actually happened over the period (Claude Code's own, or /compact). */
     actualCompactions: number;
     estimates: WindowEstimate[];
+    /** Re-read tokens charged to each simulated compaction (0 when not measured). */
+    rereadTokens?: number;
 }
-export declare function estimateCompactWindows(windows: number[], days?: number, paths?: string[]): CompactWindowReport;
+export declare function estimateCompactWindows(windows: number[], days?: number, paths?: string[], rereadTokens?: number): CompactWindowReport;
 export declare function settingsPath(home?: string): string;
 /** The autoCompactWindow Claude Code will use from user settings, if set. */
 export declare function currentCompactWindow(home?: string): number | undefined;

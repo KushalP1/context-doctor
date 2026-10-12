@@ -70,7 +70,12 @@ function readRequests(path) {
  * idle: 1.25x for everything); each simulated compaction also pays its own
  * request and summary.
  */
-function replay(reqs, window, since) {
+/**
+ * `reread`: tokens a session fetches again after a compaction because the
+ * summary dropped them (measured by `context-doctor compactions`). Each
+ * simulated compaction writes them to the cache and carries them onward.
+ */
+function replay(reqs, window, since, reread = 0) {
     let base = 0, sim = 0, extra = 0, actual = 0;
     let removed = 0, prevActual, prevSim, prevAt;
     for (const r of reqs) {
@@ -104,11 +109,11 @@ function replay(reqs, window, since) {
         let simPrev = prevSim;
         if (ctx >= TRIGGER_SHARE * window) {
             if (counted) {
-                sim += 0.1 * ctx + OUTPUT_RATIO * SUMMARY_OUTPUT;
+                sim += 0.1 * ctx + OUTPUT_RATIO * SUMMARY_OUTPUT + 1.25 * reread;
                 extra++;
             }
-            removed = r.prompt - AFTER_COMPACT;
-            ctx = AFTER_COMPACT;
+            removed = r.prompt - AFTER_COMPACT - reread;
+            ctx = AFTER_COMPACT + reread;
             simPrev = undefined; // everything after a compaction is new to the cache
         }
         if (counted)
@@ -119,7 +124,7 @@ function replay(reqs, window, since) {
     }
     return { base, sim, extra, actual };
 }
-export function estimateCompactWindows(windows, days = 30, paths) {
+export function estimateCompactWindows(windows, days = 30, paths, rereadTokens = 0) {
     const since = Date.now() - days * 86_400_000;
     const targets = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
     const acc = windows.map((w) => ({ window: w, base: 0, sim: 0, extra: 0 }));
@@ -138,7 +143,7 @@ export function estimateCompactWindows(windows, days = 30, paths) {
         sessions++;
         actualCompactions += replay(parsed.reqs, Number.MAX_SAFE_INTEGER, since).actual;
         for (const a of acc) {
-            const r = replay(parsed.reqs, a.window, since);
+            const r = replay(parsed.reqs, a.window, since, rereadTokens);
             a.base += (r.base * perM) / 1e6;
             a.sim += (r.sim * perM) / 1e6;
             a.extra += r.extra;
@@ -148,6 +153,7 @@ export function estimateCompactWindows(windows, days = 30, paths) {
         days,
         sessions,
         actualCompactions,
+        rereadTokens,
         estimates: acc.map((a) => ({
             window: a.window,
             baselineUsd: a.base,
@@ -215,6 +221,10 @@ export function renderCompactWindows(r, current) {
     }
     lines.push(`  as now   ${usd(r.estimates[0]?.baselineUsd ?? 0).padStart(10)}                    ${String(r.actualCompactions).padStart(4)} (${((r.actualCompactions / r.days) * 7).toFixed(1)}/week)`);
     lines.push("");
+    if (r.rereadTokens) {
+        lines.push(`Each simulated compaction also pays for ~${Math.round(r.rereadTokens / 100) / 10}k tokens of files read again afterwards`);
+        lines.push("(measured on your compactions: context-doctor compactions).");
+    }
     lines.push("Each compaction replaces the session's history with a summary, so a smaller");
     lines.push("window trades detail for cost. Set one with:  context-doctor compact-window 400k");
     lines.push("Undo with:  context-doctor compact-window off");

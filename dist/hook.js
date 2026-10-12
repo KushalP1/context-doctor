@@ -24,6 +24,7 @@ import { ensureProxyUp } from "./autopilot.js";
 import { detectColdResume, renderColdResume, renderColdResumeNotice } from "./coldresume.js";
 import { formatUsd, pricingFor } from "./pricing.js";
 import { checkBudget, loadConfig } from "./config.js";
+import { compactFacts, compactInstructions } from "./precompact.js";
 /** Default nudge threshold; a project budget or env var can lower/raise it. */
 const DEFAULT_WARN_TOKENS = 80_000;
 /**
@@ -146,6 +147,19 @@ export async function runHook() {
         }
         const input = JSON.parse(await readStdin());
         await heal;
+        // Before a compaction: tell the summary what this session cannot lose.
+        // Claude Code adds a PreCompact hook's plain-text output to the
+        // compaction's instructions (auto and manual alike).
+        if (input.hook_event_name === "PreCompact") {
+            if (input.transcript_path && existsSync(input.transcript_path)) {
+                const text = compactInstructions(compactFacts(input.transcript_path));
+                if (text) {
+                    process.stdout.write(text + "\n");
+                    recordLedger({ ev: "precompact", sid: (input.session_id ?? "").slice(0, 12), tok: text.length });
+                }
+            }
+            return;
+        }
         // Cursor runs this hook twice over: Claude Code's UserPromptSubmit as its
         // beforeSubmitPrompt (which cannot add context, so there is nothing to do),
         // and natively after each tool call, where `additional_context` reaches

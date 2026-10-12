@@ -146,6 +146,13 @@ export async function runDoctor(): Promise<void> {
             ? { label: "Every-prompt hook", status: "fail", detail: `registered, but ${missing} no longer exists — re-run: context-doctor install` }
             : { label: "Every-prompt hook", status: "ok", detail: "registered in ~/.claude/settings.json; command resolves" }
         );
+        const pre: Array<{ hooks?: Array<{ command?: string }> }> = settings.hooks?.PreCompact ?? [];
+        const preOurs = pre.some((e) => /context-doctor|cli\.js"?\s+hook/.test(e.hooks?.[0]?.command ?? ""));
+        checks.push(
+          preOurs
+            ? { label: "Compaction hook", status: "ok", detail: "PreCompact: each compaction's summary keeps the session's files, open tasks, your instructions and failing commands" }
+            : { label: "Compaction hook", status: "warn", detail: "not registered: compactions use generic instructions; run context-doctor install" }
+        );
       }
     } catch (e) {
       checks.push({ label: "Every-prompt hook", status: "fail", detail: `settings.json unreadable (${(e as Error).message})` });

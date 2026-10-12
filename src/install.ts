@@ -221,7 +221,11 @@ function isOurHookEntry(entry: unknown): boolean {
  * Claude Code query gets a context-size check. Idempotent.
  */
 function installHook(): string | null {
-  return installHookInto(join(homedir(), ".claude", "settings.json"), join(homedir(), ".claude"));
+  const settings = join(homedir(), ".claude", "settings.json");
+  const path = installHookInto(settings, join(homedir(), ".claude"));
+  // The same command also answers PreCompact: what each compaction's summary must keep.
+  if (path) installHookInto(settings, join(homedir(), ".claude"), "PreCompact");
+  return path;
 }
 
 /**
@@ -261,6 +265,7 @@ function installHookInto(settingsPath: string, gateDir: string, event = "UserPro
 
 function uninstallHook(): void {
   uninstallHookFrom(join(homedir(), ".claude", "settings.json"), "Claude Code every-prompt hook");
+  uninstallHookFrom(join(homedir(), ".claude", "settings.json"), "Claude Code compaction hook", "PreCompact");
   uninstallHookFrom(join(homedir(), ".codex", "hooks.json"), "Codex every-prompt hook");
   uninstallHookFrom(geminiSettingsPath(), "Gemini CLI every-prompt hook", "BeforeAgent");
   uninstallCursorHook();

@@ -50,6 +50,7 @@ import { renderReads, repeatedReads } from "./reads.js";
 import { costPerTask, renderTasks } from "./tasks.js";
 import { planCache, renderCachePlan } from "./cacheplan.js";
 import { renderPayback, subagentPayback } from "./subagentpay.js";
+import { compactionQuality, renderCompactionQuality } from "./compactquality.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -111,6 +112,8 @@ Usage:
   context-doctor cache-plan <request.json> [--calls n] [--out file]
                                                 Where an Anthropic request should carry cache_control,
                                                 what it saves over n calls; --out writes it applied
+  context-doctor compactions [--days n]         Do sessions work worse right after compacting? Re-reads,
+                                                tool errors and your corrections, before vs after
   context-doctor subagents [--days n]           Which subagents paid for themselves: their bill vs
                                                 what carrying their reads would have cost the parent
   context-doctor tasks [--days n]               Cost per commit, per project: session cost at list
@@ -581,7 +584,7 @@ async function main(): Promise<void> {
     const report = estimateSavings(args.days ?? 30, {}, undefined, progress);
     if (progress) process.stderr.write("\r\x1b[K");
     const setWindow = currentCompactWindow();
-    const cwReport = estimateCompactWindows([setWindow ?? 400_000], args.days ?? 30);
+    const cwReport = estimateCompactWindows([setWindow ?? 400_000], args.days ?? 30, undefined, compactionQuality(60).extraRereadTokensPerCompaction);
     const est = cwReport.estimates[0];
     const cwLine = cwReport.sessions > 0 && est
       ? { window: est.window, savedUsd: est.savedUsd, compactionsPerWeek: (est.compactions / cwReport.days) * 7, nowPerWeek: (cwReport.actualCompactions / cwReport.days) * 7, isCurrent: setWindow !== undefined }
@@ -633,7 +636,8 @@ async function main(): Promise<void> {
     const current = currentCompactWindow();
     const windows = [200_000, 300_000, 400_000, 600_000, 800_000];
     if (current && !windows.includes(current)) windows.push(current);
-    console.log(renderCompactWindows(estimateCompactWindows(windows.sort((a, b) => a - b), args.days ?? 30), current));
+    const reread = compactionQuality(60).extraRereadTokensPerCompaction;
+    console.log(renderCompactWindows(estimateCompactWindows(windows.sort((a, b) => a - b), args.days ?? 30, undefined, reread), current));
     return;
   }
 
@@ -695,6 +699,13 @@ async function main(): Promise<void> {
       trimBoundaryStep: loadedRc.config.trimBoundaryStep,
     });
     return; // server keeps the process alive
+  }
+
+  if (args.command === "compactions") {
+    const days = args.days ?? 60;
+    const q = compactionQuality(days);
+    console.log(args.json ? JSON.stringify(q, null, 2) : renderCompactionQuality(q, days));
+    return;
   }
 
   if (args.command === "subagents") {

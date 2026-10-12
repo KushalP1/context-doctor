@@ -43,3 +43,5 @@ export * from "./reads.js";
 export * from "./tasks.js";
 export * from "./cacheplan.js";
 export * from "./subagentpay.js";
+export * from "./compactquality.js";
+export * from "./precompact.js";

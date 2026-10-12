@@ -17,7 +17,7 @@
  */
 export interface LedgerEntry {
     ts: number;
-    ev?: "check" | "optimize" | "proxy" | "rollup" | "cold_resume";
+    ev?: "check" | "optimize" | "proxy" | "rollup" | "cold_resume" | "precompact";
     sid?: string;
     tok?: number;
     warn?: boolean;
