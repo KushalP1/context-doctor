@@ -45,7 +45,22 @@ export interface McpUsage {
 export declare function toolPrefixName(server: string): string;
 /** MCP servers Claude Code starts in `cwd`, with their launch configs. */
 export declare function claudeMcpConfigs(cwd?: string, home?: string): McpServerConfig[];
-/** MCP calls per server over the last `days`, from Claude Code transcripts (a cheap line scan, no JSON parse per line). */
+/**
+ * MCP calls per server over the last `days`, from Claude Code transcripts
+ * and their subagents' (`<session>/subagents/agent-*.jsonl`). Only lines
+ * naming an MCP tool or ToolSearch are parsed.
+ *
+ * Subagents: on the author's machine 49 Gmail and 23 Slack connector calls
+ * were made only by subagents, so scanning the top-level transcripts alone
+ * told the user to remove a server their subagents use. Once per call: a
+ * forked session starts as a copy of its parent's history, the same rows
+ * (uuid) holding the same calls (tool_use id), so a call is counted once by
+ * the two together; like replyCounter, that leaves alone hand-made
+ * transcripts that reuse an id. Each call by its own row's time: a file
+ * touched in the window also holds every older call of its session (2,983
+ * of them in one 30-day count). Rows without a timestamp count with their
+ * file.
+ */
 export declare function mcpUsage(days?: number, paths?: string[]): McpUsage;
 /** Connect to one server the way a client does and size its tool list. */
 export declare function measureServer(cfg: McpServerConfig, timeoutMs?: number): Promise<McpServerSize>;
