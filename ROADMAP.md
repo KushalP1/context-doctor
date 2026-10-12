@@ -70,6 +70,10 @@ The idea: when a prompt itself carries a big paste, tell the model to work from 
 
 The idea: before a `Read`, say "you already have this, unchanged since turn N". Across 998 reads in 78 sessions (30 days), one returned content identical to an earlier read of the same range in the same session, about $0.10 at list price. Repeated reads of one file were different ranges of a large file. Nothing to save.
 
+## Closed by measurement (2026-10-13): distilling noisy tool output in a PostToolUse hook
+
+The idea: Claude Code 2.1.295 lets a PostToolUse hook replace a tool's output (`updatedToolOutput`), so a hook could strip the noise from large results before they enter the context: ANSI codes, carriage-return and progress-bar lines, repeated identical lines, blank-line runs, runs of passing tests, install chatter. Measured on the author's last 30 days (455 transcripts including subagents, 50,803 tool results, ~61M tokens, ~$5.1k at list price counting each result's cache write and every later re-read until compaction), those rules remove 130k tokens (0.2%), about $19. On results over 4k tokens, where the hook would act, they remove 34k tokens, about $3. The large results are content the model asked for and may edit from: `sed -n` and `cat -n` file reads (8.0M of the 13.3M tokens in Bash results over 4k), grep, `git diff` and `git show`. Rules that keep exact text must leave those alone, and the rest is screenshots. Test, build and install output is already trimmed at the command: 96% of 1,226 such commands went through `tail`, `head`, `grep` or a quiet flag, median 95 tokens, none over 4k. The hook would add a ~80 ms process start to ~1,700 tool calls a day to save about $3 a month.
+
 ## Waiting on the owner's accounts
 
 | Item | State | Owner's step |
