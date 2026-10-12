@@ -119,11 +119,14 @@ export function loadConfig(startDir = process.cwd(), onWarn) {
                 return { config: parsed, path, warnings };
             }
             onWarn?.(`${path}: expected a JSON object — ignoring`);
+            return { config: {}, path, error: "expected a JSON object" };
         }
         catch (e) {
             onWarn?.(`${path}: ${e.message} — ignoring`);
+            // Returning no path made `doctor` report "no .contextdoctorrc" for a
+            // file that exists with a typo in it: the one case worth reporting.
+            return { config: {}, path, error: e.message };
         }
-        return { config: {} };
     }
     return { config: {} };
 }

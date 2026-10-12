@@ -164,9 +164,11 @@ test("the published server is wrapped for Windows, bare everywhere else", async 
   const { npxLauncher } = await import("../install.js");
 
   // MCP clients spawn without a shell; npx.cmd is not directly executable.
-  assert.deepEqual(npxLauncher("win32"), { command: "cmd", args: ["/c", "npx", "-y", "context-doctor-mcp"] });
+  // npx's operand is a PACKAGE: context-doctor, whose `mcp` subcommand is the
+  // server (no package is named context-doctor-mcp).
+  assert.deepEqual(npxLauncher("win32"), { command: "cmd", args: ["/c", "npx", "-y", "context-doctor", "mcp"] });
   for (const os of ["darwin", "linux", "freebsd"]) {
-    assert.deepEqual(npxLauncher(os), { command: "npx", args: ["-y", "context-doctor-mcp"] }, `${os} needs no wrapper`);
+    assert.deepEqual(npxLauncher(os), { command: "npx", args: ["-y", "context-doctor", "mcp"] }, `${os} needs no wrapper`);
   }
 });
 

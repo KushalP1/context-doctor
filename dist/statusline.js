@@ -35,6 +35,13 @@ export function tailUsage(path, tailBytes = 256 * 1024) {
             catch {
                 continue; // the first line of a tail is usually a partial one
             }
+            // Compacted since the last reply: that reply's usage is the context
+            // BEFORE the compaction, and the new size is unknown until the next one.
+            if ((entry.type === "system" && entry.subtype === "compact_boundary") || entry.isCompactSummary)
+                return undefined;
+            // A subagent's usage describes its own context window, not this one.
+            if (entry.isSidechain)
+                continue;
             const usage = entry.type === "assistant" ? entry.message?.usage : undefined;
             if (!usage)
                 continue;
@@ -58,32 +65,37 @@ function bar(pct) {
 export function renderStatusLine(input) {
     let live;
     const cw = input.context_window;
-    const fromPayload = cw?.current_usage
-        ? (cw.current_usage.input_tokens ?? 0) + (cw.current_usage.cache_read_input_tokens ?? 0) + (cw.current_usage.cache_creation_input_tokens ?? 0)
-        : cw?.total_input_tokens;
-    if (fromPayload && fromPayload > 0) {
-        const read = cw?.current_usage?.cache_read_input_tokens;
+    // Only current_usage is the context. total_input_tokens is a running total
+    // in some Claude Code versions and the last response's figure in others;
+    // either way it outlives a /compact (current_usage is null until the next
+    // reply), and it was shown as "ctx 187k/200k 94% ⚠" over an emptied window.
+    // So it is never a fallback.
+    const cu = cw?.current_usage;
+    const fromPayload = cu ? (cu.input_tokens ?? 0) + (cu.cache_read_input_tokens ?? 0) + (cu.cache_creation_input_tokens ?? 0) : 0;
+    if (cu && fromPayload > 0) {
+        const read = cu.cache_read_input_tokens;
         live = { tokens: fromPayload, cacheShare: read !== undefined ? read / fromPayload : undefined, model: input.model?.id };
     }
     else if (input.transcript_path) {
         live = tailUsage(input.transcript_path);
     }
-    if (!live)
-        return null;
-    const window = cw?.context_window_size ?? contextWindowFor(live.model ?? input.model?.id);
     const parts = [];
-    if (window) {
-        const pct = (live.tokens / window) * 100;
-        parts.push(`ctx ${formatTokens(live.tokens)}/${formatTokens(window)} ${bar(pct)} ${pct.toFixed(0)}%${pct >= 70 ? " ⚠" : ""}`);
+    if (live) {
+        const window = cw?.context_window_size ?? contextWindowFor(live.model ?? input.model?.id);
+        if (window) {
+            const pct = (live.tokens / window) * 100;
+            parts.push(`ctx ${formatTokens(live.tokens)}/${formatTokens(window)} ${bar(pct)} ${pct.toFixed(0)}%${pct >= 70 ? " ⚠" : ""}`);
+        }
+        else {
+            parts.push(`ctx ${formatTokens(live.tokens)}`);
+        }
+        if (live.cacheShare !== undefined)
+            parts.push(`cache ${Math.round(live.cacheShare * 100)}%`);
     }
-    else {
-        parts.push(`ctx ${formatTokens(live.tokens)}`);
-    }
-    if (live.cacheShare !== undefined)
-        parts.push(`cache ${Math.round(live.cacheShare * 100)}%`);
+    // The session's cost is true whatever the context is; show it on its own.
     if (input.cost?.total_cost_usd && input.cost.total_cost_usd > 0)
         parts.push(formatUsd(input.cost.total_cost_usd));
-    return parts.join(" · ");
+    return parts.length > 0 ? parts.join(" · ") : null;
 }
 async function readStdin() {
     const chunks = [];

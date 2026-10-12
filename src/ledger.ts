@@ -85,10 +85,17 @@ export function foldTotals(entries: LedgerEntry[]): CarriedTotals {
       out.proxySaved += e.saved ?? 0;
       out.proxyUsd += e.usd ?? 0;
       out.proxyRequests += e.requests ?? 0;
-    } else {
+    } else if ((e.ev === "check" || e.ev === undefined) && e.sid !== "doctor-probe") {
+      // Exactly what the live reports (impact, dashboard) count, or totals
+      // jump when the ledger rotates. Not every other event is a check:
+      // cold_resume and precompact are not, and precompact's tok is a
+      // CHARACTER count that read as hundreds of tokens of "shrinkage".
+      // "doctor-probe" came from `doctor` before 0.30, not from the hook.
       out.checks++;
       if (e.warn) out.warnings++;
-      if (e.sid && typeof e.tok === "number") perSession.set(e.sid, [...(perSession.get(e.sid) ?? []), e.tok]);
+      // "mcp-sketch" was one id shared by unrelated chats (until 0.24): its
+      // sizes are not one session's, so no shrinkage is read from them.
+      if (e.sid && e.sid !== "mcp-sketch" && typeof e.tok === "number") perSession.set(e.sid, [...(perSession.get(e.sid) ?? []), e.tok]);
     }
   }
   for (const toks of perSession.values()) {
