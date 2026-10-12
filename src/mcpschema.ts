@@ -17,10 +17,11 @@
  * schemas. Usage of ToolSearch in the transcripts says whether that is so.
  */
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { forEachLine, listSessions } from "./session.js";
+import { subagentDir } from "./subagents.js";
 import { estimateTokens } from "./tokens.js";
 // Type only: erased at compile time, so dist/ never loads the SDK at startup.
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -83,19 +84,59 @@ export function claudeMcpConfigs(cwd = process.cwd(), home = homedir()): McpServ
   return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** MCP calls per server over the last `days`, from Claude Code transcripts (a cheap line scan, no JSON parse per line). */
+/**
+ * MCP calls per server over the last `days`, from Claude Code transcripts
+ * and their subagents' (`<session>/subagents/agent-*.jsonl`). Only lines
+ * naming an MCP tool or ToolSearch are parsed.
+ *
+ * Subagents: on the author's machine 49 Gmail and 23 Slack connector calls
+ * were made only by subagents, so scanning the top-level transcripts alone
+ * told the user to remove a server their subagents use. Once per call: a
+ * forked session starts as a copy of its parent's history, the same rows
+ * (uuid) holding the same calls (tool_use id), so a call is counted once by
+ * the two together; like replyCounter, that leaves alone hand-made
+ * transcripts that reuse an id. Each call by its own row's time: a file
+ * touched in the window also holds every older call of its session (2,983
+ * of them in one 30-day count). Rows without a timestamp count with their
+ * file.
+ */
 export function mcpUsage(days = 30, paths?: string[]): McpUsage {
   const since = Date.now() - days * 86_400_000;
   const files = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
   const calls = new Map<string, number>();
+  const counted = new Set<string>();
   let toolSearchSessions = 0;
   for (const path of files) {
     let searched = false;
-    forEachLine(path, (line) => {
-      if (!line.includes('"tool_use"')) return;
-      for (const m of line.matchAll(/"name":"mcp__([^"]+?)__[^"]+"/g)) calls.set(m[1], (calls.get(m[1]) ?? 0) + 1);
-      if (!searched && line.includes('"name":"ToolSearch"')) searched = true;
+    const scan = (file: string): void => forEachLine(file, (line) => {
+      if (!line.includes('"tool_use"') || (!line.includes('"name":"mcp__') && !line.includes('"name":"ToolSearch"'))) return;
+      let e: any;
+      try { e = JSON.parse(line); } catch { return; }
+      const content = e?.message?.content;
+      if (!Array.isArray(content)) return;
+      // Whether a session defers MCP definitions is a property of the
+      // session, so ToolSearch counts whenever it was used; calls are dated.
+      const before = Date.parse(e?.timestamp) < since;
+      for (const b of content) {
+        if (b?.type !== "tool_use" || typeof b.name !== "string") continue;
+        if (b.name === "ToolSearch") { searched = true; continue; }
+        if (before) continue;
+        const server = /^mcp__(.+?)__./.exec(b.name)?.[1];
+        if (!server) continue;
+        if (typeof b.id === "string" && typeof e.uuid === "string") {
+          const key = `${e.uuid}\0${b.id}`;
+          if (counted.has(key)) continue;
+          counted.add(key);
+        }
+        calls.set(server, (calls.get(server) ?? 0) + 1);
+      }
     });
+    scan(path);
+    let agents: string[] = [];
+    try { agents = readdirSync(subagentDir(path)).filter((f) => f.endsWith(".jsonl")); } catch { /* no subagents */ }
+    for (const a of agents) {
+      try { scan(join(subagentDir(path), a)); } catch { /* one unreadable subagent must not sink the report */ }
+    }
     if (searched) toolSearchSessions++;
   }
   return { calls, sessions: files.length, toolSearchSessions };

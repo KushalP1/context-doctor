@@ -26,6 +26,12 @@
  * this instance has not seen is treated as warm, so a fresh serverless
  * instance never clears blind; pass `statePath` on shared storage when many
  * instances serve the same conversations.
+ *
+ * Thinking blocks: on current Claude models a thinking block's signature
+ * binds the history before it, and enforced accounts get a 400 for an edited
+ * one. As the proxy does, an Anthropic request refused that way is sent
+ * again once as the caller wrote it, and the account is remembered so its
+ * conversations are not edited where a thinking block follows.
  */
 import { AutoClearer, type AutoClearOptions, type AutoClearResult } from "./autoclear.js";
 export interface WrapOptions extends AutoClearOptions {
