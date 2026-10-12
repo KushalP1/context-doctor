@@ -35,6 +35,7 @@ Pick where you work. Each takes about a minute and is fully reversible.
 - `overhead`: what every request re-reads before your message (system prompt, tools, MCP servers, CLAUDE.md, rules, memory), each file priced per month.
 - `tasks`: cost per commit, per project, from each session's recorded usage and its own `git commit` calls.
 - `reads`: the files read into session after session, and whether a CLAUDE.md summary or `pack` would pay.
+- `cache-plan <request.json>`: where an Anthropic API request should carry `cache_control`, and what it saves over N calls; `--out` writes it applied.
 - `session`, `watch`, `analyze`, `report`, `dashboard`: token breakdown and wasted-context findings for any session, conversation file or agent trace.
 
 **Keep waste out of the context**

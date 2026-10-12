@@ -47,6 +47,7 @@ import { applySplit, planSplit, renderSplit } from "./split.js";
 import { ciReport, renderCiMarkdown, renderCiText } from "./ci.js";
 import { renderReads, repeatedReads } from "./reads.js";
 import { costPerTask, renderTasks } from "./tasks.js";
+import { planCache, renderCachePlan } from "./cacheplan.js";
 const HELP = `context-doctor — profile and optimize LLM context windows
 
 Usage:
@@ -104,6 +105,9 @@ Usage:
   context-doctor ci [--base <ref>] [--max-tokens n] [--max-increase n] [--markdown]
                                                 For pull requests: memory files (CLAUDE.md, AGENTS.md,
                                                 GEMINI.md, rules) at HEAD vs base; exit 1 over budget
+  context-doctor cache-plan <request.json> [--calls n] [--out file]
+                                                Where an Anthropic request should carry cache_control,
+                                                what it saves over n calls; --out writes it applied
   context-doctor tasks [--days n]               Cost per commit, per project: session cost at list
                                                 price vs commits made during the sessions
   context-doctor reads [--days n] [--limit n]   Files read into session after session: reads, tokens,
@@ -289,6 +293,9 @@ function parseArgs(argv) {
                 break;
             case "--write":
                 args.write = true;
+                break;
+            case "--calls":
+                args.calls = numArg("--calls", argv[++i], { min: 1, integer: true });
                 break;
             case "--semantic":
                 args.semantic = args.semantic || true;
@@ -716,6 +723,27 @@ async function main() {
             trimBoundaryStep: loadedRc.config.trimBoundaryStep,
         });
         return; // server keeps the process alive
+    }
+    if (args.command === "cache-plan") {
+        const file = args.positionals?.[0];
+        if (!file) {
+            console.error("usage: context-doctor cache-plan <request.json|-> [--calls 10] [--out planned.json]");
+            process.exit(1);
+        }
+        let result;
+        try {
+            result = planCache(readInput(file), args.calls ?? 10, args.model);
+        }
+        catch (e) {
+            console.error(`Could not read a request from ${file}: ${e.message}`);
+            process.exit(1);
+        }
+        console.log(args.json ? JSON.stringify(result.plan, null, 2) : renderCachePlan(result.plan));
+        if (args.out) {
+            writeFileSync(args.out, JSON.stringify(result.apply(), null, 2));
+            console.error(`context-doctor: request with the planned breakpoints written to ${args.out}`);
+        }
+        return;
     }
     if (args.command === "tasks") {
         const report = costPerTask(args.days ?? 30);

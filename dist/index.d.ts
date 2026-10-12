@@ -34,3 +34,4 @@ export * from "./wrap.js";
 export * from "./ci.js";
 export * from "./reads.js";
 export * from "./tasks.js";
+export * from "./cacheplan.js";

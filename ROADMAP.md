@@ -65,7 +65,6 @@ The idea: when a prompt itself carries a big paste, tell the model to work from 
 ## Later / research
 
 - Per-subagent context budgets and a report of which subagent tasks pay for themselves.
-- A prompt-cache breakpoint planner for API apps: where to put `cache_control` given the measured request mix.
 
 ## Waiting on the owner's accounts
 
@@ -90,6 +89,12 @@ The idea: when a prompt itself carries a big paste, tell the model to work from 
 | **`context-doctor tasks`**: cost per commit, per project | Dollars per session say little alone. Each session priced from its recorded usage (input, cache writes 1.25x, reads 0.1x, output) against the commits it made: its own successful `git commit` calls, in whichever repository. A `git log` time window was tried first and dropped: a parent folder's repo showed no commits, a busy repo's unrelated history showed 1,111 | ✅ Author's last 30 days: $10.4k at list price, 40 sessions, 919 commits, $9-20 per commit across projects; 23 of 31 sessions started in `~/tech` committed nothing (research, deploys, browser work) |
 | **`context-doctor reads`**: files read into session after session | Agents re-read the same orientation files every session. Counted from transcripts per file: sessions, reads, tokens (images billed as images, not their base64) and the floor of the cost; a file read in most of its project's sessions is flagged as worth a few lines in CLAUDE.md, the rest pointed at `pack` | ✅ Measured on the author's last 30 days: 1,435 reads in 76 sessions, ~2.6M tokens; only 7 files were read in 3+ sessions, 8% of read tokens and about $1.70 at the floor. Cross-session repetition is small there; the larger waste is re-reading within a session (one file read 100 times in 3 sessions), which `session` already flags as `repeated_file_read` |
 | **Python package** (`python/`, `pip install context-doctor` once published) | RAG pipelines chunk and stuff context in Python. The port gives them `pack_context`, `pack_documents` (LangChain documents, LlamaIndex nodes, strings, duck-typed: no dependencies), `estimate_tokens`, a message `profile_messages`, and `python -m context_doctor pack` | ✅ Parity with the TypeScript, byte for byte: 42 token estimates, 19 number formats, 579 chunks across 14 chunkings (markdown, code, logs, Unicode, one-line logs), 7 full packs and their rendered output. Tested on Python 3.9, 3.11 and 3.14 here; CI runs 3.9 and 3.13 on Linux, macOS and Windows and fails if the fixtures fall behind the TypeScript. Wheel built and installed in a clean venv. Publishing waits on the owner's PyPI trusted publisher |
+
+## Shipped on main after 0.29
+
+| Item | Why | Status |
+|---|---|---|
+| **`context-doctor cache-plan <request.json>`** | API apps leave caching on the table or place breakpoints where they cache nothing. Following Anthropic's rules (prefix order tools → system → messages, 1,024-token minimum, 2,048 on Haiku, at most 4 breakpoints, 20-block lookback) it places breakpoints at the end of the tools and the system prompt when each reaches the minimum, on the last block of the conversation, and an anchor when the conversation outruns the lookback; prices the request sent N times; `--out` writes it applied (a string system prompt becomes a block). OpenAI requests get the ordering and `prompt_cache_key` advice instead, since OpenAI caches without markers | ✅ Tests cover placement, the anchor, the 4-breakpoint cap, applying, small and OpenAI requests; the dollar figures match a hand calculation (sample conversation, 20 calls on Sonnet: $0.703 → $0.111) |
 
 ## Fixed by a local audit (2026-10-12)
 
