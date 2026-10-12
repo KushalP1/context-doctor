@@ -128,8 +128,10 @@ function arm(model: string | undefined, clearer: AutoClearer | null) {
  * to mean anything. `runRows` is shared by every transcript of one report: a
  * forked session starts as a copy of its parent's history, which replays
  * here (it shapes the context) but was billed once, under the parent.
+ * `coldRows` does the same for the cold-resume count, which reads the
+ * transcript again after the replay has added its rows to `runRows`.
  */
-export function replaySession(path: string, options: AutoClearOptions = {}, since = 0, runRows?: Set<string>): SessionSavings | undefined {
+export function replaySession(path: string, options: AutoClearOptions = {}, since = 0, runRows?: Set<string>, coldRows?: Set<string>): SessionSavings | undefined {
   let model: string | undefined;
   let base = arm(undefined, null), auto = arm(undefined, new AutoClearer(options));
   let baseUsd = 0, autoUsd = 0, baseRaw = 0, autoRaw = 0;
@@ -212,7 +214,7 @@ export function replaySession(path: string, options: AutoClearOptions = {}, sinc
   // have written those at the TTL it wrote everything else at.
   const mix = writeMultiplier(writes5m, writes1h);
   for (let i = 0; i < closed.length; i += 2) { baseUsd += closed[i].usd(mix); autoUsd += closed[i + 1].usd(mix); }
-  const cold = coldResumeEvents(path).filter((c) => c.at >= since);
+  const cold = coldResumeEvents(path, undefined, undefined, coldRows).filter((c) => c.at >= since);
   const pct = baseUsd > 0 ? (baseUsd - autoUsd) / baseUsd : 0;
   const rawPct = baseRaw > 0 ? (baseRaw - autoRaw) / baseRaw : 0;
   const dir = basename(dirname(path));
@@ -238,11 +240,11 @@ export function estimateSavings(days = 30, options: AutoClearOptions = {}, paths
   const since = Date.now() - days * 86_400_000;
   const targets = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
   const sessions: SessionSavings[] = [];
-  const runRows = new Set<string>();
+  const runRows = new Set<string>(), coldRows = new Set<string>();
   for (const [i, p] of targets.entries()) {
     onProgress?.(i, targets.length);
     try {
-      const s = replaySession(p, options, since, runRows);
+      const s = replaySession(p, options, since, runRows, coldRows);
       if (s) sessions.push(s);
     } catch {
       /* one unreadable transcript must not sink the report */

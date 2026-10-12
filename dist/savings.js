@@ -85,8 +85,10 @@ function arm(model, clearer) {
  * to mean anything. `runRows` is shared by every transcript of one report: a
  * forked session starts as a copy of its parent's history, which replays
  * here (it shapes the context) but was billed once, under the parent.
+ * `coldRows` does the same for the cold-resume count, which reads the
+ * transcript again after the replay has added its rows to `runRows`.
  */
-export function replaySession(path, options = {}, since = 0, runRows) {
+export function replaySession(path, options = {}, since = 0, runRows, coldRows) {
     let model;
     let base = arm(undefined, null), auto = arm(undefined, new AutoClearer(options));
     let baseUsd = 0, autoUsd = 0, baseRaw = 0, autoRaw = 0;
@@ -180,7 +182,7 @@ export function replaySession(path, options = {}, since = 0, runRows) {
         baseUsd += closed[i].usd(mix);
         autoUsd += closed[i + 1].usd(mix);
     }
-    const cold = coldResumeEvents(path).filter((c) => c.at >= since);
+    const cold = coldResumeEvents(path, undefined, undefined, coldRows).filter((c) => c.at >= since);
     const pct = baseUsd > 0 ? (baseUsd - autoUsd) / baseUsd : 0;
     const rawPct = baseRaw > 0 ? (baseRaw - autoRaw) / baseRaw : 0;
     const dir = basename(dirname(path));
@@ -205,11 +207,11 @@ export function estimateSavings(days = 30, options = {}, paths, onProgress) {
     const since = Date.now() - days * 86_400_000;
     const targets = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
     const sessions = [];
-    const runRows = new Set();
+    const runRows = new Set(), coldRows = new Set();
     for (const [i, p] of targets.entries()) {
         onProgress?.(i, targets.length);
         try {
-            const s = replaySession(p, options, since, runRows);
+            const s = replaySession(p, options, since, runRows, coldRows);
             if (s)
                 sessions.push(s);
         }

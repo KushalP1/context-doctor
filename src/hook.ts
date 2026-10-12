@@ -22,7 +22,7 @@ import { profileConversation } from "./profile.js";
 import { parseSessionFile } from "./session.js";
 import { formatTokens, CHARS_PER_TOKEN, LARGEST_WINDOW } from "./tokens.js";
 import { ensureProxyUp } from "./autopilot.js";
-import { detectColdResume, renderColdResume, renderColdResumeNotice } from "./coldresume.js";
+import { detectColdResume, renderColdResume, renderColdResumeNotice, sessionWriteMultiplier } from "./coldresume.js";
 import { formatUsd, pricingFor } from "./pricing.js";
 import { checkBudget, loadConfig } from "./config.js";
 import { compactFacts, compactInstructions } from "./precompact.js";
@@ -267,9 +267,13 @@ export async function runHook(): Promise<void> {
     // context at the cached rate (0.1x) and pays the full rate only when the
     // cache has expired. Quoting the uncached figure alone overstated the
     // per-message cost tenfold (fixed in 0.22).
+    // An expired cache is re-written at the TTL this session writes at, read
+    // from the transcript's tail: Claude Code's main thread has mostly
+    // written the 1-hour cache, at 2x input, where a flat 1.25x quoted the
+    // cold message 37% low (5-minute writes stay at 1.25x).
     const pricing = pricingFor(model);
     const cachedUsd = pricing ? (liveTokens * pricing.cacheReadPerM) / 1e6 : undefined;
-    const coldUsd = pricing ? (liveTokens * pricing.inputPerM * 1.25) / 1e6 : undefined;
+    const coldUsd = pricing ? (liveTokens * pricing.inputPerM * sessionWriteMultiplier(transcriptPath)) / 1e6 : undefined;
     // Cursor's agent transcript records tool calls but not their output, and
     // keeps turns Cursor has since summarized, so it measures how much the chat
     // has accumulated, not the live context: no window share or price for it.
