@@ -20,6 +20,7 @@ import { existsSync } from "node:fs";
 import { formatTokens, CHARS_PER_TOKEN, providerFor } from "./tokens.js";
 import { formatUsd, inputCostUsd, pricingFor } from "./pricing.js";
 import { recordLedger } from "./ledger.js";
+import { minCacheableTokens } from "./cacheplan.js";
 
 export interface ProxyOptions extends OptimizeOptions {
   /** Per-model-prefix overrides; first match wins, global options otherwise. */
@@ -312,8 +313,10 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
               const stablePrefix = JSON.stringify(parsedBody.tools ?? null) + JSON.stringify(parsedBody.system ?? null);
               const hasBreakpoint = body.includes("cache_control");
               const stablePrefixTokens = Math.round(stablePrefix.length / CHARS_PER_TOKEN[providerFor(requestModel)].code);
-              // Anthropic will not cache a prefix under ~1024 tokens; below that the advice is useless.
-              if (stablePrefixTokens >= 1024 && !hasBreakpoint) {
+              // Anthropic will not cache a prefix under the model's minimum (512 to
+              // 4,096 tokens, cacheplan.ts); below that the advice is useless.
+              const minCacheable = minCacheableTokens(requestModel);
+              if (stablePrefixTokens >= minCacheable && !hasBreakpoint) {
                 // Say WHERE, not just that. A breakpoint caches everything up
                 // to and including the block it sits on, so it belongs on the
                 // LAST stable block: the final tool definition if there are
@@ -349,8 +352,7 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
                 if (stable >= 2) {
                   const stableChars = msgs.slice(0, stable).reduce((n: number, m) => n + JSON.stringify(m).length, 0);
                   const stableTokens = Math.round(stableChars / CHARS_PER_TOKEN[providerFor(requestModel)].code);
-                  // Anthropic will not cache a prefix under ~1024 tokens (2048 on Haiku).
-                  if (stableTokens >= 1024) {
+                  if (stableTokens >= minCacheable) {
                     advise(
                       `messages #0-#${stable - 1} (~${stableTokens} tokens) were identical to the previous ${requestModel} request and carry no cache_control. ` +
                         `Put {"cache_control":{"type":"ephemeral"}} on the last content block of message #${stable - 1}; that run then reads from cache instead of re-billing each turn`

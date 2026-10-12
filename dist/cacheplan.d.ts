@@ -4,9 +4,10 @@
  *
  * A request is cached as a prefix in a fixed order: tools, then system, then
  * messages. A breakpoint caches everything up to and including the block it
- * sits on, a prefix under the model's minimum (1,024 tokens; 2,048 on Haiku)
- * is not cached at all, a request may carry at most 4 breakpoints, and the
- * cache looks back at most 20 blocks from a breakpoint for an earlier hit.
+ * sits on, a prefix under the model's minimum (512 to 4,096 tokens, see
+ * minCacheableTokens) is not cached at all, a request may carry at most 4
+ * breakpoints, and the cache looks back at most 20 blocks from a breakpoint
+ * for an earlier hit.
  * The planner places breakpoints at the ends of the stable parts (last tool,
  * last system block) and on the last block of the conversation, adds a
  * middle anchor when the conversation is longer than the 20-block lookback,
@@ -38,6 +39,7 @@ export interface CachePlan {
     usdWith?: number;
     notes: string[];
 }
+export declare function minCacheableTokens(model?: string): number;
 export declare function planCache(request: unknown, calls?: number, modelOverride?: string): {
     plan: CachePlan;
     apply: () => Record<string, any>;
