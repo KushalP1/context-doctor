@@ -49,6 +49,7 @@ import { ciReport, renderCiMarkdown, renderCiText } from "./ci.js";
 import { renderReads, repeatedReads } from "./reads.js";
 import { costPerTask, renderTasks } from "./tasks.js";
 import { planCache, renderCachePlan } from "./cacheplan.js";
+import { renderPayback, subagentPayback } from "./subagentpay.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -110,6 +111,8 @@ Usage:
   context-doctor cache-plan <request.json> [--calls n] [--out file]
                                                 Where an Anthropic request should carry cache_control,
                                                 what it saves over n calls; --out writes it applied
+  context-doctor subagents [--days n]           Which subagents paid for themselves: their bill vs
+                                                what carrying their reads would have cost the parent
   context-doctor tasks [--days n]               Cost per commit, per project: session cost at list
                                                 price vs commits made during the sessions
   context-doctor reads [--days n] [--limit n]   Files read into session after session: reads, tokens,
@@ -692,6 +695,12 @@ async function main(): Promise<void> {
       trimBoundaryStep: loadedRc.config.trimBoundaryStep,
     });
     return; // server keeps the process alive
+  }
+
+  if (args.command === "subagents") {
+    const report = subagentPayback(args.days ?? 30);
+    console.log(args.json ? JSON.stringify(report, null, 2) : renderPayback(report, args.limit ?? 8));
+    return;
   }
 
   if (args.command === "cache-plan") {

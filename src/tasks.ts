@@ -17,6 +17,7 @@
  * subagent traffic.
  */
 
+import { realModel } from "./tokens.js";
 import { basename } from "node:path";
 import { forEachLine, listSessions } from "./session.js";
 import { formatUsd, pricingFor } from "./pricing.js";
@@ -81,7 +82,7 @@ export function sessionCost(path: string): SessionCost | undefined {
     lastId = e.message.id;
     const at = Date.parse(e.timestamp);
     if (Number.isFinite(at)) { start = Math.min(start, at); end = Math.max(end, at); }
-    if (typeof e.message.model === "string") model = e.message.model;
+    model = realModel(e.message.model) ?? model;
     const price = pricingFor(e.message.model ?? model);
     if (!price) return;
     const u = e.message.usage;

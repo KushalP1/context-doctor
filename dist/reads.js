@@ -11,7 +11,7 @@
  * is cheaper left as a read; `pack` can cut it to the part a question needs).
  */
 import { forEachLine, listSessions } from "./session.js";
-import { estimateTokens, formatTokens } from "./tokens.js";
+import { estimateTokens, formatTokens, realModel } from "./tokens.js";
 import { formatUsd, pricingFor } from "./pricing.js";
 const CLAUDE = "claude-opus-5";
 /** An image in a tool result bills as an image (~1.6k tokens for a full-size screenshot), not as its base64. */
@@ -56,8 +56,7 @@ function sessionReads(path) {
         if (!Array.isArray(content))
             return;
         if (e.type === "assistant") {
-            if (typeof e.message.model === "string")
-                model = e.message.model;
+            model = realModel(e.message.model) ?? model;
             for (const b of content) {
                 if (b?.type === "tool_use" && b.name === "Read" && typeof b.input?.file_path === "string")
                     pending.set(b.id, b.input.file_path);

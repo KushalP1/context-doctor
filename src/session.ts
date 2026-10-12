@@ -9,6 +9,7 @@
  * (titles, mode changes, hook records) is metadata and skipped.
  */
 
+import { realModel } from "./tokens.js";
 import { readdirSync, readFileSync, statSync, existsSync, openSync, readSync, closeSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { homedir } from "node:os";
@@ -425,7 +426,7 @@ export function parseSessionFile(path: string): ParsedSession {
     if (entry.isSidechain) return; // subagent traffic has its own context window
     const message = entry.message as Record<string, unknown>;
     if (!message.role || message.content == null) return;
-    if (typeof message.model === "string") model = message.model;
+    model = realModel(message.model) ?? model;
     const usage = message.usage as Record<string, number> | undefined;
     if (entry.type === "assistant" && usage) {
       // Coerce, do not trust: a transcript whose usage numbers are STRINGS

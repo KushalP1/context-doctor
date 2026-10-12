@@ -47,3 +47,10 @@ export declare function estimateTokens(text: string, model?: string): number;
 /** Per-message structural overhead (role markers, delimiters) is roughly constant. */
 export declare const MESSAGE_OVERHEAD_TOKENS = 4;
 export declare function formatTokens(n: number): string;
+/**
+ * A transcript's model field, unless it is a placeholder: Claude Code writes
+ * "<synthetic>" on messages it generates itself (errors, interruptions), and
+ * taking the last model seen made a session's model unknown to pricing and
+ * window math whenever one came last.
+ */
+export declare function realModel(model: unknown): string | undefined;

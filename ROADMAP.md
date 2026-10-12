@@ -64,7 +64,6 @@ The idea: when a prompt itself carries a big paste, tell the model to work from 
 
 ## Later / research
 
-- Per-subagent context budgets and a report of which subagent tasks pay for themselves.
 
 ## Waiting on the owner's accounts
 
@@ -94,6 +93,8 @@ The idea: when a prompt itself carries a big paste, tell the model to work from 
 
 | Item | Why | Status |
 |---|---|---|
+| **`context-doctor subagents`**: which subagents paid for themselves | The work costs money either way; the question is where it is cheaper. Per subagent, from its transcript and `meta.json` (which names the parent's tool call): its bill, against the same steps done in the parent at the parent's model price, with the parent's context re-read on every step and the subagent's reads carried through the parent's later requests | ✅ Author's last 30 days: 409 subagents cost $2,476 at list price; the same work in the parent ~$14.0k, 408 of 409 cheaper as subagents. Why: subagents start when the parent is already large (median 306k tokens, median 35 steps). A first version that compared the subagent's whole bill to the carried reads alone showed the opposite and was wrong; the test pins the corrected arithmetic |
+| **Placeholder models ignored** | Claude Code writes `<synthetic>` as the model of messages it generates itself; five modules took the last model seen, so a session ending on one lost its pricing and window (92 subagents priced at $0 net) | ✅ `realModel()` used everywhere a transcript's model is read |
 | **`context-doctor cache-plan <request.json>`** | API apps leave caching on the table or place breakpoints where they cache nothing. Following Anthropic's rules (prefix order tools → system → messages, 1,024-token minimum, 2,048 on Haiku, at most 4 breakpoints, 20-block lookback) it places breakpoints at the end of the tools and the system prompt when each reaches the minimum, on the last block of the conversation, and an anchor when the conversation outruns the lookback; prices the request sent N times; `--out` writes it applied (a string system prompt becomes a block). OpenAI requests get the ordering and `prompt_cache_key` advice instead, since OpenAI caches without markers | ✅ Tests cover placement, the anchor, the 4-breakpoint cap, applying, small and OpenAI requests; the dollar figures match a hand calculation (sample conversation, 20 calls on Sonnet: $0.703 → $0.111) |
 
 ## Fixed by a local audit (2026-10-12)

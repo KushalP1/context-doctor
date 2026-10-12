@@ -16,6 +16,7 @@
  * history showed hundreds). Commits made by hand are not counted, nor is
  * subagent traffic.
  */
+import { realModel } from "./tokens.js";
 import { basename } from "node:path";
 import { forEachLine, listSessions } from "./session.js";
 import { formatUsd, pricingFor } from "./pricing.js";
@@ -65,8 +66,7 @@ export function sessionCost(path) {
             start = Math.min(start, at);
             end = Math.max(end, at);
         }
-        if (typeof e.message.model === "string")
-            model = e.message.model;
+        model = realModel(e.message.model) ?? model;
         const price = pricingFor(e.message.model ?? model);
         if (!price)
             return;

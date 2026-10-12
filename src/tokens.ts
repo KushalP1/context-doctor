@@ -113,3 +113,13 @@ export function formatTokens(n: number): string {
   if (n >= 1_000) return `${(n / 1000).toFixed(1)}k`;
   return String(n);
 }
+
+/**
+ * A transcript's model field, unless it is a placeholder: Claude Code writes
+ * "<synthetic>" on messages it generates itself (errors, interruptions), and
+ * taking the last model seen made a session's model unknown to pricing and
+ * window math whenever one came last.
+ */
+export function realModel(model: unknown): string | undefined {
+  return typeof model === "string" && model && !model.startsWith("<") ? model : undefined;
+}

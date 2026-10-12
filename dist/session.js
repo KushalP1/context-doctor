@@ -8,6 +8,7 @@
  * where `message` is in Anthropic Messages format. Everything else
  * (titles, mode changes, hook records) is metadata and skipped.
  */
+import { realModel } from "./tokens.js";
 import { readdirSync, readFileSync, statSync, existsSync, openSync, readSync, closeSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { homedir } from "node:os";
@@ -371,8 +372,7 @@ export function parseSessionFile(path) {
         const message = entry.message;
         if (!message.role || message.content == null)
             return;
-        if (typeof message.model === "string")
-            model = message.model;
+        model = realModel(message.model) ?? model;
         const usage = message.usage;
         if (entry.type === "assistant" && usage) {
             // Coerce, do not trust: a transcript whose usage numbers are STRINGS
