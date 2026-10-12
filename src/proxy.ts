@@ -189,6 +189,28 @@ function fnv1a(s: string): number {
   return h >>> 0;
 }
 
+/**
+ * How long a stopping proxy waits for requests in flight. Under launchd's
+ * default 20 s exit timeout, so the proxy exits on its own terms rather than
+ * by SIGKILL.
+ */
+const DRAIN_MS = 15_000;
+/** Each running proxy's drain, so one signal stops them all. */
+const liveServers = new Set<() => Promise<void>>();
+let signalsInstalled = false;
+let stopping = false;
+function installSignalHandlers(): void {
+  if (signalsInstalled) return;
+  signalsInstalled = true;
+  const stop = (): void => {
+    if (stopping) process.exit(0); // a second Ctrl-C: stop now
+    stopping = true;
+    void Promise.all([...liveServers].map((d) => d().catch(() => undefined))).finally(() => process.exit(0));
+  };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+}
+
 export function startProxy(opts: ProxyOptions = {}): http.Server {
   const port = opts.port ?? 8787;
   // A conversation with no record (first seen since a restart, or evicted) is
@@ -222,8 +244,20 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
     console.error(`[context-doctor] cache advisor: ${msg}`);
   };
 
+  /** Requests still being answered, so a shutdown can let them finish. */
+  let inFlight = 0;
   const server = http.createServer(async (req, res) => {
     let url = req.url ?? "/";
+    inFlight++;
+    // A client that goes away (Ctrl-C, an SDK timeout) must take its upstream
+    // request with it: without this, a stream the client abandoned at 0.1 s
+    // kept running upstream to the end (3 s in the test, minutes of output
+    // tokens on a real one).
+    const upstreamAbort = new AbortController();
+    res.on("close", () => {
+      inFlight--;
+      if (!res.writableFinished) upstreamAbort.abort();
+    });
     try {
       if (url === "/health") {
         res.setHeader("content-type", "application/json");
@@ -404,11 +438,13 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
       }
 
       const upstreamStart = Date.now();
-      const upstream = await fetch(upstreamBase + url, {
+      const send = (payload: string | Buffer): Promise<Response> => fetch(upstreamBase + url, {
         method: req.method ?? "POST",
         headers,
-        body: req.method === "GET" || req.method === "HEAD" ? undefined : body === originalBody ? rawBody : body,
+        body: req.method === "GET" || req.method === "HEAD" ? undefined : (payload as RequestInit["body"]),
+        signal: upstreamAbort.signal,
       });
+      const upstream = await send(body === originalBody ? rawBody : body);
 
       console.error(
         `[context-doctor] ${req.method} ${url} → ${upstream.status} in ${Date.now() - upstreamStart}ms | ${note}` +
@@ -426,11 +462,16 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
         let scanBuf = "";
         const decoder = new TextDecoder();
         const reader = upstream.body.getReader();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          res.write(value);
-          if (scanBuf.length < USAGE_SCAN_CAP) scanBuf += decoder.decode(value, { stream: true });
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            res.write(value);
+            if (scanBuf.length < USAGE_SCAN_CAP) scanBuf += decoder.decode(value, { stream: true });
+          }
+        } catch (e) {
+          reader.cancel().catch(() => undefined);
+          throw e;
         }
         if (upstream.ok && !isMeasurement) {
           const usage = extractUsage(scanBuf);
@@ -446,11 +487,22 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
       }
       res.end();
     } catch (e) {
-      console.error(`[context-doctor] error on ${url}: ${(e as Error).message}`);
-      if (!res.headersSent) {
-        res.statusCode = 502;
-        res.setHeader("content-type", "application/json");
+      if (upstreamAbort.signal.aborted) {
+        console.error(`[context-doctor] ${req.method} ${url}: client went away; upstream request cancelled`);
+        res.destroy();
+        return;
       }
+      console.error(`[context-doctor] error on ${url}: ${(e as Error).message}`);
+      if (res.headersSent) {
+        // Upstream failed mid-body. Status and part of the body are already
+        // with the client; appending a JSON error and ending cleanly made a
+        // truncated stream look complete (a 200 whose SSE just stops). Cut
+        // the connection instead, so the client sees the failure and retries.
+        res.destroy(e as Error);
+        return;
+      }
+      res.statusCode = 502;
+      res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({ error: `context-doctor proxy: ${(e as Error).message}` }));
     }
   });
@@ -478,13 +530,24 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
   };
   const checkpointTimer = setInterval(checkpoint, 60_000);
   checkpointTimer.unref?.(); // never hold the process open on our account
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.once(signal, () => {
-      checkpoint();
-      process.exit(0);
-    });
-  }
-  server.on("close", checkpoint);
+  // Stop: no new connections, let requests in flight finish (a streamed
+  // answer is usually done within seconds), then save. Exiting on the signal
+  // cut every open stream, and a service restart (launchd's kickstart -k
+  // after an update) sends exactly that signal.
+  const drain = async (): Promise<void> => {
+    checkpoint();
+    server.close();
+    server.closeIdleConnections?.();
+    const end = Date.now() + DRAIN_MS;
+    while (inFlight > 0 && Date.now() < end) await new Promise((r) => setTimeout(r, 50));
+    checkpoint();
+  };
+  liveServers.add(drain);
+  installSignalHandlers();
+  server.on("close", () => {
+    liveServers.delete(drain);
+    checkpoint();
+  });
 
   const host = opts.host ?? "127.0.0.1";
   server.listen(port, host, () => {
