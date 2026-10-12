@@ -85,6 +85,11 @@ export function planSplit(path, { minTokens = 400 } = {}) {
     const flush = () => {
         if (group.length === 0)
             return;
+        // One blank line before the pointer, however many stood before the moved
+        // heading. Only here: blank lines in kept text (a code sample's spacing)
+        // stay byte for byte.
+        while (kept.length > 1 && kept[kept.length - 1] === "" && kept[kept.length - 2] === "")
+            kept.pop();
         const names = group.map((g) => g.heading);
         const tokens = group.reduce((t, g) => t + g.tokens, 0);
         if (memoryIndex) {
@@ -121,7 +126,7 @@ export function planSplit(path, { minTokens = 400 } = {}) {
         group.push(section);
     }
     flush();
-    const keptText = kept.join("\n").replace(/\n{3,}/g, "\n\n");
+    const keptText = kept.join("\n");
     const header = `# Reference moved out of ${basename(path)}\n\nRead a section when a task needs it; ${basename(path)} points here by section name.\n\n`;
     const movedText = moved.length ? header + moved.join("\n") : "";
     return {

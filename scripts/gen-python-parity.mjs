@@ -18,6 +18,8 @@ if (!existsSync(inputsPath)) {
     { name: "server.log", text: "boot ok\n" + "GET /api/users 200 12ms user=alice ".repeat(400) + "\nERROR timeout upstream payments after 30s\nshutdown" },
     { name: "unicode.md", text: "# Café ☕ guide\n\nÜber-schnelle Bestellungen: naïve façade, résumé.\n\n## 日本語\n\n東京の天気は晴れです。キャッシュは一時間で期限切れ。\n\n## Emoji 🎉\n\nParty 🎉🎉 time with 👩‍💻 developers." },
     { name: "script.py", text: '#!/usr/bin/env python3\n"""Module doc."""\n\nimport os\n\n\ndef rotate_key(path):\n    """Rotate the signing key."""\n    return os.path.exists(path)\n\n\nclass Billing:\n    def invoice(self):\n        return 1\n' },
+    // Long lines of astral characters: a cut must not split a surrogate pair (odd and even alignment, and at a space).
+    { name: "emoji.log", text: "a" + "😀".repeat(500) + "\n" + "😀".repeat(500) + "\n" + "🎉 party ".repeat(150) },
   ];
   const texts = [
     "", "hello world", "x = 1;\n".repeat(50), "{\"a\": [1, 2, 3], \"b\": {\"c\": \"d\"}}", "Café naïve résumé 東京 🎉👩‍💻",

@@ -51,6 +51,23 @@ function flattenContent(content) {
                 hasBinary = true;
                 text += `[${b.type}]`;
                 break;
+            // OpenAI's media blocks (Chat Completions and Responses). Stringified,
+            // a 300 KB base64 data URL counted as ~75k text tokens and tripped the
+            // base64 finding; it is an attachment, counted like Anthropic's above.
+            case "image_url":
+            case "input_image":
+                hasBinary = true;
+                text += "[image]";
+                break;
+            case "input_audio":
+                hasBinary = true;
+                text += "[audio]";
+                break;
+            case "file":
+            case "input_file":
+                hasBinary = true;
+                text += "[file]";
+                break;
             case "thinking":
                 // Count the thinking text but NOT the signature — it is an opaque
                 // base64 blob the API requires, not something the user can trim.
@@ -71,7 +88,8 @@ function normalizeMessage(rawInput, index) {
     const raw = rawInput && typeof rawInput === "object" ? rawInput : {};
     const role = String(raw.role ?? "user");
     const flat = flattenContent(raw.content);
-    let kind = flat.kind ?? (["system", "user", "assistant"].includes(role) ? role : "other");
+    // OpenAI's "developer" role is the system prompt under its newer name (o1 onward).
+    let kind = flat.kind ?? (role === "developer" ? "system" : ["system", "user", "assistant"].includes(role) ? role : "other");
     let toolName = flat.toolName;
     let text = flat.text;
     let toolCallText = flat.toolCallText;
@@ -93,30 +111,36 @@ function normalizeMessage(rawInput, index) {
     }
     return { index, role, kind, text, toolName, toolCallText, hasBinary: flat.hasBinary, isError: flat.isError };
 }
+/** Raw text: the whole input as one user message, so profiling still works for raw prompts. */
+function rawText(input, parseError) {
+    // If it LOOKS like JSON, the user handed us a broken conversation file and
+    // deserves to be told, not given a report about a single 9-token "message".
+    const head = input.trimStart()[0];
+    const parseWarning = input.trim() === ""
+        ? "Input is empty — nothing to profile."
+        : parseError && (head === "{" || head === "[")
+            ? `Input starts like JSON but does not parse (${parseError.message}). Profiling it as raw text, which is almost certainly not what you want.`
+            : undefined;
+    return {
+        sourceFormat: "text",
+        parseWarning,
+        // Empty input has no message: reporting "1 message, ~4 tokens" for it
+        // would be inventing content that is not there.
+        messages: input.trim() === "" ? [] : [{ index: 0, role: "user", kind: "user", text: input, hasBinary: false }],
+    };
+}
 export function parseConversation(input) {
     let data;
     try {
         data = JSON.parse(input);
     }
     catch (e) {
-        // Not JSON — treat the whole thing as one user message so profiling still
-        // works for raw prompts. But if it LOOKS like JSON, the user handed us a
-        // broken conversation file and deserves to be told, not given a report
-        // about a single 9-token "message".
-        const head = input.trimStart()[0];
-        const parseWarning = input.trim() === ""
-            ? "Input is empty — nothing to profile."
-            : head === "{" || head === "["
-                ? `Input starts like JSON but does not parse (${e.message}). Profiling it as raw text, which is almost certainly not what you want.`
-                : undefined;
-        return {
-            sourceFormat: "text",
-            parseWarning,
-            // Empty input has no message: reporting "1 message, ~4 tokens" for it
-            // would be inventing content that is not there.
-            messages: input.trim() === "" ? [] : [{ index: 0, role: "user", kind: "user", text: input, hasBinary: false }],
-        };
+        return rawText(input, e);
     }
+    // A prompt can happen to be valid JSON ("2024", a quoted sentence, null):
+    // that is still a raw prompt, not a conversation with no messages.
+    if (data === null || typeof data !== "object")
+        return rawText(input);
     if (Array.isArray(data)) {
         const looksLikeMessages = data.length === 0 || data.some((m) => m && typeof m === "object" && "role" in m);
         return {
