@@ -107,11 +107,16 @@ class PackReadsWhatGitDoes(unittest.TestCase):
             fh.write("API_KEY=do-not-pack")
         with open(os.path.join(repo, "guide.md"), "w") as fh:
             fh.write("# Guide\n\nrotate the keys\n")
-        os.symlink(os.path.join(outside, "secret.txt"), os.path.join(repo, "notes.md"))
+        try:
+            os.symlink(os.path.join(outside, "secret.txt"), os.path.join(repo, "notes.md"))
+            linked = True
+        except (OSError, NotImplementedError):  # Windows without symlink privilege
+            linked = False
         skipped = []
         sources = list(_read([repo, os.path.join(repo, "guide.md")], skipped))
         texts = [s.text for s in sources]
         self.assertEqual(sum("rotate the keys" in t for t in texts), 1, "a file reached twice is read once")
         self.assertFalse(any("do-not-pack" in t for t in texts), ".gitignore'd .env stays out")
-        self.assertFalse(any("outside secret" in t for t in texts), "a link out of the folder is not followed")
-        self.assertTrue(any("symlink pointing outside" in n for n in skipped))
+        if linked:
+            self.assertFalse(any("outside secret" in t for t in texts), "a link out of the folder is not followed")
+            self.assertTrue(any("symlink pointing outside" in n for n in skipped))
