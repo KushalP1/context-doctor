@@ -43,8 +43,19 @@ def _walk(folder):
 
 
 def _within(root, inner):
-    rel = os.path.relpath(inner, root)
+    try:
+        rel = os.path.relpath(inner, root)
+    except ValueError:  # Windows: another drive is never inside
+        return False
     return rel == "." or not (rel == ".." or rel.startswith(".." + os.sep) or os.path.isabs(rel))
+
+
+def _name(path):
+    """A source's name: relative to the working directory when it can be (Windows has no relative path across drives)."""
+    try:
+        return os.path.relpath(path)
+    except ValueError:
+        return path
 
 
 def _read(paths, skipped=None):
@@ -87,7 +98,7 @@ def _read(paths, skipped=None):
                     continue
                 if not os.path.isfile(full):
                     continue
-                s = source(full, os.path.relpath(full))
+                s = source(full, _name(full))
                 if s:
                     yield s
         else:
