@@ -480,6 +480,33 @@ export function startProxy(opts = {}) {
         checkpoint();
     });
     const host = opts.host ?? "127.0.0.1";
+    // A port already in use was an unhandled 'error' event: a crash with a
+    // stack trace, which launchd (KeepAlive) restarted into the same error
+    // every 5 s, 45 times in one real log, while a second proxy held the port.
+    // One clear line instead, and exit 0 when a context-doctor proxy already
+    // serves the port (traffic flows; a service that restarts only on failure
+    // stays down), 1 when something else holds it. An app that embeds
+    // startProxy and handles 'error' itself keeps that decision.
+    server.on("error", (e) => {
+        if (server.listenerCount("error") > 1)
+            return;
+        if (e.code !== "EADDRINUSE") {
+            console.error(`context-doctor proxy: cannot listen on ${host}:${port}: ${e.message}`);
+            process.exit(1);
+        }
+        const probe = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host.includes(":") ? `[${host}]` : host;
+        fetch(`http://${probe}:${port}/health`, { signal: AbortSignal.timeout(2000) })
+            .then((r) => r.json())
+            .catch(() => undefined)
+            .then((h) => {
+            if (h?.service === "context-doctor-proxy") {
+                console.error(`context-doctor proxy: port ${port} is already served by a context-doctor proxy (v${h.version ?? "?"}); this one exits.`);
+                process.exit(0);
+            }
+            console.error(`context-doctor proxy: port ${port} on ${host} is in use by another program; exiting.`);
+            process.exit(1);
+        });
+    });
     server.listen(port, host, () => {
         // Print the token as <token>, never the value: this log is what people paste into bug reports.
         const prefix = opts.token ? "/t/<token>" : "";

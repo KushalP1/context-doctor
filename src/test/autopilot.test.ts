@@ -212,11 +212,11 @@ test("service definitions for macOS, Linux and Windows run the autopilot proxy w
   const args = serviceCommand("/usr/bin/node", "/opt/cd/dist/cli.js", 8787, paths);
   assert.deepEqual(args.slice(0, 6), ["/usr/bin/node", "/opt/cd/dist/cli.js", "proxy", "--autopilot", "--port", "8787"]);
   const plist = launchdPlist(args, paths.log);
-  assert.match(plist, /<key>KeepAlive<\/key><true\/>/);
+  assert.match(plist, /<key>KeepAlive<\/key><dict><key>SuccessfulExit<\/key><false\/><\/dict>/);
   assert.match(plist, /<string>--autopilot<\/string>/);
   const unit = systemdUnit(["/usr/bin/node", "/path with space/cli.js", "proxy"], "/tmp/l.log");
   assert.match(unit, /ExecStart=\/usr\/bin\/node "\/path with space\/cli.js" proxy/);
-  assert.match(unit, /Restart=always/);
+  assert.match(unit, /Restart=on-failure/);
   assert.equal(windowsTaskCommand(["C:\\node.exe", "C:\\cd\\cli.js", "proxy"]), '"C:\\node.exe" "C:\\cd\\cli.js" "proxy"');
 });
 
