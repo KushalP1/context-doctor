@@ -12,7 +12,7 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 |---|---|---|---|
 | Claude Code, terminal and IDE | every-prompt hook, autopilot proxy, compact-window, status line | savings, session, watch, report, pack, overhead, MCP tools, plugin | — |
 | Claude Code, desktop app Code tab | hook (incl. cold-resume `/compact` offer), compact-window | same as above | autopilot: the app sets its own API address |
-| Claude Desktop chat | standing MCP instructions (now incl. pack_context) | profile_context sketch, pack_context on local files, checkup prompt | no hook API, no transcript on disk ; on the author's machine Desktop has made 0 tool calls to context-doctor in its whole log: the rules are read, the tools go unused |
+| Claude Desktop chat | standing MCP instructions (now incl. pack_context) | profile_context sketch, pack_context on local files, checkup prompt | no hook API, no transcript on disk ; Desktop's log shows the tools offered on every launch and called once; `doctor` reports both |
 | Cursor agent | native postToolUse hook | MCP tools, cursor profiler, editor extension | Cursor's own models never pass through a local process |
 | Codex (app, IDE, CLI) | every-prompt hook | MCP tools (read-only, no approval needed), session | autopilot only with an API key |
 | Gemini CLI | every-prompt hook (`BeforeAgent`, with the API's own token counts); autopilot on an API key (`GOOGLE_GEMINI_BASE_URL`) | MCP tools, session, watch, overhead (GEMINI.md and the measured start-of-session cost) | autopilot cannot see Google sign-in traffic |
@@ -64,7 +64,7 @@ The idea: when a prompt itself carries a big paste, tell the model to work from 
 
 ## Later / research
 
-- **Claude Desktop does not use the tools.** Its log shows the standing instructions delivered and 0 tool calls to context-doctor, ever, on the author's machine. Worth trials of other instruction wordings and tool descriptions, which need a person driving Desktop (Claude cannot), with the log as the measure.
+- **Claude Desktop chat tool use.** Desktop's log on the author's machine: tools offered in 42 of 44 launches, called once (2026-08-24). Desktop does not log which pages are opened, so chat activity cannot be measured locally; the author's Desktop use shows up as Code-tab sessions (32 this week), which context-doctor serves through the hook. `doctor` now reports these numbers for anyone. Next step needs a person in Desktop: in a chat, ask "what's eating my context?" or run the `context_checkup` prompt, and the log shows whether the call happened
 
 ## Closed by measurement (2026-10-12): telling the model a re-read file is unchanged
 

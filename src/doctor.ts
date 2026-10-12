@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { ledgerPath } from "./ledger.js";
 import { loadConfig } from "./config.js";
 import { geminiCliPresent, geminiSettingsPath } from "./install.js";
+import { describeDesktopUsage, desktopUsage } from "./desktopusage.js";
 
 function claudeDesktopConfigPath(): string {
   switch (platform()) {
@@ -120,6 +121,9 @@ export async function runDoctor(): Promise<void> {
   const checks: Check[] = [];
 
   checks.push(checkMcpEntry("Claude Desktop", claudeDesktopConfigPath()));
+  // Desktop chat has no hook or transcript; its own logs are the only evidence the tools are used.
+  const desktop = desktopUsage();
+  if (desktop) checks.push({ label: "Desktop chat tool use", status: "ok", detail: describeDesktopUsage(desktop, recentSurfaces(7).get("claude-desktop") ?? 0) });
   checks.push(checkMcpEntry("Claude Code", join(homedir(), ".claude.json")));
   checks.push(checkMcpEntry("Cursor", join(homedir(), ".cursor", "mcp.json")));
 
