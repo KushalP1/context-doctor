@@ -14,8 +14,8 @@
  * comes with every result lets the model pick sections by heading when it does.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, extname, join, relative } from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { estimateTokens, formatTokens } from "./tokens.js";
 import { EXTRACTABLE, extractText } from "./extract.js";
 const DEFAULT_BUDGET = 4000;
@@ -92,6 +92,8 @@ function units(lines, kind) {
     }
     return out;
 }
+const isHigh = (c) => c >= 0xd800 && c <= 0xdbff;
+const isLow = (c) => c >= 0xdc00 && c <= 0xdfff;
 /** Split one source into chunks of at most `maxTokens`, along its own structure. */
 export function chunkSource(source, opts = {}) {
     const maxTokens = Math.max(50, opts.maxChunkTokens ?? DEFAULT_CHUNK_TOKENS);
@@ -105,7 +107,11 @@ export function chunkSource(source, opts = {}) {
     source.text.replace(/\r\n?/g, "\n").split("\n").forEach((line, n) => {
         while (line.length > maxChars) {
             const cut = line.lastIndexOf(" ", maxChars);
-            const at = cut > maxChars / 2 ? cut + 1 : maxChars;
+            let at = cut > maxChars / 2 ? cut + 1 : maxChars;
+            // Indexes are UTF-16 units: a cut between the two halves of an emoji or
+            // other astral character would leave a lone surrogate on each side.
+            if (isHigh(line.charCodeAt(at - 1)) && isLow(line.charCodeAt(at)))
+                at--;
             lines.push(line.slice(0, at));
             lineNo.push(n + 1);
             line = line.slice(at);
@@ -329,11 +335,6 @@ export function renderPack(r, { outlineLimit = 60 } = {}) {
 }
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "target", "__pycache__", ".venv", "venv", "vendor"]);
 export const PACK_LIMITS = { files: 500, fileBytes: 5 * 1024 * 1024, totalBytes: 50 * 1024 * 1024 };
-/**
- * Read files and directories (recursively, skipping build and dependency
- * folders, binaries, and anything past the size limits) into sources.
- * `skipped` says what was left out and why, so nothing vanishes silently.
- */
 /** Files git would consider part of the repository under `dir` (relative to it), or undefined outside git. */
 function gitFiles(dir) {
     try {
@@ -347,10 +348,37 @@ function gitFiles(dir) {
         return undefined;
     }
 }
+/** Git ignores something under `dir`: why a folder that has files can list none. */
+function gitIgnoresSome(dir) {
+    // --directory names an ignored folder once instead of every file in it.
+    const r = spawnSync("git", ["-C", dir, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 30_000 });
+    return r.status === 0 && typeof r.stdout === "string" && r.stdout.length > 0;
+}
+/** `inner` is `root` itself or somewhere under it. */
+function within(root, inner) {
+    const rel = relative(root, inner);
+    return rel === "" || (rel !== ".." && !rel.startsWith(".." + sep) && !isAbsolute(rel));
+}
+/**
+ * Read files and directories (recursively, skipping build and dependency
+ * folders, binaries, and anything past the size limits) into sources.
+ * `skipped` says what was left out and why, so nothing vanishes silently.
+ *
+ * A path named here is read even through a symlink; a symlink met inside a
+ * folder is not followed, as git does not follow one either. A link out of
+ * the folder would pack files nobody named (a tracked link to /etc/hosts, or
+ * to a secret beside the repo), a link to a parent loops, and what a link
+ * inside points at is read under its own name (or left out by .gitignore).
+ */
 export function readSources(paths, cwd = process.cwd()) {
     const sources = [];
     const skipped = [];
     let bytes = 0;
+    // Real paths already packed: a file reached twice ("." and "guide.md") is packed once, not twice under one id.
+    // Only packed ones: a binary passed over inside a folder and then named outright still gets its message.
+    const seen = new Set();
+    // Real location of the path being read: a link out of it is reported, not just dropped.
+    let root = "";
     const visit = (p, top) => {
         if (sources.length >= PACK_LIMITS.files) {
             if (top || skipped.length < 20)
@@ -359,10 +387,22 @@ export function readSources(paths, cwd = process.cwd()) {
         }
         let st;
         try {
-            st = statSync(p);
+            st = top ? statSync(p) : lstatSync(p);
         }
         catch {
             skipped.push(`${p}: not found`);
+            return;
+        }
+        if (st.isSymbolicLink()) {
+            let target;
+            try {
+                target = realpathSync(p);
+            }
+            catch {
+                return; // dangling: nothing to read
+            }
+            if (!within(root, target))
+                skipped.push(`${p}: symlink pointing outside the folder (not followed)`);
             return;
         }
         if (st.isDirectory()) {
@@ -373,6 +413,11 @@ export function readSources(paths, cwd = process.cwd()) {
             // data dumps and secrets stay out. Elsewhere, walk with SKIP_DIRS.
             const listed = top ? gitFiles(p) : undefined;
             if (listed) {
+                // A folder named outright that git lists nothing in is still not read
+                // (that is the .gitignore guarantee), but the user hears why.
+                if (listed.length === 0 && gitIgnoresSome(p)) {
+                    skipped.push(`${p}: ignored by git (.gitignore); pack reads folders as git does, so ignored files stay out. Name a file to pack it anyway`);
+                }
                 for (const f of listed)
                     visit(join(p, f), false);
                 return;
@@ -382,6 +427,15 @@ export function readSources(paths, cwd = process.cwd()) {
             return;
         }
         if (!st.isFile())
+            return;
+        let real;
+        try {
+            real = realpathSync(p);
+        }
+        catch {
+            real = resolve(p);
+        }
+        if (seen.has(real))
             return;
         if (st.size > PACK_LIMITS.fileBytes || bytes + st.size > PACK_LIMITS.totalBytes) {
             skipped.push(`${p}: too large (${Math.round(st.size / 1024)} KB)`);
@@ -395,6 +449,7 @@ export function readSources(paths, cwd = process.cwd()) {
                 skipped.push(`${p}: ${got.error}`);
             else {
                 bytes += st.size;
+                seen.add(real);
                 sources.push({ name, text: got.text });
             }
             return;
@@ -406,13 +461,21 @@ export function readSources(paths, cwd = process.cwd()) {
             return;
         }
         bytes += st.size;
+        seen.add(real);
         sources.push({ name, text: buf.toString("utf8") });
     };
     for (const p of paths) {
-        if (!existsSync(p))
+        if (!existsSync(p)) {
             skipped.push(`${p}: not found`);
-        else
-            visit(p, true);
+            continue;
+        }
+        try {
+            root = realpathSync(p);
+        }
+        catch {
+            root = resolve(p);
+        }
+        visit(p, true);
     }
     return { sources, skipped };
 }

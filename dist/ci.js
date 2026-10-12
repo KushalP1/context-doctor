@@ -10,7 +10,7 @@
  * Base contents come from `git show <base>:<path>`; nothing is checked out.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join, posix } from "node:path";
 import { estimateTokens, formatTokens } from "./tokens.js";
 import { formatUsd, pricingFor } from "./pricing.js";
@@ -76,13 +76,33 @@ function measure(paths, read) {
         visit(p, false, 0);
     return out;
 }
+/** `-z` output: without it git quotes non-ASCII paths ("caf\303\251/CLAUDE.md") and they match nothing. */
+const paths0 = (out) => (out ?? "").split("\0").filter(Boolean);
+/** A file on disk, not a directory: `@src/components` names a folder, which Claude Code does not load. */
+function isFile(p) {
+    try {
+        return statSync(p).isFile();
+    }
+    catch {
+        return false;
+    }
+}
 export function ciReport(opts = {}) {
     const cwd = opts.cwd ?? process.cwd();
     const root = git(["rev-parse", "--show-toplevel"], cwd)?.trim() ?? cwd;
-    const headList = (git(["ls-files", "--cached", "--others", "--exclude-standard"], root) ?? "").split("\n").filter(Boolean);
-    const baseList = opts.base ? (git(["ls-tree", "-r", "--name-only", opts.base], root) ?? "").split("\n").filter(Boolean) : [];
-    const head = measure(headList.filter((p) => agentFor(p)), (p) => (existsSync(join(root, p)) ? readFileSync(join(root, p), "utf8") : undefined));
-    const base = opts.base ? measure(baseList.filter((p) => agentFor(p)), (p) => git(["show", `${opts.base}:${p}`], root)) : new Map();
+    // A base git cannot resolve (a typo, or a shallow clone that never fetched
+    // it) would read as an empty tree: every file "new", and a failure that
+    // blames the PR for the whole memory set. Stop and say so instead.
+    if (opts.base && git(["rev-parse", "--verify", "--quiet", `${opts.base}^{commit}`], root) === undefined) {
+        throw new Error(`--base ${opts.base} is not a commit in ${root}: check the name, or fetch it first (a shallow clone: git fetch --depth=1 origin ${opts.base})`);
+    }
+    const headList = paths0(git(["ls-files", "-z", "--cached", "--others", "--exclude-standard"], root));
+    const baseList = opts.base ? paths0(git(["ls-tree", "-r", "-z", "--name-only", opts.base], root)) : [];
+    // ls-tree -r lists blobs only, so a path outside it (a folder, a missing file) has no base content;
+    // `git show base:folder` would print the folder's listing and count it as an imported file.
+    const baseFiles = new Set(baseList);
+    const head = measure(headList.filter((p) => agentFor(p)), (p) => (isFile(join(root, p)) ? readFileSync(join(root, p), "utf8") : undefined));
+    const base = opts.base ? measure(baseList.filter((p) => agentFor(p)), (p) => (baseFiles.has(p) ? git(["show", `${opts.base}:${p}`], root) : undefined)) : new Map();
     const files = [...new Set([...head.keys(), ...base.keys()])].sort().map((p) => ({
         path: p,
         agent: agentFor(p) ?? "Claude Code",

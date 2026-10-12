@@ -173,6 +173,9 @@ def chunk_source(source: PackSource, max_chunk_tokens: Optional[int] = None, mod
             while len(u) > max_chars:
                 cut = max((k for k in range(min(max_chars, len(u) - 1), -1, -1) if u[k] == 0x20), default=-1)
                 at = cut + 1 if cut > max_chars / 2 else max_chars
+                # Never cut between the two halves of a surrogate pair (an emoji would leave a lone half on each side).
+                if 0xD800 <= u[at - 1] <= 0xDBFF and 0xDC00 <= u[at] <= 0xDFFF:
+                    at -= 1
                 lines.append(_from16(u[:at]))
                 line_no.append(n + 1)
                 u = u[at:]

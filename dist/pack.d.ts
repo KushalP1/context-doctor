@@ -94,6 +94,17 @@ export declare const PACK_LIMITS: {
     fileBytes: number;
     totalBytes: number;
 };
+/**
+ * Read files and directories (recursively, skipping build and dependency
+ * folders, binaries, and anything past the size limits) into sources.
+ * `skipped` says what was left out and why, so nothing vanishes silently.
+ *
+ * A path named here is read even through a symlink; a symlink met inside a
+ * folder is not followed, as git does not follow one either. A link out of
+ * the folder would pack files nobody named (a tracked link to /etc/hosts, or
+ * to a secret beside the repo), a link to a parent loops, and what a link
+ * inside points at is read under its own name (or left out by .gitignore).
+ */
 export declare function readSources(paths: string[], cwd?: string): {
     sources: PackSource[];
     skipped: string[];

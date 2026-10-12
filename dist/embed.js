@@ -19,12 +19,47 @@ import { join } from "node:path";
 const EMBED_NAME = /embed|bge|e5-|gte|minilm|nomic|mxbai|arctic|snowflake/i;
 const BATCH = 64;
 const CACHE_CAP = 50_000;
-function host() {
-    const h = process.env.OLLAMA_HOST ?? "http://127.0.0.1:11434";
-    return h.startsWith("http") ? h.replace(/\/$/, "") : `http://${h}`;
+/**
+ * The URL to reach Ollama at, read from OLLAMA_HOST the way Ollama reads it:
+ * no scheme means http on 11434 (`0.0.0.0`, `localhost:8080`), an explicit
+ * http:// or https:// without a port means 80 or 443. Taking `0.0.0.0` as
+ * `http://0.0.0.0` aimed at port 80, so semantic ranking was silently off for
+ * the most common setting. 0.0.0.0 and :: are where a server listens, not an
+ * address to connect to, so they mean this machine.
+ */
+export function ollamaUrl(env = process.env.OLLAMA_HOST) {
+    let rest = (env ?? "").trim();
+    let scheme = "http";
+    let port = "11434";
+    const sep = rest.indexOf("://");
+    if (sep >= 0) {
+        scheme = rest.slice(0, sep);
+        rest = rest.slice(sep + 3);
+        if (scheme === "http")
+            port = "80";
+        else if (scheme === "https")
+            port = "443";
+    }
+    const slash = rest.indexOf("/");
+    const path = slash >= 0 ? rest.slice(slash).replace(/\/+$/, "") : "";
+    let host = slash >= 0 ? rest.slice(0, slash) : rest;
+    const m = /^(\[[^\]]*\]|[^:]*):([^:]*)$/.exec(host);
+    if (m) {
+        host = m[1];
+        if (/^\d+$/.test(m[2]) && Number(m[2]) <= 65535)
+            port = m[2];
+    }
+    else if (host.includes(":") && !host.startsWith("[")) {
+        host = `[${host}]`; // a bare IPv6 address
+    }
+    if (!host || host === "0.0.0.0")
+        host = "127.0.0.1";
+    else if (host === "[::]")
+        host = "[::1]";
+    return `${scheme}://${host}:${port}${path}`;
 }
 async function getJson(path, body, timeoutMs = 60_000) {
-    const r = await fetch(host() + path, {
+    const r = await fetch(ollamaUrl() + path, {
         method: body ? "POST" : "GET",
         headers: body ? { "content-type": "application/json" } : undefined,
         body: body ? JSON.stringify(body) : undefined,
@@ -94,7 +129,7 @@ export async function semanticRerank(chunks, query, opts = {}) {
         model = await findEmbeddingModel(opts.model);
     }
     catch {
-        return { used: false, note: `semantic ranking off: no Ollama at ${host()} (keyword ranking only)` };
+        return { used: false, note: `semantic ranking off: no Ollama at ${ollamaUrl()} (keyword ranking only)` };
     }
     if (!model)
         return { used: false, note: "semantic ranking off: Ollama has no embedding model; run `ollama pull nomic-embed-text` (keyword ranking only)" };

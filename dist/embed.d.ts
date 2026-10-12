@@ -19,6 +19,15 @@ export interface SemanticResult {
     /** Why semantic ranking was not used, or what it did. */
     note: string;
 }
+/**
+ * The URL to reach Ollama at, read from OLLAMA_HOST the way Ollama reads it:
+ * no scheme means http on 11434 (`0.0.0.0`, `localhost:8080`), an explicit
+ * http:// or https:// without a port means 80 or 443. Taking `0.0.0.0` as
+ * `http://0.0.0.0` aimed at port 80, so semantic ranking was silently off for
+ * the most common setting. 0.0.0.0 and :: are where a server listens, not an
+ * address to connect to, so they mean this machine.
+ */
+export declare function ollamaUrl(env?: string | undefined): string;
 /** The embedding model to use: the one asked for, else the first installed model that looks like one. */
 export declare function findEmbeddingModel(preferred?: string): Promise<string | undefined>;
 /**
