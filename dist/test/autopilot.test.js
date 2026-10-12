@@ -146,12 +146,20 @@ const upstream = http.createServer((req, res) => {
 await new Promise((r) => upstream.listen(0, "127.0.0.1", r));
 const dir = mkdtempSync(join(tmpdir(), "cd-apx-"));
 const pauseFile = join(dir, "paused");
-const proxy = startProxy({ port: 0, anthropicUpstream: `http://127.0.0.1:${upstream.address().port}`, autopilot: true, autopilotPauseFile: pauseFile });
+/** A state file saying this conversation was last sent two hours ago: the proxy treats one it has no record of as warm. */
+function idleState(name, body) {
+    const statePath = join(dir, name);
+    const seed = new AutoClearer({ statePath });
+    seed.apply(body, Date.now() - 2 * HOUR);
+    seed.flush();
+    return statePath;
+}
+const proxy = startProxy({ port: 0, anthropicUpstream: `http://127.0.0.1:${upstream.address().port}`, autopilot: true, autopilotPauseFile: pauseFile, autopilotStatePath: idleState("anthropic.json", conversation(1)) });
 await new Promise((r) => proxy.once("listening", r));
 const base = `http://127.0.0.1:${proxy.address().port}`;
 after(() => { proxy.close(); upstream.close(); });
 const send = (body) => fetch(`${base}/v1/messages`, { method: "POST", headers: { "content-type": "application/json", "x-api-key": "k" }, body: JSON.stringify(body) }).then((r) => r.json());
-test("proxy autopilot: first (cold) request goes out lighter; stats and /health say so", async () => {
+test("proxy autopilot: a request after an idle gap (cold) goes out lighter; stats and /health say so", async () => {
     received = [];
     await send(conversation(12));
     assert.ok(received[0].messages[2].content[0].content.startsWith("[context-doctor"));
@@ -167,7 +175,7 @@ test("proxy autopilot: OpenAI Chat Completions requests are lightened too", asyn
     received = [];
     const openaiUp = http.createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { received.push(JSON.parse(b)); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ usage: { prompt_tokens: 10, completion_tokens: 1 } })); }); });
     await new Promise((r) => openaiUp.listen(0, "127.0.0.1", r));
-    const p2 = startProxy({ port: 0, openaiUpstream: `http://127.0.0.1:${openaiUp.address().port}`, autopilot: true });
+    const p2 = startProxy({ port: 0, openaiUpstream: `http://127.0.0.1:${openaiUp.address().port}`, autopilot: true, autopilotStatePath: idleState("openai.json", openaiChat(1)) });
     await new Promise((r) => p2.once("listening", r));
     try {
         await fetch(`http://127.0.0.1:${p2.address().port}/v1/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer k" }, body: JSON.stringify(openaiChat(12)) });

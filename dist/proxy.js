@@ -111,7 +111,10 @@ function fnv1a(s) {
 }
 export function startProxy(opts = {}) {
     const port = opts.port ?? 8787;
-    const clearer = opts.autopilot ? new AutoClearer({ statePath: opts.autopilotStatePath }) : undefined;
+    // A conversation with no record (first seen since a restart, or evicted) is
+    // treated as warm: the state file keeps each conversation's last request
+    // time, and without one, clearing could rewrite a cache that is still warm.
+    const clearer = opts.autopilot ? new AutoClearer({ statePath: opts.autopilotStatePath, unseenIsWarm: true }) : undefined;
     const stats = {
         startedAt: new Date().toISOString(),
         requests: 0,
@@ -385,6 +388,7 @@ export function startProxy(opts = {}) {
     let checkpointedUsd = 0;
     let checkpointedRequests = 0;
     const checkpoint = () => {
+        clearer?.flush();
         const savedDelta = stats.tokensSaved - checkpointedTokens;
         if (savedDelta <= 0)
             return;

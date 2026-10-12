@@ -56,6 +56,18 @@ export const CLEARABLE_TOOLS = new Set([
 /** Tokens billed for one image inside a tool result (a full-size screenshot is ~1.6k on Claude). */
 const IMAGE_TOKENS = 1600;
 const HOUR = 3_600_000;
+/**
+ * Conversations' last request times are written at most this often (and on
+ * flush). A record read back after a crash can be this much older than the
+ * truth, so it is read as this much newer: when unsure, warm.
+ */
+const CONV_SAVE_MS = 60_000;
+function lastIndex(items, pred) {
+    for (let i = items.length - 1; i >= 0; i--)
+        if (pred(items[i]))
+            return i;
+    return -1;
+}
 export function clearedNote(tokens) {
     // Not "run it again": a cleared Bash result may come from a command with
     // side effects (a push, a delete), and repeating that would be wrong.
@@ -101,11 +113,13 @@ function isOpenAIChat(messages) {
 export function viewOf(body) {
     const toolName = new Map();
     const results = [];
-    let firstToolId = "";
     // Gemini generateContent: contents[].parts[] with functionCall / functionResponse.
-    // Ids are optional there, so a missing one is derived from its position
-    // (stable: history only grows) and scoped to the conversation, because the
-    // cleared set is keyed by id and positions repeat across conversations.
+    // Ids are optional there, so a missing one is derived. Position and the
+    // first user message alone repeat whenever the same prompt runs twice, and
+    // the cleared set is keyed by id: run 2 then had run 1's clearings applied
+    // to its own results, newest included. The response's own content is part
+    // of the derived id, so another run's result is another id unless it is
+    // byte-identical at the same place (and apply() still requires it eligible).
     if (Array.isArray(body.contents)) {
         const units = body.contents;
         const firstUser = units.find((u) => u?.role === "user")?.parts;
@@ -118,12 +132,12 @@ export function viewOf(body) {
                 const call = p?.functionCall;
                 const resp = p?.functionResponse;
                 if (call && typeof call === "object") {
-                    const id = typeof call.id === "string" && call.id ? call.id : `gemini:${scope}:${i}:${j}`;
-                    toolName.set(id, String(call.name ?? ""));
-                    firstToolId ||= id;
+                    if (typeof call.id === "string" && call.id)
+                        toolName.set(call.id, String(call.name ?? ""));
                 }
                 else if (resp && typeof resp === "object") {
-                    const id = typeof resp.id === "string" && resp.id ? resp.id : `gemini:${scope}:${i}:${j}`;
+                    const content = createHash("sha1").update(JSON.stringify(resp.response ?? "")).digest("hex").slice(0, 12);
+                    const id = typeof resp.id === "string" && resp.id ? resp.id : `gemini:${scope}:${i}:${j}:${content}`;
                     // The response names its tool, so it classifies on its own.
                     if (!toolName.has(id))
                         toolName.set(id, String(resp.name ?? ""));
@@ -131,7 +145,8 @@ export function viewOf(body) {
                 }
             });
         });
-        return { format: "gemini", units, toolName, results, firstUser, firstToolId, ttlMs: requestTtlMs(body) };
+        const seenUpTo = lastIndex(units, (u) => u?.role === "model");
+        return { format: "gemini", units, toolName, results, firstUser, seenUpTo, ttlMs: requestTtlMs(body) };
     }
     if (Array.isArray(body.input)) {
         const units = body.input;
@@ -139,19 +154,23 @@ export function viewOf(body) {
             const t = it?.type;
             if ((t === "function_call" || t === "custom_tool_call" || t === "local_shell_call") && typeof it.call_id === "string") {
                 toolName.set(it.call_id, t === "local_shell_call" ? "shell" : String(it.name ?? ""));
-                firstToolId ||= it.call_id;
             }
             else if ((t === "function_call_output" || t === "custom_tool_call_output" || t === "local_shell_call_output") && typeof it.call_id === "string") {
                 results.push({ unit: i, id: it.call_id, content: it.output, set: (note) => { units[i] = { ...it, output: note }; } });
             }
         });
         const firstUser = units.find((u) => u?.role === "user")?.content;
-        return { format: "openai-responses", units, toolName, results, firstUser, firstToolId, ttlMs: requestTtlMs(body) };
+        // Model-written items: its tool calls, reasoning and assistant messages.
+        // With previous_response_id the input holds none of them, so every result
+        // in it is new to the model.
+        const seenUpTo = lastIndex(units, (u) => u?.role === "assistant" || ["function_call", "custom_tool_call", "local_shell_call", "reasoning"].includes(String(u?.type)));
+        return { format: "openai-responses", units, toolName, results, firstUser, seenUpTo, ttlMs: requestTtlMs(body) };
     }
     const messages = body.messages;
     if (!Array.isArray(messages) || messages.length === 0)
         return undefined;
     const firstUser = messages.find((m) => m?.role === "user")?.content;
+    const seenUpTo = lastIndex(messages, (m) => m?.role === "assistant");
     if (isOpenAIChat(messages)) {
         messages.forEach((m, i) => {
             if (m?.role === "assistant" && Array.isArray(m.tool_calls)) {
@@ -159,14 +178,13 @@ export function viewOf(body) {
                     if (typeof c?.id !== "string")
                         continue;
                     toolName.set(c.id, String(c.function?.name ?? c.name ?? ""));
-                    firstToolId ||= c.id;
                 }
             }
             else if (m?.role === "tool" && typeof m.tool_call_id === "string") {
                 results.push({ unit: i, id: m.tool_call_id, content: m.content, set: (note) => { messages[i] = { ...m, content: note }; } });
             }
         });
-        return { format: "openai-chat", units: messages, toolName, results, firstUser, firstToolId, ttlMs: requestTtlMs(body) };
+        return { format: "openai-chat", units: messages, toolName, results, firstUser, seenUpTo, ttlMs: requestTtlMs(body) };
     }
     messages.forEach((m, i) => {
         if (!Array.isArray(m?.content))
@@ -175,25 +193,36 @@ export function viewOf(body) {
         blocks.forEach((b, j) => {
             if (m.role === "assistant" && b?.type === "tool_use" && typeof b.id === "string") {
                 toolName.set(b.id, String(b.name ?? ""));
-                firstToolId ||= b.id;
             }
             else if (m.role === "user" && b?.type === "tool_result" && typeof b.tool_use_id === "string") {
                 results.push({ unit: i, id: b.tool_use_id, content: b.content, set: (note) => { blocks[j] = { ...b, content: note }; } });
             }
         });
     });
-    return { format: "anthropic", units: messages, toolName, results, firstUser, firstToolId, ttlMs: requestTtlMs(body) };
+    return { format: "anthropic", units: messages, toolName, results, firstUser, seenUpTo, ttlMs: requestTtlMs(body) };
 }
 /**
- * A conversation's identity: its first user message plus its first tool call
- * id. The message alone can repeat across sessions (the same project context
- * opens every session in a folder); tool call ids are unique per session.
+ * A conversation's identity, the same from its first request on: the first
+ * user message, plus the client's own session tag when it sends one
+ * (Anthropic metadata.user_id, which Claude Code fills per session; OpenAI
+ * prompt_cache_key). The first user message is read without cache_control:
+ * Claude Code marks the last message, which on request 1 is the first one,
+ * and moves the marker on request 2. Through 0.31.1 the key also held the
+ * first tool call id, so request 2 (the first tool round) was a new,
+ * never-seen conversation, called cold eight seconds after request 1.
+ * Two sessions that open with the same message and send no tag share a key;
+ * that only ever makes one look warm when the other is, the safe direction.
  * The model is left out on purpose: switching models mid-session keeps the
  * conversation (and the cleared set) but not the cache, which the TTL check
  * cannot see, so a model switch is treated as warm, the safe direction.
  */
-function conversationKey(view) {
-    return createHash("sha1").update(JSON.stringify(view.firstUser ?? "").slice(0, 4000)).update(view.firstToolId).digest("hex");
+function conversationKey(view, body) {
+    const first = JSON.stringify(view.firstUser ?? "", (k, v) => (k === "cache_control" ? undefined : v)) ?? "";
+    const h = createHash("sha1").update(first.slice(0, 4000));
+    const tag = body.metadata?.user_id ?? body.prompt_cache_key;
+    if (typeof tag === "string")
+        h.update("\0").update(tag);
+    return h.digest("hex");
 }
 export class AutoClearer {
     cleared = new Map();
@@ -202,6 +231,9 @@ export class AutoClearer {
     convs = new Map();
     opts;
     dirty = false;
+    /** Conversation times changed since the last save (written at most every CONV_SAVE_MS, or on flush). */
+    convsDirty = false;
+    lastSave = 0;
     constructor(options = {}) {
         this.opts = {
             keepRecent: options.keepRecent ?? 3,
@@ -224,12 +256,15 @@ export class AutoClearer {
                 return none("no messages");
             // Gemini puts the model in the URL, not the body; the proxy passes it.
             const model = typeof body.model === "string" ? body.model : modelHint;
-            const key = conversationKey(view);
+            const key = conversationKey(view, body);
             const conv = this.convs.get(key);
             const cold = conv ? now - conv.last > view.ttlMs : !this.opts.unseenIsWarm;
+            // Delete first so the map stays in last-used order and the cap evicts idle conversations.
+            this.convs.delete(key);
             this.convs.set(key, { last: now, requests: (conv?.requests ?? 0) + 1 });
             if (this.convs.size > 2000)
                 this.convs.delete(this.convs.keys().next().value);
+            this.convsDirty = true;
             const results = view.results.map((r) => {
                 let tokens = this.sizes.get(r.id);
                 if (tokens === undefined) {
@@ -240,8 +275,11 @@ export class AutoClearer {
                 }
                 return { ...r, tokens };
             });
+            // Results that arrive with this request (after the model's last turn)
+            // are not eligible however many there are: the model has not read them.
             const eligible = results.slice(0, Math.max(0, results.length - this.opts.keepRecent))
-                .filter((r) => CLEARABLE_TOOLS.has(view.toolName.get(r.id) ?? ""));
+                .filter((r) => r.unit <= view.seenUpTo && CLEARABLE_TOOLS.has(view.toolName.get(r.id) ?? ""));
+            const eligibleIds = new Set(eligible.map((r) => r.id));
             const pending = eligible.filter((r) => !this.cleared.has(r.id) && r.tokens > 200);
             const pendingTokens = pending.reduce((n, r) => n + r.tokens, 0);
             let reason = "nothing to clear";
@@ -267,12 +305,14 @@ export class AutoClearer {
             if (taken.length)
                 this.dirty = true;
             // Apply every clearing ever decided for this conversation, so the
-            // prefix is identical to what was sent last time.
+            // prefix is identical to what was sent last time. A remembered id must
+            // still be eligible here: a derived id (Gemini without ids) can recur in
+            // another conversation, where it must not cost that one its newest result.
             let removed = 0;
             let changed = false;
             let firstChanged = -1;
             for (const r of results) {
-                if (!this.cleared.has(r.id))
+                if (!this.cleared.has(r.id) || !eligibleIds.has(r.id))
                     continue;
                 const note = clearedNote(this.cleared.get(r.id));
                 if (r.content === note)
@@ -307,6 +347,10 @@ export class AutoClearer {
         const saving = 0.1 * pendingTokens * requestsSoFar;
         return saving >= this.opts.paybackSafety * rewriteCost;
     }
+    /** Write pending state now (the proxy calls this on a timer and before it exits). */
+    flush() {
+        this.save(true);
+    }
     load() {
         if (!this.opts.statePath || !existsSync(this.opts.statePath))
             return;
@@ -314,20 +358,32 @@ export class AutoClearer {
             const data = JSON.parse(readFileSync(this.opts.statePath, "utf8"));
             for (const [id, tokens] of data.cleared ?? [])
                 this.cleared.set(id, tokens);
+            // Each conversation's last request time, so a restart does not make
+            // every open conversation "unseen" (cold) and rewrite a warm cache.
+            for (const [key, last, requests] of data.convs ?? []) {
+                if (typeof key === "string" && typeof last === "number")
+                    this.convs.set(key, { last: last + CONV_SAVE_MS, requests: Number(requests) || 1 });
+            }
         }
         catch {
             /* a corrupt state file only means results may be re-cleared once */
         }
     }
-    save() {
-        if (!this.dirty || !this.opts.statePath)
+    save(force = false) {
+        if (!this.opts.statePath)
+            return;
+        const due = this.convsDirty && (force || Date.now() - this.lastSave >= CONV_SAVE_MS);
+        if (!this.dirty && !due)
             return;
         this.dirty = false;
+        this.convsDirty = false;
+        this.lastSave = Date.now();
         try {
             // Newest 50k ids: far more than any live session holds.
             const entries = [...this.cleared.entries()].slice(-50_000);
+            const convs = [...this.convs.entries()].map(([k, c]) => [k, c.last, c.requests]);
             mkdirSync(dirname(this.opts.statePath), { recursive: true });
-            writeFileSync(this.opts.statePath, JSON.stringify({ cleared: entries }));
+            writeFileSync(this.opts.statePath, JSON.stringify({ cleared: entries, convs }));
         }
         catch {
             /* persistence is best effort */

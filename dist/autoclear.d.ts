@@ -51,13 +51,21 @@ export interface AutoClearOptions {
      * warm clearing off, cold cache only (the never-worse setting).
      */
     paybackSafety?: number;
-    /** Where cleared ids persist so a restart does not un-clear (and re-bill) them. */
+    /**
+     * Where cleared ids persist so a restart does not un-clear (and re-bill)
+     * them, with each conversation's last request time so a restart does not
+     * mistake a warm cache for a cold one.
+     */
     statePath?: string;
     /**
-     * Treat a conversation this instance has never seen as warm-cached (so
-     * nothing is cleared on it). The proxy sees every request and leaves this
-     * off; an in-process wrapper in a fresh process cannot know whether another
-     * process just sent the conversation, so it turns this on.
+     * Treat a conversation this instance has no record of as warm-cached (so
+     * nothing is cleared on it). Both the proxy and the in-process wrapper turn
+     * this on: a wrapper in a fresh process cannot know whether another process
+     * just sent the conversation, and a restarted proxy cannot know either
+     * unless the conversation's last request time was persisted (statePath).
+     * Calling a warm cache cold pays a full rewrite; calling a cold one warm
+     * only delays a free clearing to the next idle gap. Off here so a bare
+     * AutoClearer (the savings replay) keeps its first-request-is-cold model.
      */
     unseenIsWarm?: boolean;
 }
@@ -93,7 +101,12 @@ interface View {
     toolName: Map<string, string>;
     results: Array<Omit<Found, "tokens">>;
     firstUser: unknown;
-    firstToolId: string;
+    /**
+     * Index of the last unit the model wrote (-1 for none). Results after it
+     * arrive with this request: the model has not read them yet, so they are
+     * never eligible, however many there are (six parallel reads).
+     */
+    seenUpTo: number;
     ttlMs: number;
 }
 export declare function clearedNote(tokens: number): string;
@@ -114,6 +127,9 @@ export declare class AutoClearer {
     private convs;
     private opts;
     private dirty;
+    /** Conversation times changed since the last save (written at most every CONV_SAVE_MS, or on flush). */
+    private convsDirty;
+    private lastSave;
     constructor(options?: AutoClearOptions);
     /**
      * Rewrite `body` in place: an Anthropic Messages, OpenAI Chat Completions or
@@ -129,6 +145,8 @@ export declare class AutoClearer {
      * cover the rewrite `paybackSafety` times over.
      */
     private shouldClearWarm;
+    /** Write pending state now (the proxy calls this on a timer and before it exits). */
+    flush(): void;
     private load;
     private save;
 }

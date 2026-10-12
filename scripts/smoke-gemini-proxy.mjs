@@ -6,6 +6,10 @@
 //   HOME=$(mktemp -d) node scripts/smoke-gemini-proxy.mjs    (from the repo root, after npm run build)
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { AutoClearer } from "../dist/autoclear.js";
 
 const seen = [];
 const up = createServer((req, res) => {
@@ -24,7 +28,13 @@ const up = createServer((req, res) => {
 });
 await new Promise((r) => up.listen(0, "127.0.0.1", r));
 const freePort = await new Promise((r) => { const s = createServer().listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => r(p)); }); });
-const proxy = spawn(process.execPath, [new URL("../dist/cli.js", import.meta.url).pathname, "proxy", "--autopilot", "--port", String(freePort), "--upstream-google", `http://127.0.0.1:${up.address().port}`], { stdio: ["ignore", "pipe", "pipe"], env: process.env });
+// Autopilot clears only on a cold cache, and treats a conversation it has no
+// record of as warm: record the one below as last sent two hours ago.
+const statePath = join(mkdtempSync(join(tmpdir(), "cd-smoke-")), "state.json");
+const seed = new AutoClearer({ statePath });
+seed.apply({ contents: [{ role: "user", parts: [{ text: "fix the build" }] }] }, Date.now() - 7_200_000, "gemini-3-pro");
+seed.flush();
+const proxy = spawn(process.execPath, [new URL("../dist/cli.js", import.meta.url).pathname, "proxy", "--autopilot", "--port", String(freePort), "--autopilot-state", statePath, "--upstream-google", `http://127.0.0.1:${up.address().port}`], { stdio: ["ignore", "pipe", "pipe"], env: process.env });
 await new Promise((r) => proxy.stderr.on("data", (d) => /listening/.test(String(d)) && r()));
 const base = `http://127.0.0.1:${freePort}`;
 const H = { "content-type": "application/json", "x-goog-api-key": "AIza-test-not-real" };
@@ -50,7 +60,7 @@ check(first < 250 && text.includes("finishReason"), "streamGenerateContent arriv
 check(seen.at(-1).url === "/v1beta/models/gemini-3-pro:streamGenerateContent?alt=sse", "path and query string forwarded");
 const sent = seen.at(-1).body.contents.flatMap((c) => c.parts).filter((p) => p.functionResponse);
 const cleared = sent.filter((p) => JSON.stringify(p.functionResponse.response).length < big.length).length;
-check(cleared > 0 && sent.at(-1).functionResponse.response.output === big, "cold first request: stale functionResponse cleared, the recent ones kept", `${cleared} of ${sent.length} cleared`);
+check(cleared > 0 && sent.at(-1).functionResponse.response.output === big, "cold request (idle 2 h): stale functionResponse cleared, the recent ones kept", `${cleared} of ${sent.length} cleared`);
 check(seen.at(-1).body.contents.flatMap((c) => c.parts).filter((p) => p.functionCall).length === 8, "every functionCall kept (calls and responses stay paired)");
 
 await fetch(`${base}/v1/models/gemini-3-flash:generateContent`, { method: "POST", headers: H, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "hi" }] }] }) });
