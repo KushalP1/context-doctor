@@ -89,6 +89,12 @@ test("uninstall switches autopilot off: Claude Code is no longer pointed at a de
     for (const f of [".context-doctor-autopilot-paused", ".context-doctor-autopilot-cleared.json", ".context-doctor-proxy.log", ".context-doctor-proxy-restart", ".context-doctor-calibration.json"]) {
         writeFileSync(join(claude, f), "{}");
     }
+    // The service files this home's autopilot installed: `off` only asks the
+    // service manager to remove a service whose file is in this home.
+    mkdirSync(join(home, "Library", "LaunchAgents"), { recursive: true });
+    writeFileSync(join(home, "Library", "LaunchAgents", "com.gai-ventures.context-doctor.proxy.plist"), "<plist/>");
+    mkdirSync(join(home, ".config", "systemd", "user"), { recursive: true });
+    writeFileSync(join(home, ".config", "systemd", "user", "context-doctor-proxy.service"), "[Service]\n");
     const stubs = serviceStubs();
     const r = await run(home, ["uninstall"], { PATH: `${stubs.dir}${delimiter}${process.env.PATH ?? ""}` });
     assert.equal(r.code, 0, r.err);
