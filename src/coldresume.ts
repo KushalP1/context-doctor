@@ -33,6 +33,30 @@ import { formatTokens, realModel } from "./tokens.js";
 
 /** Just past Claude Code's one-hour cache, as Claude Code's own idle clearing uses. */
 export const COLD_IDLE_MS = 65 * 60_000;
+/** Margin past a cache's lifetime before a return counts as cold. */
+const COLD_MARGIN_MS = 5 * 60_000;
+const HOUR_MS = 3_600_000;
+const FIVE_MIN_MS = 5 * 60_000;
+
+/**
+ * How long the cache entry a reply left behind lives: one hour when the reply
+ * wrote the 1-hour cache, five minutes when it wrote only the 5-minute one,
+ * and otherwise whatever the last write before it used (a read refreshes an
+ * entry at its own lifetime). Claude Code's main thread wrote the 1-hour cache
+ * until 2.1.295, which often writes the 5-minute one (in the author's last 3
+ * days, 1,307 main-thread replies wrote only 5-minute entries): a gate fixed
+ * at 65 minutes missed every return between 10 and 65 minutes to those
+ * sessions, cold as they were. Undefined when nothing says.
+ */
+function writtenTtlMs(u: any): number | undefined {
+  // Only an explicit split says: cacheWriteSplit books unsplit writes as
+  // 5-minute for pricing, which would make every old transcript look short-lived.
+  const split = u?.cache_creation;
+  if (!split) return undefined;
+  if ((split.ephemeral_1h_input_tokens ?? 0) > 0) return HOUR_MS;
+  if ((split.ephemeral_5m_input_tokens ?? 0) > 0) return FIVE_MIN_MS;
+  return undefined;
+}
 /** Below this, a rebuilt cache is cheap and compaction is not worth the interruption. */
 export const COLD_MIN_TOKENS = 150_000;
 /** What a compacted session restarts from: system prompt and tools plus the summary. */
@@ -70,9 +94,11 @@ function tailLines(path: string, bytes = 256 * 1024): string[] {
  * Is the prompt being submitted now a return to a large, cache-cold session?
  * Reads only the transcript's tail. Undefined when not (or when unreadable).
  */
-export function detectColdResume(path: string, now = Date.now(), idleMs = COLD_IDLE_MS, minTokens = COLD_MIN_TOKENS): ColdResume | undefined {
+export function detectColdResume(path: string, now = Date.now(), idleMs?: number, minTokens = COLD_MIN_TOKENS): ColdResume | undefined {
   try {
-    for (const line of tailLines(path)) {
+    const lines = tailLines(path);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
       let e: any;
       try { e = JSON.parse(line); } catch { continue; }
       // Compacted since the last reply: the old usage no longer describes the
@@ -87,7 +113,17 @@ export function detectColdResume(path: string, now = Date.now(), idleMs = COLD_I
       const lastReplyAt = Date.parse(e.timestamp);
       if (!Number.isFinite(lastReplyAt)) return undefined;
       const idle = now - lastReplyAt;
-      if (idle < idleMs || tokens < minTokens) return undefined;
+      // The cache lives as long as the last write said (see writtenTtlMs);
+      // with nothing recorded, the hour Claude Code used to write.
+      let ttl = writtenTtlMs(u);
+      for (let j = i + 1; ttl === undefined && j < lines.length; j++) {
+        try {
+          const earlier = JSON.parse(lines[j]);
+          if (earlier?.type === "assistant" && !earlier.isSidechain) ttl = writtenTtlMs(earlier.message?.usage);
+        } catch { /* partial line at the tail's start */ }
+      }
+      const gate = idleMs ?? (ttl ?? HOUR_MS) + COLD_MARGIN_MS;
+      if (idle < gate || tokens < minTokens) return undefined;
       const model = realModel(e.message?.model);
       const p = pricingFor(model);
       // The rebuild is written at the TTL this session writes at: Claude
@@ -199,8 +235,10 @@ export interface ColdResumeEvent {
  * session's copy of its parent's history shapes the timeline, but a resume
  * in it was counted under the transcript that met it first.
  */
-export function coldResumeEvents(path: string, idleMs = COLD_IDLE_MS, minTokens = COLD_MIN_TOKENS, runRows?: Set<string>): ColdResumeEvent[] {
-  type Req = { at: number; total: number; price?: ModelPricing; copy: boolean } | "compact";
+export function coldResumeEvents(path: string, idleMs?: number, minTokens = COLD_MIN_TOKENS, runRows?: Set<string>): ColdResumeEvent[] {
+  /** `ttl`: how long the cache this request left behind lives (see writtenTtlMs). */
+  type Req = { at: number; total: number; price?: ModelPricing; copy: boolean; ttl: number } | "compact";
+  let ttl = HOUR_MS;
   const reqs: Req[] = [];
   let model: string | undefined, writes5m = 0, writes1h = 0;
   const sighting = replyCounter(runRows);
@@ -220,7 +258,8 @@ export function coldResumeEvents(path: string, idleMs = COLD_IDLE_MS, minTokens 
     const w = cacheWriteSplit(u);
     writes5m += w.fiveMinute;
     writes1h += w.oneHour;
-    reqs.push({ at, total, price: pricingFor(model), copy: seen === "copy" });
+    ttl = writtenTtlMs(u) ?? ttl;
+    reqs.push({ at, total, price: pricingFor(model), copy: seen === "copy", ttl });
   });
   const mix = writeMultiplier(writes5m, writes1h);
   const real = reqs.filter((r) => r !== "compact");
@@ -229,16 +268,18 @@ export function coldResumeEvents(path: string, idleMs = COLD_IDLE_MS, minTokens 
   for (let i = 1; i < reqs.length; i++) {
     const a = reqs[i - 1], b = reqs[i];
     if (a === "compact" || b === "compact") continue;
-    if (b.at - a.at <= idleMs || b.total < minTokens) continue;
+    // Cold once the gap outlives the cache the previous request left behind.
+    const gate = (r: { ttl: number }) => idleMs ?? r.ttl + COLD_MARGIN_MS;
+    if (b.at - a.at <= gate(a) || b.total < minTokens) continue;
     if (b.copy || !b.price) continue;
     const removed = Math.max(0, b.total - AFTER_COMPACT_TOKENS);
-    let saved = 0, n = 0, prev = b.at;
+    let saved = 0, n = 0, prev: { at: number; ttl: number } = b;
     for (const c of reqs.slice(i + 1)) {
       if (c === "compact") break;
-      if (c.at - prev > idleMs && c.total >= minTokens) break;
+      if (c.at - prev.at > gate(prev) && c.total >= minTokens) break;
       const p = c.price ?? b.price;
-      saved += removed * (c.at - prev > 3_600_000 ? mix * p.inputPerM : p.cacheReadPerM);
-      prev = c.at;
+      saved += removed * (c.at - prev.at > prev.ttl ? mix * p.inputPerM : p.cacheReadPerM);
+      prev = c;
       n++;
     }
     // The compaction re-reads the context just rebuilt and writes a summary;

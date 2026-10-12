@@ -85,3 +85,23 @@ test("savings: a forked session's copy of a cold resume is counted once", () => 
     assert.equal(pair.coldResumes, 1, "the fork's copy of the parent's resume is the same resume");
     assert.equal(estimateSavings(30, {}, [fork, parent]).coldResumes, 1, "whichever file comes first");
 });
+test("a session writing the 5-minute cache is cold after ~10 idle minutes; one writing the hour is not", () => {
+    const reqs = [{ at: T0 - 60_000, prompt: 380_000, write: 380_000 }, { at: T0, prompt: 400_000, write: 20_000 }];
+    const twentyMin = T0 + 20 * 60_000;
+    const short = detectColdResume(write(rows(reqs, "5m")), twentyMin);
+    assert.ok(short, "5-minute cache, 20 minutes idle: cold");
+    assert.equal(detectColdResume(write(rows(reqs, "5m")), T0 + 7 * 60_000), undefined, "within the margin: not claimed");
+    assert.equal(detectColdResume(write(rows(reqs, "1h")), twentyMin), undefined, "1-hour cache, 20 minutes: still warm");
+    assert.equal(detectColdResume(write(rows(reqs, "none")), twentyMin), undefined, "nothing recorded: the hour, as before");
+    // A reply that only read the cache keeps the lifetime of the last write.
+    const readOnly = [...reqs, { at: T0 + 60_000, prompt: 400_000, write: 0 }];
+    assert.ok(detectColdResume(write(rows(readOnly, "5m")), T0 + 60_000 + 20 * 60_000), "a pure read keeps the 5-minute lifetime");
+});
+test("savings counts a 20-minute return to a 5-minute-cache session as cold, and prices its re-reads as re-writes", () => {
+    const base = [{ at: T0, prompt: 400_000, write: 400_000 }, { at: T0 + 20 * 60_000, prompt: 410_000, write: 410_000 }];
+    const after = Array.from({ length: 5 }, (_, k) => ({ at: T0 + 21 * 60_000 + k * 60_000, prompt: 410_000 + k, write: 1 }));
+    const short = coldResumeEvents(write(rows([...base, ...after], "5m")));
+    assert.equal(short.length, 1, "the 20-minute gap is a cold return");
+    assert.equal(short[0].messagesAfter, 5);
+    assert.equal(coldResumeEvents(write(rows([...base, ...after], "1h"))).length, 0, "the same gap on the hour cache is warm");
+});
