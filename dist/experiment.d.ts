@@ -49,6 +49,7 @@ export interface ArmResult {
 }
 /** Build the argv for one arm — exported so the dry run and the tests see exactly what runs. */
 export declare function claudeArgs(opts: ExperimentOptions, arm: "fresh" | "existing"): string[];
+export declare function findTranscript(sessionId: string, cwd: string): string | undefined;
 export declare function runExperiment(opts: ExperimentOptions): {
     arms: ArmResult[];
     startCommit?: string;

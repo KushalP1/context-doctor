@@ -22,6 +22,8 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { forEachLine, listSessions } from "./session.js";
 import { estimateTokens } from "./tokens.js";
+// Type only: erased at compile time, so dist/ never loads the SDK at startup.
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 
 const CLAUDE = "claude-opus-5";
 
@@ -101,22 +103,35 @@ export function mcpUsage(days = 30, paths?: string[]): McpUsage {
 
 /** Connect to one server the way a client does and size its tool list. */
 export async function measureServer(cfg: McpServerConfig, timeoutMs = 15_000): Promise<McpServerSize> {
-  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-  const client = new Client({ name: "context-doctor-overhead", version: "1" });
-  let transport: any;
-  if (cfg.command) {
-    const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
-    transport = new StdioClientTransport({
-      command: cfg.command,
-      args: cfg.args ?? [],
-      env: { ...(process.env as Record<string, string>), ...(cfg.env ?? {}) },
-      stderr: "ignore",
-    });
-  } else if (cfg.url && cfg.type !== "sse") {
-    const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
-    transport = new StreamableHTTPClientTransport(new URL(cfg.url));
-  } else {
+  if (!cfg.command && !(cfg.url && cfg.type !== "sse")) {
     return { name: cfg.name, error: cfg.type === "sse" ? "SSE server: not measured" : "no command or url" };
+  }
+  // The SDK is a dependency of the npm package, but the Claude Code plugin runs
+  // dist/ from a git checkout with no node_modules. An import failure there
+  // used to abort the whole `overhead --mcp` report; it is a per-server note.
+  let client: Client;
+  let transport: any;
+  try {
+    const sdk = await import("@modelcontextprotocol/sdk/client/index.js");
+    client = new sdk.Client({ name: "context-doctor-overhead", version: "1" });
+    if (cfg.command) {
+      const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
+      transport = new StdioClientTransport({
+        command: cfg.command,
+        args: cfg.args ?? [],
+        env: { ...(process.env as Record<string, string>), ...(cfg.env ?? {}) },
+        stderr: "ignore",
+      });
+    } else {
+      const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+      transport = new StreamableHTTPClientTransport(new URL(cfg.url!));
+    }
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException)?.code;
+    if (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") {
+      return { name: cfg.name, error: "MCP SDK not installed (not measured)" };
+    }
+    return { name: cfg.name, error: String((e as Error)?.message ?? e).split("\n")[0].slice(0, 100) };
   }
   let timer: NodeJS.Timeout | undefined;
   const work = (async () => {

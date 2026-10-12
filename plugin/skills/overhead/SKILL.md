@@ -9,7 +9,7 @@ Run this and show the user its output as it is (it is already formatted):
 node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" overhead --mcp
 ```
 
-`--mcp` launches each configured MCP server once to size its tool definitions; drop it if the user does not want their servers started. Then say in one or two sentences which item costs the most and what to do about it.
+`--mcp` launches each configured MCP server once to size its tool definitions; drop it if the user does not want their servers started. If the servers show "MCP SDK not installed", this plugin copy cannot launch them; `npx -y context-doctor overhead --mcp` can, if the user wants the sizes. Then say in one or two sentences which item costs the most and what to do about it.
 
 If a memory file is flagged as large, offer to split it. Show the plan first, which changes nothing:
 

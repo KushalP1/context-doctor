@@ -29,6 +29,7 @@ export interface DashboardData {
         model?: string;
     }>;
     proxy: {
+        startedAt?: string;
         requests: number;
         optimizedRequests: number;
         tokensSaved: number;
@@ -41,6 +42,15 @@ export interface DashboardData {
     } | null;
 }
 export declare function collectDashboardData(proxyPort?: number): Promise<DashboardData>;
+/**
+ * Whether a request's Host header names this machine's loopback.
+ *
+ * Listening on 127.0.0.1 is not enough on its own: a web page can rebind its
+ * own hostname to 127.0.0.1 (DNS rebinding) and then read /api/data, session
+ * titles included, as same-origin. Such a request still carries the attacker's
+ * hostname in Host, so only loopback names are answered.
+ */
+export declare function isLoopbackHost(host: string | undefined, port: number): boolean;
 export declare function startDashboard(opts?: {
     port?: number;
     proxyPort?: number;

@@ -39,9 +39,12 @@ export function claudeArgs(opts, arm) {
         args.push("--resume", opts.existing, "--fork-session");
     return args;
 }
-function findTranscript(sessionId, cwd) {
-    // Claude Code keys project dirs by the cwd with separators replaced.
-    const projectDir = join(homedir(), ".claude", "projects", cwd.replace(/[\\/:]/g, "-"));
+export function findTranscript(sessionId, cwd) {
+    // Claude Code keys project dirs by the cwd with EVERY non-alphanumeric
+    // character replaced (/Users/me/.claude/x_y -> -Users-me--claude-x-y), as
+    // overhead.ts does. Replacing only separators missed any cwd with a dot,
+    // underscore or space, and the "live context" row silently disappeared.
+    const projectDir = join(homedir(), ".claude", "projects", cwd.replace(/[^A-Za-z0-9]/g, "-"));
     const candidate = join(projectDir, `${sessionId}.jsonl`);
     return existsSync(candidate) ? candidate : undefined;
 }
