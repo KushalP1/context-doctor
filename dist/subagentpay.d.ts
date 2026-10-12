@@ -9,8 +9,11 @@
  *
  *   in a subagent = its bill
  *   in the parent = (bill - its own startup context) x parent/subagent price
- *                 + parent context at launch x steps x 0.1 x parent input price
- *                 + (read - returned) x (1.25 + 0.1 x later parent requests) x parent input price
+ *                 + parent context at launch x steps x parent cache-read price
+ *                 + (read - returned) x (W + 0.1 x later parent requests) x parent input price
+ *
+ * W is the parent's own cache-write price (1.25x input at the 5-minute TTL,
+ * 2x at 1 hour, weighted by what the parent's usage records it wrote).
  *
  * "Read" is the tool output the subagent pulled in; "returned" is what the
  * parent received (tool result, or a background agent's task notification);

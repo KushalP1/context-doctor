@@ -4,11 +4,13 @@
  * Tokens and dollars per session say little on their own; a session that
  * shipped five commits and one that shipped none can cost the same. This
  * prices each recent Claude Code session from the usage its transcript
- * records (input, cache writes at 1.25x, cache reads at 0.1x, output), counts
- * the commits the session itself made (successful `git commit` calls in its
- * shell tool, in whichever repository), and reports per project: sessions,
- * cost, commits, cost per commit, and how much went to sessions that
- * committed nothing.
+ * records (input, cache writes by TTL, cache reads, output; each request at
+ * its own model's price), counts the commits the session itself made
+ * (successful `git commit` calls in its shell tool, in whichever
+ * repository), and reports per project: sessions, cost, commits, cost per
+ * commit, and how much went to sessions that committed nothing. Only
+ * requests and commits inside the period count, and a forked session's
+ * copy of its parent's history counts once.
  *
  * Counting from the transcript attributes each commit to exactly one session
  * and finds commits in nested repositories; a time window over `git log`
@@ -18,13 +20,22 @@
  */
 import { realModel } from "./tokens.js";
 import { basename } from "node:path";
-import { forEachLine, listSessions } from "./session.js";
-import { formatUsd, pricingFor } from "./pricing.js";
-/** One session's bill, priced as the prompt cache bills it, from the usage the transcript records. */
-export function sessionCost(path) {
-    let cwd, model, lastId;
+import { forEachLine, listSessions, outputSettler, replyCounter } from "./session.js";
+import { formatUsd, pricingFor, usageCost } from "./pricing.js";
+/**
+ * One session's bill, priced as the prompt cache bills it, from the usage the
+ * transcript records. `since` counts only requests and commits from then on,
+ * each by its own timestamp: a month-old session touched today is not a
+ * month of today's spend (`tasks --days 1` reported $760 where $244 fell in
+ * the day). Rows without a timestamp count with their file.
+ */
+export function sessionCost(path, since = 0, counted = { rows: new Set(), commits: new Set() }) {
+    let cwd, model;
     let start = Infinity, end = 0, usd = 0, requests = 0, commits = 0;
     const commitCalls = new Map();
+    const sighting = replyCounter(counted.rows);
+    const settle = outputSettler();
+    const inWindow = (e) => { const at = Date.parse(e.timestamp); return !Number.isFinite(at) || at >= since; };
     forEachLine(path, (line) => {
         if (!line.includes('"usage"') && !line.includes('"tool_result"') && cwd !== undefined)
             return;
@@ -52,28 +63,43 @@ export function sessionCost(path) {
             for (const b of content) {
                 if (b?.type !== "tool_result" || !commitCalls.has(b.tool_use_id))
                     continue;
-                if (!b.is_error)
+                // A forked session copies its parent's commit calls too: count each once.
+                if (!b.is_error && inWindow(e) && !counted.commits.has(b.tool_use_id)) {
                     commits += commitCalls.get(b.tool_use_id);
+                    counted.commits.add(b.tool_use_id);
+                }
                 commitCalls.delete(b.tool_use_id);
             }
             return;
         }
-        if (e.type !== "assistant" || !e.message?.usage || e.message.id === lastId)
+        if (e.type !== "assistant" || !e.message?.usage)
             return;
-        lastId = e.message.id;
+        // "<synthetic>" rows are Claude Code's own placeholders, not requests.
+        if (typeof e.message.model === "string" && !realModel(e.message.model))
+            return;
+        const seen = sighting(e);
+        if (seen === "repeat") {
+            // A later row of a counted reply: only its final output count is new.
+            const more = settle(e, false);
+            const price = more ? pricingFor(realModel(e.message.model) ?? model) : undefined;
+            if (price)
+                usd += (more * price.outputPerM) / 1e6;
+            return;
+        }
+        if (seen !== "new" || !inWindow(e))
+            return;
         const at = Date.parse(e.timestamp);
         if (Number.isFinite(at)) {
             start = Math.min(start, at);
             end = Math.max(end, at);
         }
         model = realModel(e.message.model) ?? model;
-        const price = pricingFor(e.message.model ?? model);
+        // Each request at its own model's price: one session can switch models.
+        const price = pricingFor(model);
         if (!price)
             return;
-        const u = e.message.usage;
-        const n = (k) => (typeof u[k] === "number" && u[k] > 0 ? u[k] : 0);
-        usd += (n("input_tokens") * price.inputPerM + n("cache_creation_input_tokens") * price.inputPerM * 1.25 +
-            n("cache_read_input_tokens") * price.cacheReadPerM + n("output_tokens") * price.outputPerM) / 1e6;
+        usd += usageCost(e.message.usage, price).totalUsd;
+        settle(e, true);
         requests++;
     });
     if (!requests || !Number.isFinite(start))
@@ -93,9 +119,10 @@ export function costPerTask(days = 30, paths) {
     const since = Date.now() - days * 86_400_000;
     const list = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
     const byProject = new Map();
+    const counted = { rows: new Set(), commits: new Set() };
     for (const p of list) {
-        const s = sessionCost(p);
-        if (!s || s.end < since)
+        const s = sessionCost(p, since, counted);
+        if (!s)
             continue;
         const project = s.cwd ?? "?";
         const agg = byProject.get(project) ?? { sessions: 0, usd: 0, commits: 0, idle: 0, idleUsd: 0 };

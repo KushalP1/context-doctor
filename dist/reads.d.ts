@@ -20,7 +20,7 @@ export interface RepeatedRead {
     reads: number;
     /** Tokens of all its results, summed over every read. */
     tokens: number;
-    /** Floor of the cost: each read written to the prompt cache once (1.25x input). */
+    /** Floor of the cost: each read written to the prompt cache once (1.25x input; 2x at the 1-hour TTL). */
     usd?: number;
     advice: "summarize" | "pack";
 }

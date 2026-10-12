@@ -9,8 +9,11 @@
  *
  *   in a subagent = its bill
  *   in the parent = (bill - its own startup context) x parent/subagent price
- *                 + parent context at launch x steps x 0.1 x parent input price
- *                 + (read - returned) x (1.25 + 0.1 x later parent requests) x parent input price
+ *                 + parent context at launch x steps x parent cache-read price
+ *                 + (read - returned) x (W + 0.1 x later parent requests) x parent input price
+ *
+ * W is the parent's own cache-write price (1.25x input at the 5-minute TTL,
+ * 2x at 1 hour, weighted by what the parent's usage records it wrote).
  *
  * "Read" is the tool output the subagent pulled in; "returned" is what the
  * parent received (tool result, or a background agent's task notification);
@@ -24,9 +27,9 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { forEachLine, listSessions } from "./session.js";
+import { forEachLine, listSessions, outputSettler, replyCounter } from "./session.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
-import { formatUsd, pricingFor } from "./pricing.js";
+import { cacheWriteSplit, formatUsd, pricingFor, usageCost, writeMultiplier } from "./pricing.js";
 
 const CLAUDE = "claude-opus-5";
 const IMAGE_TOKENS = 1600;
@@ -67,9 +70,11 @@ function blockTokens(content: unknown): number {
 }
 
 /** A subagent's bill (usage priced as the cache bills it), steps, startup context, start time and the tool output it read. */
-function scanSubagent(path: string): { costUsd: number; readTokens: number; task: string; steps: number; startup: number; start: number; model?: string } {
-  let costUsd = 0, readTokens = 0, task = "", lastId: string | undefined, model: string | undefined;
-  let steps = 0, startup = 0, start = Infinity;
+function scanSubagent(path: string): { costUsd: number; readTokens: number; task: string; steps: number; startup: number; start: number; model?: string; writeMult: number } {
+  let costUsd = 0, readTokens = 0, task = "", model: string | undefined;
+  let steps = 0, startup = 0, start = Infinity, writes5m = 0, writes1h = 0;
+  const sighting = replyCounter();
+  const settle = outputSettler();
   forEachLine(path, (line) => {
     let e: any;
     try { e = JSON.parse(line); } catch { return; }
@@ -79,8 +84,18 @@ function scanSubagent(path: string): { costUsd: number; readTokens: number; task
       if (Array.isArray(content)) for (const b of content) if (b?.type === "tool_result") readTokens += blockTokens(b.content);
       return;
     }
-    if (e?.type !== "assistant" || !e.message?.usage || e.message.id === lastId) return;
-    lastId = e.message.id;
+    if (e?.type !== "assistant" || !e.message?.usage) return;
+    if (typeof e.message.model === "string" && !realModel(e.message.model)) return; // "<synthetic>": not a request
+    const seen = sighting(e);
+    if (seen === "repeat") {
+      // A later row of the same reply: only its final output count is new.
+      const more = settle(e, false);
+      const price = more ? pricingFor(realModel(e.message.model) ?? model) : undefined;
+      if (price) costUsd += (more * price.outputPerM) / 1e6;
+      return;
+    }
+    if (seen !== "new") return;
+    settle(e, true);
     model = realModel(e.message.model) ?? model;
     const u = e.message.usage;
     const n = (k: string) => (typeof u[k] === "number" && u[k] > 0 ? u[k] : 0);
@@ -88,12 +103,14 @@ function scanSubagent(path: string): { costUsd: number; readTokens: number; task
     if (Number.isFinite(at)) start = Math.min(start, at);
     if (steps === 0) startup = n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens");
     steps++;
-    const price = pricingFor(e.message.model ?? model);
+    const w = cacheWriteSplit(u);
+    writes5m += w.fiveMinute;
+    writes1h += w.oneHour;
+    const price = pricingFor(model);
     if (!price) return;
-    costUsd += (n("input_tokens") * price.inputPerM + n("cache_creation_input_tokens") * price.inputPerM * 1.25 +
-      n("cache_read_input_tokens") * price.cacheReadPerM + n("output_tokens") * price.outputPerM) / 1e6;
+    costUsd += usageCost(u, price).totalUsd;
   });
-  return { costUsd, readTokens, task: task.replace(/\s+/g, " ").slice(0, 90), steps, startup, start, model };
+  return { costUsd, readTokens, task: task.replace(/\s+/g, " ").slice(0, 90), steps, startup, start, model, writeMult: writeMultiplier(writes5m, writes1h) };
 }
 
 interface ParentView {
@@ -102,12 +119,15 @@ interface ParentView {
   prompts: number[];
   compactions: number[];
   model?: string;
+  /** Cache-write tokens the parent's usage records at each TTL: its write price. */
+  writes5m: number;
+  writes1h: number;
   /** For each id (tool_use id or agent id): the largest text that mentions it, and when. */
   returns: Map<string, { tokens: number; at: number }>;
 }
 
 function scanParent(path: string, ids: Set<string>): ParentView {
-  const view: ParentView = { requests: [], prompts: [], compactions: [], returns: new Map() };
+  const view: ParentView = { requests: [], prompts: [], compactions: [], writes5m: 0, writes1h: 0, returns: new Map() };
   let lastId: string | undefined;
   forEachLine(path, (line) => {
     const hits = [...ids].filter((id) => line.includes(id));
@@ -126,6 +146,9 @@ function scanParent(path: string, ids: Set<string>): ParentView {
         view.requests.push(at);
         view.prompts.push((u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0));
       }
+      const w = cacheWriteSplit(e.message.usage);
+      view.writes5m += w.fiveMinute;
+      view.writes1h += w.oneHour;
       view.model = realModel(e.message.model) ?? view.model;
       return;
     }
@@ -151,7 +174,7 @@ export function subagentPayback(days = 30, paths?: string[]): PaybackReport {
     if (!existsSync(dir)) continue;
     const agents = readdirSync(dir).filter((f) => /^agent-.+\.jsonl$/.test(f));
     if (!agents.length) continue;
-    withSubagents++;
+    const before = out.length;
     const metas = agents.map((f) => {
       const id = basename(f, ".jsonl").replace(/^agent-/, "");
       let meta: { agentType?: string; description?: string; toolUseId?: string } = {};
@@ -161,9 +184,15 @@ export function subagentPayback(days = 30, paths?: string[]): PaybackReport {
     const ids = new Set(metas.flatMap((m) => [m.id, m.meta.toolUseId].filter((x): x is string => Boolean(x))));
     const view = scanParent(parent, ids);
     const price = pricingFor(view.model);
+    // What the parent pays to write a token to its cache, from its own usage.
+    const parentWrite = writeMultiplier(view.writes5m, view.writes1h);
     for (const m of metas) {
       const s = scanSubagent(m.file);
-      const ret = [m.id, m.meta.toolUseId].map((k) => (k ? view.returns.get(k) : undefined)).filter(Boolean).sort((a, b) => b!.tokens - a!.tokens)[0];
+      // Each subagent by its own start: a long session touched today brought
+      // all its subagents into `--days 1` (70 where 9 started that day).
+      // A subagent with no dated request counts with its session.
+      if (Number.isFinite(s.start) && s.start < since) continue;
+      const ret =[m.id, m.meta.toolUseId].map((k) => (k ? view.returns.get(k) : undefined)).filter(Boolean).sort((a, b) => b!.tokens - a!.tokens)[0];
       const returnedTokens = ret?.tokens ?? 0;
       const from = ret?.at ?? Infinity;
       const until = Math.min(...view.compactions.filter((c) => c > from), Infinity);
@@ -175,10 +204,12 @@ export function subagentPayback(days = 30, paths?: string[]): PaybackReport {
       const sub = pricingFor(s.model) ?? price;
       let inParentUsd = s.costUsd, avoidedUsd = 0;
       if (price && sub) {
-        const startupUsd = (s.startup * (1.25 + 0.1 * Math.max(0, s.steps - 1)) * sub.inputPerM) / 1e6;
+        // Each side's cache writes at its own TTL mix (subagents write at 5
+        // minutes, the main thread mostly at 1 hour) and reads at its model's rate.
+        const startupUsd = (s.startup * (s.writeMult * sub.inputPerM + Math.max(0, s.steps - 1) * sub.cacheReadPerM)) / 1e6;
         const work = Math.max(0, s.costUsd - startupUsd) * (price.inputPerM / sub.inputPerM);
         const rideAlong = (parentContextTokens * s.steps * price.cacheReadPerM) / 1e6;
-        avoidedUsd = (carried * (1.25 + 0.1 * laterRequests) * price.inputPerM) / 1e6;
+        avoidedUsd = (carried * (parentWrite * price.inputPerM + laterRequests * price.cacheReadPerM)) / 1e6;
         inParentUsd = work + rideAlong + avoidedUsd;
       }
       out.push({
@@ -196,6 +227,7 @@ export function subagentPayback(days = 30, paths?: string[]): PaybackReport {
         netUsd: inParentUsd - s.costUsd,
       });
     }
+    if (out.length > before) withSubagents++;
   }
   return { days, sessions: withSubagents, subagents: out };
 }

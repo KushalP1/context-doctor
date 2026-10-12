@@ -16,8 +16,9 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { formatTokens } from "./tokens.js";
-import { formatUsd, pricingFor } from "./pricing.js";
-import { forEachLine } from "./session.js";
+import { formatUsd, pricingFor, usageCost } from "./pricing.js";
+import { forEachLine, outputSettler, replyCounter } from "./session.js";
+import { realModel } from "./tokens.js";
 /** Where Claude Code keeps a session's subagents: beside the transcript, under its id. */
 export function subagentDir(transcriptPath) {
     return join(transcriptPath.replace(/\.jsonl$/, ""), "subagents");
@@ -39,6 +40,11 @@ function summarize(path) {
     let last;
     let cost = 0;
     let priced = true;
+    // One reply is written as several rows with the same usage; counting rows
+    // doubled the calls and the bill (a real session: 6156 calls / $769 per
+    // row against 3228 / $387 per reply).
+    const sighting = replyCounter();
+    const settle = outputSettler();
     forEachLine(path, (line) => {
         // Cheap pre-filter: most lines are content we do not need to parse.
         if (!line.includes('"usage"') && !line.includes('"timestamp"') && !s.task)
@@ -71,8 +77,20 @@ function summarize(path) {
             const out = n(u.output_tokens);
             if (input + read + write === 0)
                 return;
-            if (typeof m.model === "string")
-                s.model = m.model;
+            const seen = sighting(e);
+            if (seen === "repeat") {
+                // A later row of the same reply: only its final output count is new.
+                const more = settle(e, false);
+                const p = more ? pricingFor(s.model) : undefined;
+                s.outputTokens += more;
+                if (p)
+                    cost += (more * p.outputPerM) / 1_000_000;
+                return;
+            }
+            if (seen !== "new")
+                return;
+            settle(e, true);
+            s.model = realModel(m.model) ?? s.model;
             s.calls++;
             s.finalContextTokens = input + read + write;
             s.inputBilledTokens += input + read + write;
@@ -80,8 +98,9 @@ function summarize(path) {
             s.outputTokens += out;
             const p = pricingFor(s.model);
             if (p) {
-                // Cache writes bill at 1.25x input; reads at the cache-read rate.
-                cost += ((input + write * 1.25) * p.inputPerM + read * p.cacheReadPerM + out * p.outputPerM) / 1_000_000;
+                // Subagents write at the 5-minute TTL (1.25x), the main thread mostly
+                // at 1 hour (2x); the usage records which.
+                cost += usageCost(u, p).totalUsd;
             }
             else {
                 priced = false;
@@ -145,7 +164,7 @@ function fmtDuration(ms) {
  *   all its calls (from the cache analysis), so the comparison is total against
  *   total. Comparing against a per-call figure produced nonsense like "159x".
  */
-export function renderSubagents(report, parentInputUsd, top = 5) {
+export function renderSubagents(report, parentInputUsd, top = 5, options = {}) {
     if (!report)
         return null;
     const lines = [];
@@ -162,7 +181,8 @@ export function renderSubagents(report, parentInputUsd, top = 5) {
     }
     for (const a of report.agents.slice(0, top)) {
         const cost = a.estCostUsd !== undefined ? formatUsd(a.estCostUsd) : "unpriced";
-        lines.push(`  ${cost.padStart(8)}  ${String(a.calls).padStart(3)} calls  ctx ${formatTokens(a.finalContextTokens).padStart(6)}  ${fmtDuration(a.durationMs).padStart(4)}  ${a.task.slice(0, 60) || "(no task text)"}`);
+        const task = options.redact ? "[redacted]" : a.task.slice(0, 60) || "(no task text)";
+        lines.push(`  ${cost.padStart(8)}  ${String(a.calls).padStart(3)} calls  ctx ${formatTokens(a.finalContextTokens).padStart(6)}  ${fmtDuration(a.durationMs).padStart(4)}  ${task}`);
     }
     if (report.agents.length > top)
         lines.push(`  … and ${report.agents.length - top} more`);

@@ -4,11 +4,12 @@
  *
  * Each session is replayed request by request, twice: as it was sent, and as
  * autopilot (autoclear.ts, the shipped class) would have sent it. Both arms
- * are priced the way the prompt cache bills (reads 0.1x, writes 1.25x, a
- * cold cache after an idle gap longer than the request's own TTL). The
- * difference between the arms is the saving. The baseline shown to the user
- * is not an estimate: it is the input the sessions were actually billed for,
- * read from the usage every transcript records.
+ * are priced the way the prompt cache bills (reads at the model's cache-read
+ * rate, writes at the session's own 5-minute/1-hour TTL mix, a cold cache
+ * after an idle gap longer than the request's own TTL). The difference
+ * between the arms is the saving. The baseline shown to the user is not an
+ * estimate: it is the input the sessions were actually billed for, read from
+ * the usage every transcript records, each request at its own model's price.
  */
 import { type AutoClearOptions } from "./autoclear.js";
 export interface SessionSavings {
@@ -16,7 +17,11 @@ export interface SessionSavings {
     project: string;
     model?: string;
     requests: number;
-    /** Cache-weighted input actually billed (usage in the transcript), in base-input-token units. */
+    /**
+     * Cache-weighted input actually billed (usage in the transcript), in
+     * base-input-token units: reads at 0.1x, writes at 1.25x (5-minute TTL)
+     * or 2x (1-hour TTL) as each request recorded them.
+     */
     billedWeighted: number;
     billedUsd: number;
     /** Replay difference, in the same units. */
@@ -55,8 +60,13 @@ export interface SavingsReport {
     coldResumes: number;
     coldResumeNetUsd: number;
 }
-/** Replay one Claude Code transcript. Undefined when it holds too few requests to mean anything. */
-export declare function replaySession(path: string, options?: AutoClearOptions, since?: number): SessionSavings | undefined;
+/**
+ * Replay one Claude Code transcript. Undefined when it holds too few requests
+ * to mean anything. `runRows` is shared by every transcript of one report: a
+ * forked session starts as a copy of its parent's history, which replays
+ * here (it shapes the context) but was billed once, under the parent.
+ */
+export declare function replaySession(path: string, options?: AutoClearOptions, since?: number, runRows?: Set<string>): SessionSavings | undefined;
 export declare function estimateSavings(days?: number, options?: AutoClearOptions, paths?: string[], onProgress?: (done: number, total: number) => void): SavingsReport;
 /** Optional third lever, computed by compactwindow.ts and passed in by the CLI. */
 export interface CompactWindowLine {

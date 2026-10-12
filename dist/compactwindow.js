@@ -20,22 +20,31 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { forEachLine, listSessions } from "./session.js";
-import { pricingFor } from "./pricing.js";
+import { forEachLine, listSessions, replyCounter } from "./session.js";
+import { cacheWriteSplit, pricingFor, writeMultiplier } from "./pricing.js";
+import { realModel } from "./tokens.js";
 import { readJson, writeJsonWithBackup } from "./install.js";
 /** Claude Code compacts at about this share of the window (970k of 1M, measured). */
 const TRIGGER_SHARE = 0.97;
 /** Context right after a compaction: system prompt, tools and the summary (median 75,447, measured). */
 const AFTER_COMPACT = 75_000;
-/** Output tokens a compaction summary costs, priced at output's 5x input rate. */
+/** Output tokens a compaction summary costs, at the model's output price. */
 const SUMMARY_OUTPUT = 20_000;
-const OUTPUT_RATIO = 5;
 const TTL_MS = 3_600_000;
 export const MIN_WINDOW = 100_000;
 export const MAX_WINDOW = 1_000_000;
-function readRequests(path) {
+/**
+ * `writeMult`: what this session pays to write a token to the cache,
+ * relative to input, from the 5-minute and 1-hour writes its usage records.
+ * The replay charges writes that never happened (a cold re-read, a fresh
+ * context after a simulated compaction); the harness would have written
+ * those at the TTL it writes everything else at, mostly 1 hour (2x) for
+ * Claude Code's main thread, not the 1.25x a constant assumed.
+ */
+function readRequests(path, runRows) {
     const reqs = [];
-    let lastId, model;
+    let model, writes5m = 0, writes1h = 0, priced = false;
+    const sighting = replyCounter(runRows);
     forEachLine(path, (line) => {
         let e;
         try {
@@ -47,55 +56,70 @@ function readRequests(path) {
         if (!e || e.isSidechain)
             return;
         if (e.type === "system" && e.subtype === "compact_boundary") {
-            reqs.push("compact");
+            const copy = typeof e.uuid === "string" && !!runRows?.has(e.uuid);
+            if (typeof e.uuid === "string")
+                runRows?.add(e.uuid);
+            reqs.push({ compact: true, copy });
             return;
         }
-        if (e.type !== "assistant" || !e.message || e.message.id === lastId)
+        if (e.type !== "assistant" || !e.message)
             return;
-        lastId = e.message.id;
+        const seen = sighting(e);
+        if (seen === "repeat")
+            return;
         const u = e.message.usage ?? {};
         const prompt = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
         const at = Date.parse(e.timestamp);
-        if (prompt > 0 && Number.isFinite(at)) {
-            reqs.push({ at, prompt });
-            model ??= e.message.model;
-        }
+        if (!(prompt > 0) || !Number.isFinite(at))
+            return;
+        // Each request at its own model's price; "<synthetic>" rows carry no usage.
+        model = realModel(e.message.model) ?? model;
+        const p = pricingFor(model);
+        if (p)
+            priced = true;
+        const w = cacheWriteSplit(u);
+        writes5m += w.fiveMinute;
+        writes1h += w.oneHour;
+        reqs.push({ at, prompt, inPerM: p?.inputPerM ?? 0, readPerM: p?.cacheReadPerM ?? 0, outPerM: p?.outputPerM ?? 0, copy: seen === "copy" });
     });
-    return { model, reqs };
+    return { reqs, writeMult: writeMultiplier(writes5m, writes1h), priced };
 }
 /**
  * Replay one session twice: as it ran, and with compaction whenever the
  * context reaches the window's trigger. Both arms are priced as the prompt
- * cache bills (warm: 0.1x re-read + 1.25x for what is new; cold after an hour
- * idle: 1.25x for everything); each simulated compaction also pays its own
- * request and summary.
- */
-/**
+ * cache bills, in USD at each request's own model (warm: the cache-read rate
+ * on what was there + a write for what is new; cold after an hour idle: a
+ * write for everything, writes at the session's own `writeMult`); each
+ * simulated compaction also pays its own request and summary.
+ *
  * `reread`: tokens a session fetches again after a compaction because the
  * summary dropped them (measured by `context-doctor compactions`). Each
  * simulated compaction writes them to the cache and carries them onward.
  */
-function replay(reqs, window, since, reread = 0) {
+function replay(reqs, window, since, reread = 0, writeMult = 1.25) {
     let base = 0, sim = 0, extra = 0, actual = 0;
     let removed = 0, prevActual, prevSim, prevAt;
     for (const r of reqs) {
-        if (r === "compact") {
-            if (prevAt !== undefined && prevAt >= since)
+        if ("compact" in r) {
+            if (prevAt !== undefined && prevAt >= since && !r.copy)
                 actual++;
             // A real compaction in the transcript: the simulated arm compacts there too.
-            if (prevAt !== undefined && prevAt >= since && removed === 0)
+            if (prevAt !== undefined && prevAt >= since && removed === 0 && !r.copy)
                 extra++;
             removed = 0;
             prevActual = prevSim = undefined;
             continue;
         }
-        const counted = r.at >= since;
+        // Requests before the window, or already counted from a forked copy,
+        // still shape both arms; only the rest are billed.
+        const counted = r.at >= since && !r.copy;
         const cold = prevAt === undefined || r.at - prevAt > TTL_MS;
+        const write = writeMult * r.inPerM;
         const cost = (ctx, prev) => {
             if (cold)
-                return 1.25 * ctx;
+                return write * ctx;
             const fresh = prev === undefined || ctx < prev ? ctx : ctx - prev;
-            return 0.1 * (ctx - fresh) + 1.25 * fresh;
+            return r.readPerM * (ctx - fresh) + write * fresh;
         };
         if (counted)
             base += cost(r.prompt, prevActual);
@@ -109,7 +133,7 @@ function replay(reqs, window, since, reread = 0) {
         let simPrev = prevSim;
         if (ctx >= TRIGGER_SHARE * window) {
             if (counted) {
-                sim += 0.1 * ctx + OUTPUT_RATIO * SUMMARY_OUTPUT + 1.25 * reread;
+                sim += r.readPerM * ctx + r.outPerM * SUMMARY_OUTPUT + write * reread;
                 extra++;
             }
             removed = r.prompt - AFTER_COMPACT - reread;
@@ -129,23 +153,24 @@ export function estimateCompactWindows(windows, days = 30, paths, rereadTokens =
     const targets = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
     const acc = windows.map((w) => ({ window: w, base: 0, sim: 0, extra: 0 }));
     let sessions = 0, actualCompactions = 0;
+    // Shared by every transcript of the run, so a fork's copy counts once.
+    const runRows = new Set();
     for (const p of targets) {
         let parsed;
         try {
-            parsed = readRequests(p);
+            parsed = readRequests(p, runRows);
         }
         catch {
             continue;
         }
-        const perM = pricingFor(parsed.model)?.inputPerM;
-        if (!perM || parsed.reqs.filter((r) => r !== "compact" && r.at >= since).length < 10)
+        if (!parsed.priced || parsed.reqs.filter((r) => !("compact" in r) && r.at >= since && !r.copy).length < 10)
             continue;
         sessions++;
-        actualCompactions += replay(parsed.reqs, Number.MAX_SAFE_INTEGER, since).actual;
+        actualCompactions += replay(parsed.reqs, Number.MAX_SAFE_INTEGER, since, 0, parsed.writeMult).actual;
         for (const a of acc) {
-            const r = replay(parsed.reqs, a.window, since, rereadTokens);
-            a.base += (r.base * perM) / 1e6;
-            a.sim += (r.sim * perM) / 1e6;
+            const r = replay(parsed.reqs, a.window, since, rereadTokens, parsed.writeMult);
+            a.base += r.base / 1e6;
+            a.sim += r.sim / 1e6;
             a.extra += r.extra;
         }
     }

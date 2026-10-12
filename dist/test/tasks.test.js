@@ -27,8 +27,8 @@ test("a session's cost is priced from its usage; failed commits do not count", (
     const s = sessionCost(p);
     assert.equal(s.commits, 1);
     assert.equal(s.requests, 2);
-    // Sonnet: 1k input x $3 + 10k writes x $3.75 + 11k reads x $0.30 + 600 output x $15, per million.
-    const expected = (1000 * 3 + 10_000 * 3.75 + 11_000 * 0.3 + 600 * 15) / 1e6;
+    // Sonnet 5: 1k input x $2 + 10k writes x $2.50 (5-minute) + 11k reads x $0.20 + 600 output x $10, per million.
+    const expected = (1000 * 2 + 10_000 * 2.5 + 11_000 * 0.2 + 600 * 10) / 1e6;
     assert.ok(Math.abs(s.usd - expected) < 1e-12);
     const r = costPerTask(30, [p]);
     assert.equal(r.projects[0].commits, 1);

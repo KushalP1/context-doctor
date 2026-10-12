@@ -4,18 +4,19 @@
  *
  * Each session is replayed request by request, twice: as it was sent, and as
  * autopilot (autoclear.ts, the shipped class) would have sent it. Both arms
- * are priced the way the prompt cache bills (reads 0.1x, writes 1.25x, a
- * cold cache after an idle gap longer than the request's own TTL). The
- * difference between the arms is the saving. The baseline shown to the user
- * is not an estimate: it is the input the sessions were actually billed for,
- * read from the usage every transcript records.
+ * are priced the way the prompt cache bills (reads at the model's cache-read
+ * rate, writes at the session's own 5-minute/1-hour TTL mix, a cold cache
+ * after an idle gap longer than the request's own TTL). The difference
+ * between the arms is the saving. The baseline shown to the user is not an
+ * estimate: it is the input the sessions were actually billed for, read from
+ * the usage every transcript records, each request at its own model's price.
  */
 import { basename, dirname } from "node:path";
 import { AutoClearer } from "./autoclear.js";
 import { coldResumeEvents } from "./coldresume.js";
-import { forEachLine, listSessions } from "./session.js";
-import { pricingFor } from "./pricing.js";
-import { estimateTokens, formatTokens } from "./tokens.js";
+import { forEachLine, listSessions, replyCounter } from "./session.js";
+import { CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, pricingFor, usageCost, writeMultiplier } from "./pricing.js";
+import { estimateTokens, formatTokens, realModel } from "./tokens.js";
 /** System prompt and tool schemas: sent on every request, identical in both arms. */
 const FIXED_TOKENS = 54_000;
 const CLAUDE_CODE_TTL_MS = 3_600_000;
@@ -28,11 +29,19 @@ const CLAUDE_CODE_TTL_MS = 3_600_000;
 export function autopilotReaches(entrypoint) {
     return !(entrypoint ?? "").startsWith("claude-desktop");
 }
-/** One arm of the replay: the history as sent, priced incrementally. */
+/** Without a price on file the arms still need relative weights: Claude's usual 10% read rate. */
+const UNPRICED = { inputPerM: 1, outputPerM: 5, cacheReadPerM: 0.1 };
+/**
+ * One arm of the replay: the history as sent, priced incrementally at each
+ * request's own model. Reads are priced as they go; writes are kept at the
+ * input price and multiplied by the session's write TTL mix at the end
+ * (`usd(writeMult)`), since the mix is only known once the whole transcript
+ * has been read.
+ */
 function arm(model, clearer) {
     const msgs = [];
     const tok = [];
-    let total = 0, prevLen = 0, weighted = 0, raw = 0;
+    let total = 0, prevLen = 0, readUsd = 0, writeAtInput = 0, raw = 0;
     const size = (m) => estimateTokens(JSON.stringify(m), model);
     return {
         push(m) { msgs.push(structuredClone(m)); const k = size(m); tok.push(k); total += k; },
@@ -43,7 +52,7 @@ function arm(model, clearer) {
             tok[i] = size(msgs[i]);
             total += tok[i];
         },
-        request(now, cold, counted = true) {
+        request(now, cold, counted = true, price = UNPRICED) {
             let first = -1;
             if (clearer) {
                 const body = { model, messages: msgs, system: [{ type: "text", text: "", cache_control: { type: "ephemeral", ttl: "1h" } }] };
@@ -61,23 +70,34 @@ function arm(model, clearer) {
                 read += tok[i];
             const write = total - read;
             if (counted) {
-                weighted += (cold ? FIXED_TOKENS * 1.25 : FIXED_TOKENS * 0.1) + read * 0.1 + write * 1.25;
+                readUsd += ((cold ? 0 : FIXED_TOKENS) + read) * price.cacheReadPerM;
+                writeAtInput += ((cold ? FIXED_TOKENS : 0) + write) * price.inputPerM;
                 raw += FIXED_TOKENS + total;
             }
             prevLen = msgs.length;
         },
-        get weighted() { return weighted; },
+        usd(writeMult) { return (readUsd + writeAtInput * writeMult) / 1e6; },
         get raw() { return raw; },
     };
 }
-/** Replay one Claude Code transcript. Undefined when it holds too few requests to mean anything. */
-export function replaySession(path, options = {}, since = 0) {
+/**
+ * Replay one Claude Code transcript. Undefined when it holds too few requests
+ * to mean anything. `runRows` is shared by every transcript of one report: a
+ * forked session starts as a copy of its parent's history, which replays
+ * here (it shapes the context) but was billed once, under the parent.
+ */
+export function replaySession(path, options = {}, since = 0, runRows) {
     let model;
     let base = arm(undefined, null), auto = arm(undefined, new AutoClearer(options));
-    let baseW = 0, autoW = 0, baseRaw = 0, autoRaw = 0;
+    let baseUsd = 0, autoUsd = 0, baseRaw = 0, autoRaw = 0;
     let entrypoint;
-    let billed = 0, billedRaw = 0, requests = 0, lastId, lastTs = null;
-    const flush = () => { baseW += base.weighted; autoW += auto.weighted; baseRaw += base.raw; autoRaw += auto.raw; };
+    let billed = 0, billedUsd = 0, billedRaw = 0, requests = 0, lastId, lastTs = null;
+    let writes5m = 0, writes1h = 0;
+    const sighting = replyCounter(runRows);
+    // Arms are closed out at each compaction and at the end, priced at the
+    // session's write mix (known by the end, so the closed arms wait for it).
+    const closed = [];
+    const flush = () => { closed.push(base, auto); baseRaw += base.raw; autoRaw += auto.raw; };
     forEachLine(path, (line) => {
         let e;
         try {
@@ -99,25 +119,36 @@ export function replaySession(path, options = {}, since = 0) {
         }
         if (e.type === "assistant" && e.message) {
             const m = e.message;
-            model = model ?? m.model;
+            // "<synthetic>" placeholders are not a model: a session that opened
+            // with one was priced at nothing.
+            model = model ?? realModel(m.model);
             const blocks = (Array.isArray(m.content) ? m.content : []).filter((b) => b?.type !== "thinking" && b?.type !== "redacted_thinking");
             if (m.id !== lastId) {
                 lastId = m.id;
                 const u = m.usage ?? {};
                 const read = u.cache_read_input_tokens ?? 0, write = u.cache_creation_input_tokens ?? 0, fresh = u.input_tokens ?? 0;
-                if (read + write + fresh > 0) {
+                const seen = sighting(e);
+                if (seen !== "repeat" && read + write + fresh > 0) {
                     const now = Date.parse(e.timestamp) || 0;
-                    // History before the window still shapes the replay's state; only
-                    // requests inside the window are billed and counted.
-                    const inWindow = now >= since;
+                    // History before the window, or already billed under the session
+                    // it was forked from, still shapes the replay's state; only the
+                    // rest is billed and counted.
+                    const inWindow = now >= since && seen === "new";
+                    // Each request at its own model: a session that switched from a
+                    // $4 to a $10 model was priced at the first one throughout.
+                    const price = pricingFor(realModel(m.model) ?? model);
+                    const ttl = cacheWriteSplit(u);
+                    writes5m += ttl.fiveMinute;
+                    writes1h += ttl.oneHour;
                     if (inWindow) {
-                        billed += fresh + read * 0.1 + write * 1.25;
+                        billed += fresh + read * 0.1 + ttl.fiveMinute * CACHE_WRITE_5M + ttl.oneHour * CACHE_WRITE_1H;
+                        billedUsd += price ? usageCost(u, price).promptUsd : 0;
                         billedRaw += fresh + read + write;
                         requests++;
                     }
                     const cold = lastTs === null || now - lastTs > CLAUDE_CODE_TTL_MS;
-                    base.request(now, cold, inWindow);
-                    auto.request(now, cold, inWindow);
+                    base.request(now, cold, inWindow, price);
+                    auto.request(now, cold, inWindow, price);
                     lastTs = now;
                 }
                 base.push({ role: "assistant", content: blocks });
@@ -140,10 +171,17 @@ export function replaySession(path, options = {}, since = 0) {
         return undefined;
     // The replay decides the SHARE saved (both arms priced the same way); that
     // share is applied to what was actually billed, so the dollars and tokens
-    // shown are fractions of the user's real usage, not of an estimate.
-    const perM = pricingFor(model)?.inputPerM ?? 0;
+    // shown are fractions of the user's real usage, not of an estimate. The
+    // arms write at this session's own TTL mix: the replay charges writes that
+    // never happened (a cold re-read after clearing), and Claude Code would
+    // have written those at the TTL it wrote everything else at.
+    const mix = writeMultiplier(writes5m, writes1h);
+    for (let i = 0; i < closed.length; i += 2) {
+        baseUsd += closed[i].usd(mix);
+        autoUsd += closed[i + 1].usd(mix);
+    }
     const cold = coldResumeEvents(path).filter((c) => c.at >= since);
-    const pct = baseW > 0 ? (baseW - autoW) / baseW : 0;
+    const pct = baseUsd > 0 ? (baseUsd - autoUsd) / baseUsd : 0;
     const rawPct = baseRaw > 0 ? (baseRaw - autoRaw) / baseRaw : 0;
     const dir = basename(dirname(path));
     return {
@@ -152,9 +190,9 @@ export function replaySession(path, options = {}, since = 0) {
         model,
         requests,
         billedWeighted: billed,
-        billedUsd: (billed / 1e6) * perM,
+        billedUsd,
         savedWeighted: pct * billed,
-        savedUsd: ((pct * billed) / 1e6) * perM,
+        savedUsd: pct * billedUsd,
         savedTokens: rawPct * billedRaw,
         savedPct: pct,
         entrypoint,
@@ -167,10 +205,11 @@ export function estimateSavings(days = 30, options = {}, paths, onProgress) {
     const since = Date.now() - days * 86_400_000;
     const targets = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
     const sessions = [];
+    const runRows = new Set();
     for (const [i, p] of targets.entries()) {
         onProgress?.(i, targets.length);
         try {
-            const s = replaySession(p, options, since);
+            const s = replaySession(p, options, since, runRows);
             if (s)
                 sessions.push(s);
         }

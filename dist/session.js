@@ -178,6 +178,89 @@ export function forEachLine(path, onLine) {
         closeSync(fd);
     }
 }
+/**
+ * Has this API reply been counted already? Claude Code writes one reply as
+ * several rows (one per content block, ~2.2 on average) carrying the same
+ * message id and the same usage, so a row is not a request. And a forked
+ * session starts as a verbatim copy of its parent's transcript in a new file
+ * (same row uuids, same message ids), so across files one reply can turn up
+ * twice. Within a file the message id identifies the reply; across files
+ * the uuid of its row does, which unrelated files never share even when they
+ * reuse an id (hand-made transcripts do).
+ *
+ * Make one per file, passing the same `runRows` set to every file of one
+ * report. Returns "new" the first time a reply is met in the run, "copy"
+ * when its file met it first but an earlier file already counted it, and
+ * "repeat" for its later rows in the same file.
+ */
+export function replyCounter(runRows) {
+    const ids = new Set();
+    return (entry) => {
+        const id = entry?.message?.id;
+        if (typeof id === "string") {
+            if (ids.has(id))
+                return "repeat";
+            ids.add(id);
+        }
+        const uuid = entry?.uuid;
+        if (runRows && typeof uuid === "string") {
+            if (runRows.has(uuid))
+                return "copy";
+            runRows.add(uuid);
+        }
+        return "new";
+    };
+}
+/**
+ * A counted reply's output, settled. Subagent transcripts are written as a
+ * reply streams, each row with a snapshot of its usage: the input and cache
+ * counts are final from the first row, output_tokens only on the last. On
+ * the author's machine 5.8k subagent replies changed it, their first rows
+ * carrying 1.3M output tokens against a final 6.7M (main-thread rows carry
+ * the final usage throughout). Call with `first` on the row a reply is
+ * counted at; for its later rows it returns the output tokens not yet
+ * charged, and 0 for replies never counted.
+ */
+export function outputSettler() {
+    const charged = new Map();
+    return (entry, first) => {
+        const raw = Number(entry?.message?.usage?.output_tokens);
+        const out = Number.isFinite(raw) && raw > 0 ? raw : 0;
+        const id = entry?.message?.id;
+        if (typeof id !== "string")
+            return first ? out : 0;
+        if (first) {
+            charged.set(id, out);
+            return out;
+        }
+        const prev = charged.get(id);
+        if (prev === undefined || out <= prev)
+            return 0;
+        charged.set(id, out);
+        return out - prev;
+    };
+}
+/**
+ * Text the user typed while the agent was working. Claude Code delivers it
+ * mid-turn and records it only as an attachment line (type "attachment",
+ * attachment.type "queued_command"), never as a user row: on the author's
+ * machine 511 such prompts against ~2.5k typed user rows. Task
+ * notifications and subagent hand-backs arrive the same way, so only
+ * human-origin prompts count (older lines carry no origin; their prompts
+ * were human). Undefined for anything else.
+ */
+export function queuedUserPrompt(entry) {
+    const a = entry?.attachment;
+    if (entry?.type !== "attachment" || a?.type !== "queued_command" || entry.isSidechain || entry.isMeta || a.isMeta)
+        return undefined;
+    if ((a.commandMode ?? "prompt") !== "prompt")
+        return undefined;
+    if (a.origin !== undefined && a.origin?.kind !== "human")
+        return undefined;
+    if (typeof a.prompt === "string")
+        return a.prompt.trim() ? a.prompt : undefined;
+    return Array.isArray(a.prompt) && a.prompt.length ? a.prompt : undefined;
+}
 /** Peek at the first bytes to tell a ChatGPT export (JSON array) from JSONL. */
 function startsWithArray(path) {
     const fd = openSync(path, "r");
@@ -319,6 +402,17 @@ export function parseSessionFile(path) {
     /** Open tool calls awaiting their result, by tool_use id. */
     const pendingCalls = new Map();
     const latenciesByTool = new Map();
+    /**
+     * A compaction keeps the last few messages verbatim after its summary
+     * (compact_boundary's compactMetadata.preservedMessages). They sit BEFORE
+     * the boundary in the file, so cutting at the summary dropped them from the
+     * live context as if they had been compacted away. Rows are remembered by
+     * uuid (references, not copies) so the kept ones can be put back.
+     */
+    const rowsByUuid = new Map();
+    let boundaryKeeps;
+    let liveKeeps;
+    let seq = 0;
     forEachLine(path, (line) => {
         if (!line.trim())
             return;
@@ -365,6 +459,17 @@ export function parseSessionFile(path) {
             messages.push({ role: entry.role, content: message.content });
             return;
         }
+        if (entry.type === "system" && entry.subtype === "compact_boundary") {
+            const kept = entry.compactMetadata?.preservedMessages;
+            const uuids = Array.isArray(kept) ? kept : Array.isArray(kept?.uuids) ? kept.uuids : Array.isArray(kept?.allUuids) ? kept.allUuids : undefined;
+            boundaryKeeps = uuids?.filter((u) => typeof u === "string");
+            return;
+        }
+        // A prompt typed while the agent worked is the user's turn too, though
+        // Claude Code records it only as an attachment.
+        const queued = queuedUserPrompt(entry);
+        if (queued !== undefined)
+            entry = { ...entry, type: "user", message: { role: "user", content: queued } };
         if ((entry.type !== "user" && entry.type !== "assistant") || !entry.message)
             return;
         if (entry.isSidechain)
@@ -372,6 +477,15 @@ export function parseSessionFile(path) {
         const message = entry.message;
         if (!message.role || message.content == null)
             return;
+        seq++;
+        if (typeof entry.uuid === "string") {
+            rowsByUuid.set(entry.uuid, { role: message.role, content: message.content, seq });
+        }
+        if (entry.isCompactSummary) {
+            // The kept messages belong to the boundary just before this summary.
+            liveKeeps = boundaryKeeps ? { uuids: boundaryKeeps, seq } : undefined;
+            boundaryKeeps = undefined;
+        }
         model = realModel(message.model) ?? model;
         const usage = message.usage;
         if (entry.type === "assistant" && usage) {
@@ -461,8 +575,24 @@ export function parseSessionFile(path) {
     // A compaction replaces everything before it: the summary entry IS the live
     // history from that point on. Counting the pre-compaction turns would
     // overstate context, cost per message and window fill — sometimes hugely.
-    const compactedAway = lastCompactIndex >= 0 ? lastCompactIndex : 0;
-    const live = lastCompactIndex >= 0 ? messages.slice(lastCompactIndex) : messages;
+    // ...except the messages the compaction kept verbatim, which follow the
+    // summary in what the model sees. Rebuilt the way the main pass merges
+    // rows: consecutive same-role rows are one message.
+    const kept = [];
+    if (lastCompactIndex >= 0 && liveKeeps) {
+        for (const uuid of liveKeeps.uuids) {
+            const row = rowsByUuid.get(uuid);
+            if (!row || row.seq >= liveKeeps.seq)
+                continue; // only rows the cut dropped
+            const prev = kept[kept.length - 1];
+            if (prev && prev.role === row.role)
+                prev.content = [...asBlocks(prev.content), ...asBlocks(row.content)];
+            else
+                kept.push({ role: row.role, content: row.content });
+        }
+    }
+    const compactedAway = lastCompactIndex >= 0 ? Math.max(0, lastCompactIndex - kept.length) : 0;
+    const live = lastCompactIndex >= 0 ? [messages[lastCompactIndex], ...kept, ...messages.slice(lastCompactIndex + 1)] : messages;
     return {
         conversationJson: JSON.stringify({ messages: live }),
         title,
@@ -471,10 +601,12 @@ export function parseSessionFile(path) {
         compactedAway,
         reportedInputTokens,
         // Samples before the compaction boundary describe a context that no longer
-        // exists; re-base the rest onto the live array.
-        usageSamples: usageSamples
-            .filter((u) => u.index >= compactedAway)
-            .map((u) => ({ index: u.index - compactedAway, input: u.input })),
+        // exists; re-base the rest onto the live array, after the kept messages.
+        usageSamples: lastCompactIndex >= 0
+            ? usageSamples
+                .filter((u) => u.index >= lastCompactIndex)
+                .map((u) => ({ index: u.index - lastCompactIndex + (u.index > lastCompactIndex ? kept.length : 0), input: u.input }))
+            : usageSamples,
         toolTimings,
         path,
     };

@@ -6,7 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { subagentPayback } from "../subagentpay.js";
 import { realModel } from "../tokens.js";
-const at = (min) => new Date(Date.UTC(2026, 9, 1, 10, min)).toISOString();
+// Relative to now: subagents count by their own start time, and a fixed date
+// would fall out of the 30-day window a month after it was written.
+const day = Date.now() - 2 * 86_400_000;
+const at = (min) => new Date(day + min * 60_000).toISOString();
 const jsonl = (rows) => rows.map((r) => JSON.stringify(r)).join("\n") + "\n";
 test("the comparison: work at the parent's price, parent context per step, and the carried reads", () => {
     const dir = mkdtempSync(join(tmpdir(), "cd-sub-"));
@@ -32,12 +35,13 @@ test("the comparison: work at the parent's price, parent context per step, and t
     assert.equal(a.steps, 4);
     assert.equal(a.parentContextTokens, 100_000);
     assert.equal(a.laterRequests, 5);
-    // Sonnet: 10k written at $3.75/M, then 3 x 10k read at $0.30/M.
-    const bill = (10_000 * 3.75 + 30_000 * 0.3) / 1e6;
+    // Sonnet 5: 10k written at 1.25 x $2/M, then 3 x 10k read at $0.20/M.
+    const bill = (10_000 * 2.5 + 30_000 * 0.2) / 1e6;
     assert.ok(Math.abs(a.costUsd - bill) < 1e-12);
-    // In the parent: the work minus the subagent's own 10k startup (all of it here), the parent's 100k per step, the carried reads.
-    const rideAlong = (100_000 * 4 * 0.3) / 1e6;
-    const carried = ((a.readTokens - a.returnedTokens) * (1.25 + 0.1 * 5) * 3) / 1e6;
+    // In the parent: the work minus the subagent's own 10k startup (all of it here), the parent's 100k per step, the carried reads
+    // (written once at the parent's write price, 1.25x with no writes recorded, then read by 5 later requests).
+    const rideAlong = (100_000 * 4 * 0.2) / 1e6;
+    const carried = ((a.readTokens - a.returnedTokens) * (1.25 * 2 + 5 * 0.2)) / 1e6;
     assert.ok(Math.abs(a.inParentUsd - (rideAlong + carried)) < 1e-9, `${a.inParentUsd} vs ${rideAlong + carried}`);
     assert.ok(a.netUsd > 0);
 });

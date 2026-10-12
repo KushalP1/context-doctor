@@ -571,7 +571,11 @@ async function main() {
             applyBudgetGate(checkBudget(loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`)).config.budget, profile).overBudget, args.failOverBudget);
         }
         else {
-            console.log(`Session: ${parsed.title ?? "(untitled)"}\nFile:    ${parsed.path}`);
+            // Under --redact the title (the user's first prompt) and the path (which
+            // names the project) are content too.
+            console.log(args.redact
+                ? "Session: [redacted]\nFile:    [redacted]"
+                : `Session: ${parsed.title ?? "(untitled)"}\nFile:    ${parsed.path}`);
             if (parsed.compactedAway) {
                 console.log(`Note:    ${parsed.compactedAway} earlier message(s) were compacted away and are NOT counted below — this is the live context the model still sees.`);
             }
@@ -595,7 +599,7 @@ async function main() {
                 console.log("");
                 console.log(timing);
             }
-            const subs = renderSubagents(subagentReport(path), cacheUsage?.paidUsd);
+            const subs = renderSubagents(subagentReport(path), cacheUsage?.paidUsd, 5, { redact: args.redact });
             if (subs) {
                 console.log("");
                 console.log(subs);

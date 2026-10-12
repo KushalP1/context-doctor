@@ -84,4 +84,41 @@ export declare function listSessions(limit?: number): SessionInfo[];
  * boundaries so multi-byte characters are never corrupted.
  */
 export declare function forEachLine(path: string, onLine: (line: string) => void): void;
+/**
+ * Has this API reply been counted already? Claude Code writes one reply as
+ * several rows (one per content block, ~2.2 on average) carrying the same
+ * message id and the same usage, so a row is not a request. And a forked
+ * session starts as a verbatim copy of its parent's transcript in a new file
+ * (same row uuids, same message ids), so across files one reply can turn up
+ * twice. Within a file the message id identifies the reply; across files
+ * the uuid of its row does, which unrelated files never share even when they
+ * reuse an id (hand-made transcripts do).
+ *
+ * Make one per file, passing the same `runRows` set to every file of one
+ * report. Returns "new" the first time a reply is met in the run, "copy"
+ * when its file met it first but an earlier file already counted it, and
+ * "repeat" for its later rows in the same file.
+ */
+export declare function replyCounter(runRows?: Set<string>): (entry: Record<string, any>) => "new" | "copy" | "repeat";
+/**
+ * A counted reply's output, settled. Subagent transcripts are written as a
+ * reply streams, each row with a snapshot of its usage: the input and cache
+ * counts are final from the first row, output_tokens only on the last. On
+ * the author's machine 5.8k subagent replies changed it, their first rows
+ * carrying 1.3M output tokens against a final 6.7M (main-thread rows carry
+ * the final usage throughout). Call with `first` on the row a reply is
+ * counted at; for its later rows it returns the output tokens not yet
+ * charged, and 0 for replies never counted.
+ */
+export declare function outputSettler(): (entry: Record<string, any>, first: boolean) => number;
+/**
+ * Text the user typed while the agent was working. Claude Code delivers it
+ * mid-turn and records it only as an attachment line (type "attachment",
+ * attachment.type "queued_command"), never as a user row: on the author's
+ * machine 511 such prompts against ~2.5k typed user rows. Task
+ * notifications and subagent hand-backs arrive the same way, so only
+ * human-origin prompts count (older lines carry no origin; their prompts
+ * were human). Undefined for anything else.
+ */
+export declare function queuedUserPrompt(entry: Record<string, any>): string | unknown[] | undefined;
 export declare function parseSessionFile(path: string): ParsedSession;

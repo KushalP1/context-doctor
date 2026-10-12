@@ -18,7 +18,7 @@ export interface SubagentSummary {
     model?: string;
     /** What the parent asked it to do: first user message, trimmed. */
     task: string;
-    /** API calls the subagent made (assistant turns carrying usage). */
+    /** API calls the subagent made (replies carrying usage, each counted once). */
     calls: number;
     /** Context size on its last call: what each further turn would have cost. */
     finalContextTokens: number;
@@ -26,7 +26,7 @@ export interface SubagentSummary {
     inputBilledTokens: number;
     cacheReadTokens: number;
     outputTokens: number;
-    /** Cost across all calls at list price with cache-read discount. */
+    /** Cost across all calls at list price: cache reads discounted, writes priced by TTL. */
     estCostUsd?: number;
     durationMs?: number;
 }
@@ -42,9 +42,13 @@ export interface SubagentReport {
 export declare function subagentDir(transcriptPath: string): string;
 /** Account for every subagent of a session, or null when there are none. */
 export declare function subagentReport(transcriptPath: string): SubagentReport | null;
+export interface SubagentRenderOptions {
+    /** Hide each subagent's brief: it quotes the conversation, as previews do. */
+    redact?: boolean;
+}
 /**
  * @param parentInputUsd what the PARENT session's input actually cost across
  *   all its calls (from the cache analysis), so the comparison is total against
  *   total. Comparing against a per-call figure produced nonsense like "159x".
  */
-export declare function renderSubagents(report: SubagentReport | null, parentInputUsd?: number, top?: number): string | null;
+export declare function renderSubagents(report: SubagentReport | null, parentInputUsd?: number, top?: number, options?: SubagentRenderOptions): string | null;

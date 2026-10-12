@@ -13,7 +13,7 @@
 
 import { forEachLine, listSessions } from "./session.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
-import { formatUsd, pricingFor } from "./pricing.js";
+import { CACHE_WRITE_5M, formatUsd, pricingFor } from "./pricing.js";
 
 const CLAUDE = "claude-opus-5";
 /** An image in a tool result bills as an image (~1.6k tokens for a full-size screenshot), not as its base64. */
@@ -41,7 +41,7 @@ export interface RepeatedRead {
   reads: number;
   /** Tokens of all its results, summed over every read. */
   tokens: number;
-  /** Floor of the cost: each read written to the prompt cache once (1.25x input). */
+  /** Floor of the cost: each read written to the prompt cache once (1.25x input; 2x at the 1-hour TTL). */
   usd?: number;
   advice: "summarize" | "pack";
 }
@@ -54,13 +54,29 @@ export interface ReadsReport {
   files: RepeatedRead[];
 }
 
-/** Read calls in one transcript: path -> {reads, tokens}, plus the session's model and project directory. */
-function sessionReads(path: string): { cwd?: string; model?: string; files: Map<string, { reads: number; tokens: number }> } {
-  const pending = new Map<string, string>();
-  const files = new Map<string, { reads: number; tokens: number }>();
+type FileReads = { reads: number; tokens: number; usd: number; priced: boolean };
+
+/**
+ * Read calls in one transcript: path -> reads, tokens and their cost floor,
+ * plus the project directory and whether the session did anything after
+ * `since`. Each read counts by its own timestamp (a session active today
+ * does not bring last week's reads into `--days 1`), and a read already
+ * counted from another transcript (a forked session copies its parent's
+ * history) is not counted again. Rows without a timestamp count with their file.
+ */
+function sessionReads(path: string, since = 0, countedReads = new Set<string>()): { cwd?: string; active: boolean; files: Map<string, FileReads> } {
+  const pending = new Map<string, { file: string; model?: string }>();
+  const files = new Map<string, FileReads>();
   let cwd: string | undefined;
   let model: string | undefined;
+  let active = false, dated = false;
   forEachLine(path, (line) => {
+    // Activity in the window from any row's own timestamp, without parsing it.
+    if (!active) {
+      const ts = /"timestamp":"([^"]+)"/.exec(line);
+      const at = ts ? Date.parse(ts[1]) : Number.NaN;
+      if (Number.isFinite(at)) { dated = true; if (at >= since) active = true; }
+    }
     if (!line.includes('"tool_use"') && !line.includes('"tool_result"') && cwd !== undefined) return;
     let e: any;
     try {
@@ -75,55 +91,71 @@ function sessionReads(path: string): { cwd?: string; model?: string; files: Map<
     if (e.type === "assistant") {
       model = realModel(e.message.model) ?? model;
       for (const b of content) {
-        if (b?.type === "tool_use" && b.name === "Read" && typeof b.input?.file_path === "string") pending.set(b.id, b.input.file_path);
+        if (b?.type === "tool_use" && b.name === "Read" && typeof b.input?.file_path === "string") pending.set(b.id, { file: b.input.file_path, model });
       }
     } else if (e.type === "user") {
+      const at = Date.parse(e.timestamp);
+      if (Number.isFinite(at) && at < since) return;
       for (const b of content) {
         if (b?.type !== "tool_result") continue;
-        const file = pending.get(b.tool_use_id);
-        if (!file) continue;
+        const call = pending.get(b.tool_use_id);
+        if (!call) continue;
         pending.delete(b.tool_use_id);
-        const f = files.get(file) ?? { reads: 0, tokens: 0 };
+        if (countedReads.has(b.tool_use_id)) continue;
+        countedReads.add(b.tool_use_id);
+        const f = files.get(call.file) ?? { reads: 0, tokens: 0, usd: 0, priced: false };
+        const tokens = resultTokens(b.content);
         f.reads++;
-        f.tokens += resultTokens(b.content);
-        files.set(file, f);
+        f.tokens += tokens;
+        // Priced at the model that read it, written to the cache once at the
+        // 5-minute rate: a floor, since Claude Code mostly writes at 1 hour (2x).
+        const price = pricingFor(call.model);
+        if (price) {
+          f.usd += (tokens * CACHE_WRITE_5M * price.inputPerM) / 1e6;
+          f.priced = true;
+        }
+        files.set(call.file, f);
       }
     }
   });
-  return { cwd, model, files };
+  return { cwd, active: active || !dated || files.size > 0, files };
 }
 
 export function repeatedReads(days = 30, paths?: string[], minSessions = 3): ReadsReport {
   const since = Date.now() - days * 86_400_000;
   const list = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
-  const byFile = new Map<string, { project: string; sessions: number; reads: number; tokens: number; usd: number; priced: boolean }>();
+  // Keyed by project AND file: the same path read from two projects is two
+  // findings, each against its own project's session count ("4/1 sessions"
+  // came from counting every project's readers against one project's total).
+  const byFile = new Map<string, { path: string; project: string; sessions: number; reads: number; tokens: number; usd: number; priced: boolean }>();
   const projectSessions = new Map<string, number>();
-  let reads = 0, readTokens = 0;
+  const countedReads = new Set<string>();
+  let reads = 0, readTokens = 0, sessions = 0;
   for (const p of list) {
-    const s = sessionReads(p);
+    const s = sessionReads(p, since, countedReads);
+    if (!s.active) continue;
+    sessions++;
     const project = s.cwd ?? "?";
     projectSessions.set(project, (projectSessions.get(project) ?? 0) + 1);
-    const price = pricingFor(s.model);
     for (const [file, f] of s.files) {
       reads += f.reads;
       readTokens += f.tokens;
-      const agg = byFile.get(file) ?? { project, sessions: 0, reads: 0, tokens: 0, usd: 0, priced: false };
+      const key = `${project}\u0000${file}`;
+      const agg = byFile.get(key) ?? { path: file, project, sessions: 0, reads: 0, tokens: 0, usd: 0, priced: false };
       agg.sessions++;
       agg.reads += f.reads;
       agg.tokens += f.tokens;
-      if (price) {
-        agg.usd += (f.tokens * 1.25 * price.inputPerM) / 1e6;
-        agg.priced = true;
-      }
-      byFile.set(file, agg);
+      agg.usd += f.usd;
+      agg.priced ||= f.priced;
+      byFile.set(key, agg);
     }
   }
-  const files: RepeatedRead[] = [...byFile.entries()]
-    .filter(([, a]) => a.sessions >= minSessions)
-    .map(([path, a]) => {
+  const files: RepeatedRead[] = [...byFile.values()]
+    .filter((a) => a.sessions >= minSessions)
+    .map((a) => {
       const ps = projectSessions.get(a.project) ?? a.sessions;
       return {
-        path,
+        path: a.path,
         project: a.project,
         sessions: a.sessions,
         projectSessions: ps,
@@ -135,7 +167,7 @@ export function repeatedReads(days = 30, paths?: string[], minSessions = 3): Rea
       };
     })
     .sort((a, b) => b.tokens - a.tokens);
-  return { days, sessions: list.length, reads, readTokens, files };
+  return { days, sessions, reads, readTokens, files };
 }
 
 export function renderReads(r: ReadsReport, limit = 15, home = process.env.HOME ?? ""): string {
