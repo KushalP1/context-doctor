@@ -61,7 +61,12 @@ export declare function stripToken(url: string, token: string): string | undefin
  * Code under autopilot, an SDK) also lists models, uploads files, counts
  * tokens. Until 0.24 those got a 404 and broke the feature for that client.
  * Unknown paths go to Anthropic when the request says it is one (Anthropic
- * clients always send anthropic-version, or x-api-key), else to OpenAI.
+ * clients always send anthropic-version, or x-api-key; OAuth calls send
+ * anthropic-beta; Anthropic keys and tokens start sk-ant-), else to OpenAI.
+ * Under autopilot the default flips: Claude Code is the client it is
+ * installed for, and a Bearer-only request from it (its OAuth token) sent to
+ * OpenAI would hand an Anthropic credential to another company. There only a
+ * request carrying an OpenAI-style key (sk-..., not sk-ant-...) goes to OpenAI.
  * Google's Gemini API (GOOGLE_GEMINI_BASE_URL) is recognised by its key
  * header, its /v1beta paths, or a `model:method` path such as
  * /v1/models/gemini-3-pro:generateContent.

@@ -86,7 +86,12 @@ export function stripToken(url: string, token: string): string | undefined {
  * Code under autopilot, an SDK) also lists models, uploads files, counts
  * tokens. Until 0.24 those got a 404 and broke the feature for that client.
  * Unknown paths go to Anthropic when the request says it is one (Anthropic
- * clients always send anthropic-version, or x-api-key), else to OpenAI.
+ * clients always send anthropic-version, or x-api-key; OAuth calls send
+ * anthropic-beta; Anthropic keys and tokens start sk-ant-), else to OpenAI.
+ * Under autopilot the default flips: Claude Code is the client it is
+ * installed for, and a Bearer-only request from it (its OAuth token) sent to
+ * OpenAI would hand an Anthropic credential to another company. There only a
+ * request carrying an OpenAI-style key (sk-..., not sk-ant-...) goes to OpenAI.
  * Google's Gemini API (GOOGLE_GEMINI_BASE_URL) is recognised by its key
  * header, its /v1beta paths, or a `model:method` path such as
  * /v1/models/gemini-3-pro:generateContent.
@@ -97,7 +102,13 @@ export function upstreamFor(url: string, opts: ProxyOptions, headers: http.Incom
   if (isGeminiRequest(url, headers)) return opts.googleUpstream ?? "https://generativelanguage.googleapis.com";
   if (url.startsWith("/v1/messages")) return anthropic;
   if (url.startsWith("/v1/chat/completions") || url.startsWith("/v1/responses") || url.startsWith("/v1/embeddings")) return openai;
-  return headers["anthropic-version"] !== undefined || headers["x-api-key"] !== undefined ? anthropic : openai;
+  const auth = headers.authorization;
+  const bearer = typeof auth === "string" ? /^Bearer\s+(\S+)/i.exec(auth)?.[1] : undefined;
+  if (headers["anthropic-version"] !== undefined || headers["x-api-key"] !== undefined || headers["anthropic-beta"] !== undefined || bearer?.startsWith("sk-ant-")) {
+    return anthropic;
+  }
+  if (opts.autopilot) return bearer?.startsWith("sk-") ? openai : anthropic;
+  return openai;
 }
 
 export function isGeminiRequest(url: string, headers: http.IncomingHttpHeaders = {}): boolean {
