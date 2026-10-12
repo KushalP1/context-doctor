@@ -3,6 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -28,7 +29,9 @@ test("doctor runs, checks the MCP handshake, and exits 0", async () => {
   assert.ok(out.includes("CONTEXT DOCTOR — self-check"));
   assert.ok(out.includes("MCP server handshake"));
   assert.ok(/✓ MCP server handshake/.test(out), "our own server must pass its own handshake");
-  assert.ok(out.includes("Ledger"));
+  assert.ok(/✓ Ledger/.test(out));
+  // The writability probe must not log a hook check: those count in report and the dashboard.
+  assert.ok(!existsSync(join(stateDir, ".context-doctor-ledger.jsonl")), "doctor wrote a ledger entry");
 });
 
 test("install never writes a version-pinned node binary into configs", async () => {

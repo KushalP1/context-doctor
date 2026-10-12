@@ -33,6 +33,10 @@ export declare function serviceCommand(node: string, cli: string, port: number, 
 export declare function launchdPlist(args: string[], log: string): string;
 export declare function systemdUnit(args: string[], log: string): string;
 export declare function windowsTaskCommand(args: string[]): string;
+/** Version of the package a CLI path belongs to (dist/cli.js -> ../package.json). */
+export declare function installedVersion(cli: string): string | undefined;
+/** Restart the installed background service onto the current build (launchd, systemd). */
+export declare function restartService(): boolean;
 export declare function startDetached(args: string[], log: string): void;
 export interface Health {
     ok: boolean;

@@ -43,7 +43,8 @@ export async function collectDashboardData(proxyPort = 8787): Promise<DashboardD
   // Totals folded in when the ledger rotated; excluded from the daily series,
   // which describes individual days rather than a carried-forward sum.
   const carried = foldTotals(ledger.filter((e) => e.ev === "rollup"));
-  const checks = ledger.filter((e) => e.ev === "check" || e.ev === undefined);
+  // "doctor-probe" entries came from `doctor` (before 0.30), not from the hook.
+  const checks = ledger.filter((e) => (e.ev === "check" || e.ev === undefined) && e.sid !== "doctor-probe");
   const optimizes = ledger.filter((e) => e.ev === "optimize");
 
   // Observed shrinkage: a session getting SMALLER between two deep checks is a

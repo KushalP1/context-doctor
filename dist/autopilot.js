@@ -19,7 +19,7 @@
  * backend, not an API base URL).
  */
 import { execFileSync, spawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -150,6 +150,38 @@ function removeService() {
     else if (os === "win32") {
         tryRun("schtasks", ["/Delete", "/F", "/TN", "context-doctor-proxy"]);
     }
+}
+/** Version of the package a CLI path belongs to (dist/cli.js -> ../package.json). */
+export function installedVersion(cli) {
+    try {
+        return JSON.parse(readFileSync(join(dirname(cli), "..", "package.json"), "utf8")).version;
+    }
+    catch {
+        return undefined;
+    }
+}
+function restartDue(paths) {
+    const marker = join(dirname(paths.log), ".context-doctor-proxy-restart");
+    try {
+        if (existsSync(marker) && Date.now() - statSync(marker).mtimeMs < 3_600_000)
+            return false;
+        mkdirSync(dirname(marker), { recursive: true });
+        writeFileSync(marker, String(Date.now()));
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+/** Restart the installed background service onto the current build (launchd, systemd). */
+export function restartService() {
+    const os = platform();
+    const sp = servicePaths();
+    if (os === "darwin" && existsSync(sp.plist))
+        return tryRun("launchctl", ["kickstart", "-k", `gui/${uid()}/${LABEL}`]);
+    if (os === "linux" && existsSync(sp.unit))
+        return tryRun("systemctl", ["--user", "restart", "context-doctor-proxy.service"]);
+    return false;
 }
 export function startDetached(args, log) {
     mkdirSync(dirname(log), { recursive: true });
@@ -393,8 +425,17 @@ export async function ensureProxyUp(paths = autopilotPaths()) {
     const cfg = readConfig(paths);
     if (!cfg)
         return;
-    if ((await health(cfg.port, 300)).ok)
+    const h = await health(cfg.port, 300);
+    if (h.ok) {
+        // A service keeps running the code it started with: after an update it
+        // answers fine but is still the old version (seen: 0.25 serving for days
+        // after 0.29 was installed). Restart it onto the installed build, at most
+        // once an hour so an install that cannot fix it never loops.
+        const installed = typeof cfg.cli === "string" ? installedVersion(cfg.cli) : undefined;
+        if (installed && h.version && h.version !== installed && restartDue(paths))
+            restartService();
         return;
+    }
     if (typeof cfg.node !== "string" || typeof cfg.cli !== "string" || !existsSync(cfg.node) || !existsSync(cfg.cli))
         return;
     startDetached(serviceCommand(cfg.node, cfg.cli, cfg.port, paths), paths.log);

@@ -5,13 +5,13 @@
  * check, so "it doesn't work" becomes a single pasteable diagnosis. Always
  * exits 0 — absence of an app is a note, not a failure.
  */
-import { autopilotPaths, health, proxyUrl, recentSurfaces } from "./autopilot.js";
+import { autopilotPaths, health, installedVersion, proxyUrl, recentSurfaces } from "./autopilot.js";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ledgerPath, recordLedger } from "./ledger.js";
+import { ledgerPath } from "./ledger.js";
 import { loadConfig } from "./config.js";
 import { geminiCliPresent, geminiSettingsPath } from "./install.js";
 function claudeDesktopConfigPath() {
@@ -234,10 +234,14 @@ export async function runDoctor() {
     checks.push(existsSync(skillPath)
         ? { label: "Agent Skill", status: "ok", detail: skillPath }
         : { label: "Agent Skill", status: "skip", detail: "not installed (run context-doctor install on a Claude Code machine)" });
-    // Ledger writable
+    // Ledger writable. Tested without writing an entry: recordLedger swallows
+    // errors (so this could never fail), and the entry it wrote counted as a
+    // hook check in every report.
     try {
-        recordLedger({ ev: "check", sid: "doctor-probe", tok: 0, warn: false });
-        checks.push({ label: "Ledger", status: "ok", detail: `writable at ${ledgerPath()}` });
+        const lp = ledgerPath();
+        mkdirSync(dirname(lp), { recursive: true });
+        accessSync(existsSync(lp) ? lp : dirname(lp), fsConstants.W_OK);
+        checks.push({ label: "Ledger", status: "ok", detail: `writable at ${lp}` });
     }
     catch {
         checks.push({ label: "Ledger", status: "fail", detail: `cannot write ${ledgerPath()}` });
@@ -264,6 +268,7 @@ export async function runDoctor() {
         }
         else {
             const cfg = JSON.parse(readFileSync(paths.config, "utf8"));
+            const installed = typeof cfg.cli === "string" ? installedVersion(cfg.cli) : undefined;
             const h = await health(cfg.port);
             let routed = false;
             try {
@@ -283,9 +288,11 @@ export async function runDoctor() {
             const desktopOnly = known.length > 0 && known.every((ep) => ep.startsWith("claude-desktop"));
             checks.push(h.ok && h.autopilot && routed && seen === 0 && desktopOnly
                 ? { label: "Autopilot", status: "warn", detail: "running, but it has seen 0 requests: your recent Claude Code sessions all ran in the desktop app, which ignores settings.json's API address. Autopilot only reaches terminal and IDE sessions; for desktop ones, see `context-doctor compact-window`" }
-                : h.ok && h.autopilot && routed
-                    ? { label: "Autopilot", status: "ok", detail: `proxy up on ${proxyUrl(cfg.port)}, Claude Code routed through it${seen >= 0 ? ` (${seen} requests since start)` : ""}${paused ? " (PAUSED: passthrough)" : ""}` }
-                    : { label: "Autopilot", status: "fail", detail: !h.ok ? `proxy not answering on ${proxyUrl(cfg.port)}: the next Claude Code prompt restarts it; or run: context-doctor autopilot on` : "settings.json no longer routes Claude Code to the proxy: run context-doctor autopilot on" });
+                : h.ok && h.autopilot && routed && h.version && installed && h.version !== installed
+                    ? { label: "Autopilot", status: "warn", detail: `proxy is running v${h.version} but v${installed} is installed; the next Claude Code prompt restarts it, or run: context-doctor autopilot on` }
+                    : h.ok && h.autopilot && routed
+                        ? { label: "Autopilot", status: "ok", detail: `proxy up on ${proxyUrl(cfg.port)}, Claude Code routed through it${seen >= 0 ? ` (${seen} requests since start)` : ""}${paused ? " (PAUSED: passthrough)" : ""}` }
+                        : { label: "Autopilot", status: "fail", detail: !h.ok ? `proxy not answering on ${proxyUrl(cfg.port)}: the next Claude Code prompt restarts it; or run: context-doctor autopilot on` : "settings.json no longer routes Claude Code to the proxy: run context-doctor autopilot on" });
         }
     }
     const mark = { ok: "✓", warn: "!", fail: "✗", skip: "–" };
@@ -295,6 +302,11 @@ export async function runDoctor() {
         console.log(`${mark[c.status]} ${c.label.padEnd(22)} ${c.detail}`);
     }
     const fails = checks.filter((c) => c.status === "fail");
+    const warns = checks.filter((c) => c.status === "warn");
     console.log("");
-    console.log(fails.length === 0 ? "All good." : `${fails.length} issue(s) found — fixes suggested above.`);
+    console.log(fails.length > 0
+        ? `${fails.length} issue(s) found — fixes suggested above.`
+        : warns.length > 0
+            ? `No problems; ${warns.length} note(s) marked ! above.`
+            : "All good.");
 }

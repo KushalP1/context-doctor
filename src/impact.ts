@@ -39,7 +39,8 @@ export async function buildImpactReport(proxyPort = 8787): Promise<string> {
   // Rotation folds dropped entries into a rollup. Counting it is what keeps
   // these lifetime totals from going backwards once the cap is hit.
   const carried = foldTotals(ledger.filter((e) => e.ev === "rollup"));
-  const checks = ledger.filter((e) => e.ev === "check" || e.ev === undefined);
+  // "doctor-probe" entries came from `doctor` (before 0.30), not from the hook.
+  const checks = ledger.filter((e) => (e.ev === "check" || e.ev === undefined) && e.sid !== "doctor-probe");
   const optimizes = ledger.filter((e) => e.ev === "optimize");
 
   // Observed per-session reductions: when a session SHRANK between two deep
