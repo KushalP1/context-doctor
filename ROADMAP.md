@@ -12,13 +12,13 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 |---|---|---|---|
 | Claude Code, terminal and IDE | every-prompt hook, autopilot proxy, compact-window, status line | savings, session, watch, report, pack, overhead, MCP tools, plugin | — |
 | Claude Code, desktop app Code tab | hook (incl. cold-resume `/compact` offer), compact-window | same as above | autopilot: the app sets its own API address |
-| Claude Desktop chat | standing MCP instructions (now incl. pack_context) | profile_context sketch, pack_context on local files, checkup prompt | no hook API, no transcript on disk |
+| Claude Desktop chat | standing MCP instructions (now incl. pack_context) | profile_context sketch, pack_context on local files, checkup prompt | no hook API, no transcript on disk ; on the author's machine Desktop has made 0 tool calls to context-doctor in its whole log: the rules are read, the tools go unused |
 | Cursor agent | native postToolUse hook | MCP tools, cursor profiler, editor extension | Cursor's own models never pass through a local process |
 | Codex (app, IDE, CLI) | every-prompt hook | MCP tools (read-only, no approval needed), session | autopilot only with an API key |
 | Gemini CLI | every-prompt hook (`BeforeAgent`, with the API's own token counts); autopilot on an API key (`GOOGLE_GEMINI_BASE_URL`) | MCP tools, session, watch, overhead (GEMINI.md and the measured start-of-session cost) | autopilot cannot see Google sign-in traffic |
 | claude.ai, ChatGPT, phone apps | standing preferences (`instructions --copy`) | analyze an exported chat | nothing runs there |
 | Your own API apps (Anthropic, OpenAI, Gemini) | autopilot or the optimizing proxy; `withContextDoctor(client)` without a proxy (Anthropic, OpenAI and Google Gen AI SDKs) | library: profile, optimize, pack | — |
-| CI | `analyze --fail-over-budget`; the GitHub Action comments memory-file growth on PRs and gates on a budget | `ci` locally | Marketplace listing pending |
+| CI | `analyze --fail-over-budget`; the GitHub Action (`uses: KushalP1/context-doctor@<tag>`) comments memory-file growth on PRs and gates on a budget | `ci` locally | Not in the Marketplace: it only lists repositories with no workflow files, and context-doctor stays one repository |
 
 ## Verified 2026-10-08
 
@@ -73,7 +73,6 @@ The idea: when a prompt itself carries a big paste, tell the model to work from 
 |---|---|---|
 | **Sign the `.mcpb`** | Signing is in `build:mcpb` and the release workflow; `mcpb verify` gates the release. Tested end to end with a self-signed certificate | Obtain a code-signing certificate from a trusted CA; add `MCPB_CERT` / `MCPB_KEY` |
 | **Publish the extension** | Marketplace metadata, icon, listing and changelog ready; the `vscode-v*` workflow publishes to both marketplaces and attaches the `.vsix` | Create the `gai-ventures` publisher and an Open VSX account; add `VSCE_PAT` / `OVSX_PAT`; push a `vscode-v*` tag |
-| **List the GitHub Action on the Marketplace** | `action.yml` at the repo root works today as `uses: KushalP1/context-doctor@<tag>`, but the Marketplace only lists repositories that hold one action and no workflow files. A standalone `KushalP1/context-doctor-action` (action.yml, README, LICENSE; tagged v1 and v1.0.0) is ready locally at `~/tech/context-doctor-action` | Create the empty public repo `KushalP1/context-doctor-action`, then the push and a release with "Publish this Action to the GitHub Marketplace" ticked (GitHub asks you to accept its Marketplace developer agreement once) |
 | **Claim the Glama listing** | A `Dockerfile` at the repo root runs the published MCP server, which passes the full MCP smoke test on both entry points | Sign in to glama.ai with GitHub, claim `KushalP1/context-doctor`; Glama builds the Dockerfile and scores it; the open awesome-mcp-servers PR #15213 then passes its check |
 | **Publish the Python package to PyPI** | `publish-python.yml` publishes `python/` by trusted publishing on a `py-v*` tag; the name `context-doctor` is free on PyPI | On pypi.org, add a pending trusted publisher: project `context-doctor`, owner `KushalP1`, repo `context-doctor`, workflow `publish-python.yml`; then push tag `py-v0.1.0` |
 | Move repo to the **gAI-ventures org** | Redirects keep old links working | The org owner transfers it on GitHub |
@@ -91,6 +90,15 @@ The idea: when a prompt itself carries a big paste, tell the model to work from 
 | **`context-doctor tasks`**: cost per commit, per project | Dollars per session say little alone. Each session priced from its recorded usage (input, cache writes 1.25x, reads 0.1x, output) against the commits it made: its own successful `git commit` calls, in whichever repository. A `git log` time window was tried first and dropped: a parent folder's repo showed no commits, a busy repo's unrelated history showed 1,111 | ✅ Author's last 30 days: $10.4k at list price, 40 sessions, 919 commits, $9-20 per commit across projects; 23 of 31 sessions started in `~/tech` committed nothing (research, deploys, browser work) |
 | **`context-doctor reads`**: files read into session after session | Agents re-read the same orientation files every session. Counted from transcripts per file: sessions, reads, tokens (images billed as images, not their base64) and the floor of the cost; a file read in most of its project's sessions is flagged as worth a few lines in CLAUDE.md, the rest pointed at `pack` | ✅ Measured on the author's last 30 days: 1,435 reads in 76 sessions, ~2.6M tokens; only 7 files were read in 3+ sessions, 8% of read tokens and about $1.70 at the floor. Cross-session repetition is small there; the larger waste is re-reading within a session (one file read 100 times in 3 sessions), which `session` already flags as `repeated_file_read` |
 | **Python package** (`python/`, `pip install context-doctor` once published) | RAG pipelines chunk and stuff context in Python. The port gives them `pack_context`, `pack_documents` (LangChain documents, LlamaIndex nodes, strings, duck-typed: no dependencies), `estimate_tokens`, a message `profile_messages`, and `python -m context_doctor pack` | ✅ Parity with the TypeScript, byte for byte: 42 token estimates, 19 number formats, 579 chunks across 14 chunkings (markdown, code, logs, Unicode, one-line logs), 7 full packs and their rendered output. Tested on Python 3.9, 3.11 and 3.14 here; CI runs 3.9 and 3.13 on Linux, macOS and Windows and fails if the fixtures fall behind the TypeScript. Wheel built and installed in a clean venv. Publishing waits on the owner's PyPI trusted publisher |
+
+## Fixed by a local audit (2026-10-12)
+
+| Found | Fix |
+|---|---|
+| The autopilot service kept serving the code it started with: on the author's machine v0.25 answered for days after 0.29 was installed | The every-prompt self-heal compares the running proxy's version with the installed build and restarts the service (launchd `kickstart`, `systemctl --user restart`) at most once an hour; `doctor` flags a mismatch |
+| `doctor` wrote a fake hook check into the ledger on every run (36 on the author's machine, counted in `report` and the dashboard), and its "Ledger writable" probe could never fail because the writer swallows errors | Write access is tested directly, with no entry; `report` and the dashboard ignore old `doctor-probe` entries |
+| `doctor` printed "All good." under a `!` warning | It says "No problems; N note(s)" when there are warnings |
+| A verification run wrote a fixture optimize into the real ledger | `scripts/verify-local.sh` runs every ledger-writing command in a throwaway HOME, checked to leave the real ledger byte-identical |
 
 ## History: what shipped, with the measurements behind it
 
