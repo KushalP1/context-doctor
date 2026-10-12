@@ -64,6 +64,11 @@ The idea: when a prompt itself carries a big paste, tell the model to work from 
 
 ## Later / research
 
+- **Claude Desktop does not use the tools.** Its log shows the standing instructions delivered and 0 tool calls to context-doctor, ever, on the author's machine. Worth trials of other instruction wordings and tool descriptions, which need a person driving Desktop (Claude cannot), with the log as the measure.
+
+## Closed by measurement (2026-10-12): telling the model a re-read file is unchanged
+
+The idea: before a `Read`, say "you already have this, unchanged since turn N". Across 998 reads in 78 sessions (30 days), one returned content identical to an earlier read of the same range in the same session, about $0.10 at list price. Repeated reads of one file were different ranges of a large file. Nothing to save.
 
 ## Waiting on the owner's accounts
 
