@@ -461,7 +461,9 @@ async function main() {
         const opts = { task: args.task, check: args.check, existing: args.existing, model: args.model, budgetUsd: args.budgetUsd, dryRun: args.dryRun, allowDirty: args.allowDirty };
         const result = runExperiment(opts);
         console.log(args.json ? JSON.stringify(result, null, 2) : renderExperiment(result, opts));
-        if (result.refused)
+        // No arm completed (claude missing, or every run errored): nothing was
+        // compared, and a script must not read exit 0 as a result.
+        if (result.refused || (result.arms.length > 0 && result.arms.every((a) => a.error)))
             process.exitCode = 1;
         return;
     }
@@ -493,7 +495,9 @@ async function main() {
     if (args.command === "cursor") {
         let chats;
         try {
-            chats = listCursorChats();
+            // An id is looked up among ALL chats: the default list keeps the 20
+            // largest, so a smaller chat's id used to fall through to the biggest one.
+            chats = listCursorChats(args.file && !args.list ? Infinity : undefined);
         }
         catch (e) {
             console.error(`Could not read Cursor history: ${e.message}`);
@@ -509,7 +513,12 @@ async function main() {
             }
             return;
         }
-        const chat = args.file ? chats.find((c) => c.composerId === args.file) ?? chats[0] : chats[0];
+        // A named chat that does not exist is an error, never a silent profile of another one.
+        const chat = args.file ? chats.find((c) => c.composerId === args.file) : chats[0];
+        if (!chat) {
+            console.error(`No Cursor chat with id "${args.file}" (context-doctor cursor --list shows the ids).`);
+            process.exit(1);
+        }
         const parsed = parseCursorChat(chat);
         const profile = profileConversation(parseConversation(parsed.conversationJson), args.model ?? parsed.model);
         if (args.json) {
@@ -557,6 +566,9 @@ async function main() {
         const profile = profileConversation(parseConversation(parsed.conversationJson), args.model ?? parsed.model);
         if (args.json) {
             console.log(JSON.stringify({ session: { path: parsed.path, title: parsed.title, toolTimings: parsed.toolTimings ?? [], subagents: subagentReport(path) }, profile }, null, 2));
+            // --json is what CI pipes, so the gate must hold here too (as it does for
+            // analyze); it used to run only after the text report and never failed.
+            applyBudgetGate(checkBudget(loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`)).config.budget, profile).overBudget, args.failOverBudget);
         }
         else {
             console.log(`Session: ${parsed.title ?? "(untitled)"}\nFile:    ${parsed.path}`);
@@ -847,26 +859,37 @@ async function main() {
     if (args.command === "analyze") {
         const loaded = loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`));
         const profile = profileConversation(parseConversation(input), args.model ?? loaded.config.model);
-        console.log(args.json ? JSON.stringify(profile, null, 2) : renderProfile(profile, { redact: args.redact }));
-        if (!args.json)
-            applyBudgetGate(printBudgetStatus(profile, loaded), args.failOverBudget);
-        else
+        // The exact count is awaited before anything prints: with --json it goes
+        // inside the one JSON object. Printed after it, as it once was, the extra
+        // lines made stdout invalid JSON for every script that parsed it.
+        const exact = args.exact ? await exactTokenCount(input, args.model) : undefined;
+        let drift;
+        let remembered = false;
+        if (exact?.tokens !== undefined) {
+            drift = profile.totalTokens > 0 ? Math.round(((exact.tokens - profile.totalTokens) / exact.tokens) * 100) : 0;
+            // Remember the comparison so the next estimate for this model family
+            // starts from the user's own ground truth instead of a constant.
+            const raw = profile.calibration ? profile.totalTokens / profile.calibration.factor : profile.totalTokens;
+            remembered = recordCalibration(args.model ?? profile.model, exact.tokens, raw);
+        }
+        if (args.json) {
+            const out = exact ? { ...profile, exact: { ...exact, driftPct: drift, calibrationRecorded: remembered } } : profile;
+            console.log(JSON.stringify(out, null, 2));
             applyBudgetGate(checkBudget(loaded.config.budget, profile).overBudget, args.failOverBudget);
-        if (args.exact) {
-            void exactTokenCount(input, args.model).then((exact) => {
-                if (exact.tokens !== undefined) {
-                    const drift = profile.totalTokens > 0 ? Math.round(((exact.tokens - profile.totalTokens) / exact.tokens) * 100) : 0;
-                    console.log(`\nExact input tokens: ${exact.tokens} (${exact.source}) — heuristic was off by ${drift}%`);
-                    // Remember the comparison so the next estimate for this model family
-                    // starts from the user's own ground truth instead of a constant.
-                    const raw = profile.calibration ? profile.totalTokens / profile.calibration.factor : profile.totalTokens;
-                    recordCalibration(args.model ?? profile.model, exact.tokens, raw);
-                    console.log(`Remembered: future ${modelFamily(args.model ?? profile.model)} estimates on this machine are calibrated from this (CONTEXT_DOCTOR_NO_CALIBRATION=1 to disable).`);
-                }
-                else {
-                    console.log(`\nExact count unavailable: ${exact.note}`);
-                }
-            });
+            return;
+        }
+        console.log(renderProfile(profile, { redact: args.redact }));
+        applyBudgetGate(printBudgetStatus(profile, loaded), args.failOverBudget);
+        if (exact?.tokens !== undefined) {
+            console.log(`\nExact input tokens: ${exact.tokens} (${exact.source}) — heuristic was off by ${drift}%`);
+            // Only claim it when it happened: a sample outside 0.5-2x is rejected,
+            // and CONTEXT_DOCTOR_NO_CALIBRATION=1 stores nothing.
+            if (remembered) {
+                console.log(`Remembered: future ${modelFamily(args.model ?? profile.model)} estimates on this machine are calibrated from this (CONTEXT_DOCTOR_NO_CALIBRATION=1 to disable).`);
+            }
+        }
+        else if (exact) {
+            console.log(`\nExact count unavailable: ${exact.note}`);
         }
         return;
     }

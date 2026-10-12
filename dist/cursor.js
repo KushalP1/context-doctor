@@ -66,6 +66,24 @@ export function findCursorDatabases() {
     return dbs.sort((a, b) => b.mtime - a.mtime).map((d) => d.path);
 }
 /**
+ * This runtime cannot read SQLite at all: no `node:sqlite` and no sqlite3
+ * command. Distinct from one database failing, which listing skips, because
+ * it applies to every database: swallowing it per database showed "No Cursor
+ * chats found" with every chat still there (Node 20, and 22.5-22.12 without
+ * the flag, when sqlite3 is not on PATH).
+ */
+export class SqliteUnavailableError extends Error {
+}
+/** Node's built-in SQLite, when this runtime has it (22.13+, or 22.5+ with --experimental-sqlite). */
+function nodeSqlite() {
+    try {
+        return require("node:sqlite");
+    }
+    catch {
+        return undefined;
+    }
+}
+/**
  * Run a read-only query against a Cursor database.
  *
  * Two hard rules learned the expensive way:
@@ -77,31 +95,40 @@ export function findCursorDatabases() {
  * safe while Cursor is running.
  */
 export function queryRows(dbPath, sql) {
-    try {
-        // Preferred: Node's built-in SQLite (22.5+).
-        const { DatabaseSync } = require("node:sqlite");
-        const db = new DatabaseSync(dbPath, { readOnly: true });
+    // Preferred: Node's built-in SQLite (22.5+).
+    const sqlite = nodeSqlite();
+    let nodeSqliteErr;
+    if (sqlite) {
         try {
-            return db.prepare(sql).all();
+            const db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+            try {
+                return db.prepare(sql).all();
+            }
+            finally {
+                db.close();
+            }
         }
-        finally {
-            db.close();
+        catch (e) {
+            nodeSqliteErr = e;
         }
     }
-    catch (nodeSqliteErr) {
-        // Fallback: the sqlite3 CLI, if the user has it.
-        try {
-            const out = execFileSync("sqlite3", ["-readonly", "-json", dbPath, sql], {
-                encoding: "utf8",
-                maxBuffer: 512 * 1024 * 1024,
-                stdio: ["ignore", "pipe", "ignore"], // a missing table is expected on some DBs
-            });
-            return out.trim() ? JSON.parse(out) : [];
+    // Fallback: the sqlite3 CLI, if the user has it.
+    try {
+        const out = execFileSync("sqlite3", ["-readonly", "-json", dbPath, sql], {
+            encoding: "utf8",
+            maxBuffer: 512 * 1024 * 1024,
+            stdio: ["ignore", "pipe", "ignore"], // a missing table is expected on some DBs
+        });
+        return out.trim() ? JSON.parse(out) : [];
+    }
+    catch (cliErr) {
+        // Neither backend exists: the same answer for every database, so say it once.
+        if (!sqlite && cliErr.code === "ENOENT") {
+            throw new SqliteUnavailableError("reading Cursor chats needs SQLite: Node 22.13+ (built-in; 22.5+ with --experimental-sqlite) or the sqlite3 command. " +
+                "Neither is available here.");
         }
-        catch {
-            throw new Error("reading Cursor chats needs SQLite: Node 22.5+ (built-in) or the sqlite3 command. " +
-                `Neither worked here (${nodeSqliteErr.message}).`);
-        }
+        // A backend ran and this database failed (no such table, locked, corrupt).
+        throw new Error(`${dbPath}: ${(nodeSqliteErr ?? cliErr).message}`);
     }
 }
 /** List Cursor chats, biggest first. */
@@ -121,8 +148,12 @@ export function listCursorChats(limit = 20) {
                 // "No Cursor chats found" with every real chat sitting right there.
                 "FROM cursorDiskKV WHERE key LIKE 'composerData:%' AND json_valid(value)");
         }
-        catch {
-            continue; // no composer table (older Cursor) or no SQLite — skip
+        catch (e) {
+            // No SQLite at all fails every database alike: report it (the CLI says
+            // what to install) instead of "No Cursor chats found".
+            if (e instanceof SqliteUnavailableError)
+                throw e;
+            continue; // no composer table (older Cursor), or this database is unreadable — skip
         }
         for (const row of rows) {
             const count = Number(row.n ?? 0);

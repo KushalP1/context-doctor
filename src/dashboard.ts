@@ -8,12 +8,14 @@
  */
 
 import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { foldTotals, readLedger } from "./ledger.js";
 import { listSessions, parseSessionFile } from "./session.js";
 import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
 import { inputCostUsd, pricingFor } from "./pricing.js";
 import { checkBudget, loadConfig } from "./config.js";
+import { proxySavings } from "./impact.js";
 
 /** Sessions bigger than this are skipped so the page stays responsive. */
 const MAX_SESSION_BYTES = 30 * 1024 * 1024;
@@ -24,7 +26,7 @@ export interface DashboardData {
   totals: { tokensSaved: number; usdSaved: number; checks: number; warnings: number; optimizeRuns: number; shrinkage: number };
   daily: Array<{ date: string; saved: number }>;
   sessions: Array<{ title: string; tokens: number; waste: number; model?: string }>;
-  proxy: { requests: number; optimizedRequests: number; tokensSaved: number; estUsdSaved: number } | null;
+  proxy: { startedAt?: string; requests: number; optimizedRequests: number; tokensSaved: number; estUsdSaved: number } | null;
   budget: { path: string; overBudget: boolean; breaches: string[] } | null;
 }
 
@@ -95,6 +97,9 @@ export async function collectDashboardData(proxyPort = 8787): Promise<DashboardD
   }
 
   const proxy = await fetchProxyStats(proxyPort);
+  // The same lifetime figure `report` prints: ledger checkpoints (so a stopped
+  // proxy's savings still show) plus what the live run has not checkpointed.
+  const proxySaved = proxySavings(ledger, proxy);
   const loaded = loadConfig();
   let budget: DashboardData["budget"] = null;
   if (loaded.path && loaded.config.budget && sessions.length > 0) {
@@ -108,9 +113,9 @@ export async function collectDashboardData(proxyPort = 8787): Promise<DashboardD
     totals: {
       // What context-doctor removed itself; compaction shrinkage is reported
       // separately (it was counted here until 0.24, which overclaimed).
-      tokensSaved: optimizeSaved + (proxy?.tokensSaved ?? 0),
+      tokensSaved: optimizeSaved + proxySaved.tokens,
       shrinkage,
-      usdSaved: usdSaved + (proxy?.estUsdSaved ?? 0),
+      usdSaved: usdSaved + proxySaved.usd,
       checks: checks.length + carried.checks,
       warnings: checks.filter((c) => c.warn).length + carried.warnings,
       optimizeRuns: optimizes.length,
@@ -122,9 +127,30 @@ export async function collectDashboardData(proxyPort = 8787): Promise<DashboardD
   };
 }
 
+/**
+ * Whether a request's Host header names this machine's loopback.
+ *
+ * Listening on 127.0.0.1 is not enough on its own: a web page can rebind its
+ * own hostname to 127.0.0.1 (DNS rebinding) and then read /api/data, session
+ * titles included, as same-origin. Such a request still carries the attacker's
+ * hostname in Host, so only loopback names are answered.
+ */
+export function isLoopbackHost(host: string | undefined, port: number): boolean {
+  if (!host) return false;
+  const h = host.toLowerCase();
+  return ["127.0.0.1", "localhost", "[::1]"].some((name) => h === name || h === `${name}:${port}`);
+}
+
 export function startDashboard(opts: { port?: number; proxyPort?: number } = {}): http.Server {
   const port = opts.port ?? 8790;
   const server = http.createServer(async (req, res) => {
+    // The bound port, not the requested one: port 0 picks a free port.
+    const boundPort = (server.address() as AddressInfo | null)?.port ?? port;
+    if (!isLoopbackHost(req.headers.host, boundPort)) {
+      res.statusCode = 403;
+      res.end("context-doctor dashboard: open it as http://127.0.0.1 or http://localhost");
+      return;
+    }
     try {
       if ((req.url ?? "").startsWith("/api/data")) {
         const data = await collectDashboardData(opts.proxyPort);

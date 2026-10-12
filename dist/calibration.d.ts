@@ -30,7 +30,12 @@ export interface Calibration {
 export declare function calibrationPath(): string;
 /** "claude", "gpt", "gemini", … — coarse on purpose; tokenizers are per vendor. */
 export declare function modelFamily(model?: string): string;
-/** Remember one exact-vs-heuristic observation. Best-effort; never throws. */
-export declare function recordCalibration(model: string | undefined, exactTokens: number, heuristicTokens: number): void;
+/**
+ * Remember one exact-vs-heuristic observation. Best-effort; never throws.
+ * Returns whether it was saved, so the caller only claims "remembered" when
+ * it was: a rejected sample, the off switch, or a failed write all leave the
+ * file as it was.
+ */
+export declare function recordCalibration(model: string | undefined, exactTokens: number, heuristicTokens: number): boolean;
 /** The factor to apply for a model, or 1 with zero samples when there is none. */
 export declare function calibrationFor(model?: string): Calibration;

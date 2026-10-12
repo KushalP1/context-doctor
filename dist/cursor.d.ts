@@ -24,6 +24,15 @@ interface Row {
     [column: string]: string | number | null;
 }
 /**
+ * This runtime cannot read SQLite at all: no `node:sqlite` and no sqlite3
+ * command. Distinct from one database failing, which listing skips, because
+ * it applies to every database: swallowing it per database showed "No Cursor
+ * chats found" with every chat still there (Node 20, and 22.5-22.12 without
+ * the flag, when sqlite3 is not on PATH).
+ */
+export declare class SqliteUnavailableError extends Error {
+}
+/**
  * Run a read-only query against a Cursor database.
  *
  * Two hard rules learned the expensive way:

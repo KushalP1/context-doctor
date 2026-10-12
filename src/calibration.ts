@@ -67,11 +67,19 @@ function readAll(): Record<string, FamilyRecord> {
   }
 }
 
-/** Remember one exact-vs-heuristic observation. Best-effort; never throws. */
-export function recordCalibration(model: string | undefined, exactTokens: number, heuristicTokens: number): void {
-  if (!(exactTokens > 0) || !(heuristicTokens > 0)) return;
+/**
+ * Remember one exact-vs-heuristic observation. Best-effort; never throws.
+ * Returns whether it was saved, so the caller only claims "remembered" when
+ * it was: a rejected sample, the off switch, or a failed write all leave the
+ * file as it was.
+ */
+export function recordCalibration(model: string | undefined, exactTokens: number, heuristicTokens: number): boolean {
+  // The off switch means off: not applied AND not learned, or a user who set
+  // it would find a calibration waiting the day they unset it.
+  if (process.env.CONTEXT_DOCTOR_NO_CALIBRATION) return false;
+  if (!(exactTokens > 0) || !(heuristicTokens > 0)) return false;
   const ratio = exactTokens / heuristicTokens;
-  if (ratio < MIN_FACTOR || ratio > MAX_FACTOR) return; // a broken sample must not poison the file
+  if (ratio < MIN_FACTOR || ratio > MAX_FACTOR) return false; // a broken sample must not poison the file
   try {
     const all = readAll();
     const key = modelFamily(model);
@@ -85,8 +93,10 @@ export function recordCalibration(model: string | undefined, exactTokens: number
     };
     mkdirSync(dirname(calibrationPath()), { recursive: true });
     writeFileSync(calibrationPath(), JSON.stringify(all, null, 2));
+    return true;
   } catch {
     /* calibration is a refinement; failing to save it must not fail the command */
+    return false;
   }
 }
 

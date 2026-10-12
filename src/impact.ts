@@ -9,7 +9,7 @@
  * a number.
  */
 
-import { foldTotals, readLedger } from "./ledger.js";
+import { foldTotals, LedgerEntry, readLedger } from "./ledger.js";
 import { listSessions, parseSessionFile } from "./session.js";
 import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
@@ -20,11 +20,76 @@ import { coldResumeFollowThrough } from "./coldresume.js";
 /** Sessions larger than this are skipped in the report (keeps it snappy). */
 const MAX_SESSION_BYTES = 30 * 1024 * 1024;
 
-async function fetchProxyStats(port: number): Promise<Record<string, number> | null> {
+/** The parts of the proxy's /stats that lifetime savings depend on. */
+export interface LiveProxyStats {
+  startedAt?: string;
+  tokensSaved?: number;
+  estUsdSaved?: number;
+}
+
+export interface ProxySavings {
+  /** Lifetime tokens the proxy removed: ledger checkpoints plus what the live run has not checkpointed. */
+  tokens: number;
+  usd: number;
+  /** The part of `tokens` from runs before the live one (all of it when none is running). */
+  earlier: number;
+  /** Ledger checkpoints written by those earlier runs. */
+  earlierCheckpoints: number;
+}
+
+/**
+ * Lifetime proxy savings, for `report` and the dashboard alike.
+ *
+ * A running proxy writes the DELTA of its total to the ledger every 60 s
+ * (proxy.ts, so history survives a restart), while /stats keeps returning the
+ * whole total since its startedAt. Ledger + /stats therefore counted every
+ * checkpointed token twice: one request saving 22k read "~45k" a minute later.
+ * Here every ledger checkpoint counts once, and the live run adds only what its
+ * own checkpoints (entries written since its startedAt) do not hold yet. The
+ * dashboard used to show the live figure alone, so a stopped proxy read 0.
+ *
+ * Known limit: if ledger rotation folds this run's own checkpoints into a
+ * rollup, they can no longer be told apart and count twice again. Only the
+ * proxy can close that (by reporting its checkpointed total in /stats).
+ */
+export function proxySavings(ledger: LedgerEntry[], live: LiveProxyStats | null): ProxySavings {
+  const carried = foldTotals(ledger.filter((e) => e.ev === "rollup"));
+  const events = ledger.filter((e) => e.ev === "proxy");
+  const sum = (es: LedgerEntry[], pick: (e: LedgerEntry) => number | undefined) => es.reduce((s, e) => s + (pick(e) ?? 0), 0);
+  const recorded = sum(events, (e) => e.saved) + carried.proxySaved;
+  const recordedUsd = sum(events, (e) => e.usd) + carried.proxyUsd;
+  if (!live) return { tokens: recorded, usd: recordedUsd, earlier: recorded, earlierCheckpoints: events.length };
+
+  // Without a parseable startedAt no checkpoint can be attributed to this run;
+  // count the live total whole, as before.
+  const since = Date.parse(live.startedAt ?? "");
+  const thisRun = Number.isFinite(since) ? events.filter((e) => e.ts >= since) : [];
+  const liveTokens = live.tokensSaved ?? 0;
+  // max(0, …): another proxy checkpointing meanwhile must not make this negative.
+  const pending = Math.max(0, liveTokens - sum(thisRun, (e) => e.saved));
+  const pendingUsd = Math.max(0, (live.estUsdSaved ?? 0) - sum(thisRun, (e) => e.usd));
+  const tokens = recorded + pending;
+  return {
+    tokens,
+    usd: recordedUsd + pendingUsd,
+    earlier: Math.max(0, tokens - liveTokens),
+    earlierCheckpoints: events.length - thisRun.length,
+  };
+}
+
+/** What the report reads from a running proxy's /stats. */
+interface ProxyStatsView extends LiveProxyStats {
+  requests: number;
+  optimizedRequests: number;
+  tokensSaved: number;
+  estUsdSaved: number;
+}
+
+async function fetchProxyStats(port: number): Promise<ProxyStatsView | null> {
   try {
     const res = await fetch(`http://127.0.0.1:${port}/stats`, { signal: AbortSignal.timeout(500) });
     if (!res.ok) return null;
-    return (await res.json()) as Record<string, number>;
+    return (await res.json()) as ProxyStatsView;
   } catch {
     return null;
   }
@@ -76,11 +141,11 @@ export async function buildImpactReport(proxyPort = 8787): Promise<string> {
   }
 
   const proxy = await fetchProxyStats(proxyPort);
-  // Persisted checkpoints cover proxy runs that have since exited; the live
-  // process reports whatever it has not checkpointed yet.
-  const proxyEvents = ledger.filter((e) => e.ev === "proxy");
-  const proxyHistoric = proxyEvents.reduce((s, e) => s + (e.saved ?? 0), 0) + carried.proxySaved;
-  const proxySaved = proxyHistoric + (proxy?.tokensSaved ?? 0);
+  // Persisted checkpoints cover earlier runs AND the live one's past minutes;
+  // proxySavings counts each token once.
+  const savedByProxy = proxySavings(ledger, proxy);
+  const proxySaved = savedByProxy.tokens;
+  const proxyHistoric = savedByProxy.earlier;
 
   // -- Headline: what context-doctor has saved ----------------------------------
   // Only what context-doctor itself removed. Sessions also shrink when Claude
@@ -98,7 +163,7 @@ export async function buildImpactReport(proxyPort = 8787): Promise<string> {
   } else {
     lines.push(
       proxyHistoric > 0
-        ? `  · proxy (exact, from ${proxyEvents.length} earlier run checkpoint(s)): ${formatTokens(proxyHistoric)} — not running now`
+        ? `  · proxy (exact, from ${savedByProxy.earlierCheckpoints} earlier run checkpoint(s)): ${formatTokens(proxyHistoric)} — not running now`
         : `  · proxy: not running on :${proxyPort} (its exact savings appear here once it runs)`
     );
   }

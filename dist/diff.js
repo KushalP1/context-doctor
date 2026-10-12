@@ -16,10 +16,17 @@ import { profileConversation } from "./profile.js";
 import { parseSessionFile } from "./session.js";
 import { formatTokens } from "./tokens.js";
 import { formatUsd } from "./pricing.js";
-/** Load either a conversation file or a Claude Code / ChatGPT transcript. */
+/**
+ * Load either a conversation file or a Claude Code / Codex / ChatGPT / Gemini
+ * transcript. The session reader goes first whatever the extension: ChatGPT's
+ * conversations.json and Gemini chats are .json, and read as a plain
+ * conversation they became one message of raw text. A file it finds no
+ * messages in is a plain conversation (OpenAI/Anthropic messages JSON), as in
+ * `watch`.
+ */
 function loadProfile(path, model) {
-    if (path.endsWith(".jsonl")) {
-        const session = parseSessionFile(path);
+    const session = parseSessionFile(path);
+    if (session.messageCount > 0) {
         return profileConversation(parseConversation(session.conversationJson), model ?? session.model);
     }
     return profileConversation(parseConversation(readFileSync(path, "utf8")), model);
