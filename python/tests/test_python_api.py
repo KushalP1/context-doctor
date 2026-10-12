@@ -84,3 +84,34 @@ class Api(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PackReadsWhatGitDoes(unittest.TestCase):
+    """The CLI reads folders as the TypeScript pack does: git's file list, no links out, each file once."""
+
+    def test_gitignore_symlinks_and_duplicates(self):
+        import os
+        import subprocess
+        import tempfile
+
+        from context_doctor.__main__ import _read
+
+        outside = tempfile.mkdtemp()
+        with open(os.path.join(outside, "secret.txt"), "w") as fh:
+            fh.write("outside secret")
+        repo = tempfile.mkdtemp()
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        with open(os.path.join(repo, ".gitignore"), "w") as fh:
+            fh.write(".env\n")
+        with open(os.path.join(repo, ".env"), "w") as fh:
+            fh.write("API_KEY=do-not-pack")
+        with open(os.path.join(repo, "guide.md"), "w") as fh:
+            fh.write("# Guide\n\nrotate the keys\n")
+        os.symlink(os.path.join(outside, "secret.txt"), os.path.join(repo, "notes.md"))
+        skipped = []
+        sources = list(_read([repo, os.path.join(repo, "guide.md")], skipped))
+        texts = [s.text for s in sources]
+        self.assertEqual(sum("rotate the keys" in t for t in texts), 1, "a file reached twice is read once")
+        self.assertFalse(any("do-not-pack" in t for t in texts), ".gitignore'd .env stays out")
+        self.assertFalse(any("outside secret" in t for t in texts), "a link out of the folder is not followed")
+        self.assertTrue(any("symlink pointing outside" in n for n in skipped))

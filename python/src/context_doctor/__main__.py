@@ -5,31 +5,95 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 
 from .pack import PackSource, pack_context
 from .profile import profile_messages
 
-_SKIP = {"node_modules", ".git", "dist", "build", "__pycache__", ".venv", "venv"}
+# Same folders the TypeScript `pack` skips outside a git repository.
+_SKIP = {"node_modules", ".git", "dist", "build", ".next", "target", "__pycache__", ".venv", "venv", "vendor"}
 
 
-def _read(paths):
+def _git_files(folder):
+    """Files git considers part of the repository under `folder` (relative), or None outside git.
+
+    Tracked plus untracked-not-ignored, as `git ls-files` lists them, so
+    .gitignore'd build output, data dumps and secrets (.env) never enter a pack.
+    """
+    try:
+        r = subprocess.run(
+            ["git", "-C", folder, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            capture_output=True, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    names = [f for f in r.stdout.decode("utf-8", "surrogateescape").split("\0") if f]
+    # --cached lists files deleted from the work tree too; only what exists is read.
+    return sorted(f for f in names if os.path.lexists(os.path.join(folder, f)))
+
+
+def _walk(folder):
+    for root, dirs, files in os.walk(folder):  # does not descend into linked folders
+        dirs[:] = sorted(d for d in dirs if d not in _SKIP and not d.startswith("."))
+        for f in sorted(files):
+            yield os.path.join(root, f)
+
+
+def _within(root, inner):
+    rel = os.path.relpath(inner, root)
+    return rel == "." or not (rel == ".." or rel.startswith(".." + os.sep) or os.path.isabs(rel))
+
+
+def _read(paths, skipped=None):
+    """Read files and folders into sources, as the TypeScript `pack` does.
+
+    A path named here is read even through a symlink; a symlink met inside a
+    folder is not followed (git does not follow one either), so a link to a
+    secret beside the repo or to /etc/hosts never enters a pack. A file reached
+    twice is read once. What is left out and why goes to `skipped`.
+    """
+    skipped = [] if skipped is None else skipped
+    seen = set()
+
+    def source(path, name):
+        real = os.path.realpath(path)
+        if real in seen:
+            return None
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except (UnicodeDecodeError, OSError):
+            return None
+        seen.add(real)
+        return PackSource(name, text)
+
     for p in paths:
         if p == "-":
             yield PackSource("stdin", sys.stdin.read())
         elif os.path.isdir(p):
-            for root, dirs, files in os.walk(p):
-                dirs[:] = sorted(d for d in dirs if d not in _SKIP and not d.startswith("."))
-                for f in sorted(files):
-                    full = os.path.join(root, f)
-                    try:
-                        with open(full, encoding="utf-8") as fh:
-                            yield PackSource(os.path.relpath(full), fh.read())
-                    except (UnicodeDecodeError, OSError):
-                        continue
+            root = os.path.realpath(p)
+            listed = _git_files(p)
+            candidates = [os.path.join(p, f) for f in listed] if listed is not None else list(_walk(p))
+            if listed is not None and not listed:
+                skipped.append(f"{p}: git lists no files here (.gitignore'd or empty); not read")
+            for full in candidates:
+                if os.path.islink(full):
+                    target = os.path.realpath(full)
+                    if os.path.exists(target) and not _within(root, target):
+                        skipped.append(f"{full}: symlink pointing outside the folder (not followed)")
+                    continue
+                if not os.path.isfile(full):
+                    continue
+                s = source(full, os.path.relpath(full))
+                if s:
+                    yield s
         else:
-            with open(p, encoding="utf-8") as fh:
-                yield PackSource(p, fh.read())
+            s = source(p, p)
+            if s:
+                yield s
 
 
 def main(argv=None) -> int:
@@ -46,8 +110,11 @@ def main(argv=None) -> int:
     pr.add_argument("--model", default=None)
     a = ap.parse_args(argv)
     if a.cmd == "pack":
-        r = pack_context(list(_read(a.paths)), query=a.query, budget=a.max_tokens, ids=a.ids.split(",") if a.ids else None, model=a.model)
+        skipped = []
+        r = pack_context(list(_read(a.paths, skipped)), query=a.query, budget=a.max_tokens, ids=a.ids.split(",") if a.ids else None, model=a.model)
         print(r.render())
+        for note in skipped:
+            print(f"skipped: {note}", file=sys.stderr)
     else:
         with (sys.stdin if a.file == "-" else open(a.file, encoding="utf-8")) as fh:
             print(profile_messages(json.load(fh), a.model).render())
