@@ -30,13 +30,26 @@ export declare function autopilotPaths(home?: string): AutopilotPaths;
 export declare function proxyUrl(port: number): string;
 /** The command the service runs. Absolute paths: services start with an empty PATH. */
 export declare function serviceCommand(node: string, cli: string, port: number, paths: AutopilotPaths): string[];
+/**
+ * The service restarts the proxy when it fails, not when it exits 0. The
+ * proxy exits 0 when another context-doctor proxy already serves its port;
+ * with KeepAlive true (Restart=always) launchd restarted it into the same
+ * EADDRINUSE every 5 s, 45 times in one real log.
+ */
 export declare function launchdPlist(args: string[], log: string): string;
 export declare function systemdUnit(args: string[], log: string): string;
 export declare function windowsTaskCommand(args: string[]): string;
+/**
+ * Runs a service-manager command, true on success. Injectable so tests can
+ * use a throwaway HOME without ever reaching the real launchd, systemd or
+ * Task Scheduler: those name the service globally (a label, a unit name, a
+ * task name), not per HOME.
+ */
+export type ServiceExec = (cmd: string, args: string[]) => boolean;
 /** Version of the package a CLI path belongs to (dist/cli.js -> ../package.json). */
 export declare function installedVersion(cli: string): string | undefined;
 /** Restart the installed background service onto the current build (launchd, systemd). */
-export declare function restartService(): boolean;
+export declare function restartService(home?: string, exec?: ServiceExec): boolean;
 export declare function startDetached(args: string[], log: string): void;
 export interface Health {
     ok: boolean;
@@ -44,6 +57,13 @@ export interface Health {
     version?: string;
 }
 export declare function health(port: number, timeoutMs?: number): Promise<Health>;
+/**
+ * The ANTHROPIC_BASE_URL `off` should restore, decided at `on`: the one an
+ * earlier `on` recorded, else what settings.json holds now, but never our own
+ * proxy's. With the config damaged, settings.json already holds the proxy URL
+ * from the last `on`, and recording that made `off` put the proxy URL back.
+ */
+export declare function baseUrlToRestore(paths: AutopilotPaths, port: number, current: string | null): string | null;
 /** Which Claude Code surfaces ran recent sessions: entrypoint -> count. */
 export declare function recentSurfaces(days?: number, home?: string): Map<string, number>;
 /** Lines explaining which recent sessions autopilot can reach, or nothing when all can. */
@@ -53,11 +73,11 @@ export declare function autopilotOn(port?: number, paths?: AutopilotPaths): Prom
     ok: boolean;
     lines: string[];
 }>;
-export declare function autopilotOff(paths?: AutopilotPaths): Promise<string[]>;
+export declare function autopilotOff(paths?: AutopilotPaths, exec?: ServiceExec): Promise<string[]>;
 export declare function autopilotPause(paused: boolean, paths?: AutopilotPaths): string;
 export declare function autopilotStatus(paths?: AutopilotPaths): Promise<string[]>;
 /**
  * Called by the every-prompt hook: if autopilot is on and the proxy is down,
  * start it before the prompt's request goes out. Returns quickly either way.
  */
-export declare function ensureProxyUp(paths?: AutopilotPaths): Promise<void>;
+export declare function ensureProxyUp(paths?: AutopilotPaths, exec?: ServiceExec): Promise<void>;

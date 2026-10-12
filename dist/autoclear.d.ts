@@ -51,13 +51,21 @@ export interface AutoClearOptions {
      * warm clearing off, cold cache only (the never-worse setting).
      */
     paybackSafety?: number;
-    /** Where cleared ids persist so a restart does not un-clear (and re-bill) them. */
+    /**
+     * Where cleared ids persist so a restart does not un-clear (and re-bill)
+     * them, with each conversation's last request time so a restart does not
+     * mistake a warm cache for a cold one.
+     */
     statePath?: string;
     /**
-     * Treat a conversation this instance has never seen as warm-cached (so
-     * nothing is cleared on it). The proxy sees every request and leaves this
-     * off; an in-process wrapper in a fresh process cannot know whether another
-     * process just sent the conversation, so it turns this on.
+     * Treat a conversation this instance has no record of as warm-cached (so
+     * nothing is cleared on it). Both the proxy and the in-process wrapper turn
+     * this on: a wrapper in a fresh process cannot know whether another process
+     * just sent the conversation, and a restarted proxy cannot know either
+     * unless the conversation's last request time was persisted (statePath).
+     * Calling a warm cache cold pays a full rewrite; calling a cold one warm
+     * only delays a free clearing to the next idle gap. Off here so a bare
+     * AutoClearer (the savings replay) keeps its first-request-is-cold model.
      */
     unseenIsWarm?: boolean;
 }
@@ -71,7 +79,26 @@ export interface AutoClearResult {
     reason: string;
     /** Index of the first message rewritten on this request (the cache breaks from here), or -1. */
     firstChanged: number;
+    /** Ids this request cleared for the first time. */
+    newIds: string[];
+    /** Every id whose clearing this request carries, earlier batches included. */
+    appliedIds: string[];
 }
+/**
+ * Whether a thinking block comes at or after message `index`. On current
+ * Claude models (Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5) a thinking
+ * block's signature binds the conversation before it: an edit to an earlier
+ * message invalidates every later thinking block, and accounts created on or
+ * after 2026-08-31 get a 400 for it ("... bound to a different
+ * conversation"), on every retry of the same body.
+ */
+export declare function thinkingAfter(messages: unknown[], index: number): boolean;
+/**
+ * A request that sets thinking.block_binding has opted into that check (any
+ * value, "drop_block" included, which silently drops the reasoning an edit
+ * invalidates), so it is treated like an account known to enforce it.
+ */
+export declare function optsIntoThinkingCheck(body: Record<string, unknown>): boolean;
 interface Found {
     /** Index of the message / input item that holds the result (cache breaks from here). */
     unit: number;
@@ -93,7 +120,12 @@ interface View {
     toolName: Map<string, string>;
     results: Array<Omit<Found, "tokens">>;
     firstUser: unknown;
-    firstToolId: string;
+    /**
+     * Index of the last unit the model wrote (-1 for none). Results after it
+     * arrive with this request: the model has not read them yet, so they are
+     * never eligible, however many there are (six parallel reads).
+     */
+    seenUpTo: number;
     ttlMs: number;
 }
 export declare function clearedNote(tokens: number): string;
@@ -114,12 +146,19 @@ export declare class AutoClearer {
     private convs;
     private opts;
     private dirty;
+    /** Conversation times changed since the last save (written at most every CONV_SAVE_MS, or on flush). */
+    private convsDirty;
+    private lastSave;
+    /** Accounts (salted credential hashes from the caller) whose API rejected a history autopilot edited. */
+    private rejecting;
     constructor(options?: AutoClearOptions);
     /**
      * Rewrite `body` in place: an Anthropic Messages, OpenAI Chat Completions or
      * OpenAI Responses request. Never throws; anything unrecognised is left alone.
+     * `account` names the credential the request carries (the proxy passes a
+     * salted hash), for accounts whose API rejects edited history.
      */
-    apply(body: Record<string, unknown>, now?: number, modelHint?: string): AutoClearResult;
+    apply(body: Record<string, unknown>, now?: number, modelHint?: string, account?: string): AutoClearResult;
     /**
      * Warm cache: clearing rewrites everything after the first cleared result
      * at the write rate (1.25x instead of 0.1x: 1.15x extra, once), and saves
@@ -129,6 +168,18 @@ export declare class AutoClearer {
      * cover the rewrite `paybackSafety` times over.
      */
     private shouldClearWarm;
+    /** Write pending state now (the proxy calls this on a timer and before it exits). */
+    flush(): void;
+    /** Whether this account's API has rejected a history autopilot edited (see thinkingAfter). */
+    rejectsEdits(account?: string): boolean;
+    /** Remember, across restarts, that this account's API rejects edited history. */
+    noteEditsRejected(account: string): void;
+    /**
+     * Stop applying these clearings: the API refused the request that carried
+     * them, and any thinking it produces from now on is bound to the history
+     * without them.
+     */
+    forget(ids: string[]): void;
     private load;
     private save;
 }

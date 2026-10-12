@@ -4,9 +4,10 @@
  *
  * A request is cached as a prefix in a fixed order: tools, then system, then
  * messages. A breakpoint caches everything up to and including the block it
- * sits on, a prefix under the model's minimum (1,024 tokens; 2,048 on Haiku)
- * is not cached at all, a request may carry at most 4 breakpoints, and the
- * cache looks back at most 20 blocks from a breakpoint for an earlier hit.
+ * sits on, a prefix under the model's minimum (512 to 4,096 tokens, see
+ * minCacheableTokens) is not cached at all, a request may carry at most 4
+ * breakpoints, and the cache looks back at most 20 blocks from a breakpoint
+ * for an earlier hit.
  * The planner places breakpoints at the ends of the stable parts (last tool,
  * last system block) and on the last block of the conversation, adds a
  * middle anchor when the conversation is longer than the 20-block lookback,
@@ -21,11 +22,45 @@ import { estimateTokens, formatTokens } from "./tokens.js";
 import { formatUsd, pricingFor } from "./pricing.js";
 const LOOKBACK_BLOCKS = 20;
 const MAX_BREAKPOINTS = 4;
-function blocksOf(req, model) {
+/**
+ * Smallest prefix Anthropic caches, per model (prompt-caching docs, Oct 2026).
+ * Not monotonic across generations: the 5.x models cache from 512 tokens,
+ * Opus 4.6/4.5 and Haiku 4.5 only from 4,096, so one number for every model
+ * (the old "1,024, 2,048 on Haiku") advised breakpoints that could never hit
+ * on some models and called cacheable prompts too small on others.
+ */
+const CACHE_MINIMUMS = {
+    "opus 5.5": 512, "opus 5.0": 512, "fable 5.0": 512, "fable 5.1": 512,
+    "mythos 5.0": 512, "mythos 5.1": 512, "sonnet 5.5": 512, "haiku 5.5": 512,
+    "opus 4.8": 1024, "sonnet 5.0": 1024, "sonnet 4.6": 1024, "sonnet 4.5": 1024,
+    "opus 4.1": 1024, "opus 4.0": 1024, "sonnet 4.0": 1024,
+    "opus 4.7": 2048, "haiku 3.5": 2048, "mythos preview": 2048,
+    "opus 4.6": 4096, "opus 4.5": 4096, "haiku 4.5": 4096,
+};
+/** For a model the table does not know: the most common minimum across generations. */
+const DEFAULT_CACHE_MINIMUM = 1024;
+export function minCacheableTokens(model) {
+    const m = (model ?? "").toLowerCase();
+    if (/mythos-preview/.test(m))
+        return CACHE_MINIMUMS["mythos preview"];
+    // Current ids: claude-<family>-<major>[-<minor>], optionally dated (claude-opus-4-20250514 is
+    // Opus 4.0, so a minor is one or two digits, never the 8-digit date) or with a platform
+    // prefix/suffix (anthropic.claude-...-v1:0, claude-...@20251101).
+    let key;
+    const cur = /(opus|sonnet|haiku|fable|mythos)-(\d+)(?:[-.](\d{1,2}))?(?!\d)/.exec(m);
+    if (cur)
+        key = `${cur[1]} ${cur[2]}.${cur[3] ?? "0"}`;
+    // Claude 3 ids put the version first: claude-3-5-haiku-20241022.
+    const old = /claude-(\d)(?:-(\d))?-(opus|sonnet|haiku)/.exec(m);
+    if (old)
+        key = `${old[3]} ${old[1]}.${old[2] ?? "0"}`;
+    return (key && CACHE_MINIMUMS[key]) || DEFAULT_CACHE_MINIMUM;
+}
+function blocksOf(req, model, longTtl = false) {
     const out = [];
     const mark = (obj) => (on) => {
         if (on)
-            obj.cache_control = obj.cache_control ?? { type: "ephemeral" };
+            obj.cache_control = obj.cache_control ?? (longTtl ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" });
         else
             delete obj.cache_control;
     };
@@ -87,9 +122,13 @@ export function planCache(request, calls = 10, modelOverride) {
             apply: () => req,
         };
     }
-    const blocks = blocksOf(req, model);
+    // Cache writes cost 1.25x input at the 5-minute TTL and 2x at one hour. A
+    // request that already uses the hour keeps it on the planned breakpoints, so
+    // the price below is the price of the request apply() returns.
+    const longTtl = /"ttl"\s*:\s*"1h"/.test(JSON.stringify(req));
+    const blocks = blocksOf(req, model, longTtl);
     const total = blocks.reduce((s, b) => s + b.tokens, 0);
-    const minCacheable = /haiku/i.test(model ?? "") ? 2048 : 1024;
+    const minCacheable = minCacheableTokens(model);
     const prefixAt = (i) => blocks.slice(0, i + 1).reduce((s, b) => s + b.tokens, 0);
     const lastIndex = (section) => blocks.map((b) => b.section).lastIndexOf(section);
     const picks = [];
@@ -118,7 +157,6 @@ export function planCache(request, calls = 10, modelOverride) {
         notes.push(`The whole request is ~${formatTokens(total)} tokens, under the ${formatTokens(minCacheable)} minimum ${model ?? "this model"} caches: caching cannot help until it grows.`);
     const cachedTokens = picks.length ? prefixAt(picks[picks.length - 1].i) : 0;
     const price = pricingFor(model);
-    const longTtl = /"ttl"\s*:\s*"1h"/.test(JSON.stringify(req));
     const writeMult = longTtl ? 2 : 1.25;
     let usdWithout, usdWith;
     if (price) {

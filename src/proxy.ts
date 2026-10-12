@@ -13,13 +13,14 @@
  */
 
 import http from "node:http";
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { optimizeConversation, OptimizeOptions } from "./optimize.js";
-import { AutoClearer } from "./autoclear.js";
+import { AutoClearer, optsIntoThinkingCheck, thinkingAfter } from "./autoclear.js";
 import { existsSync } from "node:fs";
 import { formatTokens, CHARS_PER_TOKEN, providerFor } from "./tokens.js";
 import { formatUsd, inputCostUsd, pricingFor } from "./pricing.js";
 import { recordLedger } from "./ledger.js";
+import { minCacheableTokens } from "./cacheplan.js";
 
 export interface ProxyOptions extends OptimizeOptions {
   /** Per-model-prefix overrides; first match wins, global options otherwise. */
@@ -85,7 +86,12 @@ export function stripToken(url: string, token: string): string | undefined {
  * Code under autopilot, an SDK) also lists models, uploads files, counts
  * tokens. Until 0.24 those got a 404 and broke the feature for that client.
  * Unknown paths go to Anthropic when the request says it is one (Anthropic
- * clients always send anthropic-version, or x-api-key), else to OpenAI.
+ * clients always send anthropic-version, or x-api-key; OAuth calls send
+ * anthropic-beta; Anthropic keys and tokens start sk-ant-), else to OpenAI.
+ * Under autopilot the default flips: Claude Code is the client it is
+ * installed for, and a Bearer-only request from it (its OAuth token) sent to
+ * OpenAI would hand an Anthropic credential to another company. There only a
+ * request carrying an OpenAI-style key (sk-..., not sk-ant-...) goes to OpenAI.
  * Google's Gemini API (GOOGLE_GEMINI_BASE_URL) is recognised by its key
  * header, its /v1beta paths, or a `model:method` path such as
  * /v1/models/gemini-3-pro:generateContent.
@@ -96,7 +102,13 @@ export function upstreamFor(url: string, opts: ProxyOptions, headers: http.Incom
   if (isGeminiRequest(url, headers)) return opts.googleUpstream ?? "https://generativelanguage.googleapis.com";
   if (url.startsWith("/v1/messages")) return anthropic;
   if (url.startsWith("/v1/chat/completions") || url.startsWith("/v1/responses") || url.startsWith("/v1/embeddings")) return openai;
-  return headers["anthropic-version"] !== undefined || headers["x-api-key"] !== undefined ? anthropic : openai;
+  const auth = headers.authorization;
+  const bearer = typeof auth === "string" ? /^Bearer\s+(\S+)/i.exec(auth)?.[1] : undefined;
+  if (headers["anthropic-version"] !== undefined || headers["x-api-key"] !== undefined || headers["anthropic-beta"] !== undefined || bearer?.startsWith("sk-ant-")) {
+    return anthropic;
+  }
+  if (opts.autopilot) return bearer?.startsWith("sk-") ? openai : anthropic;
+  return openai;
 }
 
 export function isGeminiRequest(url: string, headers: http.IncomingHttpHeaders = {}): boolean {
@@ -177,9 +189,80 @@ function fnv1a(s: string): number {
   return h >>> 0;
 }
 
+/** Anthropic's 400 for a history whose thinking-block signatures no longer match it. */
+const THINKING_EDIT_REJECTED = /bound to a different conversation|Invalid `signature` in `thinking` block/;
+
+/**
+ * Which account a request belongs to, as a salted hash of its credential: the
+ * proxy remembers per account whether the API refuses edited history, and
+ * never keeps the key itself.
+ */
+export function accountKey(headers: http.IncomingHttpHeaders): string {
+  const credential = headers["x-api-key"] ?? headers.authorization ?? "";
+  return createHash("sha256").update(`context-doctor account\0${String(credential)}`).digest("hex").slice(0, 16);
+}
+
+/** Whether an Anthropic request's answer may hold thinking blocks: asked for, or a 5.x model, which thinks unless told not to. */
+function mayProduceThinking(body: Record<string, unknown>): boolean {
+  const type = (body.thinking as { type?: unknown } | undefined)?.type;
+  if (type === "disabled") return false;
+  if (type !== undefined) return true;
+  return /fable|mythos|(opus|sonnet|haiku)-([5-9]|\d\d)/i.test(String(body.model ?? ""));
+}
+
+/**
+ * For an account that refuses edited history: would sending the optimizer's
+ * `edited` body instead of `original` break a thinking signature? It does
+ * when a thinking block sits at or after the first changed message, and the
+ * stateless optimizer also stays out when the answer may hold thinking: that
+ * thinking would be bound to this edit, and nothing guarantees the next
+ * request gets the identical edit.
+ */
+function editBreaksThinking(original: Record<string, unknown>, edited: unknown): boolean {
+  const before = Array.isArray(original.messages) ? (original.messages as unknown[]) : [];
+  const afterMsgs = (edited as { messages?: unknown } | null)?.messages;
+  const after = Array.isArray(afterMsgs) ? afterMsgs : [];
+  let first = 0;
+  while (first < before.length && first < after.length && JSON.stringify(before[first]) === JSON.stringify(after[first])) first++;
+  return thinkingAfter(before, first) || mayProduceThinking(original);
+}
+
+/**
+ * How long a stopping proxy waits for requests in flight. Under launchd's
+ * default 20 s exit timeout, so the proxy exits on its own terms rather than
+ * by SIGKILL.
+ */
+const DRAIN_MS = 15_000;
+/** Each running proxy's drain, so one signal stops them all. */
+const liveServers = new Set<() => Promise<void>>();
+let signalsInstalled = false;
+let stopping = false;
+function installSignalHandlers(): void {
+  if (signalsInstalled) return;
+  signalsInstalled = true;
+  const stop = (): void => {
+    if (stopping) process.exit(0); // a second Ctrl-C: stop now
+    stopping = true;
+    void Promise.all([...liveServers].map((d) => d().catch(() => undefined))).finally(() => process.exit(0));
+  };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+}
+
 export function startProxy(opts: ProxyOptions = {}): http.Server {
   const port = opts.port ?? 8787;
-  const clearer = opts.autopilot ? new AutoClearer({ statePath: opts.autopilotStatePath }) : undefined;
+  // A conversation with no record (first seen since a restart, or evicted) is
+  // treated as warm: the state file keeps each conversation's last request
+  // time, and without one, clearing could rewrite a cache that is still warm.
+  const clearer = opts.autopilot ? new AutoClearer({ statePath: opts.autopilotStatePath, unseenIsWarm: true }) : undefined;
+  // Accounts whose API refused an edited history: autopilot keeps them in its
+  // state file, the optimizing proxy (which has none) for its lifetime.
+  const refusing = new Set<string>();
+  const rejectsEdits = (account: string): boolean => (clearer ? clearer.rejectsEdits(account) : refusing.has(account));
+  const noteEditsRejected = (account: string): void => {
+    if (clearer) clearer.noteEditsRejected(account);
+    else refusing.add(account);
+  };
   const stats: ProxyStats = {
     startedAt: new Date().toISOString(),
     requests: 0,
@@ -207,8 +290,20 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
     console.error(`[context-doctor] cache advisor: ${msg}`);
   };
 
+  /** Requests still being answered, so a shutdown can let them finish. */
+  let inFlight = 0;
   const server = http.createServer(async (req, res) => {
     let url = req.url ?? "/";
+    inFlight++;
+    // A client that goes away (Ctrl-C, an SDK timeout) must take its upstream
+    // request with it: without this, a stream the client abandoned at 0.1 s
+    // kept running upstream to the end (3 s in the test, minutes of output
+    // tokens on a real one).
+    const upstreamAbort = new AbortController();
+    res.on("close", () => {
+      inFlight--;
+      if (!res.writableFinished) upstreamAbort.abort();
+    });
     try {
       if (url === "/health") {
         res.setHeader("content-type", "application/json");
@@ -256,6 +351,9 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
       stats.requests++;
       const isMeasurement = url.startsWith("/v1/messages/count_tokens");
       let note = "passthrough";
+      const account = accountKey(req.headers);
+      /** Takes back what this request's edit added to the stats and to autopilot's memory, when the edit is refused. */
+      let undoEdit: ((originalAccepted: boolean) => void) | undefined;
       if (opts.autopilot) {
         const gemini = GEMINI_CONVERSATION.test(url);
         if (req.method === "POST" && body && !isMeasurement && (gemini || /^\/v1\/(messages|chat\/completions|responses)(\?|$)/.test(url))) {
@@ -267,7 +365,7 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
             try {
               const parsed = JSON.parse(body) as Record<string, unknown>;
               const urlModel = gemini ? geminiModelFromUrl(url) : undefined;
-              const r = clearer!.apply(parsed, Date.now(), urlModel);
+              const r = clearer!.apply(parsed, Date.now(), urlModel, account);
               ap.requests++;
               ap.lastReason = r.reason;
               if (r.newlyCleared > 0) { ap.batches++; ap.resultsCleared += r.newlyCleared; if (r.cold) ap.coldBatches++; }
@@ -279,7 +377,22 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
                 stats.tokensSaved += r.tokensRemoved;
                 const pricing = pricingFor(typeof parsed.model === "string" ? parsed.model : urlModel);
                 // What autopilot removes would mostly have been cached reads: price it so.
-                if (pricing) stats.estUsdSaved += (r.tokensRemoved / 1e6) * pricing.cacheReadPerM;
+                const usd = pricing ? (r.tokensRemoved / 1e6) * pricing.cacheReadPerM : 0;
+                stats.estUsdSaved += usd;
+                undoEdit = (originalAccepted) => {
+                  if (r.newlyCleared > 0) { ap.batches--; ap.resultsCleared -= r.newlyCleared; if (r.cold) ap.coldBatches--; }
+                  ap.changedRequests--;
+                  ap.tokensRemoved -= r.tokensRemoved;
+                  stats.optimizedRequests--;
+                  stats.tokensSaved -= r.tokensRemoved;
+                  stats.estUsdSaved -= usd;
+                  // Accepted unedited: the newest thinking is bound to the full
+                  // history, so none of these clearings may be sent again.
+                  // Refused unedited as well: the earlier clearings are what
+                  // older thinking is bound to; only this request's new ones
+                  // never reached the model.
+                  clearer!.forget(originalAccepted ? r.appliedIds : r.newIds);
+                };
                 note = `autopilot: ${formatTokens(r.tokensRemoved)} tokens of stale tool output not sent (${r.reason})`;
               } else {
                 note = `autopilot: ${r.reason}`;
@@ -312,8 +425,10 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
               const stablePrefix = JSON.stringify(parsedBody.tools ?? null) + JSON.stringify(parsedBody.system ?? null);
               const hasBreakpoint = body.includes("cache_control");
               const stablePrefixTokens = Math.round(stablePrefix.length / CHARS_PER_TOKEN[providerFor(requestModel)].code);
-              // Anthropic will not cache a prefix under ~1024 tokens; below that the advice is useless.
-              if (stablePrefixTokens >= 1024 && !hasBreakpoint) {
+              // Anthropic will not cache a prefix under the model's minimum (512 to
+              // 4,096 tokens, cacheplan.ts); below that the advice is useless.
+              const minCacheable = minCacheableTokens(requestModel);
+              if (stablePrefixTokens >= minCacheable && !hasBreakpoint) {
                 // Say WHERE, not just that. A breakpoint caches everything up
                 // to and including the block it sits on, so it belongs on the
                 // LAST stable block: the final tool definition if there are
@@ -349,8 +464,7 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
                 if (stable >= 2) {
                   const stableChars = msgs.slice(0, stable).reduce((n: number, m) => n + JSON.stringify(m).length, 0);
                   const stableTokens = Math.round(stableChars / CHARS_PER_TOKEN[providerFor(requestModel)].code);
-                  // Anthropic will not cache a prefix under ~1024 tokens (2048 on Haiku).
-                  if (stableTokens >= 1024) {
+                  if (stableTokens >= minCacheable) {
                     advise(
                       `messages #0-#${stable - 1} (~${stableTokens} tokens) were identical to the previous ${requestModel} request and carry no cache_control. ` +
                         `Put {"cache_control":{"type":"ephemeral"}} on the last content block of message #${stable - 1}; that run then reads from cache instead of re-billing each turn`
@@ -365,18 +479,31 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
           }
           const result = optimizeConversation(body, effective);
           const saved = result.tokensBefore - result.tokensAfter;
+          const original = JSON.parse(originalBody) as Record<string, unknown>;
           stats.tokensBefore += result.tokensBefore;
-          stats.tokensAfter += result.tokensAfter;
-          if (saved > 0) {
-            body = JSON.stringify(result.conversation);
-            stats.optimizedRequests++;
-            stats.tokensSaved += saved;
-            const pricing = pricingFor((result.conversation as { model?: string })?.model);
-            if (pricing) stats.estUsdSaved += inputCostUsd(saved, pricing);
+          if (saved > 0 && (rejectsEdits(account) || optsIntoThinkingCheck(original)) && editBreaksThinking(original, result.conversation)) {
+            stats.tokensAfter += result.tokensBefore;
+            note = "unchanged: thinking blocks are bound to this history and this account rejects edits to it";
+          } else {
+            stats.tokensAfter += result.tokensAfter;
+            if (saved > 0) {
+              body = JSON.stringify(result.conversation);
+              stats.optimizedRequests++;
+              stats.tokensSaved += saved;
+              const pricing = pricingFor((result.conversation as { model?: string })?.model);
+              const usd = pricing ? inputCostUsd(saved, pricing) : 0;
+              stats.estUsdSaved += usd;
+              undoEdit = () => {
+                stats.optimizedRequests--;
+                stats.tokensSaved -= saved;
+                stats.tokensAfter += saved;
+                stats.estUsdSaved -= usd;
+              };
+            }
+            note = saved > 0
+              ? `optimized ${formatTokens(result.tokensBefore)} → ${formatTokens(result.tokensAfter)} tokens (${result.applied.length} changes)`
+              : "clean (nothing to save)";
           }
-          note = saved > 0
-            ? `optimized ${formatTokens(result.tokensBefore)} → ${formatTokens(result.tokensAfter)} tokens (${result.applied.length} changes)`
-            : "clean (nothing to save)";
         } catch {
           /* not a conversation payload — forward as-is */
         }
@@ -388,11 +515,32 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
       }
 
       const upstreamStart = Date.now();
-      const upstream = await fetch(upstreamBase + url, {
+      const send = (payload: string | Buffer): Promise<Response> => fetch(upstreamBase + url, {
         method: req.method ?? "POST",
         headers,
-        body: req.method === "GET" || req.method === "HEAD" ? undefined : body === originalBody ? rawBody : body,
+        body: req.method === "GET" || req.method === "HEAD" ? undefined : (payload as RequestInit["body"]),
+        signal: upstreamAbort.signal,
       });
+      const edited = body !== originalBody;
+      let upstream = await send(edited ? body : rawBody);
+      // An edited history can be refused because thinking blocks are bound to
+      // the history as it was (thinkingAfter); the 400 comes before any
+      // output, and the same body fails again on retry. Send the client's own
+      // body once instead and return that answer as if nothing happened, and
+      // remember that this account refuses edits, so it is not asked again.
+      if (edited && upstream.status === 400) {
+        const text = await upstream.text();
+        if (THINKING_EDIT_REJECTED.test(text)) {
+          upstream = await send(rawBody);
+          // A bad signature with no word on the conversation is not ours to
+          // learn from, unless the unedited body then went through.
+          if (/bound to a different conversation/.test(text) || upstream.ok) noteEditsRejected(account);
+          undoEdit?.(upstream.ok);
+          note = `edited history refused (thinking blocks are bound to it); resent unedited → ${upstream.status}`;
+        } else {
+          upstream = new Response(text, { status: upstream.status, statusText: upstream.statusText, headers: upstream.headers });
+        }
+      }
 
       console.error(
         `[context-doctor] ${req.method} ${url} → ${upstream.status} in ${Date.now() - upstreamStart}ms | ${note}` +
@@ -410,11 +558,16 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
         let scanBuf = "";
         const decoder = new TextDecoder();
         const reader = upstream.body.getReader();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          res.write(value);
-          if (scanBuf.length < USAGE_SCAN_CAP) scanBuf += decoder.decode(value, { stream: true });
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            res.write(value);
+            if (scanBuf.length < USAGE_SCAN_CAP) scanBuf += decoder.decode(value, { stream: true });
+          }
+        } catch (e) {
+          reader.cancel().catch(() => undefined);
+          throw e;
         }
         if (upstream.ok && !isMeasurement) {
           const usage = extractUsage(scanBuf);
@@ -430,11 +583,22 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
       }
       res.end();
     } catch (e) {
-      console.error(`[context-doctor] error on ${url}: ${(e as Error).message}`);
-      if (!res.headersSent) {
-        res.statusCode = 502;
-        res.setHeader("content-type", "application/json");
+      if (upstreamAbort.signal.aborted) {
+        console.error(`[context-doctor] ${req.method} ${url}: client went away; upstream request cancelled`);
+        res.destroy();
+        return;
       }
+      console.error(`[context-doctor] error on ${url}: ${(e as Error).message}`);
+      if (res.headersSent) {
+        // Upstream failed mid-body. Status and part of the body are already
+        // with the client; appending a JSON error and ending cleanly made a
+        // truncated stream look complete (a 200 whose SSE just stops). Cut
+        // the connection instead, so the client sees the failure and retries.
+        res.destroy(e as Error);
+        return;
+      }
+      res.statusCode = 502;
+      res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({ error: `context-doctor proxy: ${(e as Error).message}` }));
     }
   });
@@ -446,6 +610,7 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
   let checkpointedUsd = 0;
   let checkpointedRequests = 0;
   const checkpoint = (): void => {
+    clearer?.flush();
     const savedDelta = stats.tokensSaved - checkpointedTokens;
     if (savedDelta <= 0) return;
     recordLedger({
@@ -461,15 +626,52 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
   };
   const checkpointTimer = setInterval(checkpoint, 60_000);
   checkpointTimer.unref?.(); // never hold the process open on our account
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.once(signal, () => {
-      checkpoint();
-      process.exit(0);
-    });
-  }
-  server.on("close", checkpoint);
+  // Stop: no new connections, let requests in flight finish (a streamed
+  // answer is usually done within seconds), then save. Exiting on the signal
+  // cut every open stream, and a service restart (launchd's kickstart -k
+  // after an update) sends exactly that signal.
+  const drain = async (): Promise<void> => {
+    checkpoint();
+    server.close();
+    server.closeIdleConnections?.();
+    const end = Date.now() + DRAIN_MS;
+    while (inFlight > 0 && Date.now() < end) await new Promise((r) => setTimeout(r, 50));
+    checkpoint();
+  };
+  liveServers.add(drain);
+  installSignalHandlers();
+  server.on("close", () => {
+    liveServers.delete(drain);
+    checkpoint();
+  });
 
   const host = opts.host ?? "127.0.0.1";
+  // A port already in use was an unhandled 'error' event: a crash with a
+  // stack trace, which launchd (KeepAlive) restarted into the same error
+  // every 5 s, 45 times in one real log, while a second proxy held the port.
+  // One clear line instead, and exit 0 when a context-doctor proxy already
+  // serves the port (traffic flows; a service that restarts only on failure
+  // stays down), 1 when something else holds it. An app that embeds
+  // startProxy and handles 'error' itself keeps that decision.
+  server.on("error", (e: NodeJS.ErrnoException) => {
+    if (server.listenerCount("error") > 1) return;
+    if (e.code !== "EADDRINUSE") {
+      console.error(`context-doctor proxy: cannot listen on ${host}:${port}: ${e.message}`);
+      process.exit(1);
+    }
+    const probe = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host.includes(":") ? `[${host}]` : host;
+    fetch(`http://${probe}:${port}/health`, { signal: AbortSignal.timeout(2000) })
+      .then((r) => r.json() as Promise<{ service?: string; version?: string }>)
+      .catch(() => undefined)
+      .then((h) => {
+        if (h?.service === "context-doctor-proxy") {
+          console.error(`context-doctor proxy: port ${port} is already served by a context-doctor proxy (v${h.version ?? "?"}); this one exits.`);
+          process.exit(0);
+        }
+        console.error(`context-doctor proxy: port ${port} on ${host} is in use by another program; exiting.`);
+        process.exit(1);
+      });
+  });
   server.listen(port, host, () => {
     // Print the token as <token>, never the value: this log is what people paste into bug reports.
     const prefix = opts.token ? "/t/<token>" : "";

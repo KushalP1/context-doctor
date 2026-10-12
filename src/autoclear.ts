@@ -71,13 +71,21 @@ export interface AutoClearOptions {
    * warm clearing off, cold cache only (the never-worse setting).
    */
   paybackSafety?: number;
-  /** Where cleared ids persist so a restart does not un-clear (and re-bill) them. */
+  /**
+   * Where cleared ids persist so a restart does not un-clear (and re-bill)
+   * them, with each conversation's last request time so a restart does not
+   * mistake a warm cache for a cold one.
+   */
   statePath?: string;
   /**
-   * Treat a conversation this instance has never seen as warm-cached (so
-   * nothing is cleared on it). The proxy sees every request and leaves this
-   * off; an in-process wrapper in a fresh process cannot know whether another
-   * process just sent the conversation, so it turns this on.
+   * Treat a conversation this instance has no record of as warm-cached (so
+   * nothing is cleared on it). Both the proxy and the in-process wrapper turn
+   * this on: a wrapper in a fresh process cannot know whether another process
+   * just sent the conversation, and a restarted proxy cannot know either
+   * unless the conversation's last request time was persisted (statePath).
+   * Calling a warm cache cold pays a full rewrite; calling a cold one warm
+   * only delays a free clearing to the next idle gap. Off here so a bare
+   * AutoClearer (the savings replay) keeps its first-request-is-cold model.
    */
   unseenIsWarm?: boolean;
 }
@@ -92,6 +100,36 @@ export interface AutoClearResult {
   reason: string;
   /** Index of the first message rewritten on this request (the cache breaks from here), or -1. */
   firstChanged: number;
+  /** Ids this request cleared for the first time. */
+  newIds: string[];
+  /** Every id whose clearing this request carries, earlier batches included. */
+  appliedIds: string[];
+}
+
+/**
+ * Whether a thinking block comes at or after message `index`. On current
+ * Claude models (Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5) a thinking
+ * block's signature binds the conversation before it: an edit to an earlier
+ * message invalidates every later thinking block, and accounts created on or
+ * after 2026-08-31 get a 400 for it ("... bound to a different
+ * conversation"), on every retry of the same body.
+ */
+export function thinkingAfter(messages: unknown[], index: number): boolean {
+  for (let i = Math.max(0, index); i < messages.length; i++) {
+    const content = (messages[i] as { content?: unknown } | null)?.content;
+    if (Array.isArray(content) && content.some((b) => b?.type === "thinking" || b?.type === "redacted_thinking")) return true;
+  }
+  return false;
+}
+
+/**
+ * A request that sets thinking.block_binding has opted into that check (any
+ * value, "drop_block" included, which silently drops the reasoning an edit
+ * invalidates), so it is treated like an account known to enforce it.
+ */
+export function optsIntoThinkingCheck(body: Record<string, unknown>): boolean {
+  const thinking = body.thinking as { block_binding?: unknown } | undefined;
+  return Boolean(thinking && typeof thinking === "object" && thinking.block_binding !== undefined);
 }
 
 interface Found {
@@ -121,11 +159,27 @@ interface View {
   toolName: Map<string, string>;
   results: Array<Omit<Found, "tokens">>;
   firstUser: unknown;
-  firstToolId: string;
+  /**
+   * Index of the last unit the model wrote (-1 for none). Results after it
+   * arrive with this request: the model has not read them yet, so they are
+   * never eligible, however many there are (six parallel reads).
+   */
+  seenUpTo: number;
   ttlMs: number;
 }
 
 const HOUR = 3_600_000;
+/**
+ * Conversations' last request times are written at most this often (and on
+ * flush). A record read back after a crash can be this much older than the
+ * truth, so it is read as this much newer: when unsure, warm.
+ */
+const CONV_SAVE_MS = 60_000;
+
+function lastIndex<T>(items: T[], pred: (x: T) => boolean): number {
+  for (let i = items.length - 1; i >= 0; i--) if (pred(items[i])) return i;
+  return -1;
+}
 
 export function clearedNote(tokens: number): string {
   // Not "run it again": a cleared Bash result may come from a command with
@@ -169,12 +223,14 @@ function isOpenAIChat(messages: Array<Record<string, unknown>>): boolean {
 export function viewOf(body: Record<string, unknown>): View | undefined {
   const toolName = new Map<string, string>();
   const results: View["results"] = [];
-  let firstToolId = "";
 
   // Gemini generateContent: contents[].parts[] with functionCall / functionResponse.
-  // Ids are optional there, so a missing one is derived from its position
-  // (stable: history only grows) and scoped to the conversation, because the
-  // cleared set is keyed by id and positions repeat across conversations.
+  // Ids are optional there, so a missing one is derived. Position and the
+  // first user message alone repeat whenever the same prompt runs twice, and
+  // the cleared set is keyed by id: run 2 then had run 1's clearings applied
+  // to its own results, newest included. The response's own content is part
+  // of the derived id, so another run's result is another id unless it is
+  // byte-identical at the same place (and apply() still requires it eligible).
   if (Array.isArray(body.contents)) {
     const units = body.contents as Array<Record<string, unknown>>;
     const firstUser = units.find((u) => u?.role === "user")?.parts;
@@ -186,18 +242,18 @@ export function viewOf(body: Record<string, unknown>): View | undefined {
         const call = p?.functionCall;
         const resp = p?.functionResponse;
         if (call && typeof call === "object") {
-          const id = typeof call.id === "string" && call.id ? call.id : `gemini:${scope}:${i}:${j}`;
-          toolName.set(id, String(call.name ?? ""));
-          firstToolId ||= id;
+          if (typeof call.id === "string" && call.id) toolName.set(call.id, String(call.name ?? ""));
         } else if (resp && typeof resp === "object") {
-          const id = typeof resp.id === "string" && resp.id ? resp.id : `gemini:${scope}:${i}:${j}`;
+          const content = createHash("sha1").update(JSON.stringify(resp.response ?? "")).digest("hex").slice(0, 12);
+          const id = typeof resp.id === "string" && resp.id ? resp.id : `gemini:${scope}:${i}:${j}:${content}`;
           // The response names its tool, so it classifies on its own.
           if (!toolName.has(id)) toolName.set(id, String(resp.name ?? ""));
           results.push({ unit: i, id, content: resp.response, set: (note) => { parts[j] = { ...p, functionResponse: { ...resp, response: { output: note } } }; } });
         }
       });
     });
-    return { format: "gemini", units, toolName, results, firstUser, firstToolId, ttlMs: requestTtlMs(body) };
+    const seenUpTo = lastIndex(units, (u) => u?.role === "model");
+    return { format: "gemini", units, toolName, results, firstUser, seenUpTo, ttlMs: requestTtlMs(body) };
   }
 
   if (Array.isArray(body.input)) {
@@ -206,18 +262,22 @@ export function viewOf(body: Record<string, unknown>): View | undefined {
       const t = it?.type;
       if ((t === "function_call" || t === "custom_tool_call" || t === "local_shell_call") && typeof it.call_id === "string") {
         toolName.set(it.call_id, t === "local_shell_call" ? "shell" : String(it.name ?? ""));
-        firstToolId ||= it.call_id;
       } else if ((t === "function_call_output" || t === "custom_tool_call_output" || t === "local_shell_call_output") && typeof it.call_id === "string") {
         results.push({ unit: i, id: it.call_id, content: it.output, set: (note) => { units[i] = { ...it, output: note }; } });
       }
     });
     const firstUser = units.find((u) => u?.role === "user")?.content;
-    return { format: "openai-responses", units, toolName, results, firstUser, firstToolId, ttlMs: requestTtlMs(body) };
+    // Model-written items: its tool calls, reasoning and assistant messages.
+    // With previous_response_id the input holds none of them, so every result
+    // in it is new to the model.
+    const seenUpTo = lastIndex(units, (u) => u?.role === "assistant" || ["function_call", "custom_tool_call", "local_shell_call", "reasoning"].includes(String(u?.type)));
+    return { format: "openai-responses", units, toolName, results, firstUser, seenUpTo, ttlMs: requestTtlMs(body) };
   }
 
   const messages = body.messages as Array<Record<string, unknown>> | undefined;
   if (!Array.isArray(messages) || messages.length === 0) return undefined;
   const firstUser = messages.find((m) => m?.role === "user")?.content;
+  const seenUpTo = lastIndex(messages, (m) => m?.role === "assistant");
 
   if (isOpenAIChat(messages)) {
     messages.forEach((m, i) => {
@@ -225,13 +285,12 @@ export function viewOf(body: Record<string, unknown>): View | undefined {
         for (const c of m.tool_calls as Array<Record<string, any>>) {
           if (typeof c?.id !== "string") continue;
           toolName.set(c.id, String(c.function?.name ?? c.name ?? ""));
-          firstToolId ||= c.id;
         }
       } else if (m?.role === "tool" && typeof m.tool_call_id === "string") {
         results.push({ unit: i, id: m.tool_call_id, content: m.content, set: (note) => { messages[i] = { ...m, content: note }; } });
       }
     });
-    return { format: "openai-chat", units: messages, toolName, results, firstUser, firstToolId, ttlMs: requestTtlMs(body) };
+    return { format: "openai-chat", units: messages, toolName, results, firstUser, seenUpTo, ttlMs: requestTtlMs(body) };
   }
 
   messages.forEach((m, i) => {
@@ -240,25 +299,35 @@ export function viewOf(body: Record<string, unknown>): View | undefined {
     blocks.forEach((b, j) => {
       if (m.role === "assistant" && b?.type === "tool_use" && typeof b.id === "string") {
         toolName.set(b.id, String(b.name ?? ""));
-        firstToolId ||= b.id;
       } else if (m.role === "user" && b?.type === "tool_result" && typeof b.tool_use_id === "string") {
         results.push({ unit: i, id: b.tool_use_id, content: b.content, set: (note) => { blocks[j] = { ...b, content: note }; } });
       }
     });
   });
-  return { format: "anthropic", units: messages, toolName, results, firstUser, firstToolId, ttlMs: requestTtlMs(body) };
+  return { format: "anthropic", units: messages, toolName, results, firstUser, seenUpTo, ttlMs: requestTtlMs(body) };
 }
 
 /**
- * A conversation's identity: its first user message plus its first tool call
- * id. The message alone can repeat across sessions (the same project context
- * opens every session in a folder); tool call ids are unique per session.
+ * A conversation's identity, the same from its first request on: the first
+ * user message, plus the client's own session tag when it sends one
+ * (Anthropic metadata.user_id, which Claude Code fills per session; OpenAI
+ * prompt_cache_key). The first user message is read without cache_control:
+ * Claude Code marks the last message, which on request 1 is the first one,
+ * and moves the marker on request 2. Through 0.31.1 the key also held the
+ * first tool call id, so request 2 (the first tool round) was a new,
+ * never-seen conversation, called cold eight seconds after request 1.
+ * Two sessions that open with the same message and send no tag share a key;
+ * that only ever makes one look warm when the other is, the safe direction.
  * The model is left out on purpose: switching models mid-session keeps the
  * conversation (and the cleared set) but not the cache, which the TTL check
  * cannot see, so a model switch is treated as warm, the safe direction.
  */
-function conversationKey(view: View): string {
-  return createHash("sha1").update(JSON.stringify(view.firstUser ?? "").slice(0, 4000)).update(view.firstToolId).digest("hex");
+function conversationKey(view: View, body: Record<string, unknown>): string {
+  const first = JSON.stringify(view.firstUser ?? "", (k, v) => (k === "cache_control" ? undefined : v)) ?? "";
+  const h = createHash("sha1").update(first.slice(0, 4000));
+  const tag = (body.metadata as { user_id?: unknown } | undefined)?.user_id ?? body.prompt_cache_key;
+  if (typeof tag === "string") h.update("\0").update(tag);
+  return h.digest("hex");
 }
 
 export class AutoClearer {
@@ -268,6 +337,11 @@ export class AutoClearer {
   private convs = new Map<string, ConvState>();
   private opts: Required<Omit<AutoClearOptions, "statePath">> & { statePath?: string };
   private dirty = false;
+  /** Conversation times changed since the last save (written at most every CONV_SAVE_MS, or on flush). */
+  private convsDirty = false;
+  private lastSave = 0;
+  /** Accounts (salted credential hashes from the caller) whose API rejected a history autopilot edited. */
+  private rejecting = new Set<string>();
 
   constructor(options: AutoClearOptions = {}) {
     this.opts = {
@@ -283,20 +357,25 @@ export class AutoClearer {
   /**
    * Rewrite `body` in place: an Anthropic Messages, OpenAI Chat Completions or
    * OpenAI Responses request. Never throws; anything unrecognised is left alone.
+   * `account` names the credential the request carries (the proxy passes a
+   * salted hash), for accounts whose API rejects edited history.
    */
-  apply(body: Record<string, unknown>, now = Date.now(), modelHint?: string): AutoClearResult {
-    const none = (reason: string, cold = false): AutoClearResult => ({ changed: false, newlyCleared: 0, tokensRemoved: 0, cold, reason, firstChanged: -1 });
+  apply(body: Record<string, unknown>, now = Date.now(), modelHint?: string, account?: string): AutoClearResult {
+    const none = (reason: string, cold = false): AutoClearResult => ({ changed: false, newlyCleared: 0, tokensRemoved: 0, cold, reason, firstChanged: -1, newIds: [], appliedIds: [] });
     try {
       const view = viewOf(body);
       if (!view) return none("no messages");
       // Gemini puts the model in the URL, not the body; the proxy passes it.
       const model = typeof body.model === "string" ? body.model : modelHint;
 
-      const key = conversationKey(view);
+      const key = conversationKey(view, body);
       const conv = this.convs.get(key);
       const cold = conv ? now - conv.last > view.ttlMs : !this.opts.unseenIsWarm;
+      // Delete first so the map stays in last-used order and the cap evicts idle conversations.
+      this.convs.delete(key);
       this.convs.set(key, { last: now, requests: (conv?.requests ?? 0) + 1 });
       if (this.convs.size > 2000) this.convs.delete(this.convs.keys().next().value!);
+      this.convsDirty = true;
 
       const results: Found[] = view.results.map((r) => {
         let tokens = this.sizes.get(r.id);
@@ -308,8 +387,11 @@ export class AutoClearer {
         return { ...r, tokens };
       });
 
+      // Results that arrive with this request (after the model's last turn)
+      // are not eligible however many there are: the model has not read them.
       const eligible = results.slice(0, Math.max(0, results.length - this.opts.keepRecent))
-        .filter((r) => CLEARABLE_TOOLS.has(view.toolName.get(r.id) ?? ""));
+        .filter((r) => r.unit <= view.seenUpTo && CLEARABLE_TOOLS.has(view.toolName.get(r.id) ?? ""));
+      const eligibleIds = new Set(eligible.map((r) => r.id));
       const pending = eligible.filter((r) => !this.cleared.has(r.id) && r.tokens > 200);
       const pendingTokens = pending.reduce((n, r) => n + r.tokens, 0);
 
@@ -328,25 +410,38 @@ export class AutoClearer {
       } else if (pendingTokens > 0) {
         reason = `waiting for a ${Math.round(this.opts.minClearTokens / 1000)}k batch`;
       }
+      // An account that rejects edited history gets no NEW clearing a
+      // thinking block comes after: that block is bound to the history as it
+      // was. Clearings already sent keep being applied, because thinking
+      // generated since then is bound to the cleared history; dropping them
+      // would break the conversation the other way.
+      if (taken.length && (this.rejectsEdits(account) || optsIntoThinkingCheck(body)) && thinkingAfter(view.units, Math.min(...taken.map((r) => r.unit)))) {
+        taken = [];
+        reason = "thinking blocks follow the stale output and this account rejects edited history: left as is";
+      }
       for (const r of taken) this.cleared.set(r.id, r.tokens);
       if (taken.length) this.dirty = true;
 
       // Apply every clearing ever decided for this conversation, so the
-      // prefix is identical to what was sent last time.
+      // prefix is identical to what was sent last time. A remembered id must
+      // still be eligible here: a derived id (Gemini without ids) can recur in
+      // another conversation, where it must not cost that one its newest result.
       let removed = 0;
       let changed = false;
       let firstChanged = -1;
+      const appliedIds: string[] = [];
       for (const r of results) {
-        if (!this.cleared.has(r.id)) continue;
+        if (!this.cleared.has(r.id) || !eligibleIds.has(r.id)) continue;
         const note = clearedNote(this.cleared.get(r.id)!);
         if (r.content === note) continue;
         removed += Math.max(0, r.tokens - estimateTokens(note, model));
         r.set(note);
         changed = true;
+        appliedIds.push(r.id);
         if (firstChanged === -1 || r.unit < firstChanged) firstChanged = r.unit;
       }
       this.save();
-      return { changed, newlyCleared: taken.length, tokensRemoved: removed, cold, reason, firstChanged };
+      return { changed, newlyCleared: taken.length, tokensRemoved: removed, cold, reason, firstChanged, newIds: taken.map((r) => r.id), appliedIds };
     } catch {
       return none("error: request forwarded unchanged");
     }
@@ -369,24 +464,71 @@ export class AutoClearer {
     return saving >= this.opts.paybackSafety * rewriteCost;
   }
 
+  /** Write pending state now (the proxy calls this on a timer and before it exits). */
+  flush(): void {
+    this.save(true);
+  }
+
+  /** Whether this account's API has rejected a history autopilot edited (see thinkingAfter). */
+  rejectsEdits(account?: string): boolean {
+    return account !== undefined && this.rejecting.has(account);
+  }
+
+  /** Remember, across restarts, that this account's API rejects edited history. */
+  noteEditsRejected(account: string): void {
+    if (this.rejecting.has(account)) return;
+    this.rejecting.add(account);
+    this.dirty = true;
+    this.save();
+  }
+
+  /**
+   * Stop applying these clearings: the API refused the request that carried
+   * them, and any thinking it produces from now on is bound to the history
+   * without them.
+   */
+  forget(ids: string[]): void {
+    let any = false;
+    for (const id of ids) any = this.cleared.delete(id) || any;
+    if (any) {
+      this.dirty = true;
+      this.save();
+    }
+  }
+
   private load(): void {
     if (!this.opts.statePath || !existsSync(this.opts.statePath)) return;
     try {
-      const data = JSON.parse(readFileSync(this.opts.statePath, "utf8")) as { cleared?: Array<[string, number]> };
+      const data = JSON.parse(readFileSync(this.opts.statePath, "utf8")) as {
+        cleared?: Array<[string, number]>;
+        convs?: Array<[string, number, number]>;
+        rejectsEdits?: string[];
+      };
       for (const [id, tokens] of data.cleared ?? []) this.cleared.set(id, tokens);
+      for (const account of data.rejectsEdits ?? []) if (typeof account === "string") this.rejecting.add(account);
+      // Each conversation's last request time, so a restart does not make
+      // every open conversation "unseen" (cold) and rewrite a warm cache.
+      for (const [key, last, requests] of data.convs ?? []) {
+        if (typeof key === "string" && typeof last === "number") this.convs.set(key, { last: last + CONV_SAVE_MS, requests: Number(requests) || 1 });
+      }
     } catch {
       /* a corrupt state file only means results may be re-cleared once */
     }
   }
 
-  private save(): void {
-    if (!this.dirty || !this.opts.statePath) return;
+  private save(force = false): void {
+    if (!this.opts.statePath) return;
+    const due = this.convsDirty && (force || Date.now() - this.lastSave >= CONV_SAVE_MS);
+    if (!this.dirty && !due) return;
     this.dirty = false;
+    this.convsDirty = false;
+    this.lastSave = Date.now();
     try {
       // Newest 50k ids: far more than any live session holds.
       const entries = [...this.cleared.entries()].slice(-50_000);
+      const convs = [...this.convs.entries()].map(([k, c]) => [k, c.last, c.requests]);
       mkdirSync(dirname(this.opts.statePath), { recursive: true });
-      writeFileSync(this.opts.statePath, JSON.stringify({ cleared: entries }));
+      writeFileSync(this.opts.statePath, JSON.stringify({ cleared: entries, convs, rejectsEdits: [...this.rejecting] }));
     } catch {
       /* persistence is best effort */
     }

@@ -44,6 +44,12 @@ export function proxyUrl(port) {
 export function serviceCommand(node, cli, port, paths) {
     return [node, cli, "proxy", "--autopilot", "--port", String(port), "--autopilot-state", paths.statePath, "--autopilot-pause-file", paths.pauseFile];
 }
+/**
+ * The service restarts the proxy when it fails, not when it exits 0. The
+ * proxy exits 0 when another context-doctor proxy already serves its port;
+ * with KeepAlive true (Restart=always) launchd restarted it into the same
+ * EADDRINUSE every 5 s, 45 times in one real log.
+ */
 export function launchdPlist(args, log) {
     const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     return `<?xml version="1.0" encoding="UTF-8"?>
@@ -56,7 +62,7 @@ export function launchdPlist(args, log) {
 ${args.map((a) => `    <string>${esc(a)}</string>`).join("\n")}
   </array>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>5</integer>
   <key>StandardOutPath</key><string>${esc(log)}</string>
   <key>StandardErrorPath</key><string>${esc(log)}</string>
@@ -71,7 +77,7 @@ Description=context-doctor proxy (autopilot)
 
 [Service]
 ExecStart=${args.map(q).join(" ")}
-Restart=always
+Restart=on-failure
 RestartSec=2
 StandardOutput=append:${log}
 StandardError=append:${log}
@@ -89,6 +95,10 @@ function servicePaths(home = homedir()) {
         unit: join(home, ".config", "systemd", "user", "context-doctor-proxy.service"),
     };
 }
+/** The home directory a set of autopilot paths belongs to (<home>/.claude/settings.json). */
+function homeOf(paths) {
+    return dirname(dirname(paths.settings));
+}
 function uid() {
     return String(process.getuid?.() ?? "");
 }
@@ -105,9 +115,9 @@ function tryRun(cmd, args) {
     }
 }
 /** Install and start the background service for this platform. */
-function installService(args, log) {
+function installService(args, log, home = homedir()) {
     const os = platform();
-    const sp = servicePaths();
+    const sp = servicePaths(home);
     if (os === "darwin") {
         mkdirSync(dirname(sp.plist), { recursive: true });
         writeFileSync(sp.plist, launchdPlist(args, log));
@@ -133,23 +143,50 @@ function installService(args, log) {
     startDetached(args, log);
     return "detached process";
 }
-function removeService() {
+/**
+ * Stop and remove the service, but only one this HOME installed: launchd,
+ * systemd and Task Scheduler name it globally, so `off` run against another
+ * HOME (a test's throwaway one) would otherwise stop the real service. The
+ * plist or unit file is the proof on macOS and Linux; Windows has no file,
+ * so the caller says whether this HOME's autopilot config exists.
+ */
+function removeService(home, exec, windowsTaskOwned) {
     const os = platform();
-    const sp = servicePaths();
+    const sp = servicePaths(home);
     if (os === "darwin") {
-        tryRun("launchctl", ["bootout", `gui/${uid()}`, sp.plist]);
-        if (existsSync(sp.plist))
-            rmSync(sp.plist);
+        if (!existsSync(sp.plist))
+            return;
+        exec("launchctl", ["bootout", `gui/${uid()}`, sp.plist]);
+        rmSync(sp.plist);
     }
     else if (os === "linux") {
-        tryRun("systemctl", ["--user", "disable", "--now", "context-doctor-proxy.service"]);
-        if (existsSync(sp.unit))
-            rmSync(sp.unit);
-        tryRun("systemctl", ["--user", "daemon-reload"]);
+        if (!existsSync(sp.unit))
+            return;
+        exec("systemctl", ["--user", "disable", "--now", "context-doctor-proxy.service"]);
+        rmSync(sp.unit);
+        exec("systemctl", ["--user", "daemon-reload"]);
     }
     else if (os === "win32") {
-        tryRun("schtasks", ["/Delete", "/F", "/TN", "context-doctor-proxy"]);
+        if (windowsTaskOwned)
+            exec("schtasks", ["/Delete", "/F", "/TN", "context-doctor-proxy"]);
     }
+}
+/**
+ * Start the installed service through its manager, when this HOME has one.
+ * False when there is none or the manager refused, so the caller can start
+ * the proxy itself. kickstart without -k (and systemctl start) leave a
+ * running proxy alone: a /health that was merely slow must not start a
+ * second copy next to the managed one.
+ */
+function startService(home, exec) {
+    const os = platform();
+    const sp = servicePaths(home);
+    if (os === "darwin" && existsSync(sp.plist)) {
+        return exec("launchctl", ["kickstart", `gui/${uid()}/${LABEL}`]) || exec("launchctl", ["bootstrap", `gui/${uid()}`, sp.plist]);
+    }
+    if (os === "linux" && existsSync(sp.unit))
+        return exec("systemctl", ["--user", "start", "context-doctor-proxy.service"]);
+    return false;
 }
 /** Version of the package a CLI path belongs to (dist/cli.js -> ../package.json). */
 export function installedVersion(cli) {
@@ -174,13 +211,13 @@ function restartDue(paths) {
     }
 }
 /** Restart the installed background service onto the current build (launchd, systemd). */
-export function restartService() {
+export function restartService(home = homedir(), exec = tryRun) {
     const os = platform();
-    const sp = servicePaths();
+    const sp = servicePaths(home);
     if (os === "darwin" && existsSync(sp.plist))
-        return tryRun("launchctl", ["kickstart", "-k", `gui/${uid()}/${LABEL}`]);
+        return exec("launchctl", ["kickstart", "-k", `gui/${uid()}/${LABEL}`]);
     if (os === "linux" && existsSync(sp.unit))
-        return tryRun("systemctl", ["--user", "restart", "context-doctor-proxy.service"]);
+        return exec("systemctl", ["--user", "restart", "context-doctor-proxy.service"]);
     return false;
 }
 export function startDetached(args, log) {
@@ -209,6 +246,29 @@ async function waitHealthy(port, ms) {
             return h;
         await new Promise((r) => setTimeout(r, 250));
     }
+}
+/**
+ * Whether a base URL is this autopilot's proxy: the configured port's URL, or,
+ * when the config exists but cannot be read (so the port is unknown), any URL
+ * of the exact shape autopilot writes, http://127.0.0.1:<port>.
+ */
+function isOurProxyUrl(url, port, paths) {
+    if (port !== undefined && url === proxyUrl(port))
+        return true;
+    const damaged = existsSync(paths.config) && readConfig(paths) === undefined;
+    return damaged && /^http:\/\/127\.0\.0\.1:\d+$/.test(url);
+}
+/**
+ * The ANTHROPIC_BASE_URL `off` should restore, decided at `on`: the one an
+ * earlier `on` recorded, else what settings.json holds now, but never our own
+ * proxy's. With the config damaged, settings.json already holds the proxy URL
+ * from the last `on`, and recording that made `off` put the proxy URL back.
+ */
+export function baseUrlToRestore(paths, port, current) {
+    const prev = readConfig(paths);
+    if (prev?.previousBaseUrl !== undefined)
+        return prev.previousBaseUrl;
+    return current && isOurProxyUrl(current, port, paths) ? null : current;
 }
 function readConfig(paths) {
     // readJson returns {} for a missing file; only a file with a port is a config.
@@ -322,17 +382,16 @@ export async function autopilotOn(port = DEFAULT_AUTOPILOT_PORT, paths = autopil
         }
     }
     const args = serviceCommand(process.execPath, cli, port, paths);
-    const how = installService(args, paths.log);
+    const how = installService(args, paths.log, homeOf(paths));
     const h = await waitHealthy(port, 15_000);
     if (!h.ok || !h.autopilot) {
-        removeService();
+        removeService(homeOf(paths), tryRun, true);
         return { ok: false, lines: [`✗ The proxy did not come up on port ${port} (log: ${paths.log}). Nothing was changed in Claude Code's settings.`] };
     }
     lines.push(`✓ Proxy running with autopilot on ${proxyUrl(port)} (${how})`);
     const settings = readJson(paths.settings);
     const env = (settings.env ??= {});
-    const prev = readConfig(paths);
-    const previousBaseUrl = prev?.previousBaseUrl !== undefined ? prev.previousBaseUrl : (env.ANTHROPIC_BASE_URL ?? null);
+    const previousBaseUrl = baseUrlToRestore(paths, port, env.ANTHROPIC_BASE_URL ?? null);
     if (previousBaseUrl && previousBaseUrl !== proxyUrl(port)) {
         lines.push(`! settings.json already routed Claude Code to ${previousBaseUrl}; autopilot forwards to api.anthropic.com instead. \`autopilot off\` restores it.`);
     }
@@ -348,14 +407,19 @@ export async function autopilotOn(port = DEFAULT_AUTOPILOT_PORT, paths = autopil
     lines.push(`  GPT apps on your own OpenAI key get the same: export OPENAI_BASE_URL=${proxyUrl(port)}/v1`);
     return { ok: true, lines };
 }
-export async function autopilotOff(paths = autopilotPaths()) {
+export async function autopilotOff(paths = autopilotPaths(), exec = tryRun) {
     const lines = [];
     const cfg = readConfig(paths);
     const settings = readJson(paths.settings);
     const env = settings.env;
-    if (env?.ANTHROPIC_BASE_URL && cfg && env.ANTHROPIC_BASE_URL === proxyUrl(cfg.port)) {
-        if (cfg.previousBaseUrl)
-            env.ANTHROPIC_BASE_URL = cfg.previousBaseUrl;
+    // With the config damaged its port is unknown; the proxy URL in settings
+    // must still go, or every new Claude Code session points at a proxy whose
+    // service is being removed.
+    const ours = env?.ANTHROPIC_BASE_URL ? isOurProxyUrl(env.ANTHROPIC_BASE_URL, cfg?.port, paths) : false;
+    if (env && ours) {
+        const restore = cfg?.previousBaseUrl && !isOurProxyUrl(cfg.previousBaseUrl, cfg.port, paths) ? cfg.previousBaseUrl : undefined;
+        if (restore)
+            env.ANTHROPIC_BASE_URL = restore;
         else
             delete env.ANTHROPIC_BASE_URL;
         if (Object.keys(env).length === 0)
@@ -363,7 +427,7 @@ export async function autopilotOff(paths = autopilotPaths()) {
         writeJsonWithBackup(paths.settings, settings);
         lines.push("✓ Claude Code no longer routed through the proxy (new sessions)");
     }
-    removeService();
+    removeService(homeOf(paths), exec, Boolean(cfg) || existsSync(paths.config));
     if (existsSync(paths.config))
         rmSync(paths.config);
     if (existsSync(paths.pauseFile))
@@ -421,7 +485,7 @@ export async function autopilotStatus(paths = autopilotPaths()) {
  * Called by the every-prompt hook: if autopilot is on and the proxy is down,
  * start it before the prompt's request goes out. Returns quickly either way.
  */
-export async function ensureProxyUp(paths = autopilotPaths()) {
+export async function ensureProxyUp(paths = autopilotPaths(), exec = tryRun) {
     const cfg = readConfig(paths);
     if (!cfg)
         return;
@@ -433,7 +497,14 @@ export async function ensureProxyUp(paths = autopilotPaths()) {
         // once an hour so an install that cannot fix it never loops.
         const installed = typeof cfg.cli === "string" ? installedVersion(cfg.cli) : undefined;
         if (installed && h.version && h.version !== installed && restartDue(paths))
-            restartService();
+            restartService(homeOf(paths), exec);
+        return;
+    }
+    // A service manager owns the proxy here: ask it. A detached copy started
+    // because /health missed 300 ms (a busy proxy, not a dead one) took the
+    // port from the managed job, which then crash-looped on EADDRINUSE.
+    if (startService(homeOf(paths), exec)) {
+        await waitHealthy(cfg.port, 2500);
         return;
     }
     if (typeof cfg.node !== "string" || typeof cfg.cli !== "string" || !existsSync(cfg.node) || !existsSync(cfg.cli))
