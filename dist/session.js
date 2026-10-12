@@ -463,6 +463,11 @@ export function parseSessionFile(path) {
             const kept = entry.compactMetadata?.preservedMessages;
             const uuids = Array.isArray(kept) ? kept : Array.isArray(kept?.uuids) ? kept.uuids : Array.isArray(kept?.allUuids) ? kept.allUuids : undefined;
             boundaryKeeps = uuids?.filter((u) => typeof u === "string");
+            // The last reply's usage measured the context the compaction just
+            // replaced. Kept, the every-prompt hook read the pre-compaction size
+            // (say 800k) until the next reply reported the real one; with no figure
+            // it falls back to its estimate of the live messages.
+            reportedInputTokens = undefined;
             return;
         }
         // A prompt typed while the agent worked is the user's turn too, though
