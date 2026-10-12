@@ -113,4 +113,10 @@ export interface RouteConfig {
     keepRecent?: number;
     maxToolResultTokens?: number;
 }
+/**
+ * Which account a request belongs to, as a salted hash of its credential: the
+ * proxy remembers per account whether the API refuses edited history, and
+ * never keeps the key itself.
+ */
+export declare function accountKey(headers: http.IncomingHttpHeaders): string;
 export declare function startProxy(opts?: ProxyOptions): http.Server;

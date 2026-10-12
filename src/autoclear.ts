@@ -100,6 +100,36 @@ export interface AutoClearResult {
   reason: string;
   /** Index of the first message rewritten on this request (the cache breaks from here), or -1. */
   firstChanged: number;
+  /** Ids this request cleared for the first time. */
+  newIds: string[];
+  /** Every id whose clearing this request carries, earlier batches included. */
+  appliedIds: string[];
+}
+
+/**
+ * Whether a thinking block comes at or after message `index`. On current
+ * Claude models (Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5) a thinking
+ * block's signature binds the conversation before it: an edit to an earlier
+ * message invalidates every later thinking block, and accounts created on or
+ * after 2026-08-31 get a 400 for it ("... bound to a different
+ * conversation"), on every retry of the same body.
+ */
+export function thinkingAfter(messages: unknown[], index: number): boolean {
+  for (let i = Math.max(0, index); i < messages.length; i++) {
+    const content = (messages[i] as { content?: unknown } | null)?.content;
+    if (Array.isArray(content) && content.some((b) => b?.type === "thinking" || b?.type === "redacted_thinking")) return true;
+  }
+  return false;
+}
+
+/**
+ * A request that sets thinking.block_binding has opted into that check (any
+ * value, "drop_block" included, which silently drops the reasoning an edit
+ * invalidates), so it is treated like an account known to enforce it.
+ */
+export function optsIntoThinkingCheck(body: Record<string, unknown>): boolean {
+  const thinking = body.thinking as { block_binding?: unknown } | undefined;
+  return Boolean(thinking && typeof thinking === "object" && thinking.block_binding !== undefined);
 }
 
 interface Found {
@@ -310,6 +340,8 @@ export class AutoClearer {
   /** Conversation times changed since the last save (written at most every CONV_SAVE_MS, or on flush). */
   private convsDirty = false;
   private lastSave = 0;
+  /** Accounts (salted credential hashes from the caller) whose API rejected a history autopilot edited. */
+  private rejecting = new Set<string>();
 
   constructor(options: AutoClearOptions = {}) {
     this.opts = {
@@ -325,9 +357,11 @@ export class AutoClearer {
   /**
    * Rewrite `body` in place: an Anthropic Messages, OpenAI Chat Completions or
    * OpenAI Responses request. Never throws; anything unrecognised is left alone.
+   * `account` names the credential the request carries (the proxy passes a
+   * salted hash), for accounts whose API rejects edited history.
    */
-  apply(body: Record<string, unknown>, now = Date.now(), modelHint?: string): AutoClearResult {
-    const none = (reason: string, cold = false): AutoClearResult => ({ changed: false, newlyCleared: 0, tokensRemoved: 0, cold, reason, firstChanged: -1 });
+  apply(body: Record<string, unknown>, now = Date.now(), modelHint?: string, account?: string): AutoClearResult {
+    const none = (reason: string, cold = false): AutoClearResult => ({ changed: false, newlyCleared: 0, tokensRemoved: 0, cold, reason, firstChanged: -1, newIds: [], appliedIds: [] });
     try {
       const view = viewOf(body);
       if (!view) return none("no messages");
@@ -376,6 +410,15 @@ export class AutoClearer {
       } else if (pendingTokens > 0) {
         reason = `waiting for a ${Math.round(this.opts.minClearTokens / 1000)}k batch`;
       }
+      // An account that rejects edited history gets no NEW clearing a
+      // thinking block comes after: that block is bound to the history as it
+      // was. Clearings already sent keep being applied, because thinking
+      // generated since then is bound to the cleared history; dropping them
+      // would break the conversation the other way.
+      if (taken.length && (this.rejectsEdits(account) || optsIntoThinkingCheck(body)) && thinkingAfter(view.units, Math.min(...taken.map((r) => r.unit)))) {
+        taken = [];
+        reason = "thinking blocks follow the stale output and this account rejects edited history: left as is";
+      }
       for (const r of taken) this.cleared.set(r.id, r.tokens);
       if (taken.length) this.dirty = true;
 
@@ -386,6 +429,7 @@ export class AutoClearer {
       let removed = 0;
       let changed = false;
       let firstChanged = -1;
+      const appliedIds: string[] = [];
       for (const r of results) {
         if (!this.cleared.has(r.id) || !eligibleIds.has(r.id)) continue;
         const note = clearedNote(this.cleared.get(r.id)!);
@@ -393,10 +437,11 @@ export class AutoClearer {
         removed += Math.max(0, r.tokens - estimateTokens(note, model));
         r.set(note);
         changed = true;
+        appliedIds.push(r.id);
         if (firstChanged === -1 || r.unit < firstChanged) firstChanged = r.unit;
       }
       this.save();
-      return { changed, newlyCleared: taken.length, tokensRemoved: removed, cold, reason, firstChanged };
+      return { changed, newlyCleared: taken.length, tokensRemoved: removed, cold, reason, firstChanged, newIds: taken.map((r) => r.id), appliedIds };
     } catch {
       return none("error: request forwarded unchanged");
     }
@@ -424,14 +469,43 @@ export class AutoClearer {
     this.save(true);
   }
 
+  /** Whether this account's API has rejected a history autopilot edited (see thinkingAfter). */
+  rejectsEdits(account?: string): boolean {
+    return account !== undefined && this.rejecting.has(account);
+  }
+
+  /** Remember, across restarts, that this account's API rejects edited history. */
+  noteEditsRejected(account: string): void {
+    if (this.rejecting.has(account)) return;
+    this.rejecting.add(account);
+    this.dirty = true;
+    this.save();
+  }
+
+  /**
+   * Stop applying these clearings: the API refused the request that carried
+   * them, and any thinking it produces from now on is bound to the history
+   * without them.
+   */
+  forget(ids: string[]): void {
+    let any = false;
+    for (const id of ids) any = this.cleared.delete(id) || any;
+    if (any) {
+      this.dirty = true;
+      this.save();
+    }
+  }
+
   private load(): void {
     if (!this.opts.statePath || !existsSync(this.opts.statePath)) return;
     try {
       const data = JSON.parse(readFileSync(this.opts.statePath, "utf8")) as {
         cleared?: Array<[string, number]>;
         convs?: Array<[string, number, number]>;
+        rejectsEdits?: string[];
       };
       for (const [id, tokens] of data.cleared ?? []) this.cleared.set(id, tokens);
+      for (const account of data.rejectsEdits ?? []) if (typeof account === "string") this.rejecting.add(account);
       // Each conversation's last request time, so a restart does not make
       // every open conversation "unseen" (cold) and rewrite a warm cache.
       for (const [key, last, requests] of data.convs ?? []) {
@@ -454,7 +528,7 @@ export class AutoClearer {
       const entries = [...this.cleared.entries()].slice(-50_000);
       const convs = [...this.convs.entries()].map(([k, c]) => [k, c.last, c.requests]);
       mkdirSync(dirname(this.opts.statePath), { recursive: true });
-      writeFileSync(this.opts.statePath, JSON.stringify({ cleared: entries, convs }));
+      writeFileSync(this.opts.statePath, JSON.stringify({ cleared: entries, convs, rejectsEdits: [...this.rejecting] }));
     } catch {
       /* persistence is best effort */
     }

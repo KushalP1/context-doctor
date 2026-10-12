@@ -12,9 +12,9 @@
  * Streaming responses are piped through unchanged.
  */
 import http from "node:http";
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { optimizeConversation } from "./optimize.js";
-import { AutoClearer } from "./autoclear.js";
+import { AutoClearer, optsIntoThinkingCheck, thinkingAfter } from "./autoclear.js";
 import { existsSync } from "node:fs";
 import { formatTokens, CHARS_PER_TOKEN, providerFor } from "./tokens.js";
 import { formatUsd, inputCostUsd, pricingFor } from "./pricing.js";
@@ -109,6 +109,43 @@ function fnv1a(s) {
     }
     return h >>> 0;
 }
+/** Anthropic's 400 for a history whose thinking-block signatures no longer match it. */
+const THINKING_EDIT_REJECTED = /bound to a different conversation|Invalid `signature` in `thinking` block/;
+/**
+ * Which account a request belongs to, as a salted hash of its credential: the
+ * proxy remembers per account whether the API refuses edited history, and
+ * never keeps the key itself.
+ */
+export function accountKey(headers) {
+    const credential = headers["x-api-key"] ?? headers.authorization ?? "";
+    return createHash("sha256").update(`context-doctor account\0${String(credential)}`).digest("hex").slice(0, 16);
+}
+/** Whether an Anthropic request's answer may hold thinking blocks: asked for, or a 5.x model, which thinks unless told not to. */
+function mayProduceThinking(body) {
+    const type = body.thinking?.type;
+    if (type === "disabled")
+        return false;
+    if (type !== undefined)
+        return true;
+    return /fable|mythos|(opus|sonnet|haiku)-([5-9]|\d\d)/i.test(String(body.model ?? ""));
+}
+/**
+ * For an account that refuses edited history: would sending the optimizer's
+ * `edited` body instead of `original` break a thinking signature? It does
+ * when a thinking block sits at or after the first changed message, and the
+ * stateless optimizer also stays out when the answer may hold thinking: that
+ * thinking would be bound to this edit, and nothing guarantees the next
+ * request gets the identical edit.
+ */
+function editBreaksThinking(original, edited) {
+    const before = Array.isArray(original.messages) ? original.messages : [];
+    const afterMsgs = edited?.messages;
+    const after = Array.isArray(afterMsgs) ? afterMsgs : [];
+    let first = 0;
+    while (first < before.length && first < after.length && JSON.stringify(before[first]) === JSON.stringify(after[first]))
+        first++;
+    return thinkingAfter(before, first) || mayProduceThinking(original);
+}
 /**
  * How long a stopping proxy waits for requests in flight. Under launchd's
  * default 20 s exit timeout, so the proxy exits on its own terms rather than
@@ -138,6 +175,16 @@ export function startProxy(opts = {}) {
     // treated as warm: the state file keeps each conversation's last request
     // time, and without one, clearing could rewrite a cache that is still warm.
     const clearer = opts.autopilot ? new AutoClearer({ statePath: opts.autopilotStatePath, unseenIsWarm: true }) : undefined;
+    // Accounts whose API refused an edited history: autopilot keeps them in its
+    // state file, the optimizing proxy (which has none) for its lifetime.
+    const refusing = new Set();
+    const rejectsEdits = (account) => (clearer ? clearer.rejectsEdits(account) : refusing.has(account));
+    const noteEditsRejected = (account) => {
+        if (clearer)
+            clearer.noteEditsRejected(account);
+        else
+            refusing.add(account);
+    };
     const stats = {
         startedAt: new Date().toISOString(),
         requests: 0,
@@ -225,6 +272,9 @@ export function startProxy(opts = {}) {
             stats.requests++;
             const isMeasurement = url.startsWith("/v1/messages/count_tokens");
             let note = "passthrough";
+            const account = accountKey(req.headers);
+            /** Takes back what this request's edit added to the stats and to autopilot's memory, when the edit is refused. */
+            let undoEdit;
             if (opts.autopilot) {
                 const gemini = GEMINI_CONVERSATION.test(url);
                 if (req.method === "POST" && body && !isMeasurement && (gemini || /^\/v1\/(messages|chat\/completions|responses)(\?|$)/.test(url))) {
@@ -237,7 +287,7 @@ export function startProxy(opts = {}) {
                         try {
                             const parsed = JSON.parse(body);
                             const urlModel = gemini ? geminiModelFromUrl(url) : undefined;
-                            const r = clearer.apply(parsed, Date.now(), urlModel);
+                            const r = clearer.apply(parsed, Date.now(), urlModel, account);
                             ap.requests++;
                             ap.lastReason = r.reason;
                             if (r.newlyCleared > 0) {
@@ -254,8 +304,27 @@ export function startProxy(opts = {}) {
                                 stats.tokensSaved += r.tokensRemoved;
                                 const pricing = pricingFor(typeof parsed.model === "string" ? parsed.model : urlModel);
                                 // What autopilot removes would mostly have been cached reads: price it so.
-                                if (pricing)
-                                    stats.estUsdSaved += (r.tokensRemoved / 1e6) * pricing.cacheReadPerM;
+                                const usd = pricing ? (r.tokensRemoved / 1e6) * pricing.cacheReadPerM : 0;
+                                stats.estUsdSaved += usd;
+                                undoEdit = (originalAccepted) => {
+                                    if (r.newlyCleared > 0) {
+                                        ap.batches--;
+                                        ap.resultsCleared -= r.newlyCleared;
+                                        if (r.cold)
+                                            ap.coldBatches--;
+                                    }
+                                    ap.changedRequests--;
+                                    ap.tokensRemoved -= r.tokensRemoved;
+                                    stats.optimizedRequests--;
+                                    stats.tokensSaved -= r.tokensRemoved;
+                                    stats.estUsdSaved -= usd;
+                                    // Accepted unedited: the newest thinking is bound to the full
+                                    // history, so none of these clearings may be sent again.
+                                    // Refused unedited as well: the earlier clearings are what
+                                    // older thinking is bound to; only this request's new ones
+                                    // never reached the model.
+                                    clearer.forget(originalAccepted ? r.appliedIds : r.newIds);
+                                };
                                 note = `autopilot: ${formatTokens(r.tokensRemoved)} tokens of stale tool output not sent (${r.reason})`;
                             }
                             else {
@@ -342,19 +411,32 @@ export function startProxy(opts = {}) {
                     }
                     const result = optimizeConversation(body, effective);
                     const saved = result.tokensBefore - result.tokensAfter;
+                    const original = JSON.parse(originalBody);
                     stats.tokensBefore += result.tokensBefore;
-                    stats.tokensAfter += result.tokensAfter;
-                    if (saved > 0) {
-                        body = JSON.stringify(result.conversation);
-                        stats.optimizedRequests++;
-                        stats.tokensSaved += saved;
-                        const pricing = pricingFor(result.conversation?.model);
-                        if (pricing)
-                            stats.estUsdSaved += inputCostUsd(saved, pricing);
+                    if (saved > 0 && (rejectsEdits(account) || optsIntoThinkingCheck(original)) && editBreaksThinking(original, result.conversation)) {
+                        stats.tokensAfter += result.tokensBefore;
+                        note = "unchanged: thinking blocks are bound to this history and this account rejects edits to it";
                     }
-                    note = saved > 0
-                        ? `optimized ${formatTokens(result.tokensBefore)} → ${formatTokens(result.tokensAfter)} tokens (${result.applied.length} changes)`
-                        : "clean (nothing to save)";
+                    else {
+                        stats.tokensAfter += result.tokensAfter;
+                        if (saved > 0) {
+                            body = JSON.stringify(result.conversation);
+                            stats.optimizedRequests++;
+                            stats.tokensSaved += saved;
+                            const pricing = pricingFor(result.conversation?.model);
+                            const usd = pricing ? inputCostUsd(saved, pricing) : 0;
+                            stats.estUsdSaved += usd;
+                            undoEdit = () => {
+                                stats.optimizedRequests--;
+                                stats.tokensSaved -= saved;
+                                stats.tokensAfter += saved;
+                                stats.estUsdSaved -= usd;
+                            };
+                        }
+                        note = saved > 0
+                            ? `optimized ${formatTokens(result.tokensBefore)} → ${formatTokens(result.tokensAfter)} tokens (${result.applied.length} changes)`
+                            : "clean (nothing to save)";
+                    }
                 }
                 catch {
                     /* not a conversation payload — forward as-is */
@@ -372,7 +454,28 @@ export function startProxy(opts = {}) {
                 body: req.method === "GET" || req.method === "HEAD" ? undefined : payload,
                 signal: upstreamAbort.signal,
             });
-            const upstream = await send(body === originalBody ? rawBody : body);
+            const edited = body !== originalBody;
+            let upstream = await send(edited ? body : rawBody);
+            // An edited history can be refused because thinking blocks are bound to
+            // the history as it was (thinkingAfter); the 400 comes before any
+            // output, and the same body fails again on retry. Send the client's own
+            // body once instead and return that answer as if nothing happened, and
+            // remember that this account refuses edits, so it is not asked again.
+            if (edited && upstream.status === 400) {
+                const text = await upstream.text();
+                if (THINKING_EDIT_REJECTED.test(text)) {
+                    upstream = await send(rawBody);
+                    // A bad signature with no word on the conversation is not ours to
+                    // learn from, unless the unedited body then went through.
+                    if (/bound to a different conversation/.test(text) || upstream.ok)
+                        noteEditsRejected(account);
+                    undoEdit?.(upstream.ok);
+                    note = `edited history refused (thinking blocks are bound to it); resent unedited → ${upstream.status}`;
+                }
+                else {
+                    upstream = new Response(text, { status: upstream.status, statusText: upstream.statusText, headers: upstream.headers });
+                }
+            }
             console.error(`[context-doctor] ${req.method} ${url} → ${upstream.status} in ${Date.now() - upstreamStart}ms | ${note}` +
                 (stats.tokensSaved > 0 ? ` | session total: ${formatTokens(stats.tokensSaved)} tokens ≈ ${formatUsd(stats.estUsdSaved)} saved` : ""));
             res.statusCode = upstream.status;
