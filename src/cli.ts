@@ -763,7 +763,14 @@ async function main(): Promise<void> {
   }
 
   if (args.command === "ci") {
-    const report = ciReport({ base: args.base, maxTokens: args.maxTokens, maxIncrease: args.maxIncrease });
+    let report;
+    try {
+      report = ciReport({ base: args.base, maxTokens: args.maxTokens, maxIncrease: args.maxIncrease });
+    } catch (e) {
+      // A base git cannot resolve (a typo, a shallow clone) is a usage error, not a crash.
+      console.error(`context-doctor: ${(e as Error).message}`);
+      process.exit(1);
+    }
     console.log(args.json ? JSON.stringify(report, null, 2) : args.markdown ? renderCiMarkdown(report, { model: args.model, requestsPerDay: args.requestsPerDay }) : renderCiText(report));
     if (report.breaches.length) process.exitCode = 1;
     return;

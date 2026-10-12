@@ -15,3 +15,6 @@ build/
 
 # Private notes (marketing plans, post drafts): never published
 marketing/
+
+# Agent worktrees made by Claude Code sessions
+.claude/worktrees/

@@ -1,7 +1,7 @@
 /** ci: what git hands back is read as git means it: folders are not files, non-ASCII paths are paths, an unknown base is an error. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,4 +43,12 @@ test("a base git cannot resolve fails with a clear message instead of counting e
     assert.throws(() => ciReport({ cwd: dir, base: "origin/mian", maxIncrease: 0 }), /--base origin\/mian is not a commit.*fetch/);
     // What a shallow clone without the base commit looks like: a well-formed SHA that is not there.
     assert.throws(() => ciReport({ cwd: dir, base: "0123456789abcdef0123456789abcdef01234567" }), /not a commit/);
+});
+test("the ci command reports an unknown base in one line, not a stack trace", () => {
+    const { dir } = repo();
+    const cli = join(process.cwd(), "dist", "cli.js");
+    const r = spawnSync(process.execPath, [cli, "ci", "--base", "origin/mian"], { cwd: dir, encoding: "utf8" });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /^context-doctor: --base origin\/mian is not a commit/);
+    assert.doesNotMatch(r.stderr, /\n\s+at /, "no stack trace");
 });
