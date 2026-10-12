@@ -22,4 +22,4 @@ context-doctor install
 context-doctor autopilot on
 ```
 
-Part of [context-doctor](https://github.com/KushalP1/context-doctor) (MIT). Nothing leaves your machine.
+Part of [context-doctor](https://github.com/KushalP1/context-doctor) (MIT). Nothing leaves your machine. Built by [gAI Ventures](https://gai.ventures).
