@@ -51,8 +51,8 @@ test("totals, cache-aware cost, task text, duration and ordering come from the s
     assert.equal(a.cacheReadTokens, 14_800);
     assert.equal(a.outputTokens, 800);
     assert.equal(a.durationMs, 5 * 60_000);
-    // sonnet: $3/M input, $0.3/M cache read, $15/M output; writes at 1.25x.
-    const expected = ((10_000 + 5_000 * 1.25) * 3 + 200 * 3 + 14_800 * 0.3 + 800 * 15) / 1_000_000;
+    // Sonnet 5: $2/M input, $0.20/M cache read, $10/M output; writes at 1.25x.
+    const expected = ((10_000 + 5_000 * 1.25) * 2 + 200 * 2 + 14_800 * 0.2 + 800 * 10) / 1_000_000;
     assert.ok(Math.abs((a.estCostUsd ?? 0) - expected) < 1e-9, `cost ${a.estCostUsd} vs ${expected}`);
     const b = report.agents.find((x) => x.id === "bbb");
     assert.equal(b.task, "summarize the diff", "block-array content is flattened");

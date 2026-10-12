@@ -16,7 +16,7 @@
  * so its effect can be seen as it accumulates.
  */
 
-import { forEachLine, listSessions } from "./session.js";
+import { forEachLine, listSessions, queuedUserPrompt } from "./session.js";
 import { readLedger } from "./ledger.js";
 import { estimateTokens, formatTokens } from "./tokens.js";
 
@@ -82,12 +82,19 @@ export function compactionQuality(days = 60, paths?: string[]): CompactionQualit
   const shapedAt = readLedger().filter((e) => e.ev === "precompact").map((e) => e.ts);
   const q: CompactionQuality = { compactions: 0, extraRereadTokensPerCompaction: 0, sessions: 0, before: empty(), after: empty() };
   const shaped = { compactions: 0, before: empty(), after: empty() };
+  // A forked session copies its parent's compactions (same row uuid): one compaction, counted once.
+  const countedBoundaries = new Set<string>();
   for (const path of files) {
     const reqs: Req[] = [];
+    /** `at` is NaN when the row carries no timestamp. */
     const boundaries: Array<{ index: number; at: number }> = [];
     let cur: Req | undefined;
     // User messages between a compaction and the next request belong to the "after" side.
     let pendingUser = 0, pendingCorrections = 0;
+    const userMessage = (text: string) => {
+      const corr = CORRECTION.test(text.trim()) ? 1 : 0;
+      if (cur) { cur.userMsgs++; cur.corrections += corr; } else { pendingUser++; pendingCorrections += corr; }
+    };
     const readIds = new Map<string, string>();
     let lastId: string | undefined;
     forEachLine(path, (line) => {
@@ -96,8 +103,17 @@ export function compactionQuality(days = 60, paths?: string[]): CompactionQualit
       if (!e || e.isSidechain) return;
       const at = Date.parse(e.timestamp);
       if (e.type === "system" && e.subtype === "compact_boundary") {
-        boundaries.push({ index: reqs.length, at: Number.isFinite(at) ? at : 0 });
+        const copy = typeof e.uuid === "string" && countedBoundaries.has(e.uuid);
+        if (typeof e.uuid === "string") countedBoundaries.add(e.uuid);
+        if (!copy) boundaries.push({ index: reqs.length, at });
         cur = undefined;
+        return;
+      }
+      // Typed while the agent worked: a user message recorded only as an
+      // attachment, and the likeliest moment for a "no, stop" to arrive.
+      const queued = queuedUserPrompt(e);
+      if (queued !== undefined) {
+        userMessage(typeof queued === "string" ? queued : queued.map((b: any) => (typeof b?.text === "string" ? b.text : "")).join(" "));
         return;
       }
       const c = e.message?.content;
@@ -117,8 +133,7 @@ export function compactionQuality(days = 60, paths?: string[]): CompactionQualit
         }
       } else if (e.type === "user") {
         if (typeof c === "string" && !e.isMeta && !e.isCompactSummary) {
-          const corr = CORRECTION.test(c.trim()) ? 1 : 0;
-          if (cur) { cur.userMsgs++; cur.corrections += corr; } else { pendingUser++; pendingCorrections += corr; }
+          userMessage(c);
         } else if (cur && Array.isArray(c)) {
           for (const b of c) {
             if (b?.type !== "tool_result") continue;
@@ -135,6 +150,9 @@ export function compactionQuality(days = 60, paths?: string[]): CompactionQualit
     });
     let counted = false;
     for (const b of boundaries) {
+      // Each compaction by its own time: a session touched in the window
+      // brought in all its older compactions. Undated ones count with the file.
+      if (b.at < since) continue;
       const before = reqs.slice(Math.max(0, b.index - WINDOW), b.index);
       const after = reqs.slice(b.index, b.index + WINDOW);
       if (before.length < 5 || after.length < 5) continue;
@@ -193,7 +211,8 @@ export function renderCompactionQuality(q: CompactionQuality, days = 60): string
   const worse = a.error - b.error > 0.03 || a.correction - b.correction > 0.05;
   out.push("");
   if (forgets) {
-    out.push(`Compacting forgets files: each compaction is followed by ~${formatTokens(q.extraRereadTokensPerCompaction)} tokens of extra re-reads. compact-window charges that to every compaction it simulates.`);
+    // Rounded: an average below 1k otherwise printed as "~237.46428571428572".
+    out.push(`Compacting forgets files: each compaction is followed by ~${formatTokens(Math.round(q.extraRereadTokensPerCompaction))} tokens of extra re-reads. compact-window charges that to every compaction it simulates.`);
   }
   out.push(
     worse

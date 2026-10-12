@@ -18,11 +18,19 @@ function bar(fraction, width = 28) {
     const filled = Math.round(fraction * width);
     return "█".repeat(filled) + "░".repeat(width - filled);
 }
-/** Mask filesystem paths and quoted fragments inside a finding's text. */
-function redactText(text) {
+/**
+ * Mask filesystem paths and file names inside a finding's text.
+ *
+ * Any path with a separator goes (absolute, ~/, ./, Windows, or relative
+ * like docs/plan.pdf), and so does any bare name with an extension: a
+ * finding names a file by its last segment ("Q3-layoffs-draft.docx was read
+ * 3 times"), and the name itself can be the secret, whatever its type. An
+ * extension must start with a letter, so figures like ~1.2k or 0.5x stay.
+ */
+export function redactText(text) {
     return text
-        .replace(/(?:\/[\w.@ -]+){2,}/g, "[path]")
-        .replace(/\b[\w.-]+\.(ts|tsx|js|jsx|py|go|rs|java|rb|md|json|ya?ml|sql|sh)\b/gi, "[file]");
+        .replace(/(?:[A-Za-z]:)?(?:~|\.{1,2})?(?:[\\/][\w.@+-]+)+|[\w.@~+-]+(?:[\\/][\w.@+-]+)+/g, "[path]")
+        .replace(/(?<![\w.@+-])[\w@+-][\w.@+-]*\.[A-Za-z][A-Za-z0-9]{0,9}(?![\w@+-]|\.\w)/g, "[file]");
 }
 export function renderProfile(profile, options = {}) {
     const lines = [];

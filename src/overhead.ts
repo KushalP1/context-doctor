@@ -18,9 +18,9 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { forEachLine, listSessions } from "./session.js";
-import { estimateTokens, formatTokens, providerFor } from "./tokens.js";
-import { formatUsd, pricingFor } from "./pricing.js";
+import { forEachLine, listSessions, replyCounter } from "./session.js";
+import { estimateTokens, formatTokens, providerFor, realModel } from "./tokens.js";
+import { cacheWriteSplit, formatUsd, pricingFor, writeMultiplier as ttlWriteMultiplier } from "./pricing.js";
 import { isGeminiChat, readGeminiMessages } from "./gemini.js";
 import { claudeMcpConfigs, mcpUsage, measureServer, toolPrefixName, type McpServerConfig, type McpServerSize, type McpUsage } from "./mcpschema.js";
 
@@ -192,6 +192,9 @@ interface SessionUsage {
   /** First request's input minus the first real user message. */
   first?: number;
   reqs: Array<{ at: number; model?: string }>;
+  /** Cache writes the usage records at each TTL (Claude Code only): what a cold start's write costs. */
+  writes5m?: number;
+  writes1h?: number;
 }
 
 function textOf(content: unknown): string {
@@ -200,28 +203,41 @@ function textOf(content: unknown): string {
   return content.map((b: any) => (typeof b === "string" ? b : typeof b?.text === "string" ? b.text : "")).filter(Boolean).join("\n");
 }
 
-/** Claude Code: usage rows on assistant messages (one per API reply id). */
-function claudeUsage(path: string): SessionUsage {
-  const out: SessionUsage = { agent: "Claude Code", reqs: [] };
+/**
+ * Claude Code: usage rows on assistant messages (one per API reply id).
+ * `runRows` is shared by every transcript of one report: a forked session
+ * begins with a verbatim copy of its parent's history, whose requests (and
+ * first request) the parent already counted.
+ */
+function claudeUsage(path: string, runRows?: Set<string>): SessionUsage {
+  const out: SessionUsage = { agent: "Claude Code", reqs: [], writes5m: 0, writes1h: 0 };
   let firstUser: string | undefined;
-  let lastId: string | undefined;
+  let started = false;
+  const sighting = replyCounter(runRows);
   forEachLine(path, (line) => {
     let e: any;
     try { e = JSON.parse(line); } catch { return; }
     if (!e || e.isSidechain) return;
-    if (e.type === "user" && out.first === undefined && firstUser === undefined && !e.isMeta) {
+    if (e.type === "user" && !started && firstUser === undefined && !e.isMeta) {
       const text = textOf(e.message?.content);
       if (text) firstUser = text;
       return;
     }
-    if (e.type !== "assistant" || !e.message?.usage || e.message.id === lastId) return;
-    lastId = e.message.id;
+    if (e.type !== "assistant" || !e.message?.usage) return;
+    const seen = sighting(e);
+    if (seen === "repeat") return;
     const u = e.message.usage;
     const prompt = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
     const at = Date.parse(e.timestamp);
     if (!(prompt > 0) || !Number.isFinite(at)) return;
-    out.first ??= Math.max(0, prompt - estimateTokens(firstUser ?? "", CLAUDE));
-    out.reqs.push({ at, model: e.message.model });
+    // A fork's first request is its parent's: not a second session start.
+    if (!started && seen === "new") out.first = Math.max(0, prompt - estimateTokens(firstUser ?? "", CLAUDE));
+    started = true;
+    if (seen === "copy") return;
+    const w = cacheWriteSplit(u);
+    out.writes5m! += w.fiveMinute;
+    out.writes1h! += w.oneHour;
+    out.reqs.push({ at, model: realModel(e.message.model) });
   });
   return out;
 }
@@ -272,29 +288,37 @@ function geminiUsage(path: string): SessionUsage {
   return out;
 }
 
-function usageOf(path: string): SessionUsage {
+function usageOf(path: string, runRows?: Set<string>): SessionUsage {
   if (isGeminiChat(path)) return geminiUsage(path);
   if (/[\\/]\.codex[\\/]/.test(path)) return codexUsage(path);
-  return claudeUsage(path);
+  return claudeUsage(path, runRows);
 }
 
-/** Cache writes cost 1.25x input on Anthropic; OpenAI and Google charge no write premium. */
-function writeMultiplier(model?: string): number {
-  return providerFor(model) === "anthropic" ? 1.25 : 1;
+/**
+ * Cache writes cost 1.25x input on Anthropic at the 5-minute TTL and 2x at 1
+ * hour, which Claude Code's main thread mostly uses: the agent's own
+ * recorded mix decides. OpenAI and Google charge no write premium.
+ */
+function writeMultiplier(model: string | undefined, writes5m: number, writes1h: number): number {
+  return providerFor(model) === "anthropic" ? ttlWriteMultiplier(writes5m, writes1h) : 1;
 }
 
 function aggregate(agent: Agent, sessions: SessionUsage[], since: number, days: number): Baseline | undefined {
   const firsts: number[] = [];
-  let requests = 0, coldStarts = 0, warm = 0;
+  let requests = 0, coldStarts = 0, writes5m = 0, writes1h = 0;
   const models = new Map<string, number>();
+  const starts: Array<{ cold: boolean; model?: string }> = [];
   for (const s of sessions) {
     if (s.first !== undefined && s.first > 1000) firsts.push(s.first);
+    writes5m += s.writes5m ?? 0;
+    writes1h += s.writes1h ?? 0;
     let prevAt: number | undefined;
     for (const r of s.reqs) {
       if (r.at >= since) {
         requests++;
-        if (prevAt === undefined || r.at - prevAt > TTL_MS) coldStarts++;
-        else warm++;
+        const cold = prevAt === undefined || r.at - prevAt > TTL_MS;
+        if (cold) coldStarts++;
+        starts.push({ cold, model: r.model });
         if (r.model) models.set(r.model, (models.get(r.model) ?? 0) + 1);
       }
       prevAt = r.at;
@@ -303,12 +327,17 @@ function aggregate(agent: Agent, sessions: SessionUsage[], since: number, days: 
   if (firsts.length === 0) return undefined;
   firsts.sort((a, b) => a - b);
   const model = [...models.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-  const price = pricingFor(model);
   // Each overhead token is a cache read on warm requests and a full-price
-  // write (with the provider's premium) after every cold start.
-  const usdPerKPerMonth = price
-    ? ((1000 * (warm * price.cacheReadPerM + coldStarts * writeMultiplier(model) * price.inputPerM)) / 1e6) * (30 / days)
-    : undefined;
+  // write (with the provider's premium) after every cold start, each request
+  // at its own model's price: one month can mix a $4 and a $10 model.
+  let usdPerK = 0, priced = 0;
+  for (const r of starts) {
+    const price = pricingFor(r.model ?? model);
+    if (!price) continue;
+    priced++;
+    usdPerK += (1000 * (r.cold ? writeMultiplier(r.model ?? model, writes5m, writes1h) * price.inputPerM : price.cacheReadPerM)) / 1e6;
+  }
+  const usdPerKPerMonth = priced > 0 ? usdPerK * (30 / days) : undefined;
   return {
     agent,
     sessions: firsts.length,
@@ -332,10 +361,11 @@ export function measureBaselines(days = 30, paths?: string[]): Baseline[] {
   const since = Date.now() - days * 86_400_000;
   const files = paths ?? listSessions(10_000).filter((s) => s.modifiedAt.getTime() >= since).map((s) => s.path);
   const byAgent = new Map<Agent, SessionUsage[]>();
+  const runRows = new Set<string>();
   for (const path of files) {
     let u: SessionUsage;
     try {
-      u = usageOf(path);
+      u = usageOf(path, runRows);
     } catch {
       continue;
     }
