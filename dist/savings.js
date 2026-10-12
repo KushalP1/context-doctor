@@ -222,7 +222,11 @@ export function estimateSavings(days = 30, options = {}, paths, onProgress) {
     const sum = (k) => sessions.reduce((n, s) => n + s[k], 0);
     const billedUsd = sum("billedUsd"), savedUsd = sum("savedUsd");
     const billedW = sum("billedWeighted");
-    const savedPct = billedW > 0 ? sum("savedWeighted") / billedW : 0;
+    // The share printed beside a dollar figure is a share of dollars. With each
+    // request priced at its own model, token-weighted and dollar shares differ
+    // (author's 133 days: 11.4% of weighted tokens, 12.7% of dollars); tokens
+    // only when nothing could be priced.
+    const savedPct = billedUsd > 0 ? savedUsd / billedUsd : billedW > 0 ? sum("savedWeighted") / billedW : 0;
     return {
         days,
         sessions: sessions.sort((a, b) => b.savedUsd - a.savedUsd),

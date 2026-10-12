@@ -54,9 +54,9 @@ Pick where you work. Each takes about a minute and is fully reversible.
 
 On the author's own Claude Code history (mostly Opus and Fable models with the 1M window, priced at API list prices; `savings` computes yours the same way):
 
-- **Compacting when you come back after the cache expired:** 401 such returns in 133 days; compacting then would have saved **$4,053 net, about $914 a month**. [Details →](#what-it-saves)
-- **A 400k auto-compact window instead of ~970k:** **55% less input cost** over 30 days ($6,119 to $2,757), for 15 compactions a week instead of 5. [The trade-off →](#3-compacting-earlier-automatic)
-- **Autopilot:** **9.8% less input cost, no session made more expensive.**
+- **Compacting when you come back after the cache expired:** 479 such returns in 133 days; compacting then would have saved **$2,993 net, about $675 a month**. [Details →](#what-it-saves)
+- **A 400k auto-compact window instead of ~970k:** **50% less input cost** over 30 days ($3,648 to $1,814), for 14 compactions a week instead of 5. [The trade-off →](#3-compacting-earlier-automatic)
+- **Autopilot:** **12.7% less input cost, no session made more expensive.**
 - **pack:** 9 of 10 questions about this repository answered from **0.6% of its tokens**. [How →](#before-it-enters-the-context-pack-and-overhead)
 - **Counting Claude correctly:** current Claude models pack 2.75 characters per token, not the 4 most tools assume, so estimates built on 4 undercount Claude by about 40%. `context-doctor accuracy` re-checks the ratio on your own sessions.
 
@@ -86,39 +86,38 @@ Findings (4)
 
 ## What it saves
 
-Measured, not modelled, on every Claude Code session on the author's machine (mostly Opus 5 and Fable 5 with the 1M window), priced the way the prompt cache bills it (cached reads 0.1x, writes 1.25x) at API list prices. `context-doctor savings` runs the same measurement on yours.
+Measured, not modelled, on every Claude Code session on the author's machine (mostly Opus 5 and Fable 5 with the 1M window), priced the way the prompt cache bills it (cached reads at each model's read rate, 2.5-10% of input; writes 1.25x input for the 5-minute cache, 2x for the hour) at API list prices. Re-measured on 2026-10-13 with each request at its own model and current prices (Opus 5.5 is $4 per million input tokens with $0.20 reads). `context-doctor savings` runs the same measurement on yours.
 
-**1. Compacting when you come back** (every Claude Code surface, desktop app included). 133 days, 401 returns to a session over 150k tokens after more than 65 idle minutes; median context at the return, 517k tokens.
+**1. Compacting when you come back** (every Claude Code surface, desktop app included). 133 days, 479 returns to a session over 150k tokens after its prompt cache expired (65 idle minutes on the 1-hour cache, 10 on the 5-minute one that Claude Code 2.1.295 often writes); median context at the return, 522k tokens.
 
 | | |
 |---|---|
-| Net saving had you run `/compact` after the first reply | **$4,053 (about $914 a month)** |
-| Returns where it paid off | 296 of 401 |
-| Worst single case | −$2.30 (a session left a few messages later) |
+| Net saving had you run `/compact` after the first reply | **$2,993 (about $675 a month)** |
+| Returns where it paid off | 342 of 479 |
+| Worst single case | −$1.79 (a session left a few messages later) |
 
 Each return counts only the messages up to the next return, and the compaction request is charged as a cost. Not counted: files the model may re-read after compacting, and what the summary leaves out. That is why this is advice with the numbers attached, not something done for you.
 
-**2. Autopilot** (terminal and IDE sessions, API apps). 130 days, 43 sessions, replayed through the shipped autopilot code with real timestamps:
+**2. Autopilot** (terminal and IDE sessions, API apps). 133 days, 67 sessions, replayed through the shipped autopilot code with real timestamps:
 
 | | Without autopilot | With autopilot | Saved |
 |---|---|---|---|
-| Input tokens sent | 41.4 billion | 37.6 billion | **3.8 billion (9.2%)** |
-| Input cost at API list price | $48,962 | $44,268 | **$4,694 (9.8%)** |
-| Sessions made more expensive | | | **0 of 43** |
+| Input cost at API list price | $11,347 | $9,905 | **$1,442 (12.7%)** |
+| Sessions made more expensive | | | **0 of 67** |
 
-The median session saves 1.9%, the best 37.7%: long sessions are where the money is (94% of input cost on that machine came from requests above 200k tokens). These sessions ran in the desktop app, which autopilot cannot reach, so for the author this is what the same sessions would have saved in a terminal; `context-doctor savings` separates the two for you.
+30 of 67 sessions save something, the best 34.9%: long sessions that go idle are where the money is. These sessions ran in the desktop app, which autopilot cannot reach, so for the author this is what the same sessions would have saved in a terminal; `context-doctor savings` separates the two for you.
 
 **3. Compacting earlier** <a id="3-compacting-earlier-automatic"></a>(automatic, every Claude Code surface, desktop app included). The offer in 1 is advice, and on the author's machine it was followed 1 time in 33. Claude Code has a native setting that needs nobody to follow anything: `autoCompactWindow` in `~/.claude/settings.json` makes it compact as if the window were that size. `context-doctor compact-window` replays each session request by request at several sizes, priced as the cache bills (each simulated compaction pays its own request and a 20k-token summary at the output rate), and changes nothing until you pick one:
 
 | Window | Input cost, last 30 days | Saved | Compactions a week |
 |---|---|---|---|
-| as now (~970k) | $6,119 | | 5.1 |
-| 600k | $3,570 | $2,549 (42%) | 6.5 |
-| **400k** | **$2,757** | **$3,362 (55%)** | **14.7** |
-| 300k | $2,353 | $3,766 (62%) | 24.5 |
-| 200k | $1,963 | $4,155 (68%) | 46.9 |
+| as now (~970k) | $3,648 | | 4.7 |
+| 600k | $2,242 | $1,405 (39%) | 6.5 |
+| **400k** | **$1,814** | **$1,833 (50%)** | **14.2** |
+| 300k | $1,664 | $1,983 (54%) | 25.2 |
+| 200k | $1,501 | $2,146 (59%) | 48.1 |
 
-29 sessions. The replay's baseline came within 9% of what the transcripts say was billed, on the low side. The cost is real: each compaction replaces the session's history with a summary, so a smaller window trades detail for money. That is why the command shows the table first and sets a window only when you name one (`context-doctor compact-window 400k`; `off` undoes it, and a backup of settings.json is kept).
+41 sessions. The cost is real: each compaction replaces the session's history with a summary, so a smaller window trades detail for money. That is why the command shows the table first and sets a window only when you name one (`context-doctor compact-window 400k`; `off` undoes it, and a backup of settings.json is kept).
 
 On a Claude subscription you do not pay list price; the same tokens come out of your usage limit instead. Anthropic does not publish how limits weight cached tokens, so read the dollars as the size of the effect, not as your bill.
 
@@ -180,6 +179,7 @@ MCP servers are part of the same overhead: each one's tool definitions ride on e
 
 ## What's new
 
+- **0.32 A full audit, fixed**: five reviewers read every module against real data; each finding was reproduced, fixed and tested (list in [ROADMAP.md](./ROADMAP.md#fixed-by-a-local-audit-2026-10-13)). The ones that mattered most: `npx context-doctor install` wrote an MCP launcher for a package that does not exist; `uninstall` left Claude Code pointed at a dead proxy port; the optimizer could move one parallel tool result under another's id and drop the note beside them; autopilot could clear output the model had not read; edited histories now respect thinking-block signatures; current prices (Opus 5.5 $4, Sonnet 5.x $2, Haiku 5.5 $0.10) and 1-hour cache writes at 2x; replies counted once and `--days` applied per request. The cold-resume offer follows the cache lifetime a session writes. The figures above were re-measured with it.
 - **0.31 Save tokens without losing quality**: a PreCompact hook makes every Claude Code compaction keep the session's changed files, open tasks, your instructions and still-failing tests; `context-doctor compactions` measures re-reads, tool errors and corrections before and after each compaction on your history; `compact-window` now charges the re-reads to every compaction it simulates.
 - **0.30 Where the money goes, and a self-healing service**: `context-doctor subagents` compares each subagent's bill with the same work done in the parent session; `cache-plan` places Anthropic `cache_control` breakpoints in an API request and prices them. Fixes from a local audit: the autopilot service now restarts itself onto a newly installed version, `doctor` no longer writes fake hook checks into the activity ledger, and `<synthetic>` placeholder messages no longer hide a session's model.
 - **0.29 Python, and where the work goes**: a dependency-free Python package (`python/`) with `pack_documents` for LangChain and LlamaIndex results, `pack_context`, `estimate_tokens` and `profile_messages`, held byte for byte to the TypeScript by parity tests. `context-doctor reads` shows the files read into session after session; `context-doctor tasks` shows cost per commit per project, from your own transcripts.
@@ -258,7 +258,7 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | `context-doctor savings [--days n] [--share [--copy]]` | What your recent Claude Code sessions cost, and what `/compact` at cold resumes, autopilot and an earlier auto-compact window would save, replayed through the shipped code against your actual billed usage. `--share` prints totals only (no project names or paths) to post. A bare `context-doctor` in a terminal shows the same |
 | `context-doctor compact-window [status\|off\|<size>]` | Replay your last 30 days at auto-compact windows from 200k to 800k: input cost, saving, and how many more compactions each means. `400k` (or `250000`, `0.4m`) sets Claude Code's `autoCompactWindow`, with a backup; `off` removes it. Works in every Claude Code surface, the desktop app included |
 | `context-doctor mcp [--http]` | The MCP server as a subcommand, for clients and registries that launch `npx -y context-doctor mcp` |
-| `context-doctor autopilot on\|off\|pause\|resume\|status` | Every new Claude Code session goes through the local proxy, which clears stale tool output only when the prompt cache is cold: measured 9.8% less input cost, no session worse |
+| `context-doctor autopilot on\|off\|pause\|resume\|status` | Every new Claude Code session goes through the local proxy, which clears stale tool output only when the prompt cache is cold: measured 12.7% less input cost, no session worse |
 | `context-doctor instructions [--copy]` | The ~180-token standing rules (~120 on GPT) for claude.ai / ChatGPT preferences, for web and phones where no server runs |
 | `context-doctor pack <files\|dirs\|-> --query "…"` | Only the chunks of big documents, logs or code a question needs, ranked and fit to `--max-tokens` (default 4000). No query: an outline; `--ids a#2,b#5` picks chunks from it. Offline, no key |
 | `context-doctor overhead [--days n] [--mcp]` | What every request re-reads before your message: measured first-request size (Claude Code, Codex and Gemini CLI sessions), each memory file (CLAUDE.md and imports, rules, auto memory, AGENTS.md, Cursor rules, GEMINI.md) priced per month, MCP calls per server; `--mcp` sizes each configured server's tool definitions and flags unused ones |
@@ -335,7 +335,7 @@ context-doctor autopilot off       # remove it
 
 **What it does to each request:** once old tool output adds up to 20k+ tokens (file reads, shell output, search and web results, screenshots inside them), it replaces that output with a one-line note, keeping the 3 most recent results. The tool call stays in the history, so the model can simply run it again if it needs the output. Your messages, its answers, answers you gave to its questions, subagent reports and MCP results are never touched.
 
-**Why it cannot make a session more expensive.** A prompt cache matches a byte-identical prefix, and changing old history re-bills everything after the change at the write rate (1.25x instead of 0.1x). So autopilot changes history only when the cache is cold anyway: after an idle gap longer than the cache lifetime the request itself declares (1 hour for Claude Code on a subscription, 5 minutes otherwise), when the whole prompt is re-written regardless. Once cleared, an output stays cleared on every later request, so the prefix is identical between clearings and the cache keeps hitting.
+**Why it cannot make a session more expensive.** A prompt cache matches a byte-identical prefix, and changing old history re-bills everything after the change at the write rate (1.25x or 2x input instead of a read's 2.5-10%). So autopilot changes history only when the cache is cold anyway: after an idle gap longer than the cache lifetime the request itself declares (1 hour for Claude Code on a subscription, 5 minutes otherwise), when the whole prompt is re-written regardless. Once cleared, an output stays cleared on every later request, so the prefix is identical between clearings and the cache keeps hitting. Output the model has not read yet is never cleared. On current Claude models a thinking block is bound to the history before it, and accounts created on or after 2026-08-31 get an error for an edited history; when that happens the proxy resends the request unedited and stops editing that account's histories where thinking follows.
 
 **Measured before it shipped**, by replaying every Claude Code session on the author's machine (43 sessions, 130 days) request by request through the shipped code, priced as the cache bills it, with real timestamps: 3.8 billion input tokens not sent and $4,694 at list price, ~$1,080 a month ([details](#what-it-saves)). `scripts/replay-autopilot.mjs` does this on yours:
 
@@ -345,7 +345,7 @@ context-doctor autopilot off       # remove it
 | Also clear on a warm cache when the saving "should" repay the rewrite | 9.9% | −0.13% (one session worse) |
 | The proxy's general strategies (dedupe, trim, strip-base64) | 6.7% | −13% (one session worse) |
 
-94% of input cost on that machine came from requests above 200k tokens, which is where the clearing lands. Smaller requests also mean later auto-compaction and a faster first token.
+Re-measured on 2026-10-13 with current prices, each request at its own model and the audit's fixes (output the model has not read is never cleared, a conversation the proxy has not seen counts as warm): 67 sessions over 133 days, $1,442 of $11,347 at list price (12.7%), no session worse. 94% of input cost on that machine came from requests above 200k tokens, which is where the clearing lands. Smaller requests also mean later auto-compaction and a faster first token.
 
 **Never in the way:** anything it cannot parse is forwarded unchanged; only Anthropic `/v1/messages` requests are touched. It adds about 7 ms to a 2.9 MB (~1M token) request. If the proxy dies, the service restarts it within seconds, and the every-prompt hook checks it before each prompt and starts it if needed (measured: 0.6 s once, when it had to). `pause` turns it into a passthrough without restarting anything; `off` removes the setting before stopping the service, and sessions started while it was on need a restart.
 
