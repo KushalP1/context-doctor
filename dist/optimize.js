@@ -105,8 +105,13 @@ function stableCutoff(messageCount, keepRecent, step = TRIM_BOUNDARY_STEP) {
         return raw;
     return Math.floor(raw / step) * step;
 }
+/**
+ * Exact content, ends trimmed. Whitespace inside is meaningful: two versions of
+ * a Python file that differ only in indentation are different programs, and
+ * calling the later one "identical" would delete the fix.
+ */
 function hash(text) {
-    return createHash("sha1").update(text.replace(/\s+/g, " ").trim()).digest("hex");
+    return createHash("sha1").update(text.trim()).digest("hex");
 }
 /** Extract all text from a message content value (string or block array). */
 function textOf(content) {
@@ -129,36 +134,74 @@ function textOf(content) {
         .join("\n");
 }
 /**
- * Replace the text of a message content value, preserving block structure.
- * tool_result blocks must keep their type and tool_use_id — the Anthropic API
- * rejects conversations where a tool_use has no matching tool_result — so the
- * replacement text goes INSIDE the first tool_result/text block rather than
- * replacing the block itself. Later text blocks are dropped; other block types
- * (tool_use, image) pass through untouched.
+ * Rewrite each piece of text in a message where it sits: string content, each
+ * text block, and the text of each tool_result block. Block order, types and
+ * tool_use_ids never change, so each of several parallel results stays with
+ * its own call and a note the user typed beside them stays as it was. A
+ * result's text parts are one piece (a result is trimmed as a whole) and its
+ * images stay. tool_use inputs and images are not text here; trim-tool-calls
+ * and stripInputBlobs handle inputs. An OpenAI `role: "tool"` message is a
+ * tool result throughout.
  */
-function replaceText(content, newText) {
-    if (typeof content === "string" || !Array.isArray(content))
-        return newText;
-    let placed = false;
-    const out = content
-        .map((b) => {
-        if (b?.type === "tool_result") {
-            const replaced = { ...b, content: placed ? "[removed]" : newText };
-            placed = true;
-            return replaced;
-        }
-        if (b?.type === "text") {
+function mapPieces(m, fn) {
+    const content = m?.content;
+    const own = m?.role === "tool" ? "tool_result" : "text";
+    const textParts = (parts, piece) => {
+        const texts = parts.filter((p) => p?.type === "text" && typeof p.text === "string");
+        if (texts.length === 0)
+            return parts;
+        const joined = texts.map((p) => p.text).join("\n");
+        const next = fn(joined, piece);
+        if (next === joined)
+            return parts;
+        // The rewritten text takes the first text part's place; other text parts
+        // were folded into it, everything else (images) keeps its position.
+        let placed = false;
+        return parts
+            .map((p) => {
+            if (!(p?.type === "text" && typeof p.text === "string"))
+                return p;
             if (placed)
                 return null;
             placed = true;
-            return { ...b, text: newText };
+            return { ...p, text: next };
+        })
+            .filter((p) => p !== null);
+    };
+    if (typeof content === "string")
+        return fn(content, own);
+    if (!Array.isArray(content))
+        return content;
+    if (own === "tool_result")
+        return textParts(content, own);
+    return content.map((b) => {
+        if (b?.type === "text" && typeof b.text === "string") {
+            const t = fn(b.text, "text");
+            return t === b.text ? b : { ...b, text: t };
+        }
+        if (b?.type === "tool_result") {
+            if (typeof b.content === "string") {
+                const t = fn(b.content, "tool_result");
+                return t === b.content ? b : { ...b, content: t };
+            }
+            if (Array.isArray(b.content)) {
+                const parts = textParts(b.content, "tool_result");
+                return parts === b.content ? b : { ...b, content: parts };
+            }
         }
         return b;
-    })
-        .filter(Boolean);
-    if (!placed)
-        out.push({ type: "text", text: newText });
-    return out;
+    });
+}
+/** Strip base64 blobs from the string values of a tool call's input, at any depth. */
+function stripInputBlobs(value) {
+    if (typeof value === "string")
+        return hasBase64Blob(value) ? stripBase64Blobs(value) : value;
+    if (Array.isArray(value))
+        return value.map(stripInputBlobs);
+    if (value && typeof value === "object") {
+        return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, stripInputBlobs(v)]));
+    }
+    return value;
 }
 function truncateToTokens(text, maxTokens, model) {
     const approxChars = Math.round(maxTokens * charsPerTokenFor(text, model));
@@ -219,7 +262,7 @@ export function optimizeConversation(input, options = {}) {
     catch {
         throw new Error("optimize requires a JSON conversation (message array, or object with a `messages` field)");
     }
-    const messages = Array.isArray(data) ? data : data.messages;
+    const messages = Array.isArray(data) ? data : data?.messages;
     if (!Array.isArray(messages)) {
         throw new Error("No `messages` array found in input");
     }
@@ -248,10 +291,13 @@ export function optimizeConversation(input, options = {}) {
             if (!hasBase64Blob(text))
                 return;
             const before = tok(text);
-            const cleaned = stripBase64Blobs(text);
-            const saved = before - tok(cleaned);
+            let content = mapPieces(m, (t) => (hasBase64Blob(t) ? stripBase64Blobs(t) : t));
+            if (Array.isArray(content)) {
+                content = content.map((b) => (b?.type === "tool_use" && b.input != null ? { ...b, input: stripInputBlobs(b.input) } : b));
+            }
+            const saved = before - tok(textOf(content));
             if (saved > 50) {
-                m.content = replaceText(m.content, cleaned);
+                m.content = content;
                 applied.push({ strategy: "strip-base64", messageIndex: i, tokensSaved: saved, note: "Removed inline base64 data" });
             }
         });
@@ -265,26 +311,34 @@ export function optimizeConversation(input, options = {}) {
         // and just sees a worse answer with no explanation. Older copies are fair
         // game; the live turn is not.
         const cutoff = stableCutoff(messages.length, opts.keepRecent, opts.trimBoundaryStep);
+        // Per piece (a text block or one tool's result), not per message: a whole
+        // message rarely repeats, and a message-level replacement had to flatten
+        // its blocks, which put one tool's output under another's id.
         const seen = new Map();
         messages.forEach((m, i) => {
-            const text = textOf(m.content);
-            if (text.length < 300)
+            let saved = 0;
+            let firstOf;
+            const content = mapPieces(m, (t) => {
+                if (t.length < 300)
+                    return t;
+                const h = hash(t);
+                const first = seen.get(h);
+                if (first === undefined) {
+                    seen.set(h, i);
+                    return t;
+                }
+                // Still recorded above, so a later duplicate can point back here.
+                if (i >= cutoff)
+                    return t;
+                const pointer = `[context-doctor: identical to message #${first} — content removed]`;
+                saved += tok(t) - tok(pointer);
+                firstOf ??= first;
+                return pointer;
+            });
+            if (saved <= 0)
                 return;
-            if (i >= cutoff) {
-                // Still record it, so a later duplicate can point back here.
-                if (!seen.has(hash(text)))
-                    seen.set(hash(text), i);
-                return;
-            }
-            const h = hash(text);
-            const first = seen.get(h);
-            if (first === undefined) {
-                seen.set(h, i);
-                return;
-            }
-            const saved = tok(text);
-            m.content = replaceText(m.content, `[context-doctor: identical to message #${first} — content removed]`);
-            applied.push({ strategy: "dedupe", messageIndex: i, tokensSaved: saved, note: `Duplicate of message #${first}` });
+            m.content = content;
+            applied.push({ strategy: "dedupe", messageIndex: i, tokensSaved: saved, note: `Duplicate of message #${firstOf}` });
         });
     }
     // -- trim-tool-results: shrink stale tool output ------------------------------
@@ -293,21 +347,32 @@ export function optimizeConversation(input, options = {}) {
         messages.forEach((m, i) => {
             if (i >= cutoff || !isToolResultMessage(m))
                 return;
-            const text = textOf(m.content);
-            const before = tok(text);
-            if (before <= opts.maxToolResultTokens)
+            // Each result on its own budget; text the user typed beside them is not
+            // tool output and stays whole.
+            let saved = 0;
+            const content = mapPieces(m, (t, piece) => {
+                if (piece !== "tool_result")
+                    return t;
+                const before = tok(t);
+                if (before <= opts.maxToolResultTokens)
+                    return t;
+                const trimmed = truncateToTokens(t, opts.maxToolResultTokens, model);
+                // The truncation notice has a length of its own, so a result only just
+                // over the budget can come back LARGER than it went in. Measured on a
+                // real session: 2,941 tokens "optimized" to 2,947.
+                const after = tok(trimmed);
+                if (after >= before)
+                    return t;
+                saved += before - after;
+                return trimmed;
+            });
+            if (saved <= 0)
                 return;
-            const trimmed = truncateToTokens(text, opts.maxToolResultTokens, model);
-            // The truncation notice has a length of its own, so a result only just
-            // over the budget can come back LARGER than it went in. Measured on a
-            // real session: 2,941 tokens "optimized" to 2,947.
-            if (tok(trimmed) >= before)
-                return;
-            m.content = replaceText(m.content, trimmed);
+            m.content = content;
             applied.push({
                 strategy: "trim-tool-results",
                 messageIndex: i,
-                tokensSaved: before - tok(trimmed),
+                tokensSaved: saved,
                 note: "Stale tool result truncated",
             });
         });
@@ -345,6 +410,8 @@ export function optimizeConversation(input, options = {}) {
                 }
             }
             // OpenAI shape: tool_calls[].function.arguments is a JSON string.
+            // Cut inside the parsed arguments, as above: a JSON string cut in the
+            // middle is no longer JSON, and the next request would carry it as such.
             for (const tc of m.tool_calls ?? []) {
                 const args = tc?.function?.arguments;
                 if (typeof args !== "string")
@@ -352,8 +419,21 @@ export function optimizeConversation(input, options = {}) {
                 const before = tok(args);
                 if (before <= opts.maxToolResultTokens)
                     continue;
-                tc.function.arguments = truncateToTokens(args, opts.maxToolResultTokens, model);
-                saved += before - tok(tc.function.arguments);
+                let parsed;
+                try {
+                    parsed = JSON.parse(args);
+                }
+                catch {
+                    continue;
+                }
+                if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+                    continue;
+                const trimmedArgs = JSON.stringify(trimCallArguments(parsed, opts.maxToolResultTokens, model));
+                const after = tok(trimmedArgs);
+                if (after >= before)
+                    continue;
+                tc.function.arguments = trimmedArgs;
+                saved += before - after;
             }
             if (saved > 0) {
                 applied.push({
@@ -368,7 +448,12 @@ export function optimizeConversation(input, options = {}) {
     // -- prune-history: replace the older half with a stub ------------------------
     // Opt-in only: it is lossy, so it is not in the default strategy set.
     let prunedDigest;
-    if (opts.strategies.includes("prune-history") && messages.length > opts.keepRecent * 2) {
+    // OpenAI-shaped requests carry the system prompt as leading system/developer
+    // messages; those are instructions, not history, and are never pruned.
+    let lead = 0;
+    while (lead < messages.length && (messages[lead]?.role === "system" || messages[lead]?.role === "developer"))
+        lead++;
+    if (opts.strategies.includes("prune-history") && messages.length - lead > opts.keepRecent * 2) {
         let keepFrom = messages.length - opts.keepRecent;
         // Never let the kept tail START with a tool result: its matching tool_use
         // would be pruned away and both the Anthropic and OpenAI APIs reject
@@ -384,22 +469,22 @@ export function optimizeConversation(input, options = {}) {
             // APIs reject a conversation containing an orphan. Measured on a real
             // 1,011-message session, which pruned to 7 messages with one orphan.
             dropOrphanedToolResults(messages.slice(keepFrom));
-            const pruned = messages.slice(0, keepFrom);
+            const pruned = messages.slice(lead, keepFrom);
             const prunedTokens = pruned.reduce((s, m) => s + tok(textOf(m.content)), 0);
             // Digest: first ~200 chars of each pruned turn — enough for a host LLM to
             // write a faithful summary, small enough not to defeat the pruning.
             prunedDigest = pruned
-                .map((m, i) => `[${i}:${m.role}] ${textOf(m.content).replace(/\s+/g, " ").slice(0, 200)}`)
+                .map((m, i) => `[${lead + i}:${m.role}] ${textOf(m.content).replace(/\s+/g, " ").slice(0, 200)}`)
                 .join("\n");
             const stub = {
                 role: "user",
                 content: `[context-doctor: ${pruned.length} earlier messages (~${prunedTokens} tokens) pruned. ` +
                     `Replace this stub with an LLM-written summary of those turns for best results.]`,
             };
-            messages.splice(0, keepFrom, stub);
+            messages.splice(lead, keepFrom - lead, stub);
             applied.push({
                 strategy: "prune-history",
-                messageIndex: 0,
+                messageIndex: lead,
                 tokensSaved: prunedTokens - tok(stub.content),
                 note: `Pruned ${pruned.length} old messages`,
             });
