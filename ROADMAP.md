@@ -22,7 +22,7 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 
 ## Verified 2026-10-17
 
-- `npm test`: 392 of 392 pass locally (CI runs the suite on macOS, Linux and Windows, Node 20/22/24).
+- `npm test`: 444 of 444 pass locally (CI runs the suite on macOS, Linux and Windows, Node 20/22/24).
 - `scripts/verify-local.sh` after the audit: build, tests, MCP smoke over stdio and streamable HTTP, OpenAI and Gemini proxy smokes, the published package, Python 3.9/3.11/3.14 with parity fixtures current, every CLI command on the author's real history (no crash, no NaN), install/doctor/uninstall round trip in a throwaway HOME with nothing of ours left, and the GitHub Action's steps; the real ledger was left untouched.
 
 ## Next: the cross-platform plan (2026-10-17)
@@ -33,18 +33,18 @@ From an audit of the first-run experience, the docs against the code, and each p
 
 | # | Item | Why | How we will know it works |
 |---|---|---|---|
-| U1 | **One first screen** | A bare `npx context-doctor` with no history printed 139 lines of help; the two first commands need a JSON file a newcomer does not have. Show "Start here": plugin, `install`, `savings`, `doctor` | A new user reaches `savings` or `install` without reading the help |
-| U2 | **Plugin and install never both** | With the plugin enabled, `install` added a second MCP server and skill: every session carried the instructions and tools twice | `install` skips Claude Code when the plugin is on; `doctor` warns on duplicates |
-| U3 | **Fast `npx` start** | A cold `npx` took 9.4 s (187 packages, mostly the MCP SDK) | Bundled entry points, no runtime dependencies: cold start ~1 s |
-| U4 | **Strict, helpful CLI** | Unknown flags were ignored, typos ran the default, bad JSON reported "in good shape", `doctor` exited 0 with failures | Errors name the flag with a suggestion; per-command `--help`; non-zero exits on failure |
-| U5 | **One set of numbers** | `savings`, `compact-window` and `overhead` counted sessions and the baseline differently (37 vs 80 vs 85 sessions; $3,458 vs $3,173) | The same window gives the same session count and baseline everywhere |
-| U6 | **The right session** | `session` and the checkup profiled the newest transcript on the machine, not the current one | `$CLAUDE_CODE_SESSION_ID`, then the cwd's project, then newest |
+| U1 | ✅ **One first screen** (0.33.0) | A bare `npx context-doctor` with no history printed 139 lines of help; the two first commands need a JSON file a newcomer does not have. Show "Start here": plugin, `install`, `savings`, `doctor` | A new user reaches `savings` or `install` without reading the help |
+| U2 | ✅ **Plugin and install never both** (0.33.0) | With the plugin enabled, `install` added a second MCP server and skill: every session carried the instructions and tools twice | `install` skips Claude Code when the plugin is on; `doctor` warns on duplicates |
+| U3 | ✅ **Fast `npx` start** (0.33.0) | A cold `npx` took 4.5–9.4 s (99–187 packages, mostly the MCP SDK) | Measured after bundling: 0.84–0.95 s cold, one package, no runtime dependencies |
+| U4 | ✅ **Strict, helpful CLI** (0.33.0) | Unknown flags were ignored, typos ran the default, bad JSON reported "in good shape", `doctor` exited 0 with failures | Errors name the flag with a suggestion; per-command `--help`; non-zero exits on failure |
+| U5 | ✅ **One set of numbers** (0.33.0) | `savings`, `compact-window` and `overhead` counted sessions and the baseline differently (37 vs 80 vs 85 sessions; $3,458 vs $3,173) | The same window gives the same session count and baseline everywhere |
+| U6 | ✅ **The right session** (0.33.0) | `session` and the checkup profiled the newest transcript on the machine, not the current one | `$CLAUDE_CODE_SESSION_ID`, then the cwd's project, then newest |
 
 ### Claude Code (terminal, IDE, desktop app)
 
 | # | Item | Why | How we will know it works |
 |---|---|---|---|
-| C1 | ✅ **Autopilot keeps MCP tool search on** (shipped on main, 3720af6) | Claude Code turns tool search off behind a non-Anthropic `ANTHROPIC_BASE_URL`, so autopilot loaded every MCP tool definition on every request ([docs](https://code.claude.com/docs/en/mcp); confirmed in the 2.1.295 binary) | `ENABLE_TOOL_SEARCH=auto` set by `autopilot on` and by the self-heal for existing installs |
+| C1 | ✅ **Autopilot keeps MCP tool search on** (0.33.0) | Claude Code turns tool search off behind a non-Anthropic `ANTHROPIC_BASE_URL`, so autopilot loaded every MCP tool definition on every request ([docs](https://code.claude.com/docs/en/mcp); confirmed in the 2.1.295 binary) | `ENABLE_TOOL_SEARCH=auto` set by `autopilot on` and by the self-heal for existing installs |
 | C2 | **Step aside for native idle compaction** | Claude Code ≥2.1.290 can compact an idle session itself (`idleCompaction`, account-gated; none on the author's 36 compactions). The cold-resume offer should stay silent after an idle compaction and keep covering what it skips (5-minute caches, sessions under its threshold); SessionStart's `prompt_cache_likely_expired` and `estimated_cache_write_usd` give the numbers directly | No offer after an idle compaction; `compactions` and `compact-window` replay it |
 | C3 | **Server-side clearing for API traffic** | Anthropic's context editing (`clear_tool_uses_20250919`, `exclude_tools`, `clear_at_least`) clears on the server, which keeps thinking signatures valid where rewriting messages cannot ([docs](https://platform.claude.com/docs/en/build-with-claude/context-editing)). Use it in the proxy and `withContextDoctor` for 5.x thinking traffic; step aside when a request already carries `context_management` | Replay: no session more expensive; live test that the edit is re-sent every request so the cache holds |
 | C4 | **`cache-plan` for automatic caching** | Top-level `cache_control` (automatic caching) and the lower minimum on 5.x models change where breakpoints go | Plans match the API's current rules; tested against fixtures |
