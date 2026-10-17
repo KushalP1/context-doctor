@@ -26,7 +26,7 @@ Pick where you work. Each takes about a minute and is fully reversible.
 | **claude.ai, ChatGPT, phone apps** | `npx context-doctor instructions --copy`, then paste into the app's personal preferences |
 | **Your own app on an LLM API** | Run `npx context-doctor proxy --autopilot` and point `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` (add `/v1`) or `GOOGLE_GEMINI_BASE_URL` at `http://localhost:8787`. No proxy possible? Wrap the SDK client: `withContextDoctor(new Anthropic())` |
 | **Python / RAG pipelines** | `pip install context-doctor` (after the first PyPI release; until then `pip install "git+https://github.com/KushalP1/context-doctor#subdirectory=python"`), then `pack_documents(retrieved_docs, question, budget=4000)` trims LangChain or LlamaIndex results to the chunks that matter. [Python README](./python/README.md) |
-| **GitHub pull requests** | `uses: KushalP1/context-doctor@v0.27.0` comments how much a PR grows CLAUDE.md, AGENTS.md and rules, and can fail over a budget ([setup](#enforce-a-budget-in-ci)) |
+| **GitHub pull requests** | `uses: KushalP1/context-doctor@v0.32.0` comments how much a PR grows CLAUDE.md, AGENTS.md and rules, and can fail over a budget ([setup](#enforce-a-budget-in-ci)) |
 
 ## What it does
 
@@ -58,7 +58,7 @@ On the author's own Claude Code history (mostly Opus and Fable models with the 1
 - **A 400k auto-compact window instead of ~970k:** **50% less input cost** over 30 days ($3,648 to $1,814), for 14 compactions a week instead of 5. [The trade-off →](#3-compacting-earlier-automatic)
 - **Autopilot:** **12.7% less input cost, no session made more expensive.**
 - **pack:** 9 of 10 questions about this repository answered from **0.6% of its tokens**. [How →](#before-it-enters-the-context-pack-and-overhead)
-- **Counting Claude correctly:** current Claude models pack 2.75 characters per token, not the 4 most tools assume, so estimates built on 4 undercount Claude by about 40%. `context-doctor accuracy` re-checks the ratio on your own sessions.
+- **Counting Claude correctly:** current Claude models pack 2.75 characters per token on prose (2.4 on code), not the 4 most tools assume: Claude counts about 40% more tokens than the usual 4-characters rule (~45% on prose, ~33% on code). `context-doctor accuracy` re-checks the ratio on your own sessions.
 
 On a Claude subscription you do not pay list price; the same tokens come out of your usage limit instead, so read the dollars as the size of the effect.
 
@@ -102,7 +102,7 @@ Each return counts only the messages up to the next return, and the compaction r
 
 | | Without autopilot | With autopilot | Saved |
 |---|---|---|---|
-| Input cost at API list price | $11,347 | $9,905 | **$1,442 (12.7%)** |
+| Input cost at API list price | $11,347 | $9,905 | **$1,442 (12.7%, about $325 a month)** |
 | Sessions made more expensive | | | **0 of 67** |
 
 30 of 67 sessions save something, the best 34.9%: long sessions that go idle are where the money is. These sessions ran in the desktop app, which autopilot cannot reach, so for the author this is what the same sessions would have saved in a terminal; `context-doctor savings` separates the two for you.
@@ -130,7 +130,7 @@ On a Claude subscription you do not pay list price; the same tokens come out of 
 | **Cursor** (agent) | A native **after-tool-call hook** (`~/.cursor/hooks.json`): in a heavy chat the agent gets the same hygiene guidance and the largest waste, once per 40% of growth. (Cursor's prompt hook can only allow or block a prompt, so this is the event where guidance reaches the model) | MCP tools, editor status bar extension, `cursor` profiler. With your own OpenAI key, autopilot too via a tokened tunnel ([how](#putting-the-proxy-on-a-public-url-cursor-with-your-own-openai-key-remote-apps)) |
 | **Codex** (ChatGPT app's Codex tab, IDE extension, CLI) | Every-prompt hook with the API's own token counts | MCP tools, skill, `session` reads Codex rollouts. On an API key, autopilot too (`OPENAI_BASE_URL`) |
 | **Gemini CLI** | Every-prompt hook (`BeforeAgent`) with the API's own token counts. On an API key, autopilot too: `GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8787` (Google sign-in traffic goes elsewhere) | MCP tools, `session` and `watch` read its chats, `overhead` sizes GEMINI.md |
-| **Your own apps on the Anthropic, OpenAI or Gemini API** | Autopilot on `/v1/messages`, `/v1/chat/completions`, `/v1/responses` and Gemini's `generateContent` (`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` / `GOOGLE_GEMINI_BASE_URL`), or the full optimizing proxy; no proxy possible (serverless, edge)? `withContextDoctor(client)` runs autopilot inside the SDK client | Exact usage and cache hit rates in `/stats`, prompt-cache placement advice |
+| **Your own apps on the Anthropic, OpenAI or Gemini API** | Autopilot on `/v1/messages`, `/v1/chat/completions`, `/v1/responses` and Gemini's `generateContent` (`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` / `GOOGLE_GEMINI_BASE_URL`), or the optimizing proxy (which can cost more on cached traffic); no proxy possible (serverless, edge)? `withContextDoctor(client)` runs autopilot inside the SDK client | Exact usage and cache hit rates in `/stats`, prompt-cache placement advice |
 | **Claude Desktop chat** | Standing context rules in every chat; one cheap `profile_context` call the model makes past ~30 turns or on any cost question; `pack_context` instead of reading a big local file whole | One-click `.mcpb` install, `context_checkup` prompt |
 | **claude.ai, ChatGPT, the phone apps** | Your account's standing preferences (`context-doctor instructions --copy`) | Profile an exported chat with `analyze` |
 | **CI** | `analyze --fail-over-budget` fails a build whose prompts outgrow a budget | `.contextdoctorrc` budgets and presets |
@@ -166,14 +166,15 @@ In Claude Desktop, Claude Code, Cursor and Codex the same thing is the `pack_con
 **`overhead`: what every request re-reads before your message.** The system prompt, tool and MCP schemas, skills and your memory files ride on every request: cached, so each read is cheap, but read on every request of every session and written again at full price after each cold start. Transcripts never show them. `overhead` measures the fixed part from the first request of each recent Claude Code session (the API's own count, minus your first message), lists every memory file each agent loads in the current directory (Claude Code's CLAUDE.md with its `@imports`, rules and auto memory; Codex's AGENTS.md; Cursor's always-applied rules; GEMINI.md), and prices each per month from your own request and cold-start counts.
 
 ```
-Claude Code, last 30 days: 71 sessions start at a median ~54k tokens (p90 ~62k) before the first message.
-Memory files loaded here are ~3.4k of that; the rest is Claude Code's system prompt, tools, skills and MCP schemas.
-At your usage (14,104 requests, 249 cold starts, claude-fable-5-1 list prices) every 1k tokens of it costs ~$16.97 a month;
+Claude Code, last 30 days: 80 sessions start at a median ~57k tokens (p90 ~67k) before the first message.
+Memory files loaded here are ~3.6k of that; the rest is Claude Code's system prompt, tools, skills and MCP schemas.
+At your usage (12,023 requests, 238 cold starts, claude-opus-5-5 list prices) every 1k tokens of it costs ~$5.89 a month;
+the whole overhead ~$335.94 a month.
 ```
 
 Findings point at files over 2k tokens, paragraphs loaded twice from two files, and long code blocks that could live in a file the agent opens when it needs them.
 
-To act on a finding, `context-doctor overhead split <file>` plans the fix: sections over ~400 tokens (or mostly code) move word for word to `<name>.reference.md`, each run of them leaving one pointer the agent follows when a task needs it. Lists of links are indexes and stay, and an auto-memory `MEMORY.md` keeps only its index, as Claude Code intends. Nothing is written until you add `--write`, which backs up the original first. On a copy of the author's auto-memory index: ~3.4k to ~1.7k tokens on every request, about $28 a month, nothing lost.
+To act on a finding, `context-doctor overhead split <file>` plans the fix: sections over ~400 tokens (or mostly code) move word for word to `<name>.reference.md`, each run of them leaving one pointer the agent follows when a task needs it. Lists of links are indexes and stay, and an auto-memory `MEMORY.md` keeps only its index, as Claude Code intends. Nothing is written until you add `--write`, which backs up the original first. On a copy of the author's auto-memory index: ~3.4k to ~1.7k tokens on every request, about $10 a month at the ~$5.89 per 1k tokens measured above, nothing lost.
 
 MCP servers are part of the same overhead: each one's tool definitions ride on every request. `overhead` counts calls per server from your transcripts, including servers the app or its connectors provide, and `overhead --mcp` launches each configured server once to size its definitions, flagging the ones you never call with what they cost a month. When Claude Code's tool search is on (the report says how often it was used), definitions are deferred and an idle server costs about its tool names instead.
 
@@ -186,13 +187,13 @@ MCP servers are part of the same overhead: each one's tool definitions ride on e
 - **0.28 Wider reach**: `/context-doctor:overhead` and `/context-doctor:pack` in the Claude Code plugin; `pack` reads a folder inside a git repository the way git does, so `.gitignore`'d build output and secrets stay out; `withContextDoctor` wraps Google's `@google/genai` client too; `overhead` measures the fixed start-of-session cost of Codex and Gemini CLI sessions as well as Claude Code's, priced with each provider's cache rules.
 - **0.27 Keep waste out**: `pack` and the `pack_context` MCP tool put only the chunks of big files (text, code, PDF, Word, PowerPoint) a question needs into the context, within a budget; `overhead` measures and prices the front matter every request re-reads (system prompt, tools, CLAUDE.md, rules, memory, AGENTS.md, Cursor rules, GEMINI.md). MCP servers sized and their use counted; `overhead split` turns a heavy memory file into a lean one plus a reference file. `withContextDoctor(client)` runs autopilot inside an Anthropic or OpenAI SDK client, for apps with no proxy. Gemini joins: `install` wires Gemini CLI's MCP server and every-prompt hook, `session` and `watch` read its chats, and the proxy and autopilot carry Google's Gemini API. A GitHub Action (and `context-doctor ci`) reports memory-file growth on every pull request and gates on a budget. Re-verified on every surface: 229 tests on macOS, Linux and Windows, plus MCP, OpenAI and Gemini end-to-end smoke runs, now in CI, MCP over stdio and HTTP, the OpenAI proxy, and a live `doctor`.
 - **0.26 Checked on every platform, three fixes**: tested end to end in Claude Code (terminal, desktop app, plugin from GitHub), Claude Desktop, Cursor, Codex on GPT-5.5, VS Code, the MCP server on every launch path, and the proxy on OpenAI's APIs. Found and fixed: Cursor's agent never received the hook's guidance (Cursor runs Claude Code's hook where output cannot add context), so `install` now adds a native Cursor hook; Codex blocked the MCP tools behind an approval it never grants in `codex exec`, so the tools are now marked read-only; autopilot skipped Codex's newest tools (`exec`, `wait`) and some of Cursor's. Also: a history imported into Codex no longer reads as "2136% of the window", and the chat-app settings paths are current.
-- **0.25 Compact earlier, by itself**: the `/compact` offer at cold resumes was followed 1 time in 33 on the author's machine, so two changes. The hook now also shows you the notice (it went only to the model, which rarely raised it), with the dollar cost of the message you just sent. And `context-doctor compact-window` measures and sets Claude Code's own auto-compact window, which works without anyone acting on advice, in every surface including the desktop app: 55% less input cost at 400k on the author's last 30 days. `savings` shows it as a third lever.
-- **0.20 Autopilot**: stale tool output cleared from every Claude Code request, only when the prompt cache is cold, so it cannot cost more (measured: 9.8% less input cost, ~$1,080 a month on the author's usage, no session worse); runs as a login service on macOS, Linux and Windows; now also for GPT via OpenAI's Chat Completions and Responses APIs.
+- **0.25 Compact earlier, by itself**: the `/compact` offer at cold resumes was followed 1 time in 33 on the author's machine, so two changes. The hook now also shows you the notice (it went only to the model, which rarely raised it), with the dollar cost of the message you just sent. And `context-doctor compact-window` measures and sets Claude Code's own auto-compact window, which works without anyone acting on advice, in every surface including the desktop app: 50% less input cost at 400k on the author's last 30 days (re-measured in 0.32). `savings` shows it as a third lever.
+- **0.20 Autopilot**: stale tool output cleared from every Claude Code request made in a terminal or IDE, only when the prompt cache is cold, so it cannot cost more (re-measured in 0.32: 12.7% less input cost, no session worse); runs as a login service on macOS, Linux and Windows; now also for GPT via OpenAI's Chat Completions and Responses APIs.
 - **0.24 A full audit, fixed**: the session parser now rebuilds API messages from Claude Code's one-row-per-block transcripts (it had split each reply into several messages, breaking tool pairing in exported conversations and inflating profiles); the proxy forwards every non-conversation endpoint and never re-encodes bodies it does not rewrite (model listing and file uploads failed or were corrupted through it); `report` and the dashboard no longer count compaction as tokens context-doctor saved, and MCP sketches no longer inflate them; `watch` follows plain conversation files; MCP inputs are bounded. 0.23: four dependency vulnerabilities patched, no false `/compact` alarm after compacting, `savings --share`.
-- **0.22 Honest about where each lever works, and a new one that works everywhere**: the every-prompt hook now offers `/compact` when you return to a large session after the cache expired (measured: ~$914 a month on the author's history), including in the desktop app. Found and fixed: autopilot cannot reach the desktop app's Code tab, and `doctor` now says so instead of reporting ✓; `savings` counted whole-file history as "last 30 days"; the hook quoted per-message cost at the uncached rate (10x too high). `--version` added.
+- **0.22 Honest about where each lever works, and a new one that works everywhere**: the every-prompt hook now offers `/compact` when you return to a large session after the cache expired (re-measured in 0.32: $2,993 net over 133 days, about $675 a month on the author's history), including in the desktop app. Found and fixed: autopilot cannot reach the desktop app's Code tab, and `doctor` now says so instead of reporting ✓; `savings` counted whole-file history as "last 30 days"; the hook quoted per-message cost at the uncached rate (10x too high). `--version` added.
 - **0.21 See it before you install it**: `npx context-doctor savings` replays your own recent sessions through autopilot and shows what it would have saved, against what you were actually billed. Install as a **Claude Code plugin** from inside Claude Code. Ready for the official **MCP Registry** (`io.github.KushalP1/context-doctor`), which every release now publishes to; any MCP client can launch it as `npx -y context-doctor mcp`.
 - **0.20.1 Releases that finish themselves**: one tag publishes to npm and creates a GitHub release with the Claude Desktop bundle (signed when a certificate is configured); the editor extension is ready for the VS Code Marketplace and Open VSX.
-- **0.19 Measured Claude tokenizer**: estimates were 40% low for Claude; fixed from the API's own counts, with a per-model check in `accuracy`.
+- **0.19 Measured Claude tokenizer**: Claude counts about 40% more tokens than the 4-characters rule the estimates used; fixed from the API's own counts, with a per-model check in `accuracy`.
 - **0.18** `proxy --token` for putting the proxy on a public URL safely. **0.17** Claude Desktop: a `profile_context` the model can afford to call from chat, `.mcpb` bundle, standing preferences for web and mobile. **0.16** Codex. **0.15** Cursor.
 
 Full history with the measurements behind each change: [ROADMAP.md](./ROADMAP.md).
@@ -213,24 +214,27 @@ One run of `context-doctor install` writes these (each config edit makes a `.bac
 2. **Claude Code config** (`~/.claude.json`) — registers the MCP server
 3. **Cursor config** (`~/.cursor/mcp.json`) — registers the MCP server
 4. **Agent Skill** → `~/.claude/skills/context-doctor/` — context-hygiene playbook for Claude Code
-5. **Every-prompt hook** → `~/.claude/settings.json` — the per-query context check for Claude Code
-6. **Cursor hook**, when Cursor is present → `~/.cursor/hooks.json` (`postToolUse`) — the same check for Cursor's agent, after each tool call
-7. **Codex**, when present: MCP server in `~/.codex/config.toml`, the hook in `~/.codex/hooks.json`, the skill in `~/.codex/skills/`
-8. With `--statusline`: live context size, cache share and cost in Claude Code's status bar
+5. **Every-prompt hook** → `~/.claude/settings.json` (`UserPromptSubmit`) — the per-query context check for Claude Code
+6. **Compaction hook** → `~/.claude/settings.json` (`PreCompact`) — tells each compaction what the session cannot lose (files changed, open tasks, your instructions, failing commands)
+7. **Cursor hook**, when Cursor is present → `~/.cursor/hooks.json` (`postToolUse`) — the same check for Cursor's agent, after each tool call
+8. **Codex**, when present: MCP server in `~/.codex/config.toml`, the hook in `~/.codex/hooks.json`, the skill in `~/.codex/skills/`
+9. **Gemini CLI**, when present: MCP server and the every-prompt hook (`BeforeAgent`) in `~/.gemini/settings.json`
+10. With `--statusline`: live context size, cache share and cost in Claude Code's status bar
 
 `context-doctor autopilot on` is separate and opt-in: it adds the background proxy service and one line (`env.ANTHROPIC_BASE_URL`) to `~/.claude/settings.json`, after the proxy has answered a health check.
 
-**In every chat afterward (Claude Desktop, Cursor):** when the conversation starts, the app launches the MCP server, which hands the model standing instructions that stay in force for the whole chat:
+**In every chat afterward (Claude Desktop, Cursor):** when the conversation starts, the app launches the MCP server, which hands the model standing instructions that stay in force for the whole chat. These five, verbatim:
 
-- summarize large pastes and tool results instead of carrying them verbatim,
-- reference earlier content instead of re-quoting it, never inline base64,
-- once the chat passes ~30 turns or accumulates big pastes, *proactively offer to profile it*,
-- answer any "what's eating my context / cost / latency" question by calling `profile_context`, not by guessing.
+1. Summarize any paste or tool result over ~2k tokens into the points you need; don't carry it verbatim unless you will edit or quote it exactly.
+2. Refer to earlier content by name; never re-quote it or inline base64.
+3. Once, at ~30 turns or 3+ large pastes, and when asked about tokens, cost, speed or limits: call profile_context BEFORE answering; act on its top finding. In a chat app pass a `sketch` (turns + large blocks). Do not estimate token counts yourself.
+4. If optimize_context returns a pruned-turns digest, write its ≤150-token summary.
+5. To answer from a large file or folder you won't edit, call pack_context with the question; don't read it whole.
 
 **In every Claude Code / Cowork session afterward:** all of the above via MCP, plus two more layers:
 
 - the **skill** loads whenever context work is relevant, and
-- the **hook runs on every single prompt you send**: lean sessions cost a ~1ms file-size check; once a session is heavy it profiles on growth events and injects a note the model sees with your message — actual token count, cost per message, the single largest recoverable waste — with instructions to work leaner and offer you compaction. It re-fires only after ~40% further growth, can never break a prompt (any failure exits silently), and logs each deep check to a small local ledger that feeds `context-doctor report`.
+- the **hook runs on every single prompt you send**: ~80ms per prompt, nearly all of it Node startup, because on a lean session its own work is one `stat()` (~1ms); once a session is heavy it profiles on growth events and injects a note the model sees with your message — actual token count, cost per message, the single largest recoverable waste — with instructions to work leaner and offer you compaction. It re-fires only after ~40% further growth, can never break a prompt (any failure exits silently), and logs each deep check to a small local ledger that feeds `context-doctor report`.
 
 **What it never does:** delete or rewrite your history without asking (pruning is consent-only, and the model writes the replacement summary so nothing is lost silently), send data anywhere (everything runs on your machine), or touch an API key.
 
@@ -241,12 +245,12 @@ MCP is just one of seven delivery mechanisms. It's only required when you want t
 | How you use it | MCP needed? | What it requires |
 |---|---|---|
 | **CLI** — `analyze`, `optimize`, `session` on files/transcripts | ❌ No | Nothing but `npx` — works in any terminal, scripts, CI |
-| **Autopilot** — every Claude Code session, and GPT API apps | ❌ No | `context-doctor autopilot on` (a login service + one line in `~/.claude/settings.json`) |
-| **Proxy** — always-on optimization of your API apps | ❌ No | `context-doctor proxy` + one env var in your app |
+| **Autopilot** — Claude Code sessions in a terminal or IDE, and your API apps | ❌ No | `context-doctor autopilot on` (a login service + one line in `~/.claude/settings.json`) |
+| **Proxy** — autopilot for your API apps | ❌ No | `context-doctor proxy --autopilot` + one env var in your app |
 | **Claude Code every-prompt hook** | ❌ No | Written by `install`; Claude Code invokes it directly |
 | **Agent Skill** — hygiene behavior in Claude Code / claude.ai | ❌ No | A markdown file; `install` places it (or upload to claude.ai) |
 | **Library** — `import { profileConversation } from "context-doctor"` | ❌ No | `npm install context-doctor` in your project |
-| **In-chat tools** — Claude Desktop, ChatGPT desktop, Cursor chat | ✅ Yes | This is the only MCP piece — so the model itself can call `profile_context` / `optimize_context` mid-conversation |
+| **In-chat tools** — Claude Desktop, Cursor chat, ChatGPT through a developer-mode connector at a URL | ✅ Yes | This is the only MCP piece — so the model itself can call `profile_context` / `optimize_context` mid-conversation |
 
 Practical upshot: a developer who only wants cheaper, faster API calls never touches MCP (proxy + CLI). A Claude Code user gets the hook and skill without MCP either — the MCP server just adds in-chat tools on top. `install` sets up all of it at once precisely so you don't have to think about which mechanism is which.
 
@@ -254,15 +258,20 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 
 | Command | What it does |
 |---|---|
-| `context-doctor install` / `uninstall` | Wire (or remove) everything: MCP for Claude Desktop/Code/Cursor/Codex, the Agent Skill, the every-prompt hook |
+| `context-doctor install` / `uninstall` | Wire (or remove) everything it finds: the MCP server for Claude Desktop, Claude Code, Cursor, Codex and Gemini CLI; the Agent Skill (Claude Code, Codex); the every-prompt hook (Claude Code, Codex, Gemini CLI's `BeforeAgent`, Cursor's `postToolUse`); Claude Code's `PreCompact` hook. `--statusline` adds the status bar line |
 | `context-doctor savings [--days n] [--share [--copy]]` | What your recent Claude Code sessions cost, and what `/compact` at cold resumes, autopilot and an earlier auto-compact window would save, replayed through the shipped code against your actual billed usage. `--share` prints totals only (no project names or paths) to post. A bare `context-doctor` in a terminal shows the same |
 | `context-doctor compact-window [status\|off\|<size>]` | Replay your last 30 days at auto-compact windows from 200k to 800k: input cost, saving, and how many more compactions each means. `400k` (or `250000`, `0.4m`) sets Claude Code's `autoCompactWindow`, with a backup; `off` removes it. Works in every Claude Code surface, the desktop app included |
 | `context-doctor mcp [--http]` | The MCP server as a subcommand, for clients and registries that launch `npx -y context-doctor mcp` |
-| `context-doctor autopilot on\|off\|pause\|resume\|status` | Every new Claude Code session goes through the local proxy, which clears stale tool output only when the prompt cache is cold: measured 12.7% less input cost, no session worse |
+| `context-doctor autopilot on\|off\|pause\|resume\|status` | Every new Claude Code session started in a terminal or IDE goes through the local proxy, which clears stale tool output only when the prompt cache is cold: measured 12.7% less input cost, no session worse |
 | `context-doctor instructions [--copy]` | The ~180-token standing rules (~120 on GPT) for claude.ai / ChatGPT preferences, for web and phones where no server runs |
 | `context-doctor pack <files\|dirs\|-> --query "…"` | Only the chunks of big documents, logs or code a question needs, ranked and fit to `--max-tokens` (default 4000). No query: an outline; `--ids a#2,b#5` picks chunks from it. Offline, no key |
 | `context-doctor overhead [--days n] [--mcp]` | What every request re-reads before your message: measured first-request size (Claude Code, Codex and Gemini CLI sessions), each memory file (CLAUDE.md and imports, rules, auto memory, AGENTS.md, Cursor rules, GEMINI.md) priced per month, MCP calls per server; `--mcp` sizes each configured server's tool definitions and flags unused ones |
 | `context-doctor overhead split <file> [--write]` | Move a memory file's big or code-heavy sections word for word to `<name>.reference.md`, leaving pointers; indexes stay. A plan until `--write`, which backs up first |
+| `context-doctor tasks [--days n]` | Cost per commit, per project: each session priced from its recorded usage against the commits it made |
+| `context-doctor reads [--days n] [--limit n]` | Files read into session after session: reads, tokens, cost, and whether a CLAUDE.md summary or `pack` pays |
+| `context-doctor subagents [--days n]` | Which subagents paid for themselves: each one's bill vs the same steps run in the parent session |
+| `context-doctor compactions [--days n]` | Do sessions work worse right after compacting? Re-reads, tool errors and your corrections, before vs after each compaction |
+| `context-doctor cache-plan <request.json> [--calls n] [--out file]` | Where an Anthropic API request should carry `cache_control`, and what it saves over n calls; `--out` writes it applied |
 | `context-doctor ci [--base <ref>] [--max-tokens n] [--max-increase n]` | Memory files (CLAUDE.md, AGENTS.md, GEMINI.md, rules, their imports) at HEAD vs a base commit; exit 1 over budget. What the GitHub Action runs |
 | `context-doctor analyze <file>` | Profile a conversation: token breakdown, findings, cost + latency estimates. `--fail-over-budget` exits 1 on a breach, for CI |
 | `context-doctor optimize <file>` | Apply the safe fixes; add `--strategy trim-tool-calls` for big inline file writes, `--strategy prune-history` for consented lossy compaction |
@@ -273,7 +282,7 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 | `context-doctor accuracy` | How much of what you are billed for is visible in your transcript (the fixed harness baseline, per-turn injected content), plus a tokenizer check: real chars/token per model from the API's own counts, next to the ratio the estimator uses |
 | `context-doctor cursor [--list]` | Profile a chat from Cursor's local history (both storage formats) |
 | `context-doctor report` | Machine-wide impact report (proxy savings persist across restarts): exact proxy savings, hook activity, how often the cold-resume `/compact` offer was followed by a compaction, recoverable waste in recent sessions |
-| `context-doctor proxy` | Always-on local proxy that optimizes every Anthropic/OpenAI API request in flight (`/stats` for cumulative savings) |
+| `context-doctor proxy --autopilot` | Local proxy for your own Anthropic, OpenAI and Gemini API apps: clears stale tool output only when the prompt cache is cold, so it never costs more. Plain `proxy` runs the optimizing strategies (dedupe, trim, strip base64), which can cost more on cached traffic. `/stats` for cumulative savings |
 | `context-doctor watch [file]` | Live monitor of a growing session transcript or agent trace (Claude Code / Codex JSONL, or a plain OpenAI/Anthropic conversation JSON file): token/cost line per change, findings as they appear |
 | `context-doctor doctor` | Self-check the whole installation — one pasteable ✓/✗ diagnosis with fixes |
 | `context-doctor dashboard` | Local savings dashboard on 127.0.0.1: tokens saved per day, sessions by context in use vs recoverable, budget status |
@@ -285,8 +294,8 @@ Practical upshot: a developer who only wants cheaper, faster API calls never tou
 
 | Where you run LLMs | Mechanism | Guarantee |
 |---|---|---|
-| Claude Code sessions, with autopilot on | The login-service proxy clears stale tool output from every request, only when the cache is cold | **Every request; never more expensive (measured)** |
-| Your own apps/agents (API) | `context-doctor proxy` rewrites every request in flight, or `proxy --autopilot` for the cache-safe mode | **Every call, automatic** |
+| Claude Code sessions in a terminal or IDE, with autopilot on | The login-service proxy clears stale tool output from every request, only when the cache is cold | **Every request; never more expensive (measured)** |
+| Your own apps/agents (API) | `context-doctor proxy --autopilot` clears stale tool output only when the cache is cold; plain `proxy` (dedupe, trim, strip base64) can cost more on cached traffic | **Every call, automatic** |
 | Claude Code / Cowork sessions | `install` registers a **UserPromptSubmit hook**: every query measures the session; heavy sessions get injected hygiene guidance (silent when lean, rate-limited, never blocks a prompt) | **Every query checked** |
 | Claude Desktop chat / Cursor | **MCP server instructions** — standing hygiene directives injected into every conversation where the server is enabled, plus prescriptive tool triggers | **Every conversation carries the rules** |
 | claude.ai (web) / ChatGPT / phone apps | `context-doctor instructions --copy`, pasted once into the account's preferences (or upload `skills/context-doctor/SKILL.md` as a skill) | Every chat on that account carries the rules |
@@ -305,12 +314,12 @@ npx context-doctor optimize conversation.json --out slimmed.json
 
 Input is any of: OpenAI chat format, Anthropic messages format (with `system` and content blocks), or a bare `[{role, content}]` array. Use `-` to pipe from stdin.
 
-Reports include **dollar and latency estimates**, not just tokens:
+Reports include **dollar and latency estimates**, not just tokens (`analyze examples/sample-conversation.json --model claude-sonnet-5`):
 
 ```
-Cost:  ~$3.30 input per call · ~$3302 per 1k calls · ~13.2s of latency per call (estimates)
+Cost:  ~$0.023 input per call · ~$23.40 per 1k calls · ~0.5s of latency per call (estimates)
 ...
-Potential recovery: ~5.9k tokens (~73% of context) ≈ $17.69 per 1k calls, 0.2s faster per call
+Potential recovery: ~7.9k tokens (~67% of context) ≈ $15.79 per 1k calls, 0.3s faster per call
 ```
 
 ## Profile your actual Claude Code sessions
@@ -322,7 +331,7 @@ npx context-doctor session --list    # browse sessions
 
 Parses the transcripts Claude Code writes locally and answers "where did my tokens go today?" — it will happily tell you that one giant skill load is 67% of your context.
 
-## Autopilot: every Claude Code session keeps its own context lean
+## Autopilot: Claude Code sessions in a terminal or IDE keep their context lean
 
 ```bash
 context-doctor autopilot on        # once; survives reboots
@@ -335,28 +344,28 @@ context-doctor autopilot off       # remove it
 
 **What it does to each request:** once old tool output adds up to 20k+ tokens (file reads, shell output, search and web results, screenshots inside them), it replaces that output with a one-line note, keeping the 3 most recent results. The tool call stays in the history, so the model can simply run it again if it needs the output. Your messages, its answers, answers you gave to its questions, subagent reports and MCP results are never touched.
 
-**Why it cannot make a session more expensive.** A prompt cache matches a byte-identical prefix, and changing old history re-bills everything after the change at the write rate (1.25x or 2x input instead of a read's 2.5-10%). So autopilot changes history only when the cache is cold anyway: after an idle gap longer than the cache lifetime the request itself declares (1 hour for Claude Code on a subscription, 5 minutes otherwise), when the whole prompt is re-written regardless. Once cleared, an output stays cleared on every later request, so the prefix is identical between clearings and the cache keeps hitting. Output the model has not read yet is never cleared. On current Claude models a thinking block is bound to the history before it, and accounts created on or after 2026-08-31 get an error for an edited history; when that happens the proxy resends the request unedited and stops editing that account's histories where thinking follows.
+**Why it cannot make a session more expensive.** A prompt cache matches a byte-identical prefix, and changing old history re-bills everything after the change at the write rate (1.25x or 2x input instead of a read's 2.5-10%). So autopilot changes history only when the cache is cold anyway: after an idle gap longer than the cache lifetime the request itself declares (on Anthropic, 1 hour when its `cache_control` is marked `ttl: 1h`, otherwise 5 minutes; an hour on OpenAI and Gemini), when the whole prompt is re-written regardless. Once cleared, an output stays cleared on every later request, so the prefix is identical between clearings and the cache keeps hitting. Output the model has not read yet is never cleared. On current Claude models a thinking block is bound to the history before it, and accounts created on or after 2026-08-31 get an error for an edited history; when that happens the proxy resends the request unedited and stops editing that account's histories where thinking follows.
 
-**Measured before it shipped**, by replaying every Claude Code session on the author's machine (43 sessions, 130 days) request by request through the shipped code, priced as the cache bills it, with real timestamps: 3.8 billion input tokens not sent and $4,694 at list price, ~$1,080 a month ([details](#what-it-saves)). `scripts/replay-autopilot.mjs` does this on yours:
+**Measured** by replaying every Claude Code session on the author's machine request by request through the shipped code, priced as the cache bills it, with real timestamps (re-measured on 2026-10-13 with current prices, each request at its own model and the audit's fixes): 67 sessions over 133 days, $1,442 of $11,347 input cost at list price (12.7%, about $325 a month), no session made more expensive, best session 34.9% ([details](#what-it-saves)). 94% of input cost on that machine came from requests above 200k tokens, which is where the clearing lands. Smaller requests also mean later auto-compaction and a faster first token. `scripts/replay-autopilot.mjs` does this on yours.
 
-| Policy | Input cost saved | Worst session |
+**Why only on a cold cache.** The replay run before autopilot shipped (0.20.0, older sessions and the prices of the time, so its percentages are not comparable with the figures above) compared three policies:
+
+| Policy (0.20.0 replay) | Input cost saved | Worst session |
 |---|---|---|
-| **Autopilot: clear only when the cache is cold (default)** | **9.8%** (9.2% of raw input tokens; best session 37.7%) | **0.00%, no session worse** |
+| **Clear only when the cache is cold (the default)** | **9.8%** | **0.00%, no session worse** |
 | Also clear on a warm cache when the saving "should" repay the rewrite | 9.9% | −0.13% (one session worse) |
 | The proxy's general strategies (dedupe, trim, strip-base64) | 6.7% | −13% (one session worse) |
 
-Re-measured on 2026-10-13 with current prices, each request at its own model and the audit's fixes (output the model has not read is never cleared, a conversation the proxy has not seen counts as warm): 67 sessions over 133 days, $1,442 of $11,347 at list price (12.7%), no session worse. 94% of input cost on that machine came from requests above 200k tokens, which is where the clearing lands. Smaller requests also mean later auto-compaction and a faster first token.
-
-**Never in the way:** anything it cannot parse is forwarded unchanged; only Anthropic `/v1/messages` requests are touched. It adds about 7 ms to a 2.9 MB (~1M token) request. If the proxy dies, the service restarts it within seconds, and the every-prompt hook checks it before each prompt and starts it if needed (measured: 0.6 s once, when it had to). `pause` turns it into a passthrough without restarting anything; `off` removes the setting before stopping the service, and sessions started while it was on need a restart.
+**Never in the way:** anything it cannot parse is forwarded unchanged; only conversation requests are touched: Anthropic `/v1/messages`, OpenAI `/v1/chat/completions` and `/v1/responses`, and Gemini `generateContent` / `streamGenerateContent`. It adds about 7 ms to a 2.9 MB (~1M token) request. If the proxy dies, the service restarts it within seconds, and the every-prompt hook checks it before each prompt and starts it if needed (measured: 0.6 s once, when it had to). `pause` turns it into a passthrough without restarting anything; `off` removes the setting before stopping the service, and sessions started while it was on need a restart.
 
 **What it cannot reach** (no process on your machine sends those requests): Claude Desktop's chat tab and claude.ai, which use the standing instructions and the `profile_context` sketch instead; Cursor's own models (Cursor's servers call the model; with your own OpenAI key, see the tunnel section below); and Codex signed in with ChatGPT, where the every-prompt hook still reports context size.
 
 ## Always-on: optimize every request automatically
 
-Run the proxy and every Anthropic/OpenAI API call your apps make gets optimized in flight — no code changes:
+Run the proxy in autopilot mode and every Anthropic, OpenAI or Gemini API call your apps make goes through the same cold-cache clearing as autopilot, with no code changes:
 
 ```bash
-npx context-doctor proxy
+npx context-doctor proxy --autopilot
 ```
 
 Then point your app or SDK at it:
@@ -364,15 +373,16 @@ Then point your app or SDK at it:
 ```bash
 export ANTHROPIC_BASE_URL=http://localhost:8787      # Anthropic SDKs / tools
 export OPENAI_BASE_URL=http://localhost:8787/v1      # OpenAI SDKs / tools
+export GOOGLE_GEMINI_BASE_URL=http://localhost:8787  # Gemini CLI / Google SDKs
 ```
 
-The proxy dedupes repeated content, trims stale tool results, and strips base64 blobs from the message history of each request, then forwards it to the real API. Your API key passes through in headers untouched, streaming (SSE) works unchanged, and per-request savings are logged with upstream latency:
+**The optimizing mode, and its cost.** Without `--autopilot`, the proxy dedupes repeated content, trims stale tool results, and strips base64 blobs from the message history of each request, then forwards it to the real API. It edits history the prompt cache holds, so on cached traffic it can cost more than it saves: in the replay before autopilot shipped it saved 6.7% overall but made one session 13% more expensive. Use it where requests are not cached, and prefer `--autopilot` everywhere else. Either way, your API key passes through in headers untouched, streaming (SSE) works unchanged, and per-request savings are logged with upstream latency:
 
 ```
 [context-doctor] POST /v1/messages → 200 in 842ms | optimized 7.3k → 518 tokens (2 changes) | session total: 6.9k tokens ≈ $0.021 saved
 ```
 
-Only conversation requests (`/v1/messages`, `/v1/chat/completions`, `/v1/responses`) are ever rewritten. Every other endpoint a client uses through the proxy (listing models, uploading files, counting tokens) is forwarded untouched, to Anthropic when the request carries `anthropic-version` or `x-api-key` and to OpenAI otherwise, and request bodies the proxy does not rewrite reach upstream byte for byte.
+Only conversation requests are ever rewritten: `/v1/messages`, `/v1/chat/completions` and `/v1/responses`, plus Gemini's `generateContent` under `--autopilot`. Every other endpoint a client uses through the proxy (listing models, uploading files, counting tokens) is forwarded untouched: Gemini requests (an `x-goog-api-key` header or a `/v1beta` path) to Google, requests carrying `anthropic-version`, `x-api-key`, `anthropic-beta` or an `sk-ant-` key to Anthropic, and the rest to OpenAI (under `--autopilot`, only an `sk-` key goes to OpenAI and the rest to Anthropic). Request bodies the proxy does not rewrite reach upstream byte for byte.
 
 `GET http://localhost:8787/stats` returns cumulative savings (requests, tokens, estimated USD), **exact upstream usage** read from every response (JSON and SSE), and **prompt-cache advisories** — the proxy watches your real traffic and flags big stable prefixes missing `cache_control` or prefix churn that silently re-bills the cache. Per-model behavior via `--config`: The advisor now says *where*: for a large system/tools prefix it names the block to mark (the last tool definition, or the last system block), and when the older messages were byte-identical to the previous request it names the exact message to put `cache_control` on, with the token count that run is re-billing each turn. Anyone who already placed breakpoints is left alone.
 
@@ -380,18 +390,18 @@ Only conversation requests (`/v1/messages`, `/v1/chat/completions`, `/v1/respons
 { "routes": [{ "modelPrefix": "gpt", "strategies": ["strip-base64"], "keepRecent": 4 }] }
 ```
 
-Because prompt caching matches byte-identical prefixes, deterministic strategies are chosen so repeated requests stay stable — but if you rely on aggressive cache prefixes, start with `--strategy strip-base64 --strategy dedupe` and add more as you verify.
+Because prompt caching matches byte-identical prefixes, the optimizing mode's strategies are deterministic so repeated requests stay as stable as they can; if you rely on cached prefixes, use `--autopilot`, or start with `--strategy strip-base64 --strategy dedupe` and add more as you verify.
 
 ### Putting the proxy on a public URL (Cursor with your own OpenAI key, remote apps)
 
 Some apps let you set a base URL but call it from *their* servers, not your machine. Cursor is one: with your own OpenAI key, "Override OpenAI Base URL" is sent to Cursor's backend inside the model configuration, and Cursor's servers make the request (only the key-verification ping is client-side; we checked the app bundle, 3.18.25). So `127.0.0.1` cannot work there; the proxy has to be reachable from the internet, and an open relay on the internet is a bad idea. Hence the token:
 
 ```bash
-npx context-doctor proxy --token "$(openssl rand -hex 16)"   # or CONTEXT_DOCTOR_PROXY_TOKEN=...
+npx context-doctor proxy --autopilot --token "$(openssl rand -hex 16)"   # or CONTEXT_DOCTOR_PROXY_TOKEN=...
 ngrok http 8787                                               # or any HTTPS tunnel / reverse proxy
 ```
 
-With `--token`, every path except `/health` must start with `/t/<token>/`; anything else gets 401 before any upstream call, and the comparison is constant time. Then in Cursor: Settings > Models > OpenAI API Key > Override OpenAI Base URL = `https://<your-host>/t/<token>/v1`. Every agent request Cursor makes with your key now passes through the proxy: deduped, stale tool results trimmed, base64 stripped, real usage counted in `/t/<token>/stats`. This is the one Cursor path that is model-independent and needs no hook. It applies only to BYO-key traffic; Cursor's own subscription models never leave Cursor's servers.
+With `--token`, every path except `/health` must start with `/t/<token>/`; anything else gets 401 before any upstream call, and the comparison is constant time. Then in Cursor: Settings > Models > OpenAI API Key > Override OpenAI Base URL = `https://<your-host>/t/<token>/v1`. Every agent request Cursor makes with your key now passes through the proxy: with `--autopilot`, stale tool output is cleared when the cache is cold (without it, the optimizing strategies run, which can cost more on cached traffic), and real usage is counted in `/t/<token>/stats`. This is the one Cursor path that is model-independent and needs no hook. It applies only to BYO-key traffic; Cursor's own subscription models never leave Cursor's servers.
 
 Your API key still rides in the request headers, as before. The token protects the relay, not the key; keep the tunnel HTTPS.
 
@@ -440,7 +450,7 @@ For any other MCP client, the server entry is:
 ### How it works in Claude Desktop, step by step
 
 1. Run `npx context-doctor install` (writes the config above for you) and restart Claude Desktop. Or open the `.mcpb` from the latest release: same server, no npm, installs as an Extension.
-2. From then on, **every conversation carries context-doctor's standing instructions**. The MCP server hands them to Desktop on connect and Desktop puts them in front of Claude: summarize big pastes instead of re-quoting them, refer to earlier content by name, never inline base64, and past ~30 turns or on any question about tokens, cost, speed or limits, call `profile_context` before answering.
+2. From then on, **every conversation carries context-doctor's standing instructions**. The MCP server hands them to Desktop on connect and Desktop puts them in front of Claude (the five rules quoted above): summarize big pastes instead of re-quoting them, refer to earlier content by name, never inline base64, call `profile_context` once at ~30 turns and before answering any question about tokens, cost, speed or limits, and use `pack_context` for big local files.
 3. That call is cheap on purpose. Claude cannot export a Desktop chat, so it passes a **sketch**: how many turns, which blocks are large, repeated, stale or images, with one size hint each (~120 tokens). The server sizes it (usually within ±20%, measured; see "Why token counts are ~"), prices the per-turn re-read (on a subscription that is what spends your usage limit), and returns ranked findings with the action for each: "summarize *the nginx config* into the points still needed", "refer to *test output* by name", "offer a 300-token handoff summary for a fresh chat". The reply ends with an instruction to apply the top one, not just suggest it.
 4. One click instead of asking: the `context_checkup` prompt in the **+** menu sends that request for you.
 5. Say *"optimize it"* on an exported conversation and Claude applies the safe fixes; if you agree to pruning old history, **Claude itself writes the replacement summary** (that's the no-API-key summarization).
@@ -454,7 +464,7 @@ ChatGPT's MCP support differs fundamentally from Claude Desktop's: **it never sp
 
 1. **Normal ChatGPT (no developer mode): no MCP at all.** context-doctor still helps via the CLI: export the conversation and run `npx context-doctor analyze chat.json --model gpt-5` / `optimize` — no account settings required.
 2. **ChatGPT developer mode**: run our HTTP transport somewhere reachable — `context-doctor-mcp --http --port 8808` on a small host (bind `--host 0.0.0.0` there), or expose your machine temporarily with a tunnel (`ngrok http 8808`). Then Settings → Connectors → Advanced → Developer mode → add connector with URL `https://<your-host>/mcp`.
-3. Once connected, GPT gets the same three tools, each marked read-only (they only read their input and return text), with the same trigger guidance: ask *"what's eating my context?"* → it calls `profile_context`; *"optimize it"* works the same, including GPT writing the pruning summary itself.
+3. Once connected, GPT gets the same four tools, each marked read-only (they only read their input and return text; over HTTP `pack_context` reads no files, only `text` you pass), with the same trigger guidance: ask *"what's eating my context?"* → it calls `profile_context`; *"optimize it"* works the same, including GPT writing the pruning summary itself.
 
 Security note for step 2: the HTTP endpoint is unauthenticated — put it behind your tunnel's auth or a reverse proxy if it stays up long-term.
 
@@ -529,7 +539,7 @@ It reads the newest Claude Code transcript for the open workspace folder, shows 
 
 ```bash
 cd vscode && npm ci && npm run package
-code --install-extension context-doctor-vscode-0.1.0.vsix     # or: cursor --install-extension …
+code --install-extension context-doctor-vscode-0.2.1.vsix     # or: cursor --install-extension …
 ```
 
 ## Context health in Claude Code's status bar
@@ -659,7 +669,7 @@ Prompt cache: 95.6% of input served from cache across 1117 requests
   input cost $438.88 — caching saved $2481.89 against $2920.76 uncached (list prices)
 ```
 
-A cache read bills at ~10% of input while a write bills at ~125%, so a session that keeps invalidating its prefix can cost *more* than one with no caching at all. context-doctor warns on the two failure modes: a **low hit rate** (something early in the prompt changes every request) and **cache churn** (writes rivalling reads).
+A cache read bills at 2.5-10% of input depending on the provider and model, while a write bills 1.25x input (5-minute cache) or 2x (1-hour cache) on Anthropic, so a session that keeps invalidating its prefix can cost *more* than one with no caching at all. context-doctor warns on the two failure modes: a **low hit rate** (something early in the prompt changes every request) and **cache churn** (writes rivalling reads).
 
 ## Enforce a budget in CI
 
@@ -676,7 +686,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: KushalP1/context-doctor@v0.27.0
+      - uses: KushalP1/context-doctor@v0.32.0
         with:
           max-increase: "2000"        # fail a PR that adds more than 2k tokens
           requests-per-day: "5000"    # optional: price the change
@@ -708,10 +718,10 @@ A tool that promises speed must be near-free. Measured overhead per touchpoint:
 
 | Touchpoint | When it runs | Overhead |
 |---|---|---|
-| Every-prompt hook (Claude Code) | Every prompt | **~80ms** (Node startup; logic ~1ms). Lean sessions exit on a single `stat()` — the transcript is never read. Full profiling (~200ms on a 4MB session) happens only when the transcript has grown ~40% since last checked |
+| Every-prompt hook (Claude Code) | Every prompt | **~80ms**, nearly all Node startup: on a lean session its own work is a single `stat()` (~1ms) and the transcript is never read. Full profiling (~200ms on a 4MB session) happens only when the transcript has grown ~40% since last checked |
 | MCP server | Spawned once per app session | Tools run only when called; standing instructions cost **~250 tokens per conversation on Claude, ~170 on GPT** — deliberately terse |
 | Proxy | Per API request | ~1–3ms of CPU (parse → optimize → re-serialize) against typical model latencies of hundreds of ms; responses stream through chunk-by-chunk, never buffered |
-| Skill | Loads only when relevant | ~1k tokens while active; its always-present description is ~60 tokens |
+| Skill | Loads only when relevant | ~1.7k tokens while active; its always-present name and description ~140 tokens |
 | Profiling a session | On demand, and on hook growth events | ~160ms for an 8.5MB / 1,855-message transcript (near-duplicate pairs that cannot clear the similarity bar are skipped without comparison) |
 | CLI / library | Only when you run it | Not in any hot path |
 
@@ -728,7 +738,7 @@ Counting exactly needs each provider's tokenizer, so the default is a chars-per-
 
 Which row applies: the model you pass, else the request's own `model` field, else the request's shape (Anthropic's `system` field or `tool_use` blocks mean Claude). Cursor transcripts record no model and use Anthropic-style blocks, so Cursor sessions are counted at Claude density; for a GPT model in Cursor that reads about 40% high.
 
-**How the Claude figures were measured, with no key.** Claude Code transcripts record what the API billed, and two things in them are exact. A reply with no thinking block is billed as exactly its `output_tokens`, and all of it is visible text: 504 replies gave a median of 2.75 chars/token (p10 2.4, p90 3.0). Between two consecutive API calls the prompt grows by exactly what was appended; when that is one large block, its size is the growth minus the previous reply: 474 blocks of code and tool output gave 2.4 (p10 2.1, p90 2.8). The ratios this tool used until 0.19 (4.0 / 3.2 for everything) **undercounted current Claude models by about 40%**: hook warnings came late, savings and costs read low, and the proxy stayed silent on cacheable prefixes between 1,024 and ~1,670 tokens. `context-doctor accuracy` re-runs both measurements on your own sessions and prints them per model beside the ratio in use, so the next tokenizer change shows up as a number, not a surprise. On this machine every model lands within ±9%.
+**How the Claude figures were measured, with no key.** Claude Code transcripts record what the API billed, and two things in them are exact. A reply with no thinking block is billed as exactly its `output_tokens`, and all of it is visible text: 504 replies gave a median of 2.75 chars/token (p10 2.4, p90 3.0). Between two consecutive API calls the prompt grows by exactly what was appended; when that is one large block, its size is the growth minus the previous reply: 474 blocks of code and tool output gave 2.4 (p10 2.1, p90 2.8). The ratios this tool used until 0.19 (4.0 / 3.2 for everything) **undercounted current Claude models**: Claude counts about 40% more tokens than that rule (~45% on prose, ~33% on code), so estimates read ~31% low on prose; hook warnings came late, savings and costs read low, and the proxy stayed silent on cacheable prefixes between 1,024 and ~1,670 tokens. `context-doctor accuracy` re-runs both measurements on your own sessions and prints them per model beside the ratio in use, so the next tokenizer change shows up as a number, not a surprise. On this machine every model lands within ±9%.
 
 Two ways to get real numbers instead of estimates:
 
@@ -741,7 +751,7 @@ One honest caveat worth knowing: a transcript stores the conversation, **not** t
 
 ## Roadmap
 
-See [ROADMAP.md](./ROADMAP.md) for the full plan, the per-surface coverage table and the measurements behind every shipped item. Next, in order of expected saving: the MCP schema tax per server in `overhead`; a Python package for RAG pipelines. Non-goals, permanently: cloud services, telemetry, silent history rewriting, mandatory API keys.
+See [ROADMAP.md](./ROADMAP.md) for the full plan, the per-surface coverage table and the measurements behind every shipped item. What comes next: the research items under [Later / research](./ROADMAP.md#later--research), and the steps waiting on the owner's accounts (PyPI, the editor extension's marketplaces, a signed Desktop bundle, the Glama listing) under [Waiting on the owner's accounts](./ROADMAP.md#waiting-on-the-owners-accounts). Non-goals, permanently: cloud services, telemetry, silent history rewriting, mandatory API keys.
 
 Contributions welcome — this project is small on purpose. Open an issue before a big PR.
 
@@ -772,7 +782,7 @@ Locally, `npm run build:mcpb` builds the bundle (`MCPB_SELF_SIGNED=1` exercises 
 
 Known gotcha: if `npm publish` fails with **`404 Not Found - PUT …/context-doctor`** on a package that clearly exists, the real cause is an **expired npm login token** — npm reports unauthenticated publishes as a 404, not a 401. Check with `npm whoami`; if that errors, run `npm login` and publish again.
 
-Also keep the MCP server version in `src/mcp.ts` in sync with `package.json`, and remember `dist/` is committed — run `npm run build` before committing so the CI dist-sync check passes.
+`npm version` runs `scripts/sync-versions.mjs`, which copies the new version into `server.json`, the MCP server and the proxy, rebuilds `dist/` and stages it, so nothing needs syncing by hand. `dist/` is committed: run `npm run build` before committing any other change so the CI dist-sync check passes.
 
 ## Contributing
 
