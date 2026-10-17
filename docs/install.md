@@ -25,7 +25,7 @@ Each config edit makes a `.backup` first:
 9. **Gemini CLI**, when present: MCP server and the every-prompt hook (`BeforeAgent`) in `~/.gemini/settings.json`
 10. With `--statusline`: live context size, cache share and cost in Claude Code's status bar ([details](./editor-and-statusline.md))
 
-`context-doctor autopilot on` is separate and opt-in: it adds the background proxy service and one line (`env.ANTHROPIC_BASE_URL`) to `~/.claude/settings.json`, after the proxy has answered a health check ([details](./autopilot.md)).
+`context-doctor autopilot on` is separate and opt-in: it adds the background proxy service and, after the proxy has answered a health check, `env.ANTHROPIC_BASE_URL` to `~/.claude/settings.json`, plus `env.ENABLE_TOOL_SEARCH=auto` unless you set that yourself ([details](./autopilot.md)).
 
 Other ways in, without `install`: the Claude Code plugin, the one-click `.mcpb` for Claude Desktop (from the [latest release](https://github.com/KushalP1/context-doctor/releases/latest); it runs on Desktop's own Node, no npm needed), or the MCP server entry in any client's config. All three are in the README's [Quick start](../README.md#quick-start). ChatGPT needs a URL instead of a local command: see [chat apps](./chat-apps.md#chatgpt).
 
