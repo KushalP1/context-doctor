@@ -487,6 +487,26 @@ function numArg(flag: string, raw: string | undefined, { min, max, integer }: { 
   return n;
 }
 
+/**
+ * A one-line "n/N transcripts" counter on stderr while a report reads the
+ * history (tens of seconds on a busy machine), in a terminal only: piped or
+ * captured output gets none of it. `clear()` erases the line before the
+ * report prints.
+ */
+function progressLine(label: string): { tick?: (done: number, total: number) => void; clear(): void } {
+  if (!process.stderr.isTTY) return { clear() {} };
+  let shown = false;
+  return {
+    tick(done, total) {
+      shown = true;
+      process.stderr.write(`\r${label}… ${done}/${total} transcripts\x1b[K`);
+    },
+    clear() {
+      if (shown) process.stderr.write("\r\x1b[K");
+    },
+  };
+}
+
 /** Any Claude Code transcript on this machine? One directory listing, no parsing. */
 function hasClaudeSessions(): boolean {
   try {
@@ -759,13 +779,16 @@ async function main(): Promise<void> {
     // A bare `context-doctor` in a terminal, with Claude Code history on the
     // machine, answers the question people install this for: what would it
     // save me? Scripts and pipes still get the help text.
-    const progress = process.stderr.isTTY
-      ? (done: number, total: number) => process.stderr.write(`\rReplaying your Claude Code sessions through autopilot… ${done}/${total}`)
-      : undefined;
-    const report = estimateSavings(args.days ?? 30, {}, undefined, progress);
-    if (progress) process.stderr.write("\r\x1b[K");
+    const replaying = progressLine("Replaying your Claude Code sessions through autopilot");
+    const report = estimateSavings(args.days ?? 30, {}, undefined, replaying.tick);
+    replaying.clear();
     const setWindow = currentCompactWindow();
-    const cwReport = estimateCompactWindows([setWindow ?? 400_000], args.days ?? 30, undefined, compactionQuality(60).extraRereadTokensPerCompaction);
+    const measuring = progressLine("Measuring your compactions");
+    const reread = compactionQuality(60, undefined, measuring.tick).extraRereadTokensPerCompaction;
+    measuring.clear();
+    const windowing = progressLine("Replaying an earlier auto-compact window");
+    const cwReport = estimateCompactWindows([setWindow ?? 400_000], args.days ?? 30, undefined, reread, windowing.tick);
+    windowing.clear();
     const est = cwReport.estimates[0];
     const cwLine = cwReport.sessions > 0 && est
       ? { window: est.window, savedUsd: est.savedUsd, compactionsPerWeek: (est.compactions / cwReport.days) * 7, nowPerWeek: (cwReport.actualCompactions / cwReport.days) * 7, isCurrent: setWindow !== undefined }
@@ -825,8 +848,13 @@ async function main(): Promise<void> {
     const current = currentCompactWindow();
     const windows = [200_000, 300_000, 400_000, 600_000, 800_000];
     if (current && !windows.includes(current)) windows.push(current);
-    const reread = compactionQuality(60).extraRereadTokensPerCompaction;
-    console.log(renderCompactWindows(estimateCompactWindows(windows.sort((a, b) => a - b), args.days ?? 30, undefined, reread), current));
+    const measuring = progressLine("Measuring your compactions");
+    const reread = compactionQuality(60, undefined, measuring.tick).extraRereadTokensPerCompaction;
+    measuring.clear();
+    const replaying = progressLine("Replaying your sessions at each window");
+    const cw = estimateCompactWindows(windows.sort((a, b) => a - b), args.days ?? 30, undefined, reread, replaying.tick);
+    replaying.clear();
+    console.log(renderCompactWindows(cw, current));
     return;
   }
 
@@ -900,7 +928,9 @@ async function main(): Promise<void> {
   }
 
   if (args.command === "subagents") {
-    const report = subagentPayback(args.days ?? 30);
+    const reading = progressLine("Reading your sessions' subagents");
+    const report = subagentPayback(args.days ?? 30, undefined, reading.tick);
+    reading.clear();
     console.log(args.json ? JSON.stringify(report, null, 2) : renderPayback(report, args.limit ?? 8));
     return;
   }
@@ -976,7 +1006,14 @@ async function main(): Promise<void> {
   }
 
   if (args.command === "overhead") {
-    const report = overheadReport({ days: args.days });
+    const sessions = progressLine("Measuring each session's first request");
+    const tools = progressLine("Counting MCP tool calls");
+    const report = overheadReport({
+      days: args.days,
+      onProgress: (done, total, stage) => (stage === "sessions" ? sessions : tools).tick?.(done, total),
+    });
+    sessions.clear();
+    tools.clear();
     if (args.mcp) await measureMcpSizes(report);
     console.log(args.json ? JSON.stringify(report, (_k, v) => (v instanceof Map ? Object.fromEntries(v) : v), 2) : renderOverhead(report));
     return;

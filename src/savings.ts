@@ -19,6 +19,7 @@ import { forEachLine, listSessions, replyCounter } from "./session.js";
 import { CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, pricingFor, usageCost, writeMultiplier, type ModelPricing } from "./pricing.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
 import { withInvocation } from "./invocation.js";
+import { sessionsLabel } from "./compactwindow.js";
 
 /** System prompt and tool schemas: sent on every request, identical in both arms. */
 const FIXED_TOKENS = 54_000;
@@ -63,7 +64,10 @@ export function autopilotReaches(entrypoint?: string): boolean {
 
 export interface SavingsReport {
   days: number;
+  /** Sessions with 10+ requests in the period: the ones replayed and counted. */
   sessions: SessionSavings[];
+  /** Claude Code transcripts written in the period, replayed or not (the progress line's total). */
+  transcripts: number;
   billedUsd: number;
   savedUsd: number;
   savedTokens: number;
@@ -259,9 +263,11 @@ export function estimateSavings(days = 30, options: AutoClearOptions = {}, paths
   // (author's 133 days: 11.4% of weighted tokens, 12.7% of dollars); tokens
   // only when nothing could be priced.
   const savedPct = billedUsd > 0 ? savedUsd / billedUsd : billedW > 0 ? sum("savedWeighted") / billedW : 0;
+  onProgress?.(targets.length, targets.length);
   return {
     days,
     sessions: sessions.sort((a, b) => b.savedUsd - a.savedUsd),
+    transcripts: targets.length,
     billedUsd,
     savedUsd,
     savedTokens: sum("savedTokens"),
@@ -299,7 +305,8 @@ export function renderSavings(r: SavingsReport, autopilotOn = false, cw?: Compac
   const pct = (x: number) => (r.billedUsd > 0 ? ` (${Math.round((x / r.billedUsd) * 100)}%)` : "");
   // Kept within 80 columns: this is most people's first screen of the tool.
   lines.push("What context-doctor finds in your Claude Code sessions");
-  lines.push(`Last ${r.days} days, ${n} session${n === 1 ? "" : "s"}, priced at list prices`);
+  // The same count, said the same way, as compact-window's.
+  lines.push(`Last ${r.days} days, ${sessionsLabel(n, r.transcripts ?? n)}, at list prices`);
   lines.push("─".repeat(60));
   lines.push(`Input you were billed for         ${usd(r.billedUsd).padStart(9)}   from your transcripts' usage`);
   lines.push("");

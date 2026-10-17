@@ -14,14 +14,20 @@
  * The trade-off is real: more compactions, each replacing history with a
  * summary. So this measures both sides on the user's own history and changes
  * nothing until asked. The replay uses the usage every transcript records;
- * its baseline came within 9% of the billed figure on the author's history
- * (on the low side, so savings are, if anything, understated).
+ * its baseline came within 9% of the billed figure on the author's history.
+ * Like `savings`, the replay decides each session's SHARE saved, and that
+ * share is applied to what the session was billed (its recorded usage at
+ * list price): "as now" is the same billed figure `savings` shows, over the
+ * same sessions (10+ requests in the window), so the two never disagree.
  */
 export declare const MIN_WINDOW = 100000;
 export declare const MAX_WINDOW = 1000000;
 export interface WindowEstimate {
     window: number;
+    /** Input billed as the sessions ran ("as now"): recorded usage at list price, as `savings` reports it. */
     baselineUsd: number;
+    /** The replay's own model of the same baseline, from which each session's share saved is taken. */
+    replayBaselineUsd: number;
     withWindowUsd: number;
     savedUsd: number;
     savedPct: number;
@@ -30,14 +36,19 @@ export interface WindowEstimate {
 }
 export interface CompactWindowReport {
     days: number;
+    /** Sessions with 10+ requests in the period: the ones replayed (the same rule as `savings`). */
     sessions: number;
+    /** Claude Code transcripts written in the period, replayed or not. */
+    transcripts: number;
     /** Compactions that actually happened over the period (Claude Code's own, or /compact). */
     actualCompactions: number;
     estimates: WindowEstimate[];
     /** Re-read tokens charged to each simulated compaction (0 when not measured). */
     rereadTokens?: number;
 }
-export declare function estimateCompactWindows(windows: number[], days?: number, paths?: string[], rereadTokens?: number): CompactWindowReport;
+export declare function estimateCompactWindows(windows: number[], days?: number, paths?: string[], rereadTokens?: number, onProgress?: (done: number, total: number) => void): CompactWindowReport;
+/** "37 sessions with 10+ requests (of 85 transcripts)": what the replayed reports count, said the same way. */
+export declare function sessionsLabel(sessions: number, transcripts: number): string;
 export declare function settingsPath(home?: string): string;
 /** The autoCompactWindow Claude Code will use from user settings, if set. */
 export declare function currentCompactWindow(home?: string): number | undefined;

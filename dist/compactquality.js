@@ -37,7 +37,7 @@ function add(s, reqs, readBefore) {
         });
     }
 }
-export function compactionQuality(days = 60, paths) {
+export function compactionQuality(days = 60, paths, onProgress) {
     const since = Date.now() - days * 86_400_000;
     const files = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
     const shapedAt = readLedger().filter((e) => e.ev === "precompact").map((e) => e.ts);
@@ -45,7 +45,8 @@ export function compactionQuality(days = 60, paths) {
     const shaped = { compactions: 0, before: empty(), after: empty() };
     // A forked session copies its parent's compactions (same row uuid): one compaction, counted once.
     const countedBoundaries = new Set();
-    for (const path of files) {
+    for (const [fileIndex, path] of files.entries()) {
+        onProgress?.(fileIndex, files.length);
         const reqs = [];
         /** `at` is NaN when the row carries no timestamp. */
         const boundaries = [];

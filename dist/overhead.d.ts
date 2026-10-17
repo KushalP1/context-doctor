@@ -30,7 +30,10 @@ export interface OverheadFinding {
 }
 export interface Baseline {
     agent: Agent;
+    /** Sessions with a measurable first request, of any length (not only the 10+ request ones savings replays). */
     sessions: number;
+    /** This agent's transcripts written in the period. */
+    transcripts: number;
     /** Median tokens of the first request, minus the first user message. */
     median: number;
     p90: number;
@@ -65,7 +68,7 @@ export declare function findMemoryFiles(cwd?: string, home?: string): MemoryFile
  * request and cold-start counts that turn tokens into a monthly bill.
  * Claude Code, Codex and Gemini CLI sessions, newest `days` only.
  */
-export declare function measureBaselines(days?: number, paths?: string[]): Baseline[];
+export declare function measureBaselines(days?: number, paths?: string[], onProgress?: (done: number, total: number) => void): Baseline[];
 /** Claude Code's baseline (the one memory-file prices are quoted against). */
 export declare function measureBaseline(days?: number, paths?: string[]): Baseline | undefined;
 /** What is worth changing in the memory files. */
@@ -75,6 +78,7 @@ export declare function overheadReport(opts?: {
     home?: string;
     days?: number;
     paths?: string[];
+    onProgress?: (done: number, total: number, stage: "sessions" | "mcp") => void;
 }): OverheadReport;
 /** Launch each configured server and size its tool definitions, then add the findings they support. */
 export declare function measureMcpSizes(r: OverheadReport): Promise<void>;

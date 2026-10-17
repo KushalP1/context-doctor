@@ -14,14 +14,17 @@
  * The trade-off is real: more compactions, each replacing history with a
  * summary. So this measures both sides on the user's own history and changes
  * nothing until asked. The replay uses the usage every transcript records;
- * its baseline came within 9% of the billed figure on the author's history
- * (on the low side, so savings are, if anything, understated).
+ * its baseline came within 9% of the billed figure on the author's history.
+ * Like `savings`, the replay decides each session's SHARE saved, and that
+ * share is applied to what the session was billed (its recorded usage at
+ * list price): "as now" is the same billed figure `savings` shows, over the
+ * same sessions (10+ requests in the window), so the two never disagree.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { forEachLine, listSessions, replyCounter } from "./session.js";
-import { cacheWriteSplit, pricingFor, writeMultiplier } from "./pricing.js";
+import { cacheWriteSplit, pricingFor, usageCost, writeMultiplier } from "./pricing.js";
 import { realModel } from "./tokens.js";
 import { readJson, writeJsonWithBackup } from "./install.js";
 import { withInvocation } from "./invocation.js";
@@ -81,7 +84,7 @@ function readRequests(path, runRows) {
         const w = cacheWriteSplit(u);
         writes5m += w.fiveMinute;
         writes1h += w.oneHour;
-        reqs.push({ at, prompt, inPerM: p?.inputPerM ?? 0, readPerM: p?.cacheReadPerM ?? 0, outPerM: p?.outputPerM ?? 0, copy: seen === "copy" });
+        reqs.push({ at, prompt, inPerM: p?.inputPerM ?? 0, readPerM: p?.cacheReadPerM ?? 0, outPerM: p?.outputPerM ?? 0, copy: seen === "copy", billedUsd: p ? usageCost(u, p).promptUsd : 0 });
     });
     return { reqs, writeMult: writeMultiplier(writes5m, writes1h), priced };
 }
@@ -149,14 +152,15 @@ function replay(reqs, window, since, reread = 0, writeMult = 1.25) {
     }
     return { base, sim, extra, actual };
 }
-export function estimateCompactWindows(windows, days = 30, paths, rereadTokens = 0) {
+export function estimateCompactWindows(windows, days = 30, paths, rereadTokens = 0, onProgress) {
     const since = Date.now() - days * 86_400_000;
     const targets = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
-    const acc = windows.map((w) => ({ window: w, base: 0, sim: 0, extra: 0 }));
+    const acc = windows.map((w) => ({ window: w, billed: 0, saved: 0, replayBase: 0, extra: 0 }));
     let sessions = 0, actualCompactions = 0;
     // Shared by every transcript of the run, so a fork's copy counts once.
     const runRows = new Set();
-    for (const p of targets) {
+    for (const [i, p] of targets.entries()) {
+        onProgress?.(i, targets.length);
         let parsed;
         try {
             parsed = readRequests(p, runRows);
@@ -164,31 +168,46 @@ export function estimateCompactWindows(windows, days = 30, paths, rereadTokens =
         catch {
             continue;
         }
-        if (!parsed.priced || parsed.reqs.filter((r) => !("compact" in r) && r.at >= since && !r.copy).length < 10)
+        // The same sessions `savings` counts: 10+ requests of its own in the
+        // period. An unpriced session counts too, at $0, as it does there.
+        const counted = parsed.reqs.filter((r) => !("compact" in r) && r.at >= since && !r.copy);
+        if (counted.length < 10)
             continue;
         sessions++;
+        const billed = counted.reduce((n, r) => n + r.billedUsd, 0);
         actualCompactions += replay(parsed.reqs, Number.MAX_SAFE_INTEGER, since, 0, parsed.writeMult).actual;
         for (const a of acc) {
             const r = replay(parsed.reqs, a.window, since, rereadTokens, parsed.writeMult);
-            a.base += r.base / 1e6;
-            a.sim += r.sim / 1e6;
+            // The replay's share saved, applied to what this session was billed.
+            const share = r.base > 0 ? (r.base - r.sim) / r.base : 0;
+            a.billed += billed;
+            a.saved += share * billed;
+            a.replayBase += r.base / 1e6;
             a.extra += r.extra;
         }
     }
+    onProgress?.(targets.length, targets.length);
     return {
         days,
         sessions,
+        transcripts: targets.length,
         actualCompactions,
         rereadTokens,
         estimates: acc.map((a) => ({
             window: a.window,
-            baselineUsd: a.base,
-            withWindowUsd: a.sim,
-            savedUsd: a.base - a.sim,
-            savedPct: a.base > 0 ? (a.base - a.sim) / a.base : 0,
+            baselineUsd: a.billed,
+            replayBaselineUsd: a.replayBase,
+            withWindowUsd: a.billed - a.saved,
+            savedUsd: a.saved,
+            savedPct: a.billed > 0 ? a.saved / a.billed : 0,
             compactions: a.extra,
         })),
     };
+}
+/** "37 sessions with 10+ requests (of 85 transcripts)": what the replayed reports count, said the same way. */
+export function sessionsLabel(sessions, transcripts) {
+    const s = `${sessions} session${sessions === 1 ? "" : "s"} with 10+ requests`;
+    return transcripts > sessions ? `${s} (of ${transcripts} transcripts)` : s;
 }
 export function settingsPath(home = homedir()) {
     return join(home, ".claude", "settings.json");
@@ -241,7 +260,8 @@ const k = (n) => `${Math.round(n / 1000)}k`;
 export function renderCompactWindows(r, current) {
     const lines = [];
     lines.push("Auto-compact window: compact earlier, automatically (Claude Code's own setting)");
-    lines.push(`Your last ${r.days} days, ${r.sessions} Claude Code session${r.sessions === 1 ? "" : "s"}, priced at list prices`);
+    // Counted and said exactly as `savings` says it, so the two screens agree.
+    lines.push(`Last ${r.days} days, ${sessionsLabel(r.sessions, r.transcripts ?? r.sessions)}, at list prices`);
     lines.push("─".repeat(66));
     lines.push(`Now: ${current ? `${k(current)} (set in ~/.claude/settings.json)` : "not set: Claude Code compacts near the model's full window"}`);
     if (r.sessions === 0) {
@@ -256,6 +276,8 @@ export function renderCompactWindows(r, current) {
     }
     lines.push(`  as now   ${usd(r.estimates[0]?.baselineUsd ?? 0).padStart(10)}                    ${String(r.actualCompactions).padStart(4)} (${((r.actualCompactions / r.days) * 7).toFixed(1)}/week)`);
     lines.push("");
+    lines.push("\"as now\" is what you were billed (transcript usage at list price, as in");
+    lines.push("`context-doctor savings`); each window saves the replay's share of it.");
     if (r.rereadTokens) {
         lines.push(`Each simulated compaction also pays for ~${Math.round(r.rereadTokens / 100) / 10}k tokens of files read again afterwards`);
         lines.push("(measured on your compactions: context-doctor compactions).");

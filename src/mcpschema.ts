@@ -100,13 +100,14 @@ export function claudeMcpConfigs(cwd = process.cwd(), home = homedir()): McpServ
  * of them in one 30-day count). Rows without a timestamp count with their
  * file.
  */
-export function mcpUsage(days = 30, paths?: string[]): McpUsage {
+export function mcpUsage(days = 30, paths?: string[], onProgress?: (done: number, total: number) => void): McpUsage {
   const since = Date.now() - days * 86_400_000;
   const files = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
   const calls = new Map<string, number>();
   const counted = new Set<string>();
   let toolSearchSessions = 0;
-  for (const path of files) {
+  for (const [index, path] of files.entries()) {
+    onProgress?.(index, files.length);
     let searched = false;
     const scan = (file: string): void => forEachLine(file, (line) => {
       if (!line.includes('"tool_use"') || (!line.includes('"name":"mcp__') && !line.includes('"name":"ToolSearch"'))) return;

@@ -42,7 +42,10 @@ export interface OverheadFinding {
 
 export interface Baseline {
   agent: Agent;
+  /** Sessions with a measurable first request, of any length (not only the 10+ request ones savings replays). */
   sessions: number;
+  /** This agent's transcripts written in the period. */
+  transcripts: number;
   /** Median tokens of the first request, minus the first user message. */
   median: number;
   p90: number;
@@ -341,6 +344,7 @@ function aggregate(agent: Agent, sessions: SessionUsage[], since: number, days: 
   return {
     agent,
     sessions: firsts.length,
+    transcripts: sessions.length,
     median: firsts[Math.floor(firsts.length / 2)],
     p90: firsts[Math.min(firsts.length - 1, Math.floor(firsts.length * 0.9))],
     requests,
@@ -357,12 +361,13 @@ function aggregate(agent: Agent, sessions: SessionUsage[], since: number, days: 
  * request and cold-start counts that turn tokens into a monthly bill.
  * Claude Code, Codex and Gemini CLI sessions, newest `days` only.
  */
-export function measureBaselines(days = 30, paths?: string[]): Baseline[] {
+export function measureBaselines(days = 30, paths?: string[], onProgress?: (done: number, total: number) => void): Baseline[] {
   const since = Date.now() - days * 86_400_000;
   const files = paths ?? listSessions(10_000).filter((s) => s.modifiedAt.getTime() >= since).map((s) => s.path);
   const byAgent = new Map<Agent, SessionUsage[]>();
   const runRows = new Set<string>();
-  for (const path of files) {
+  for (const [index, path] of files.entries()) {
+    onProgress?.(index, files.length);
     let u: SessionUsage;
     try {
       u = usageOf(path, runRows);
@@ -447,15 +452,18 @@ export function overheadFindings(files: MemoryFile[], baselines?: Baseline | Bas
   return out;
 }
 
-export function overheadReport(opts: { cwd?: string; home?: string; days?: number; paths?: string[] } = {}): OverheadReport {
+export function overheadReport(
+  opts: { cwd?: string; home?: string; days?: number; paths?: string[]; onProgress?: (done: number, total: number, stage: "sessions" | "mcp") => void } = {}
+): OverheadReport {
   const cwd = opts.cwd ?? process.cwd();
   const home = opts.home ?? homedir();
   const files = findMemoryFiles(cwd, home);
-  const baselines = measureBaselines(opts.days ?? 30, opts.paths);
+  const tick = (stage: "sessions" | "mcp") => (opts.onProgress ? (done: number, total: number) => opts.onProgress!(done, total, stage) : undefined);
+  const baselines = measureBaselines(opts.days ?? 30, opts.paths, tick("sessions"));
   const baseline = baselines.find((b) => b.agent === "Claude Code");
   // MCP usage comes from Claude Code transcripts only (the tool-name scheme is theirs).
   const claudePaths = opts.paths?.filter((p) => !isGeminiChat(p) && !/[\\/]\.codex[\\/]/.test(p));
-  const mcp: McpSection = { configs: claudeMcpConfigs(cwd, home), usage: mcpUsage(opts.days ?? 30, claudePaths) };
+  const mcp: McpSection = { configs: claudeMcpConfigs(cwd, home), usage: mcpUsage(opts.days ?? 30, claudePaths, tick("mcp")) };
   return { cwd, baseline, baselines, files, findings: overheadFindings(files, baselines), mcp };
 }
 
@@ -492,7 +500,7 @@ export function renderOverhead(r: OverheadReport, home = homedir()): string {
   const claudeTokens = r.files.filter((f) => f.agent === "Claude Code").reduce((s, f) => s + f.tokens, 0);
   if (b) {
     out.push(
-      `Claude Code, last ${b.days} days: ${b.sessions} sessions start at a median ~${formatTokens(b.median)} tokens (p90 ~${formatTokens(b.p90)}) before the first message.`,
+      `Claude Code, last ${b.days} days: ${sessionCount(b)} start at a median ~${formatTokens(b.median)} tokens (p90 ~${formatTokens(b.p90)}) before the first message.`,
       `Memory files loaded here are ~${formatTokens(claudeTokens)} of that; the rest is Claude Code's system prompt, tools, skills and MCP schemas.`
     );
     if (b.usdPerKPerMonth !== undefined) {
@@ -508,7 +516,7 @@ export function renderOverhead(r: OverheadReport, home = homedir()): string {
     const tokens = r.files.filter((f) => f.agent === o.agent).reduce((s, f) => s + f.tokens, 0);
     out.push(
       "",
-      `${o.agent}, last ${o.days} days: ${o.sessions} sessions start at a median ~${formatTokens(o.median)} tokens (p90 ~${formatTokens(o.p90)}); ${tokens ? `memory files loaded here ~${formatTokens(tokens)} of it` : "no memory files of its own here"}.` +
+      `${o.agent}, last ${o.days} days: ${sessionCount(o)} start at a median ~${formatTokens(o.median)} tokens (p90 ~${formatTokens(o.p90)}); ${tokens ? `memory files loaded here ~${formatTokens(tokens)} of it` : "no memory files of its own here"}.` +
         (o.usdPerKPerMonth !== undefined
           ? ` Each 1k tokens ~${formatUsd(o.usdPerKPerMonth)} a month (${o.requests.toLocaleString("en-US")} requests, ${o.coldStarts.toLocaleString("en-US")} cold starts, ${o.model} list prices).`
           : "")
@@ -526,6 +534,19 @@ export function renderOverhead(r: OverheadReport, home = homedir()): string {
   if (r.findings.length === 0) out.push("  Nothing to trim. The memory files are lean.");
   for (const f of r.findings) out.push(`${f.severity === "warn" ? "▲" : "ℹ"} ${f.message.replace(home, "~")}`, `   → ${f.suggestion}`);
   return out.join("\n");
+}
+
+/**
+ * Which sessions the overhead is measured on, said precisely: every session
+ * whose first request could be measured, whatever its length. `savings` and
+ * `compact-window` replay only sessions with 10+ requests, so their counts
+ * are smaller; the transcript total is the same in all three.
+ */
+function sessionCount(b: Baseline): string {
+  const total = b.transcripts ?? b.sessions;
+  return total > b.sessions
+    ? `${b.sessions} of ${total} sessions (any length; the rest had no first request to measure)`
+    : `${b.sessions} session${b.sessions === 1 ? "" : "s"} (any length)`;
 }
 
 function renderMcp(r: OverheadReport): string[] {

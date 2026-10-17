@@ -152,12 +152,13 @@ function scanParent(path, ids) {
     });
     return view;
 }
-export function subagentPayback(days = 30, paths) {
+export function subagentPayback(days = 30, paths, onProgress) {
     const since = Date.now() - days * 86_400_000;
     const sessions = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
     const out = [];
     let withSubagents = 0;
-    for (const parent of sessions) {
+    for (const [index, parent] of sessions.entries()) {
+        onProgress?.(index, sessions.length);
         const dir = join(parent.replace(/\.jsonl$/, ""), "subagents");
         if (!existsSync(dir))
             continue;
