@@ -20,16 +20,56 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 | Your own API apps (Anthropic, OpenAI, Gemini) | autopilot or the optimizing proxy; `withContextDoctor(client)` without a proxy (Anthropic, OpenAI and Google Gen AI SDKs) | library: profile, optimize, pack | — |
 | CI | `analyze --fail-over-budget`; the GitHub Action (`uses: KushalP1/context-doctor@<tag>`) comments memory-file growth on PRs and gates on a budget | `ci` locally | Not listed in the GitHub Marketplace: it lists only repositories with no workflow files, and the owner chose to keep context-doctor one repository (no separate Marketplace copy) |
 
-## Verified 2026-10-13
+## Verified 2026-10-17
 
-- `npm test`: 389 of 389 pass locally (CI runs the suite on macOS, Linux and Windows, Node 20/22/24).
+- `npm test`: 392 of 392 pass locally (CI runs the suite on macOS, Linux and Windows, Node 20/22/24).
 - `scripts/verify-local.sh` after the audit: build, tests, MCP smoke over stdio and streamable HTTP, OpenAI and Gemini proxy smokes, the published package, Python 3.9/3.11/3.14 with parity fixtures current, every CLI command on the author's real history (no crash, no NaN), install/doctor/uninstall round trip in a throwaway HOME with nothing of ours left, and the GitHub Action's steps; the real ledger was left untouched.
 
-## Next: code can finish these, in order of expected saving
+## Next: the cross-platform plan (2026-10-17)
+
+From an audit of the first-run experience, the docs against the code, and each platform's current documentation (sources in the items). Ranked by tokens saved for many users x feasibility; every item ships with a measurement, and anything that does not pay is closed by measurement.
+
+### Usability first (every platform)
 
 | # | Item | Why | How we will know it works |
 |---|---|---|---|
-| — | Nothing left that code alone can finish; the [research items](#later--research) below are next, and the [owner's steps](#waiting-on-the-owners-accounts) further down unlock PyPI, the editor extension's marketplaces, a signed Desktop bundle and the Glama listing | | |
+| U1 | **One first screen** | A bare `npx context-doctor` with no history printed 139 lines of help; the two first commands need a JSON file a newcomer does not have. Show "Start here": plugin, `install`, `savings`, `doctor` | A new user reaches `savings` or `install` without reading the help |
+| U2 | **Plugin and install never both** | With the plugin enabled, `install` added a second MCP server and skill: every session carried the instructions and tools twice | `install` skips Claude Code when the plugin is on; `doctor` warns on duplicates |
+| U3 | **Fast `npx` start** | A cold `npx` took 9.4 s (187 packages, mostly the MCP SDK) | Bundled entry points, no runtime dependencies: cold start ~1 s |
+| U4 | **Strict, helpful CLI** | Unknown flags were ignored, typos ran the default, bad JSON reported "in good shape", `doctor` exited 0 with failures | Errors name the flag with a suggestion; per-command `--help`; non-zero exits on failure |
+| U5 | **One set of numbers** | `savings`, `compact-window` and `overhead` counted sessions and the baseline differently (37 vs 80 vs 85 sessions; $3,458 vs $3,173) | The same window gives the same session count and baseline everywhere |
+| U6 | **The right session** | `session` and the checkup profiled the newest transcript on the machine, not the current one | `$CLAUDE_CODE_SESSION_ID`, then the cwd's project, then newest |
+
+### Claude Code (terminal, IDE, desktop app)
+
+| # | Item | Why | How we will know it works |
+|---|---|---|---|
+| C1 | ✅ **Autopilot keeps MCP tool search on** (shipped on main, 3720af6) | Claude Code turns tool search off behind a non-Anthropic `ANTHROPIC_BASE_URL`, so autopilot loaded every MCP tool definition on every request ([docs](https://code.claude.com/docs/en/mcp); confirmed in the 2.1.295 binary) | `ENABLE_TOOL_SEARCH=auto` set by `autopilot on` and by the self-heal for existing installs |
+| C2 | **Step aside for native idle compaction** | Claude Code ≥2.1.290 can compact an idle session itself (`idleCompaction`, account-gated; none on the author's 36 compactions). The cold-resume offer should stay silent after an idle compaction and keep covering what it skips (5-minute caches, sessions under its threshold); SessionStart's `prompt_cache_likely_expired` and `estimated_cache_write_usd` give the numbers directly | No offer after an idle compaction; `compactions` and `compact-window` replay it |
+| C3 | **Server-side clearing for API traffic** | Anthropic's context editing (`clear_tool_uses_20250919`, `exclude_tools`, `clear_at_least`) clears on the server, which keeps thinking signatures valid where rewriting messages cannot ([docs](https://platform.claude.com/docs/en/build-with-claude/context-editing)). Use it in the proxy and `withContextDoctor` for 5.x thinking traffic; step aside when a request already carries `context_management` | Replay: no session more expensive; live test that the edit is re-sent every request so the cache holds |
+| C4 | **`cache-plan` for automatic caching** | Top-level `cache_control` (automatic caching) and the lower minimum on 5.x models change where breakpoints go | Plans match the API's current rules; tested against fixtures |
+
+### ChatGPT, Codex and the OpenAI API
+
+| # | Item | Why | How we will know it works |
+|---|---|---|---|
+| O1 | **Verify and fix Codex autopilot** | Current Codex reads `openai_base_url` from config.toml; `OPENAI_BASE_URL` may no longer route it ([config](https://learn.chatgpt.com/docs/config-file/config-reference)). Sign-in traffic is a different endpoint and stays untouched | A live Codex session on an API key shows requests in `/stats` |
+| O2 | **ChatGPT connector instructions in the first 512 characters** | ChatGPT uses an MCP server's instructions but only the first 512 characters are guaranteed self-contained ([docs](https://developers.openai.com/plugins/build/mcp-server)); the 2026-07-28 MCP spec moves instructions to `server/discover` | The HTTP server's instructions lead with the rules that matter in chat; spec-compatible discover |
+| O3 | **`prompt_cache_key` and compaction in the OpenAI proxy** | A stable `prompt_cache_key` per conversation keeps requests on one cache (models before 5.6); server compaction (`context_management`) only as an opt-in, since it is lossy | Replay of OpenAI traffic: higher cached share, no request more expensive |
+
+### Cursor, Copilot, Devin/Windsurf, Gemini/Antigravity
+
+| # | Item | Why | How we will know it works |
+|---|---|---|---|
+| X1 | **Cursor: check the guidance arrives** | Cursor staff confirmed `postToolUse` `additional_context` was not injected (forum, March 2026; still reported in July). Add fallbacks on `postToolUseFailure` and `sessionStart`, cap oversized MCP results with `updated_mcp_tool_output`, and a live check in `doctor` | A Cursor agent quotes the guidance in a heavy chat |
+| X2 | **GitHub Copilot target** | VS Code agent hooks add context on SessionStart and Pre/PostToolUse (preview, 1.109+); Copilot CLI's postToolUse `modifiedResult` can replace a result ([docs](https://code.visualstudio.com/docs/copilot/customization/hooks), [CLI](https://docs.github.com/en/copilot/reference/hooks-configuration)) | `install` wires Copilot; `doctor` checks it |
+| X3 | **Devin Desktop (formerly Windsurf) and Antigravity CLI** | Devin Local hooks add context and read `~/.claude` hooks; Gemini CLI consumer accounts moved to Antigravity CLI on 2026-06-18 | Detected and wired by `install` where hooks are documented |
+
+### Measure "no quality loss" directly
+
+| # | Item | Why | How we will know it works |
+|---|---|---|---|
+| Q1 | **A/B task suite** | Quality is measured indirectly today (re-reads, tool errors, corrections). A small suite of real tasks run with and without each lever, scored on tests passing, turns "no quality loss" into a number. Needs an API key with credit (owner) | Pass rates with vs without, per lever, published with the savings |
 
 ## Later / research
 
