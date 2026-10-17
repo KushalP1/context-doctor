@@ -549,6 +549,16 @@ function sessionCount(b: Baseline): string {
     : `${b.sessions} session${b.sessions === 1 ? "" : "s"} (any length)`;
 }
 
+/**
+ * A server name as a person reads it. Connectors added on claude.ai reach
+ * Claude Code under their UUID (mcp__1a59c906-04da-521d-…__tool), which
+ * named nothing anyone recognised: "claude.ai connector 1a59c906" says
+ * where to look. --json keeps the full name.
+ */
+export function mcpDisplayName(server: string): string {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(server) ? `claude.ai connector ${server.slice(0, 8)}` : server;
+}
+
 function renderMcp(r: OverheadReport): string[] {
   const { configs, usage, sizes } = r.mcp;
   if (configs.length === 0 && usage.calls.size === 0) return [];
@@ -573,7 +583,7 @@ function renderMcp(r: OverheadReport): string[] {
   const app = [...usage.calls.entries()].filter(([n]) => !configured.has(n)).sort((a, b) => b[1] - a[1]);
   if (app.length) {
     out.push(`  Provided by the app or connectors (not in your config; toggle them in the app):`);
-    for (const [n, calls] of app.slice(0, 10)) out.push(`  ${n.padEnd(38)} ${String(calls).padStart(6)} calls`);
+    for (const [n, calls] of app.slice(0, 10)) out.push(`  ${mcpDisplayName(n).padEnd(38)} ${String(calls).padStart(6)} calls`);
     if (app.length > 10) out.push(`  … ${app.length - 10} more`);
   }
   if (!sizes && configs.length) out.push(`  \`context-doctor overhead --mcp\` launches the ${configs.length} configured server(s) once to size their definitions.`);

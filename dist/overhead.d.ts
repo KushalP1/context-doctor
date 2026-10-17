@@ -85,3 +85,10 @@ export declare function measureMcpSizes(r: OverheadReport): Promise<void>;
 /** Configured servers nobody called: their definitions ride on every request for nothing. */
 export declare function mcpFindings(m: McpSection, baseline?: Baseline): OverheadFinding[];
 export declare function renderOverhead(r: OverheadReport, home?: string): string;
+/**
+ * A server name as a person reads it. Connectors added on claude.ai reach
+ * Claude Code under their UUID (mcp__1a59c906-04da-521d-…__tool), which
+ * named nothing anyone recognised: "claude.ai connector 1a59c906" says
+ * where to look. --json keeps the full name.
+ */
+export declare function mcpDisplayName(server: string): string;

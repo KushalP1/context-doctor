@@ -504,6 +504,15 @@ function sessionCount(b) {
         ? `${b.sessions} of ${total} sessions (any length; the rest had no first request to measure)`
         : `${b.sessions} session${b.sessions === 1 ? "" : "s"} (any length)`;
 }
+/**
+ * A server name as a person reads it. Connectors added on claude.ai reach
+ * Claude Code under their UUID (mcp__1a59c906-04da-521d-…__tool), which
+ * named nothing anyone recognised: "claude.ai connector 1a59c906" says
+ * where to look. --json keeps the full name.
+ */
+export function mcpDisplayName(server) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(server) ? `claude.ai connector ${server.slice(0, 8)}` : server;
+}
 function renderMcp(r) {
     const { configs, usage, sizes } = r.mcp;
     if (configs.length === 0 && usage.calls.size === 0)
@@ -528,7 +537,7 @@ function renderMcp(r) {
     if (app.length) {
         out.push(`  Provided by the app or connectors (not in your config; toggle them in the app):`);
         for (const [n, calls] of app.slice(0, 10))
-            out.push(`  ${n.padEnd(38)} ${String(calls).padStart(6)} calls`);
+            out.push(`  ${mcpDisplayName(n).padEnd(38)} ${String(calls).padStart(6)} calls`);
         if (app.length > 10)
             out.push(`  … ${app.length - 10} more`);
     }
