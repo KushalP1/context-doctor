@@ -46,6 +46,16 @@ export declare function windowsTaskCommand(args: string[]): string;
  * task name), not per HOME.
  */
 export type ServiceExec = (cmd: string, args: string[]) => boolean;
+/**
+ * Claude Code turns MCP tool search off when ANTHROPIC_BASE_URL is not an
+ * Anthropic host ("Set ENABLE_TOOL_SEARCH=true (or auto / auto:N) if your
+ * proxy forwards tool_reference blocks", 2.1.295), so routing it through
+ * autopilot loaded every MCP tool definition into every request. The proxy
+ * forwards those blocks and the anthropic-beta header untouched, so tool
+ * search stays on ("auto", Claude Code's own default) unless the user set it.
+ * Returns true when we set it.
+ */
+export declare function keepToolSearch(env: Record<string, string>): boolean;
 /** Version of the package a CLI path belongs to (dist/cli.js -> ../package.json). */
 export declare function installedVersion(cli: string): string | undefined;
 /** Restart the installed background service onto the current build (launchd, systemd). */

@@ -53,6 +53,8 @@ interface AutopilotConfig {
   port: number;
   /** ANTHROPIC_BASE_URL in settings.json before we set it, restored by `off`. */
   previousBaseUrl?: string | null;
+  /** We set ENABLE_TOOL_SEARCH (it was unset), so `off` removes it. */
+  setToolSearch?: boolean;
   node: string;
   cli: string;
 }
@@ -220,6 +222,36 @@ function startService(home: string, exec: ServiceExec): boolean {
   }
   if (os === "linux" && existsSync(sp.unit)) return exec("systemctl", ["--user", "start", "context-doctor-proxy.service"]);
   return false;
+}
+
+/**
+ * Claude Code turns MCP tool search off when ANTHROPIC_BASE_URL is not an
+ * Anthropic host ("Set ENABLE_TOOL_SEARCH=true (or auto / auto:N) if your
+ * proxy forwards tool_reference blocks", 2.1.295), so routing it through
+ * autopilot loaded every MCP tool definition into every request. The proxy
+ * forwards those blocks and the anthropic-beta header untouched, so tool
+ * search stays on ("auto", Claude Code's own default) unless the user set it.
+ * Returns true when we set it.
+ */
+export function keepToolSearch(env: Record<string, string>): boolean {
+  if (env.ENABLE_TOOL_SEARCH !== undefined) return false;
+  env.ENABLE_TOOL_SEARCH = "auto";
+  return true;
+}
+
+/** Installs from before 0.33 routed Claude Code without it: add it once, from the every-prompt self-heal. */
+function migrateToolSearch(paths: AutopilotPaths, cfg: AutopilotConfig): void {
+  if (cfg.setToolSearch !== undefined) return;
+  try {
+    const settings = readJson(paths.settings);
+    const env = settings.env as Record<string, string> | undefined;
+    if (!env || env.ANTHROPIC_BASE_URL !== proxyUrl(cfg.port)) return;
+    const set = keepToolSearch(env);
+    if (set) writeJsonWithBackup(paths.settings, settings);
+    writeFileSync(paths.config, JSON.stringify({ ...cfg, setToolSearch: set }, null, 2));
+  } catch {
+    /* the self-heal must never disturb a prompt */
+  }
 }
 
 /** Version of the package a CLI path belongs to (dist/cli.js -> ../package.json). */
@@ -417,11 +449,13 @@ export async function autopilotOn(port = DEFAULT_AUTOPILOT_PORT, paths = autopil
     lines.push(`! settings.json already routed Claude Code to ${previousBaseUrl}; autopilot forwards to api.anthropic.com instead. \`autopilot off\` restores it.`);
   }
   env.ANTHROPIC_BASE_URL = proxyUrl(port);
+  const setToolSearch = keepToolSearch(env);
   writeJsonWithBackup(paths.settings, settings);
-  writeFileSync(paths.config, JSON.stringify({ port, previousBaseUrl, node: process.execPath, cli } satisfies AutopilotConfig, null, 2));
+  writeFileSync(paths.config, JSON.stringify({ port, previousBaseUrl, setToolSearch, node: process.execPath, cli } satisfies AutopilotConfig, null, 2));
   if (existsSync(paths.pauseFile)) rmSync(paths.pauseFile);
   lines.push(`✓ Claude Code routed through it (env.ANTHROPIC_BASE_URL in ${paths.settings})`);
-  lines.push("  Applies to Claude Code sessions started from now on (CLI, IDE, and the desktop app's Code tab).");
+  if (setToolSearch) lines.push("✓ MCP tool search kept on (env.ENABLE_TOOL_SEARCH=auto): Claude Code turns it off behind a non-Anthropic address, which would load every MCP tool definition on every request");
+  lines.push("  Applies to Claude Code sessions started from now on in a terminal or IDE (the desktop app's Code tab sets its own address).");
   lines.push("  Sessions already open keep their old route until restarted.");
   lines.push(...reachNote());
   lines.push(`  GPT apps on your own OpenAI key get the same: export OPENAI_BASE_URL=${proxyUrl(port)}/v1`);
@@ -441,6 +475,7 @@ export async function autopilotOff(paths = autopilotPaths(), exec: ServiceExec =
     const restore = cfg?.previousBaseUrl && !isOurProxyUrl(cfg.previousBaseUrl, cfg.port, paths) ? cfg.previousBaseUrl : undefined;
     if (restore) env.ANTHROPIC_BASE_URL = restore;
     else delete env.ANTHROPIC_BASE_URL;
+    if (cfg?.setToolSearch && env.ENABLE_TOOL_SEARCH === "auto") delete env.ENABLE_TOOL_SEARCH;
     if (Object.keys(env).length === 0) delete settings.env;
     writeJsonWithBackup(paths.settings, settings);
     lines.push("✓ Claude Code no longer routed through the proxy (new sessions)");
@@ -504,6 +539,7 @@ export async function autopilotStatus(paths = autopilotPaths()): Promise<string[
 export async function ensureProxyUp(paths = autopilotPaths(), exec: ServiceExec = tryRun): Promise<void> {
   const cfg = readConfig(paths);
   if (!cfg) return;
+  migrateToolSearch(paths, cfg);
   const h = await health(cfg.port, 300);
   if (h.ok) {
     // A service keeps running the code it started with: after an update it

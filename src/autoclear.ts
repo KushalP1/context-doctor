@@ -212,7 +212,10 @@ export function requestTtlMs(body: Record<string, unknown>): number {
   if (Array.isArray(body.contents)) return HOUR;
   const openai = Array.isArray(body.input) || (Array.isArray(body.messages) && isOpenAIChat(body.messages as Array<Record<string, unknown>>));
   if (openai) return body.prompt_cache_retention === "24h" ? 24 * HOUR : HOUR;
-  const json = JSON.stringify(body.system ?? "") + JSON.stringify(body.tools ?? "") + JSON.stringify((body.messages as unknown[] | undefined)?.slice(-3) ?? "");
+  // Automatic caching puts cache_control at the top level of the request; a
+  // 1-hour cache marked there was read as the 5-minute default, so autopilot
+  // could clear into a cache that was still warm.
+  const json = JSON.stringify(body.cache_control ?? "") + JSON.stringify(body.system ?? "") + JSON.stringify(body.tools ?? "") + JSON.stringify((body.messages as unknown[] | undefined)?.slice(-3) ?? "");
   return /"ttl"\s*:\s*"1h"/.test(json) ? HOUR : 300_000;
 }
 

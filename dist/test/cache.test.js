@@ -62,3 +62,9 @@ test("returns null when a transcript carries no usage", () => {
     assert.equal(analyzeCacheUsage(file), null);
     assert.equal(renderCacheReport(null), null);
 });
+test("a 1-hour cache marked at the top level of the request is a 1-hour cache", async () => {
+    const { requestTtlMs } = await import("../autoclear.js");
+    const body = { model: "claude-sonnet-5", cache_control: { type: "ephemeral", ttl: "1h" }, messages: [{ role: "user", content: "hi" }] };
+    assert.equal(requestTtlMs(body), 3_600_000);
+    assert.equal(requestTtlMs({ ...body, cache_control: { type: "ephemeral" } }), 300_000);
+});
