@@ -7,7 +7,7 @@
  * `context-doctor uninstall` reverses it.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, copyFileSync, rmSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { delimiter, dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -284,8 +284,8 @@ function uninstallStatusLine(): void {
   const current = settings.statusLine?.command as string | undefined;
   if (current && isOurStatusLine(current)) {
     delete settings.statusLine;
-    writeJsonWithBackup(settingsPath, settings);
-    console.log("✓ Claude Code status line removed");
+    writeUninstalled(settingsPath, settings);
+    done("✓ Claude Code status line removed");
   }
 }
 
@@ -405,8 +405,8 @@ function uninstallCursorHook(): void {
   if (filtered.length === entries.length) return;
   if (filtered.length === 0) delete config.hooks.postToolUse;
   else config.hooks.postToolUse = filtered;
-  writeJsonWithBackup(path, config);
-  console.log("✓ Cursor after-tool-call hook removed");
+  writeUninstalled(path, config, ["version"]);
+  done("✓ Cursor after-tool-call hook removed");
 }
 
 function uninstallHookFrom(settingsPath: string, label: string, event = "UserPromptSubmit"): void {
@@ -418,8 +418,8 @@ function uninstallHookFrom(settingsPath: string, label: string, event = "UserPro
   if (filtered.length !== entries.length) {
     settings.hooks[event] = filtered;
     if (filtered.length === 0) delete settings.hooks[event];
-    writeJsonWithBackup(settingsPath, settings);
-    console.log(`✓ ${label} removed`);
+    writeUninstalled(settingsPath, settings);
+    done(`✓ ${label} removed`);
   }
 }
 
@@ -616,19 +616,28 @@ function uninstallCodex(): void {
       const current = readFileSync(configPath, "utf8");
       const next = removeCodexMcpTable(current);
       if (next !== current) {
-        backupOnce(configPath);
-        writeFileSync(configPath, next);
-        console.log("✓ Codex: MCP server removed");
+        // A config.toml install created and that now holds nothing goes too.
+        const backup = configPath + BACKUP_SUFFIX;
+        let created = !existsSync(backup);
+        if (!created) {
+          try {
+            const before = readFileSync(backup, "utf8");
+            created = before !== removeCodexMcpTable(before) && removeCodexMcpTable(before).trim() === "";
+          } catch { /* unreadable backup: the file was the user's */ }
+        }
+        if (created && next.trim() === "") {
+          rmSync(configPath);
+          deletedStubs.push(configPath);
+        } else {
+          writeFileSync(configPath, next);
+        }
+        done("✓ Codex: MCP server removed");
       }
     }
   } catch (e) {
     console.error(`✗ Codex MCP: ${(e as Error).message}`);
   }
-  const skillDir = join(dir, "skills", "context-doctor");
-  if (existsSync(skillDir)) {
-    rmSync(skillDir, { recursive: true });
-    console.log("✓ Codex skill removed");
-  }
+  removeSkill(join(dir, "skills", "context-doctor"), "Codex skill");
 }
 
 /** Outcome of an install run, so the CLI can set a truthful exit code. */
@@ -803,6 +812,107 @@ async function uninstallAutopilot(): Promise<void> {
   }
 }
 
+// -- Uninstall: take out exactly what install put in.
+
+const BACKUP_SUFFIX = ".context-doctor.backup";
+
+/** What this uninstall run changed, and the stub files it deleted. */
+let changes = 0;
+let deletedStubs: string[] = [];
+
+/** Print one thing uninstall did, and count it. */
+function done(line: string): void {
+  changes++;
+  console.log(line);
+}
+
+/** A JSON config with our entries taken out, the way uninstall takes them out. */
+function withoutOurs(config: Record<string, any>): Record<string, any> {
+  const c = structuredClone(config);
+  if (c.mcpServers && typeof c.mcpServers === "object") delete c.mcpServers["context-doctor"];
+  if (c.hooks && typeof c.hooks === "object") {
+    for (const [event, list] of Object.entries(c.hooks as Record<string, unknown>)) {
+      if (!Array.isArray(list)) continue;
+      const kept = list.filter((e) => !isOurHookEntry(e) && !isOurCursorEntry(e));
+      if (kept.length > 0) c.hooks[event] = kept;
+      else delete c.hooks[event];
+    }
+  }
+  if (typeof c.statusLine?.command === "string" && isOurStatusLine(c.statusLine.command)) delete c.statusLine;
+  return c;
+}
+
+/**
+ * The file as it was before install, as far as its backup can tell:
+ * `created` when install made the file (no backup was needed), or when the
+ * backup is only an earlier install's own write (install run twice);
+ * `before` is the backup without our entries.
+ */
+function installOrigin(path: string, extraKeys: string[]): { created: boolean; before: Record<string, any> } {
+  const backup = path + BACKUP_SUFFIX;
+  if (!existsSync(backup)) return { created: true, before: {} };
+  try {
+    const raw = JSON.parse(readFileSync(backup, "utf8"));
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { created: false, before: {} };
+    const before = withoutOurs(raw);
+    const hadOurs = JSON.stringify(before) !== JSON.stringify(raw);
+    return { created: hadOurs && isEmptyStub(before, extraKeys), before };
+  } catch {
+    return { created: false, before: {} }; // unreadable backup: the file was the user's
+  }
+}
+
+/**
+ * Write a config with our entries removed. Containers install added
+ * (`mcpServers`, `hooks`, Cursor's `version`) go once empty, unless the file
+ * had them before install; a file install created that now configures
+ * nothing is deleted rather than left as `{"mcpServers":{}}`. No backup is
+ * written: the one install made of the user's original is kept as it is.
+ */
+function writeUninstalled(path: string, config: Record<string, any>, extraKeys: string[] = []): void {
+  const { created, before } = installOrigin(path, extraKeys);
+  for (const key of ["mcpServers", "hooks"]) {
+    const v = config[key];
+    if (v && typeof v === "object" && Object.keys(v).length === 0 && !(key in before)) delete config[key];
+  }
+  if (!("hooks" in config)) for (const key of extraKeys) if (!(key in before)) delete config[key];
+  if (created && isEmptyStub(config, extraKeys)) {
+    rmSync(path);
+    deletedStubs.push(path);
+    return;
+  }
+  writeFileSync(path, JSON.stringify(config, null, 2));
+}
+
+/** Remove the SKILL.md install copied, and its folder once nothing else is in it. */
+function removeSkill(dir: string, label: string): void {
+  const file = join(dir, "SKILL.md");
+  if (!existsSync(file)) return;
+  rmSync(file);
+  try {
+    if (readdirSync(dir).length === 0) rmSync(dir, { recursive: true });
+  } catch { /* already gone */ }
+  done(`✓ ${label} removed`);
+}
+
+/** Every config file install or autopilot may write. */
+function configPaths(): string[] {
+  return [
+    ...targets().map((t) => t.configPath),
+    join(homedir(), ".claude", "settings.json"),
+    cursorHooksPath(),
+    join(codexDir(), "config.toml"),
+    join(codexDir(), "hooks.json"),
+    geminiSettingsPath(),
+  ].filter((p, i, all) => all.indexOf(p) === i);
+}
+
+/** "~/..." for a path under the home directory. */
+function tilde(p: string): string {
+  const home = homedir();
+  return p.startsWith(home) ? "~" + p.slice(home.length) : p;
+}
+
 /** Everything of ours under ~/.claude besides configs: state, ledger, autopilot bookkeeping. */
 const OUR_CLAUDE_FILES = [
   ".context-doctor-hook-state.json",
@@ -816,26 +926,30 @@ const OUR_CLAUDE_FILES = [
 ];
 
 export async function runUninstall(): Promise<void> {
+  changes = 0;
+  deletedStubs = [];
+  // Uninstall writes no backups: each .context-doctor.backup already holds
+  // the user's file from before install, and overwriting it with the
+  // installed state (as every write here used to) lost that original.
+  for (const p of configPaths()) backedUp.add(p);
   // First: if anything below fails, Claude Code must still reach the API.
+  const hadAutopilot = existsSync(join(homedir(), ".claude", ".context-doctor-autopilot.json"));
   await uninstallAutopilot();
+  if (hadAutopilot) changes++;
   for (const target of targets().filter((t) => t.detect())) {
     try {
       if (!existsSync(target.configPath)) continue;
       const config = readJson(target.configPath);
       if (config.mcpServers?.["context-doctor"]) {
         delete config.mcpServers["context-doctor"];
-        writeJsonWithBackup(target.configPath, config);
-        console.log(`✓ ${target.name}: MCP server removed`);
+        writeUninstalled(target.configPath, config);
+        done(`✓ ${target.name}: MCP server removed`);
       }
     } catch (e) {
       console.error(`✗ ${target.name}: ${(e as Error).message}`);
     }
   }
-  const skillDir = join(homedir(), ".claude", "skills", "context-doctor");
-  if (existsSync(skillDir)) {
-    rmSync(skillDir, { recursive: true });
-    console.log("✓ Agent Skill removed");
-  }
+  removeSkill(join(homedir(), ".claude", "skills", "context-doctor"), "Agent Skill");
   uninstallHook();
   uninstallStatusLine();
   uninstallCodex();
@@ -845,8 +959,18 @@ export async function runUninstall(): Promise<void> {
     const p = join(homedir(), ".claude", file);
     if (existsSync(p)) {
       rmSync(p, { recursive: true, force: true });
-      console.log(`✓ Removed ${file}`);
+      done(`✓ Removed ${file}`);
     }
   }
-  console.log("Done.");
+  if (deletedStubs.length > 0) {
+    console.log(`✓ Deleted ${deletedStubs.length === 1 ? "a file" : "files"} install had created, now empty: ${deletedStubs.map(tilde).join(", ")}`);
+  }
+  const backups = configPaths().map((p) => p + BACKUP_SUFFIX).filter((b) => existsSync(b));
+  if (changes === 0) console.log("Nothing of context-doctor's was installed.");
+  else console.log("Done.");
+  if (backups.length > 0) {
+    console.log("Backups install made of your configs, from before it changed them, are kept:");
+    for (const b of backups) console.log(`  ${tilde(b)}`);
+    console.log("Delete them once you no longer need them.");
+  }
 }

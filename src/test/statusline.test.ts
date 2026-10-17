@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -81,7 +81,8 @@ test("install --statusline wires it, never overwrites someone else's, and uninst
   assert.match(await run(home, "install", "--statusline"), /already installed/);
   // Uninstall removes ours.
   await run(home, "uninstall");
-  assert.equal(settingsOf(home).statusLine, undefined);
+  // install created this settings.json; with ours gone it holds nothing and is deleted.
+  assert.equal(existsSync(join(home, ".claude", "settings.json")) ? settingsOf(home).statusLine : undefined, undefined);
 
   // A machine with its own status line: left alone, and said so.
   const theirs = mkdtempSync(join(tmpdir(), "ctxdoc-slforeign-"));
