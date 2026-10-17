@@ -13,7 +13,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ledgerPath } from "./ledger.js";
 import { loadConfig } from "./config.js";
-import { binOnPath, codexMcpEntry, geminiCliPresent, geminiSettingsPath, launcherNamesMissingPackage } from "./install.js";
+import { binOnPath, claudeInstalledCopies, codexMcpEntry, geminiCliPresent, geminiSettingsPath, isOurPluginKey, launcherNamesMissingPackage } from "./install.js";
 import { describeDesktopUsage, desktopUsage } from "./desktopusage.js";
 function claudeDesktopConfigPath() {
     switch (platform()) {
@@ -116,7 +116,7 @@ function pluginEnabled(layers) {
     const state = new Map();
     for (const s of layers) {
         for (const [key, on] of Object.entries((s.enabledPlugins ?? {}))) {
-            if (key.startsWith("context-doctor@"))
+            if (isOurPluginKey(key))
                 state.set(key, on === true);
         }
     }
@@ -217,6 +217,17 @@ export async function runDoctor() {
     }
     else {
         checks.push({ label: "Every-prompt hook", status: "skip", detail: "Claude Code not detected" });
+    }
+    // Plugin AND install: Claude Code then starts our MCP server twice (its
+    // instructions and tools load twice) and runs the hook twice.
+    const copies = plugin ? claudeInstalledCopies() : [];
+    if (copies.length > 0) {
+        checks.push({
+            label: "Plugin + install",
+            status: "warn",
+            detail: `the context-doctor plugin is enabled and \`install\` also wired Claude Code (${copies.join(", ")}), so its instructions and tools load twice. ` +
+                "Keep one: `context-doctor uninstall` removes the installed copy (then `context-doctor install` re-wires other apps and skips Claude Code while the plugin is on), or disable the plugin",
+        });
     }
     // Codex (OpenAI): MCP table in config.toml, hook in hooks.json, skill.
     const codexHome = join(homedir(), ".codex");

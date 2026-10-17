@@ -111,6 +111,48 @@ export function launcherNamesMissingPackage(entry: { command?: unknown; args?: u
   return rest.find((w) => !w.startsWith("-")) === "context-doctor-mcp";
 }
 
+/**
+ * The Claude Code plugin's key in enabledPlugins: "<plugin>@<marketplace>".
+ * Our marketplace (.claude-plugin/marketplace.json) is named context-doctor
+ * and lists one plugin, context-doctor, so the official key is
+ * "context-doctor@context-doctor"; a copy listed in another marketplace keeps
+ * the plugin name, so any "context-doctor@…" key is ours.
+ */
+export const PLUGIN_KEY = "context-doctor@context-doctor";
+
+export function isOurPluginKey(key: string): boolean {
+  return key === PLUGIN_KEY || key.startsWith("context-doctor@");
+}
+
+/**
+ * Is the context-doctor plugin switched on in the user's Claude Code
+ * settings? The plugin brings its own MCP server, skills and hooks, so
+ * `install` adding them as well makes Claude Code load the server's
+ * instructions and tools twice.
+ */
+export function claudePluginEnabled(home = homedir()): boolean {
+  try {
+    const plugins = readJson(join(home, ".claude", "settings.json")).enabledPlugins ?? {};
+    return Object.entries(plugins as Record<string, unknown>).some(([key, on]) => isOurPluginKey(key) && on === true);
+  } catch {
+    return false; // an unreadable settings.json is reported by the hook step
+  }
+}
+
+/** What `install` put into Claude Code that the plugin also provides, by name. */
+export function claudeInstalledCopies(home = homedir()): string[] {
+  const found: string[] = [];
+  try {
+    if (readJson(join(home, ".claude.json")).mcpServers?.["context-doctor"]) found.push("MCP server in ~/.claude.json");
+  } catch { /* unreadable: not ours to judge here */ }
+  try {
+    const hooks = readJson(join(home, ".claude", "settings.json")).hooks ?? {};
+    if (["UserPromptSubmit", "PreCompact"].some((ev) => (hooks[ev] ?? []).some?.(isOurHookEntry))) found.push("hooks in ~/.claude/settings.json");
+  } catch { /* unreadable */ }
+  if (existsSync(join(home, ".claude", "skills", "context-doctor", "SKILL.md"))) found.push("skill in ~/.claude/skills/context-doctor");
+  return found;
+}
+
 export function readJson(path: string): Record<string, any> {
   if (!existsSync(path)) return {};
   try {
@@ -603,7 +645,21 @@ export function runInstall(options: { statusLine?: boolean } = {}): InstallResul
   }
 
   const failures: string[] = [];
+  // The plugin already gives Claude Code the server, skill and hooks; a
+  // second copy of each makes every session load the instructions and the
+  // tools twice. Claude Code is skipped; the other apps are not.
+  const viaPlugin = claudePluginEnabled();
+  if (viaPlugin) {
+    console.log("– Claude Code: skipped the MCP server, skill and hooks. The context-doctor plugin is enabled and");
+    console.log("  provides them already; installing them as well would load its instructions and tools twice.");
+    const copies = claudeInstalledCopies();
+    if (copies.length > 0) {
+      console.log(`  An earlier install is still in place (${copies.join(", ")}): \`context-doctor uninstall\``);
+      console.log("  removes it, then `context-doctor install` wires the other apps again.");
+    }
+  }
   for (const target of found) {
+    if (viaPlugin && target.name === "Claude Code") continue;
     try {
       const config = readJson(target.configPath);
       config.mcpServers = config.mcpServers ?? {};
@@ -618,7 +674,7 @@ export function runInstall(options: { statusLine?: boolean } = {}): InstallResul
   }
 
   try {
-    const skillPath = installSkill();
+    const skillPath = viaPlugin ? null : installSkill();
     if (skillPath) console.log(`✓ Agent Skill installed for Claude Code (${skillPath})`);
   } catch (e) {
     console.error(`✗ Agent Skill: ${(e as Error).message}`);
@@ -626,7 +682,7 @@ export function runInstall(options: { statusLine?: boolean } = {}): InstallResul
   }
 
   try {
-    const hookPath = installHook();
+    const hookPath = viaPlugin ? null : installHook();
     if (hookPath) {
       console.log(`✓ Claude Code every-prompt hook installed (${hookPath}) — heavy sessions get automatic hygiene guidance`);
       // npx resolves the package on every single prompt; a global install makes

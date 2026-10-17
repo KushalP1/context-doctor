@@ -38,6 +38,24 @@ export declare function launcherNamesMissingPackage(entry: {
     command?: unknown;
     args?: unknown;
 } | undefined): boolean;
+/**
+ * The Claude Code plugin's key in enabledPlugins: "<plugin>@<marketplace>".
+ * Our marketplace (.claude-plugin/marketplace.json) is named context-doctor
+ * and lists one plugin, context-doctor, so the official key is
+ * "context-doctor@context-doctor"; a copy listed in another marketplace keeps
+ * the plugin name, so any "context-doctor@…" key is ours.
+ */
+export declare const PLUGIN_KEY = "context-doctor@context-doctor";
+export declare function isOurPluginKey(key: string): boolean;
+/**
+ * Is the context-doctor plugin switched on in the user's Claude Code
+ * settings? The plugin brings its own MCP server, skills and hooks, so
+ * `install` adding them as well makes Claude Code load the server's
+ * instructions and tools twice.
+ */
+export declare function claudePluginEnabled(home?: string): boolean;
+/** What `install` put into Claude Code that the plugin also provides, by name. */
+export declare function claudeInstalledCopies(home?: string): string[];
 export declare function readJson(path: string): Record<string, any>;
 /** Copy `path` to its .context-doctor.backup, once per run. */
 export declare function backupOnce(path: string): void;
