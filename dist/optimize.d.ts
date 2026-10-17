@@ -7,6 +7,8 @@
  * so the output is a drop-in replacement for the input conversation.
  */
 export type StrategyId = "dedupe" | "trim-tool-results" | "trim-tool-calls" | "prune-history" | "strip-base64";
+/** Every strategy id, for validating what a user typed. */
+export declare const STRATEGY_IDS: readonly StrategyId[];
 export interface OptimizeOptions {
     strategies?: StrategyId[];
     /**

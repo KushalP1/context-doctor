@@ -13,7 +13,8 @@ import { join } from "node:path";
 import process from "node:process";
 import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
-import { optimizeConversation, StrategyId } from "./optimize.js";
+import { optimizeConversation, STRATEGY_IDS, StrategyId } from "./optimize.js";
+import { commandHelp, didYouMean } from "./clihelp.js";
 import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
 import { startProxy } from "./proxy.js";
@@ -259,64 +260,141 @@ interface Args {
   maxIncrease?: number;
   requestsPerDay?: number;
   minTokens?: number;
+  /** -h/--help anywhere: the command's own help (or all of it). */
+  help: boolean;
+}
+
+/** Exit 1 with a usage message: wrong arguments are the caller's to fix, not a crash. */
+function usageError(message: string): never {
+  console.error(message);
+  process.exit(1);
+}
+
+/**
+ * Every command main() handles. An unknown one is an error with a
+ * suggestion, never a silent fall-through to the help text.
+ */
+const COMMANDS = [
+  "analyze", "optimize", "proxy", "install", "uninstall", "savings", "compact-window", "autopilot", "mcp",
+  "instructions", "session", "cursor", "statusline", "hook", "report", "doctor", "dashboard", "init",
+  "experiment", "diff", "accuracy", "overhead", "ci", "cache-plan", "compactions", "subagents", "tasks",
+  "reads", "pack", "watch", "help", "version",
+];
+
+type NumOpts = { min?: number; max?: number; integer?: boolean };
+
+/**
+ * One option: a switch, or one that takes a text or numeric value (as the
+ * next argument or as --flag=value). The table is the single list the
+ * parser, the unknown-option check and its suggestions all read.
+ */
+interface FlagSpec {
+  names: string[];
+  value?: "text" | "number";
+  num?: NumOpts;
+  set(a: Args, v?: any): void;
+}
+
+/** --strategy takes one of the optimizer's ids; a typo used to run nothing and report success. */
+function strategyArg(v: string): StrategyId {
+  if ((STRATEGY_IDS as readonly string[]).includes(v)) return v as StrategyId;
+  return usageError(`--strategy "${v}" is not a strategy.${didYouMean(v, STRATEGY_IDS)} Available: ${STRATEGY_IDS.join(", ")}.`);
+}
+
+const FLAGS: FlagSpec[] = [
+  { names: ["--json"], set: (a) => { a.json = true; } },
+  { names: ["--list"], set: (a) => { a.list = true; } },
+  { names: ["--exact"], set: (a) => { a.exact = true; } },
+  { names: ["--redact"], set: (a) => { a.redact = true; } },
+  { names: ["--fail-over-budget"], set: (a) => { a.failOverBudget = true; } },
+  { names: ["--model"], value: "text", set: (a, v) => { a.model = v; } },
+  { names: ["--out"], value: "text", set: (a, v) => { a.out = v; } },
+  { names: ["--strategy"], value: "text", set: (a, v) => { a.strategies.push(strategyArg(v)); } },
+  { names: ["--keep-recent"], value: "number", num: { min: 0, integer: true }, set: (a, v) => { a.keepRecent = v; } },
+  { names: ["--max-tool-tokens"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.maxToolTokens = v; } },
+  { names: ["--port"], value: "number", num: { min: 0, max: 65535, integer: true }, set: (a, v) => { a.port = v; } },
+  { names: ["--interval-ms"], value: "number", num: { min: 100, integer: true }, set: (a, v) => { a.intervalMs = v; } },
+  { names: ["--limit"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.limit = v; } },
+  { names: ["--task"], value: "text", set: (a, v) => { a.task = v; } },
+  { names: ["--check"], value: "text", set: (a, v) => { a.check = v; } },
+  { names: ["--existing"], value: "text", set: (a, v) => { a.existing = v; } },
+  { names: ["--budget"], value: "number", num: { min: 0 }, set: (a, v) => { a.budgetUsd = v; } },
+  { names: ["--dry-run"], set: (a) => { a.dryRun = true; } },
+  { names: ["--copy"], set: (a) => { a.copy = true; } },
+  { names: ["--share"], set: (a) => { a.share = true; } },
+  { names: ["--allow-dirty"], set: (a) => { a.allowDirty = true; } },
+  { names: ["--statusline"], set: (a) => { a.statusLine = true; } },
+  { names: ["--host"], value: "text", set: (a, v) => { a.host = v; } },
+  { names: ["--token"], value: "text", set: (a, v) => { a.token = v; } },
+  { names: ["--days"], value: "number", num: { min: 1 }, set: (a, v) => { a.days = v; } },
+  { names: ["--autopilot"], set: (a) => { a.autopilot = true; } },
+  { names: ["--autopilot-state"], value: "text", set: (a, v) => { a.autopilotState = v; } },
+  { names: ["--autopilot-pause-file"], value: "text", set: (a, v) => { a.autopilotPauseFile = v; } },
+  { names: ["--config"], value: "text", set: (a, v) => { a.config = v; } },
+  { names: ["-q", "--query"], value: "text", set: (a, v) => { a.query = v; } },
+  { names: ["--max-tokens"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.maxTokens = v; } },
+  { names: ["--chunk-tokens"], value: "number", num: { min: 50, integer: true }, set: (a, v) => { a.chunkTokens = v; } },
+  { names: ["--mcp"], set: (a) => { a.mcp = true; } },
+  { names: ["--write"], set: (a) => { a.write = true; } },
+  { names: ["--calls"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.calls = v; } },
+  { names: ["--semantic"], set: (a) => { a.semantic = a.semantic || true; } },
+  { names: ["--embed-model"], value: "text", set: (a, v) => { a.semantic = v; } },
+  { names: ["--base"], value: "text", set: (a, v) => { a.base = v; } },
+  { names: ["--markdown"], set: (a) => { a.markdown = true; } },
+  { names: ["--max-increase"], value: "number", num: { min: 0, integer: true }, set: (a, v) => { a.maxIncrease = v; } },
+  { names: ["--requests-per-day"], value: "number", num: { min: 1 }, set: (a, v) => { a.requestsPerDay = v; } },
+  { names: ["--min-tokens"], value: "number", num: { min: 50, integer: true }, set: (a, v) => { a.minTokens = v; } },
+  { names: ["--ids"], value: "text", set: (a, v: string) => { a.ids = v.split(",").map((x) => x.trim()).filter(Boolean); } },
+  { names: ["--upstream-anthropic"], value: "text", set: (a, v) => { a.upstreamAnthropic = v; } },
+  { names: ["--upstream-openai"], value: "text", set: (a, v) => { a.upstreamOpenai = v; } },
+  { names: ["--upstream-google"], value: "text", set: (a, v) => { a.upstreamGoogle = v; } },
+  // Read by the MCP server itself: `mcp --http [--port n] [--host h]`.
+  { names: ["--http"], set: () => {} },
+];
+const FLAG_BY_NAME = new Map(FLAGS.flatMap((f) => f.names.map((n) => [n, f] as const)));
+const FLAG_NAMES = [...FLAG_BY_NAME.keys(), "--help", "--version"];
+
+/** An option, not a value: "-q", "--days". "-" (stdin) and "-1" are values. */
+function looksLikeFlag(s: string): boolean {
+  return /^-[A-Za-z-]/.test(s) && s !== "--";
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { json: false, strategies: [], list: false, exact: false, redact: false, failOverBudget: false, dryRun: false, allowDirty: false, statusLine: false };
+  const args: Args = { json: false, strategies: [], list: false, exact: false, redact: false, failOverBudget: false, dryRun: false, allowDirty: false, statusLine: false, help: false };
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    switch (a) {
-      case "-h": case "--help": console.log(HELP); process.exit(0);
-      case "-v": case "--version": console.log(packageVersion()); process.exit(0);
-      case "--json": args.json = true; break;
-      case "--list": args.list = true; break;
-      case "--exact": args.exact = true; break;
-      case "--redact": args.redact = true; break;
-      case "--fail-over-budget": args.failOverBudget = true; break;
-      case "--model": args.model = argv[++i]; break;
-      case "--out": args.out = argv[++i]; break;
-      case "--strategy": args.strategies.push(argv[++i] as StrategyId); break;
-      case "--keep-recent": args.keepRecent = numArg("--keep-recent", argv[++i], { min: 0, integer: true }); break;
-      case "--max-tool-tokens": args.maxToolTokens = numArg("--max-tool-tokens", argv[++i], { min: 1, integer: true }); break;
-      case "--port": args.port = numArg("--port", argv[++i], { min: 0, max: 65535, integer: true }); break;
-      case "--interval-ms": args.intervalMs = numArg("--interval-ms", argv[++i], { min: 100, integer: true }); break;
-      case "--limit": args.limit = numArg("--limit", argv[++i], { min: 1, integer: true }); break;
-      case "--task": args.task = argv[++i]; break;
-      case "--check": args.check = argv[++i]; break;
-      case "--existing": args.existing = argv[++i]; break;
-      case "--budget": args.budgetUsd = numArg("--budget", argv[++i], { min: 0 }); break;
-      case "--dry-run": args.dryRun = true; break;
-      case "--copy": args.copy = true; break;
-      case "--share": args.share = true; break;
-      case "--allow-dirty": args.allowDirty = true; break;
-      case "--statusline": args.statusLine = true; break;
-      case "--host": args.host = argv[++i]; break;
-      case "--token": args.token = argv[++i]; break;
-      case "--days": args.days = numArg("--days", argv[++i], { min: 1 }); break;
-      case "--autopilot": args.autopilot = true; break;
-      case "--autopilot-state": args.autopilotState = argv[++i]; break;
-      case "--autopilot-pause-file": args.autopilotPauseFile = argv[++i]; break;
-      case "--config": args.config = argv[++i]; break;
-      case "-q": case "--query": args.query = argv[++i]; break;
-      case "--max-tokens": args.maxTokens = numArg("--max-tokens", argv[++i], { min: 1, integer: true }); break;
-      case "--chunk-tokens": args.chunkTokens = numArg("--chunk-tokens", argv[++i], { min: 50, integer: true }); break;
-      case "--mcp": args.mcp = true; break;
-      case "--write": args.write = true; break;
-      case "--calls": args.calls = numArg("--calls", argv[++i], { min: 1, integer: true }); break;
-      case "--semantic": args.semantic = args.semantic || true; break;
-      case "--embed-model": args.semantic = argv[++i]; break;
-      case "--base": args.base = argv[++i]; break;
-      case "--markdown": args.markdown = true; break;
-      case "--max-increase": args.maxIncrease = numArg("--max-increase", argv[++i], { min: 0, integer: true }); break;
-      case "--requests-per-day": args.requestsPerDay = numArg("--requests-per-day", argv[++i], { min: 1 }); break;
-      case "--min-tokens": args.minTokens = numArg("--min-tokens", argv[++i], { min: 50, integer: true }); break;
-      case "--ids": args.ids = (argv[++i] ?? "").split(",").map((x) => x.trim()).filter(Boolean); break;
-      case "--upstream-anthropic": args.upstreamAnthropic = argv[++i]; break;
-      case "--upstream-openai": args.upstreamOpenai = argv[++i]; break;
-      case "--upstream-google": args.upstreamGoogle = argv[++i]; break;
-      default: positional.push(a);
+    const raw = argv[i];
+    if (raw === "--") {
+      positional.push(...argv.slice(i + 1));
+      break;
     }
+    if (!looksLikeFlag(raw)) {
+      positional.push(raw);
+      continue;
+    }
+    const eq = raw.startsWith("--") ? raw.indexOf("=") : -1;
+    const name = eq > 0 ? raw.slice(0, eq) : raw;
+    const inline = eq > 0 ? raw.slice(eq + 1) : undefined;
+    if (name === "-h" || name === "--help") { args.help = true; continue; }
+    if (name === "-v" || name === "--version") { console.log(packageVersion()); process.exit(0); }
+    const spec = FLAG_BY_NAME.get(name);
+    if (!spec) return usageError(`Unknown option ${name}.${didYouMean(name, FLAG_NAMES)} Run \`context-doctor --help\` for the list.`);
+    if (!spec.value) {
+      if (inline !== undefined) usageError(`${name} takes no value; got "${inline}".`);
+      spec.set(args);
+      continue;
+    }
+    let value = inline;
+    if (value === undefined) {
+      const next = argv[i + 1];
+      if (next !== undefined && looksLikeFlag(next)) {
+        usageError(`${name} needs a value; got the option ${next}. For a value that starts with "-", write ${name}=<value>.`);
+      }
+      if (next !== undefined) { value = next; i++; }
+    }
+    if (spec.value === "number") spec.set(args, numArg(name, value, spec.num));
+    else if (value === undefined) usageError(`${name} needs a value; got nothing.`);
+    else spec.set(args, value);
   }
   args.command = positional[0];
   args.file = positional[1];
@@ -388,6 +466,23 @@ function hasClaudeSessions(): boolean {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+
+  if (args.command && !COMMANDS.includes(args.command)) {
+    usageError(`Unknown command "${args.command}".${didYouMean(args.command, COMMANDS)} Run \`context-doctor --help\` for the list.`);
+  }
+  if (args.command === "version") {
+    console.log(packageVersion());
+    return;
+  }
+  // `<command> --help` and `help <command>`: that command's lines, not all of them.
+  if (args.help || args.command === "help") {
+    const topic = args.command === "help" ? args.file : args.command;
+    if (topic && !COMMANDS.includes(topic)) {
+      usageError(`Unknown command "${topic}".${didYouMean(topic, COMMANDS)} Run \`context-doctor --help\` for the list.`);
+    }
+    console.log((topic && commandHelp(HELP, topic)) || HELP);
+    return;
+  }
 
   if (args.command === "hook") {
     void runHook();
@@ -855,14 +950,13 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (!args.command || !args.file) {
-    const known = ["analyze", "optimize"];
-    if (args.command && !known.includes(args.command)) {
-      console.error(`Unknown command "${args.command}". Run \`context-doctor --help\` for the list.`);
-      process.exit(1);
-    }
+  if (!args.command) {
     console.log(HELP);
-    process.exit(args.command ? 1 : 0);
+    return;
+  }
+  if (!args.file) {
+    // analyze/optimize without a file: say what is missing, then how to call it.
+    usageError(`${args.command} needs a conversation file (or - to read stdin).\n\n${commandHelp(HELP, args.command) ?? ""}`);
   }
 
   let input: string;

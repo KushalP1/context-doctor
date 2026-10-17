@@ -14,6 +14,9 @@ import { hasBase64Blob, stripBase64Blobs } from "./blob.js";
 
 export type StrategyId = "dedupe" | "trim-tool-results" | "trim-tool-calls" | "prune-history" | "strip-base64";
 
+/** Every strategy id, for validating what a user typed. */
+export const STRATEGY_IDS: readonly StrategyId[] = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"];
+
 export interface OptimizeOptions {
   strategies?: StrategyId[];
   /**
