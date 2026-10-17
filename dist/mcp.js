@@ -42,12 +42,12 @@ import { packContextSemantic, readSources, renderPack } from "./pack.js";
 // will usually not, while "when X, call Y before answering" is followed. The
 // thresholds keep it from firing on every turn, which would cost more context
 // than it saves.
-const SERVER_INSTRUCTIONS = `Context hygiene (always on):
+const SERVER_INSTRUCTIONS = `Context hygiene rules (always on):
 1. Summarize any paste or tool result over ~2k tokens into the points you need; don't carry it verbatim unless you will edit or quote it exactly.
 2. Refer to earlier content by name; never re-quote it or inline base64.
-3. Once, at ~30 turns or 3+ large pastes, and when asked about tokens, cost, speed or limits: call profile_context BEFORE answering; act on its top finding. In a chat app pass a \`sketch\` (turns + large blocks). Do not estimate token counts yourself.
+3. Once, at ~30 turns or 3+ large pastes, and when asked about tokens, cost, speed or limits: call profile_context BEFORE answering; act on its top finding. In a chat app pass a \`sketch\` (turns + big blocks). Do not estimate token counts yourself.
 4. If optimize_context returns a pruned-turns digest, write its ≤150-token summary.
-5. To answer from a large file or folder you won't edit, call pack_context with the question; don't read it whole.`;
+5. To answer from a big file or folder you won't edit, call pack_context with the question; don't read it whole.`;
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"];
 /**
  * Build a fully-configured server instance. A factory (not a singleton) so the
