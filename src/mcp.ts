@@ -2,10 +2,13 @@
 /**
  * context-doctor MCP server (stdio).
  *
- * Plug into Claude Desktop, ChatGPT desktop (developer mode), Cursor, or any
- * MCP client:
+ * Plug into Claude Desktop, Claude Code, Cursor, Codex, Gemini CLI or any MCP
+ * client that launches a local command:
  *
  *   { "mcpServers": { "context-doctor": { "command": "npx", "args": ["-y", "context-doctor", "mcp"] } } }
+ *
+ * ChatGPT launches nothing locally: it connects only to a URL (a developer-mode
+ * connector), which `--http` serves (see the transport dispatch at the end).
  *
  * Tools:
  *   profile_context   — analyze a conversation/prompt, report token breakdown + findings
@@ -41,10 +44,10 @@ import { packContextSemantic, readSources, renderPack } from "./pack.js";
 // will usually not, while "when X, call Y before answering" is followed. The
 // thresholds keep it from firing on every turn, which would cost more context
 // than it saves.
-const SERVER_INSTRUCTIONS = `Context hygiene rules (always on):
-1. Summarize any paste or tool result over ~2k tokens into the points you need; never carry it verbatim.
+const SERVER_INSTRUCTIONS = `Context hygiene (always on):
+1. Summarize any paste or tool result over ~2k tokens into the points you need; don't carry it verbatim unless you will edit or quote it exactly.
 2. Refer to earlier content by name; never re-quote it or inline base64.
-3. Past ~30 turns or 3+ large pastes, or when asked about tokens, cost, speed or limits: call profile_context BEFORE answering and act on its top finding. In a chat app pass a \`sketch\` (turns + large/repeated blocks), not the conversation. Do not estimate token counts yourself.
+3. Once, at ~30 turns or 3+ large pastes, and when asked about tokens, cost, speed or limits: call profile_context BEFORE answering; act on its top finding. In a chat app pass a \`sketch\` (turns + large blocks). Do not estimate token counts yourself.
 4. If optimize_context returns a pruned-turns digest, write its ≤150-token summary.
 5. To answer from a large file or folder you won't edit, call pack_context with the question; don't read it whole.`;
 
@@ -63,7 +66,7 @@ function createServer({ fileAccess = true }: { fileAccess?: boolean } = {}): Mcp
 
   server.tool(
   "profile_context",
-  "Profile an LLM conversation or prompt: token breakdown, largest blocks, and actionable findings about wasted context (duplicates, oversized pastes or tool results, base64 blobs, long history). Two inputs, pass ONE: `conversation` (full OpenAI/Anthropic JSON or raw text, for agents, files and proxies) or `sketch` (for chat apps such as Claude Desktop or ChatGPT where you cannot export the conversation: the turn count plus the few blocks that matter, ~120 tokens to write). Call it whenever the user asks about token usage, context size, cost, speed or limits, and on your own once the conversation passes ~30 turns or holds 3+ large pastes. Act on the top finding in your reply.",
+  "Profile an LLM conversation or prompt: token breakdown, largest blocks, and findings about wasted context (duplicates, oversized pastes or tool results, base64 blobs, long history). Pass ONE input: `conversation` (full OpenAI/Anthropic JSON or raw text) or `sketch` (chat apps such as Claude Desktop or ChatGPT, where you cannot export the conversation: the turn count plus the few blocks that matter, ~120 tokens). Call it whenever the user asks about token usage, context size, cost, speed or limits, and once on your own when the conversation first passes ~30 turns or 3+ large pastes. Act on the top finding.",
   {
     conversation: z.string().optional().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array) or raw prompt text. Omit in chat apps and pass `sketch`."),
     sketch: z.object({
@@ -102,11 +105,11 @@ function createServer({ fileAccess = true }: { fileAccess?: boolean } = {}): Mcp
 
 server.tool(
   "optimize_context",
-  "Rewrite a conversation to reclaim tokens with deterministic strategies (dedupe, trim stale tool results, strip base64; prune-history is optional and lossy). Returns the slimmed JSON and a savings summary; no LLM calls. Use after profile_context finds recoverable waste the user wants fixed. Add prune-history only with the user's consent, then write the replacement summary as the result instructs.",
+  "Rewrite a conversation to reclaim tokens with deterministic strategies (dedupe, trim stale tool results, strip base64; prune-history is optional and lossy). Returns the slimmed JSON and a savings summary; no LLM calls. Results over 100k chars are not echoed back (summary and a CLI command instead). Use after profile_context finds waste the user wants fixed. Add prune-history only with the user's consent, then write the replacement summary as the result instructs.",
   {
     conversation: z.string().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array)"),
     strategies: z.array(z.enum(STRATEGY_IDS)).optional()
-      .describe("Strategies to apply. Default: dedupe, trim-tool-results, strip-base64. Add trim-tool-calls to shrink big inline file writes, or prune-history for lossy compaction of old turns."),
+      .describe("Default: dedupe, trim-tool-results, strip-base64. Add trim-tool-calls for big inline file writes, prune-history for lossy compaction of old turns."),
     keep_recent: z.number().int().nonnegative().optional().describe("Messages at the tail to leave untouched (default 6; 0 = none)"),
     max_tool_result_tokens: z.number().int().positive().optional().describe("Token budget for trimmed tool results (default 300)"),
   },
@@ -163,7 +166,7 @@ server.tool(
     "pack_context",
     "Read only the parts of large files a question needs: chunks files or folders along their structure, ranks the chunks against `query` and returns the best that fit `max_tokens`, each with an id and line range. No query: an outline; pick with `ids`. Use instead of reading a big doc, log or folder whole when not editing it. Text, code, PDF, Word, PowerPoint, ODT.",
     {
-      paths: z.array(z.string()).max(50).optional().describe("Files or folders (absolute, or relative to the server's cwd)"),
+      paths: z.array(z.string()).max(50).optional().describe("Files or folders, absolute paths; over HTTP pass `text`"),
       text: z.string().optional().describe("Raw text to pack instead of files"),
       query: z.string().optional().describe("The question; omit for an outline"),
       max_tokens: z.number().int().positive().max(200_000).optional().describe("Budget, default 4000"),
@@ -214,7 +217,7 @@ server.tool(
 
   server.tool(
     "context_best_practices",
-    "Get a curated checklist of context-management best practices, optionally specialized for a provider (anthropic, openai).",
+    "Curated checklist of context-management practices, optionally for one provider. Call it when the user asks how to keep context lean or how to structure prompts for caching.",
     {
       provider: z.enum(["general", "anthropic", "openai"]).optional().describe("Provider to specialize tips for (default: general)"),
     },
@@ -239,7 +242,7 @@ const BEST_PRACTICES: Record<string, string[]> = {
     "Measure before optimizing — profile the conversation to find the actual heavy hitters.",
   ],
   anthropic: [
-    "Use prompt caching with cache_control breakpoints after your stable prefix — cached reads cost ~10% of base input price.",
+    "Use prompt caching with cache_control breakpoints after your stable prefix: cached reads cost 2.5-10% of input depending on the model, and cache writes 1.25x input (5-minute cache) or 2x (1-hour cache).",
     "Current Claude generations have a 1M-token window (Haiku 200k), but quality degrades under heavy fill; aim to stay under ~70%.",
     "For agents: prefer compact tool-result summaries in history and re-fetch details on demand.",
   ],

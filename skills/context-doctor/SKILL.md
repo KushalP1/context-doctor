@@ -20,18 +20,18 @@ You have two jobs when this skill triggers: (1) keep **this session's** context 
 
 Proactively (do not wait to be asked):
 - Summarize large tool outputs right after consuming them.
-- When the session passes roughly 30 turns or contains several large pastes, offer: "This conversation is getting heavy — want me to compact the older history into a summary so responses stay fast and cheap?"
+- Once, when the session first passes roughly 30 turns or contains several large pastes, offer: "This conversation is getting heavy — want me to compact the older history into a summary so responses stay fast and cheap?"
 - When asked to summarize/compact, produce a dense factual summary (decisions made, current state, open items, key identifiers) — not a narrative.
 
 ## Using the context-doctor tools
 
 If the `context-doctor` MCP tools are available:
-- `profile_context` — pass a conversation JSON (OpenAI or Anthropic format) or raw text; returns a token breakdown, largest messages, findings with estimated savings.
+- `profile_context` — pass a conversation JSON (OpenAI or Anthropic format) or raw text; returns a token breakdown, largest messages, findings with estimated savings. In a chat app, where you cannot export the conversation, pass a `sketch` instead: the turn count plus the large, repeated or image blocks, one size hint each (~120 tokens to write).
 - `optimize_context` — applies deterministic fixes (dedupe, trim stale tool results, strip base64; opt-in `trim-tool-calls` for big inline file writes and `prune-history`). When the result contains pruned-turn source material and asks for a summary, **you write that summary** (≤150 tokens, dense, factual) and place it where the stub indicates — this is how summarization works without any API key.
 - `pack_context` — before reading a large document, log or folder to answer a question (not to edit it), pass `paths` and the `query`: it returns only the best-matching chunks within `max_tokens` (default 4000), each with an id and line range, plus the next-best ids. No query = an outline to pick from with `ids`.
 - `context_best_practices` — provider-specific checklist to share with the user.
 
-If the tools are not connected, the CLI does the same: `npx context-doctor analyze <file> --model <model>` and `npx context-doctor optimize <file>`, and `npx context-doctor pack <files> --query "<question>"` for big documents. For always-on optimization of the user's own apps: `npx context-doctor proxy` then point `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` at it.
+If the tools are not connected, the CLI does the same: `npx context-doctor analyze <file> --model <model>` and `npx context-doctor optimize <file>`, and `npx context-doctor pack <files> --query "<question>"` for big documents. `npx context-doctor session` profiles the user's latest Claude Code session from its transcript, with the API's own token counts, cache economics and subagent costs (`--list` to pick another). For the user's own API apps: `npx context-doctor proxy --autopilot`, then point `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` (add `/v1`) or `GOOGLE_GEMINI_BASE_URL` at it; it clears stale tool output only when the prompt cache is cold, so it never costs more.
 
 ## When the user pastes a conversation or asks about their token usage
 

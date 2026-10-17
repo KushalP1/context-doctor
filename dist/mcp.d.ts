@@ -2,10 +2,13 @@
 /**
  * context-doctor MCP server (stdio).
  *
- * Plug into Claude Desktop, ChatGPT desktop (developer mode), Cursor, or any
- * MCP client:
+ * Plug into Claude Desktop, Claude Code, Cursor, Codex, Gemini CLI or any MCP
+ * client that launches a local command:
  *
  *   { "mcpServers": { "context-doctor": { "command": "npx", "args": ["-y", "context-doctor", "mcp"] } } }
+ *
+ * ChatGPT launches nothing locally: it connects only to a URL (a developer-mode
+ * connector), which `--http` serves (see the transport dispatch at the end).
  *
  * Tools:
  *   profile_context   — analyze a conversation/prompt, report token breakdown + findings

@@ -57,25 +57,35 @@ const HELP = `context-doctor — profile and optimize LLM context windows
 Usage:
   context-doctor analyze  <file|->  [options]   Show what's eating your tokens
   context-doctor optimize <file|->  [options]   Apply safe fixes, print slimmed conversation
-  context-doctor proxy              [options]   Always-on: local proxy that optimizes every
-                                                Anthropic/OpenAI API request in flight
-  context-doctor install                        Wire the MCP server + skill into Claude Desktop,
-                                                Claude Code, and Cursor automatically
+  context-doctor proxy --autopilot  [options]   Local proxy for your own API apps (Anthropic, OpenAI,
+                                                Gemini): clears stale tool output only when the
+                                                prompt cache is cold, so it never costs more.
+                                                Plain \`proxy\` is the optimizing mode (dedupe, trim,
+                                                strip base64), which can cost more on cached traffic
+  context-doctor install [--statusline]         Wire everything it finds: the MCP server (Claude
+                                                Desktop, Claude Code, Cursor, Codex, Gemini CLI),
+                                                the skill (Claude Code, Codex), the every-prompt
+                                                hook (Claude Code, Codex, Gemini CLI's BeforeAgent,
+                                                Cursor's postToolUse) and Claude Code's PreCompact
+                                                hook, which tells each compaction what to keep
   context-doctor uninstall                      Undo install
   context-doctor --version                      Print the installed version
   context-doctor savings [--days n] [--share [--copy]]
                                                 What your recent Claude Code sessions cost, and what
-                                                /compact at cold resumes and autopilot would save,
-                                                replayed and priced as billed. --share: totals only,
-                                                to paste. Also what a bare \`context-doctor\` shows
+                                                /compact at cold resumes, autopilot and an earlier
+                                                auto-compact window would save, replayed and priced
+                                                as billed. --share: totals only, to paste. Also
+                                                what a bare \`context-doctor\` shows
   context-doctor compact-window [status|off|<size>]
                                                 Claude Code's own auto-compact window (e.g. 400k):
                                                 what each size would have saved on your sessions,
                                                 and set or remove it. Works in the desktop app too
   context-doctor autopilot on|off|pause|resume|status
-                                                Every new Claude Code session goes through the
-                                                local proxy, which clears stale tool output only
-                                                when the prompt cache is cold (never costs more)
+                                                Every new Claude Code session started in a terminal
+                                                or IDE goes through the local proxy, which clears
+                                                stale tool output only when the prompt cache is
+                                                cold (never costs more). The desktop app's Code tab
+                                                sets its own API address, so it is not reached
   context-doctor mcp [--http]                   The MCP server (same as context-doctor-mcp), for clients
                                                 that launch \`npx -y context-doctor mcp\`
   context-doctor instructions [--copy]          Standing context rules to paste into claude.ai or
@@ -86,8 +96,8 @@ Usage:
   context-doctor statusline                     Claude Code status bar line: live context size, cache
                                                 share, cost (wired by \`install --statusline\`; reads
                                                 the status JSON on stdin)
-  context-doctor hook                           Claude Code UserPromptSubmit hook (installed
-                                                automatically by \`install\`; reads hook JSON on stdin)
+  context-doctor hook                           The every-prompt and PreCompact hook (installed by
+                                                \`install\`; reads hook JSON on stdin)
   context-doctor report                         Impact report: exact proxy savings, hook activity,
                                                 and remaining recoverable waste in recent sessions
   context-doctor doctor                         Self-check the installation (configs, hook, skill,
@@ -115,15 +125,15 @@ Usage:
   context-doctor compactions [--days n]         Do sessions work worse right after compacting? Re-reads,
                                                 tool errors and your corrections, before vs after
   context-doctor subagents [--days n]           Which subagents paid for themselves: their bill vs
-                                                what carrying their reads would have cost the parent
+                                                the same steps run in the parent session
   context-doctor tasks [--days n]               Cost per commit, per project: session cost at list
                                                 price vs commits made during the sessions
   context-doctor reads [--days n] [--limit n]   Files read into session after session: reads, tokens,
                                                 cost, and whether a CLAUDE.md summary or pack pays
-  context-doctor overhead split <file> [--write]
+  context-doctor overhead split <file> [--min-tokens n] [--write]
                                                 Move a memory file's big sections to a reference
                                                 file, leaving pointers (plan first; --write backs up)
-  context-doctor pack <files|dirs...> --query "<q>" [--max-tokens n]
+  context-doctor pack <files|dirs...|-> -q "<q>" [--max-tokens n]
                                                 Only the parts of big docs/code a question needs:
                                                 chunk along headings and declarations, rank, fit a
                                                 token budget (default 4000). No --query: an outline
@@ -159,7 +169,16 @@ Options:
                           Default: dedupe, trim-tool-results, strip-base64 (lossless-ish set)
   --keep-recent <n>       (optimize) Messages at the tail to leave untouched (default 6)
   --max-tool-tokens <n>   (optimize) Token budget for trimmed tool results (default 300)
-  --limit <n>             (accuracy, session --list) Sessions to sample or list (default 20)
+  --limit <n>             (accuracy, session --list, reads, tasks, subagents) How many to sample
+                          or list
+  --days <n>              (savings, compact-window, overhead, reads, tasks, subagents, compactions)
+                          Days of history to read (default 30; compactions 60)
+  -q, --query <text>      (pack) The question to rank chunks against
+  --max-tokens <n>        (pack) Token budget (default 4000); (ci) fail over this many tokens
+  --chunk-tokens <n>      (pack) Largest chunk, in tokens (default 400)
+  --ids <a#2,b#5>         (pack) Return these chunks by id
+  --min-tokens <n>        (overhead split) Smallest section to move, in tokens (default 400)
+  --requests-per-day <n>  (ci --markdown) Price the change at this many requests a day
   --check <cmd>           (experiment) Command whose exit code is the pass/fail for each arm
   --existing <id>         (experiment) Session id to fork the second arm from (never mutated)
   --budget <usd>          (experiment) Spend cap per arm (default 1)
@@ -167,6 +186,8 @@ Options:
   --allow-dirty           (experiment) Skip the clean-tree check (uncommitted changes will be lost)
   --statusline            (install) Also set Claude Code's statusLine to context-doctor (never
                           overwrites a statusLine you already have)
+  --autopilot             (proxy) Cold-cache clearing only, the mode \`autopilot on\` runs; never
+                          costs more. Without it the proxy runs the optimizing strategies
   --port <n>              (proxy) Port to listen on (default 8787)
   --host <addr>           (proxy) Bind address (default 127.0.0.1; use 0.0.0.0 to expose)
   --token <secret>        (proxy) Require /t/<secret>/ in every request path; needed before
@@ -176,14 +197,16 @@ Options:
                           "keepRecent":n,"maxToolResultTokens":n}]} — first prefix match wins
   --upstream-anthropic <url>  (proxy) Override Anthropic upstream (testing)
   --upstream-openai <url>     (proxy) Override OpenAI upstream (testing)
+  --upstream-google <url>     (proxy) Override Gemini upstream (testing)
   -h, --help              Show this help
 
 Examples:
   context-doctor analyze chat.json --model claude-sonnet-5
   context-doctor optimize chat.json --strategy dedupe --strategy prune-history --out slim.json
-  context-doctor proxy --port 8787
+  context-doctor proxy --autopilot --port 8787
     then: export ANTHROPIC_BASE_URL=http://localhost:8787
           export OPENAI_BASE_URL=http://localhost:8787/v1
+          export GOOGLE_GEMINI_BASE_URL=http://localhost:8787
 `;
 
 interface Args {
