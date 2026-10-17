@@ -24,14 +24,34 @@ import { formatUsd } from "./pricing.js";
  * conversations.json and Gemini chats are .json, and read as a plain
  * conversation they became one message of raw text. A file it finds no
  * messages in is a plain conversation (OpenAI/Anthropic messages JSON), as in
- * `watch`.
+ * `watch`. A saved profile (`analyze --json` output) is used as it is.
+ *
+ * Anything else is an error: a file that is not a conversation used to
+ * profile as 0 tokens, and the diff reported a 0 → 0 "comparison".
  */
 function loadProfile(path: string, model?: string): ContextProfile {
   const session = parseSessionFile(path);
   if (session.messageCount > 0) {
     return profileConversation(parseConversation(session.conversationJson), model ?? session.model);
   }
-  return profileConversation(parseConversation(readFileSync(path, "utf8")), model);
+  const text = readFileSync(path, "utf8");
+  const saved = savedProfile(text);
+  if (saved) return saved;
+  const conversation = parseConversation(text);
+  if (conversation.parseWarning) throw new Error(`${path}: ${conversation.parseWarning}`);
+  return profileConversation(conversation, model);
+}
+
+/** The JSON `analyze --json` prints, recognised by the fields every profile has. */
+function savedProfile(text: string): ContextProfile | undefined {
+  try {
+    const p = JSON.parse(text);
+    const ok = p && typeof p === "object" && !Array.isArray(p) && typeof p.totalTokens === "number" &&
+      typeof p.messageCount === "number" && p.categories && typeof p.categories === "object" && Array.isArray(p.findings);
+    return ok ? (p as ContextProfile) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Signed token delta with a stable label. */

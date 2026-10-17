@@ -894,9 +894,16 @@ async function main() {
         console.error(`Could not read ${args.file}: ${e.message}`);
         process.exit(1);
     }
+    // Broken JSON, or JSON that is not a conversation, used to profile as a
+    // few tokens (or none) and report the context "in good shape". Raw text
+    // stays a supported input: it parses without a warning.
+    const conversation = parseConversation(input);
+    if (conversation.parseWarning) {
+        usageError(`Could not ${args.command} ${args.file === "-" ? "stdin" : args.file}: ${conversation.parseWarning}`);
+    }
     if (args.command === "analyze") {
         const loaded = loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`));
-        const profile = profileConversation(parseConversation(input), args.model ?? loaded.config.model);
+        const profile = profileConversation(conversation, args.model ?? loaded.config.model);
         // The exact count is awaited before anything prints: with --json it goes
         // inside the one JSON object. Printed after it, as it once was, the extra
         // lines made stdout invalid JSON for every script that parsed it.
