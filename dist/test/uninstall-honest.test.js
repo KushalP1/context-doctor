@@ -41,12 +41,12 @@ test("files install created are deleted once empty; the user's file loses only w
     for (const f of [".claude.json", ".cursor/mcp.json", ".cursor/hooks.json", ".codex/config.toml", ".codex/hooks.json"]) {
         assert.ok(!existsSync(join(home, f)), `${f}: install created it and it holds nothing now`);
     }
-    assert.match(r.out, /Deleted files install had created, now empty: .*~\/\.cursor\/mcp\.json/);
+    assert.match(r.out.replace(/\\/g, "/"), /Deleted files install had created, now empty: .*~\/\.cursor\/mcp\.json/);
     assert.deepEqual(json(join(home, ".claude", "settings.json")), { theme: "dark" }, "no hooks: {} left behind");
     // The backup of the original is kept, untouched, and named.
     const backup = join(home, ".claude", "settings.json.context-doctor.backup");
     assert.deepEqual(json(backup), { theme: "dark" });
-    assert.match(r.out, /Backups install made of your configs.*kept:\n {2}~\/\.claude\/settings\.json\.context-doctor\.backup/);
+    assert.match(r.out.replace(/\\/g, "/"), /Backups install made of your configs.*kept:\n {2}~\/\.claude\/settings\.json\.context-doctor\.backup/);
     assert.match(r.out, /Done\./);
     assert.ok(!existsSync(join(home, ".claude", "skills", "context-doctor")));
 });

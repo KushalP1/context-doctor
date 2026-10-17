@@ -39,7 +39,8 @@ test("compact-window off / <size> say what happened, and claim no backup that do
   assert.match(r.stdout, /already 400000/);
 
   r = run("300k");
-  assert.match(r.stdout, /previous file is kept as ~\/\.claude\/settings\.json\.context-doctor\.backup/);
+  // Paths print with the platform separator; compare with forward slashes.
+  assert.match(r.stdout.replace(/\\/g, "/"), /previous file is kept as ~\/\.claude\/settings\.json\.context-doctor\.backup/);
   assert.ok(existsSync(`${settings}.context-doctor.backup`));
 
   r = run("off");
