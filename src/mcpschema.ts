@@ -24,7 +24,7 @@ import { forEachLine, listSessions } from "./session.js";
 import { subagentDir } from "./subagents.js";
 import { estimateTokens } from "./tokens.js";
 // Type only: erased at compile time, so dist/ never loads the SDK at startup.
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type { Client } from "./mcpclient.js";
 
 const CLAUDE = "claude-opus-5";
 
@@ -148,16 +148,18 @@ export async function measureServer(cfg: McpServerConfig, timeoutMs = 15_000): P
   if (!cfg.command && !(cfg.url && cfg.type !== "sse")) {
     return { name: cfg.name, error: cfg.type === "sse" ? "SSE server: not measured" : "no command or url" };
   }
-  // The SDK is a dependency of the npm package, but the Claude Code plugin runs
-  // dist/ from a git checkout with no node_modules. An import failure there
-  // used to abort the whole `overhead --mcp` report; it is a per-server note.
+  // The SDK's client comes from dist/mcpclient.js, which the build bundles
+  // with the SDK inside: the npm package has no runtime dependencies, and the
+  // Claude Code plugin runs dist/ from a git checkout with no node_modules.
+  // Should it still fail to load, that is a per-server note, never a crash
+  // that loses the whole `overhead --mcp` report.
   let client: Client;
   let transport: any;
   try {
-    const sdk = await import("@modelcontextprotocol/sdk/client/index.js");
+    const sdk = await import("./mcpclient.js");
     client = new sdk.Client({ name: "context-doctor-overhead", version: "1" });
     if (cfg.command) {
-      const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
+      const { StdioClientTransport } = sdk;
       transport = new StdioClientTransport({
         command: cfg.command,
         args: cfg.args ?? [],
@@ -165,7 +167,7 @@ export async function measureServer(cfg: McpServerConfig, timeoutMs = 15_000): P
         stderr: "ignore",
       });
     } else {
-      const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+      const { StreamableHTTPClientTransport } = sdk;
       transport = new StreamableHTTPClientTransport(new URL(cfg.url!));
     }
   } catch (e) {
