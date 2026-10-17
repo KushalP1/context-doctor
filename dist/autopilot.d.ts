@@ -75,6 +75,16 @@ export declare function autopilotOn(port?: number, paths?: AutopilotPaths): Prom
 }>;
 export declare function autopilotOff(paths?: AutopilotPaths, exec?: ServiceExec): Promise<string[]>;
 export declare function autopilotPause(paused: boolean, paths?: AutopilotPaths): string;
+/**
+ * Pause or resume, saying what actually happened. Without autopilot on there
+ * is no proxy to pause: this used to claim "✓ Paused" over nothing, and on a
+ * machine with no ~/.claude it threw ENOENT writing the pause file. `ok` is
+ * false when nothing was done, for the exit code.
+ */
+export declare function autopilotPauseResult(paused: boolean, paths?: AutopilotPaths): {
+    ok: boolean;
+    message: string;
+};
 export declare function autopilotStatus(paths?: AutopilotPaths): Promise<string[]>;
 /**
  * Called by the every-prompt hook: if autopilot is on and the proxy is down,

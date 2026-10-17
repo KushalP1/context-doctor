@@ -22,7 +22,7 @@ import { listSessions, parseSessionFile, pickCurrentSession } from "./session.js
 import { runHook } from "./hook.js";
 import { buildImpactReport } from "./impact.js";
 import { measureTokenizer, renderTokenizer } from "./tokenizer-measure.js";
-import { autopilotOff, autopilotOn, autopilotPause, autopilotPaths, autopilotStatus, DEFAULT_AUTOPILOT_PORT } from "./autopilot.js";
+import { autopilotOff, autopilotOn, autopilotPauseResult, autopilotPaths, autopilotStatus, DEFAULT_AUTOPILOT_PORT } from "./autopilot.js";
 import { estimateSavings, renderSavings, renderShare } from "./savings.js";
 import { currentCompactWindow, estimateCompactWindows, MAX_WINDOW, MIN_WINDOW, parseWindow, renderCompactWindows, setCompactWindow } from "./compactwindow.js";
 import { renderPreferences, copyToClipboard, CHAT_PREFERENCES } from "./preferences.js";
@@ -697,7 +697,9 @@ async function main(): Promise<void> {
     } else if (sub === "off") {
       console.log((await autopilotOff()).join("\n"));
     } else if (sub === "pause" || sub === "resume") {
-      console.log(autopilotPause(sub === "pause"));
+      const r = autopilotPauseResult(sub === "pause");
+      console.log(r.message);
+      if (!r.ok) process.exitCode = 1;
     } else if (sub === "status") {
       console.log((await autopilotStatus()).join("\n"));
     } else {
