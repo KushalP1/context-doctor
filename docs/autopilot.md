@@ -1,0 +1,32 @@
+# Autopilot: Claude Code sessions in a terminal or IDE keep their context lean
+
+[← README](../README.md)
+
+```bash
+context-doctor autopilot on        # once; survives reboots
+context-doctor autopilot status    # what it has done
+context-doctor autopilot pause     # instant passthrough, nothing restarts
+context-doctor autopilot off       # remove it
+```
+
+`autopilot on` runs the local proxy as a background service (launchd on macOS, a systemd user service on Linux, a logon task on Windows), waits until it answers, and only then points Claude Code at it through `env.ANTHROPIC_BASE_URL` in `~/.claude/settings.json`. Every Claude Code session started afterwards in a terminal or an IDE sends its requests through it. **Not the desktop app's Code tab:** it runs Claude Code "host-orchestrated", sets `ANTHROPIC_BASE_URL` from its own account configuration, and drops the same key from settings files (checked in Claude Code 2.1.284). `autopilot on`, `autopilot status` and `doctor` look at which surface your recent sessions ran in and warn when autopilot cannot reach them; for desktop sessions the levers that work are the cold-resume advice and `compact-window`. Your login (subscription or API key) passes through untouched.
+
+**What it does to each request:** once old tool output adds up to 20k+ tokens (file reads, shell output, search and web results, screenshots inside them), it replaces that output with a one-line note, keeping the 3 most recent results. The tool call stays in the history, so the model can simply run it again if it needs the output. Your messages, its answers, answers you gave to its questions, subagent reports and MCP results are never touched.
+
+**Why it cannot make a session more expensive.** A prompt cache matches a byte-identical prefix, and changing old history re-bills everything after the change at the write rate (1.25x or 2x input instead of a read's 2.5-10%). So autopilot changes history only when the cache is cold anyway: after an idle gap longer than the cache lifetime the request itself declares (on Anthropic, 1 hour when its `cache_control` is marked `ttl: 1h`, otherwise 5 minutes; an hour on OpenAI and Gemini), when the whole prompt is re-written regardless. Once cleared, an output stays cleared on every later request, so the prefix is identical between clearings and the cache keeps hitting. Output the model has not read yet is never cleared. On current Claude models a thinking block is bound to the history before it, and accounts created on or after 2026-08-31 get an error for an edited history; when that happens the proxy resends the request unedited and stops editing that account's histories where thinking follows.
+
+**Measured** by replaying every Claude Code session on the author's machine request by request through the shipped code, priced as the cache bills it, with real timestamps (re-measured on 2026-10-13 with current prices, each request at its own model and the audit's fixes): 67 sessions over 133 days, $1,442 of $11,347 input cost at list price (12.7%, about $325 a month), no session made more expensive, best session 34.9% ([details](../README.md#what-it-saves)). 94% of input cost on that machine came from requests above 200k tokens, which is where the clearing lands. Smaller requests also mean later auto-compaction and a faster first token. `scripts/replay-autopilot.mjs` does this on yours.
+
+**Why only on a cold cache.** The replay run before autopilot shipped (0.20.0, older sessions and the prices of the time, so its percentages are not comparable with the figures above) compared three policies:
+
+| Policy (0.20.0 replay) | Input cost saved | Worst session |
+|---|---|---|
+| **Clear only when the cache is cold (the default)** | **9.8%** | **0.00%, no session worse** |
+| Also clear on a warm cache when the saving "should" repay the rewrite | 9.9% | −0.13% (one session worse) |
+| The proxy's general strategies (dedupe, trim, strip-base64) | 6.7% | −13% (one session worse) |
+
+**Never in the way:** anything it cannot parse is forwarded unchanged; only conversation requests are touched: Anthropic `/v1/messages`, OpenAI `/v1/chat/completions` and `/v1/responses`, and Gemini `generateContent` / `streamGenerateContent`. It adds about 7 ms to a 2.9 MB (~1M token) request. If the proxy dies, the service restarts it within seconds, and the every-prompt hook checks it before each prompt and starts it if needed (measured: 0.6 s once, when it had to). `pause` turns it into a passthrough without restarting anything; `off` removes the setting before stopping the service, and sessions started while it was on need a restart.
+
+**What it cannot reach** (no process on your machine sends those requests): Claude Desktop's chat tab and claude.ai, which use the standing instructions and the `profile_context` sketch instead; Cursor's own models (Cursor's servers call the model; with your own OpenAI key, see [the proxy on a public URL](./proxy.md#putting-the-proxy-on-a-public-url-cursor-with-your-own-openai-key-remote-apps)); and Codex signed in with ChatGPT, where the every-prompt hook still reports context size.
+
+**Your own API apps** get the same clearing from `context-doctor proxy --autopilot` ([the proxy](./proxy.md)) or, where no proxy can run, from `withContextDoctor(client)` inside the SDK client ([library](./library.md#autopilot-inside-your-app-withcontextdoctor)).
