@@ -40,7 +40,7 @@ change, however good the feature is.
 - `dist/` is committed on purpose (it makes `npm install` from GitHub work
   with no build step). Run `npm run build` before committing so the CI
   dist-sync check passes.
-- CI runs the suite on Linux, macOS and Windows across Node 20 and 22. Avoid
+- CI runs the suite on Linux, macOS and Windows across Node 20, 22 and 24. Avoid
   shell-isms and path assumptions that only hold on one OS.
 - Keep comments about *why*, not *what*.
 
@@ -62,8 +62,10 @@ The first connects to the MCP server the way a client does (it takes any launch 
 
 ## Good first issues
 
-- **A new session format.** `src/session.ts` reads Claude Code transcripts and
-  ChatGPT exports. Cursor is open — it needs someone with a sample file.
+- **A new session format.** `src/session.ts` reads Claude Code transcripts,
+  Codex rollouts and ChatGPT exports; `src/gemini.ts` reads Gemini CLI chats and
+  `src/cursor.ts` Cursor's history. Another agent's format needs someone with a
+  sample file.
 - **Pricing updates.** `src/pricing.ts` is one table; provider prices drift.
 - **A new finding.** `src/profile.ts` detectors are self-contained: detect a
   waste pattern, estimate its savings, suggest the fix, add a test.

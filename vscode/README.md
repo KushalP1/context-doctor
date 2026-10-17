@@ -14,7 +14,7 @@ Settings: `contextDoctor.refreshSeconds` (default 5), `contextDoctor.warnAtPerce
 
 ## Want the context kept lean automatically?
 
-This extension shows the number. The [context-doctor CLI](https://github.com/KushalP1/context-doctor) acts on it: its every-prompt hook offers `/compact` when you come back to a large session after the prompt cache expired (about $914 a month on the author's history), and `context-doctor autopilot on` clears stale tool output from terminal and IDE Claude Code sessions, only when the cache is cold, so it never costs more (9.8% less input in a replay of real sessions). `npx context-doctor savings` shows both on your own history.
+This extension shows the number. The [context-doctor CLI](https://github.com/KushalP1/context-doctor) acts on it: its every-prompt hook offers `/compact` when you come back to a large session after the prompt cache expired ($2,993 net over 133 days, about $675 a month, on the author's history), and `context-doctor autopilot on` clears stale tool output from terminal and IDE Claude Code sessions, only when the cache is cold, so it never costs more (12.7% less input cost in a replay of 67 real sessions, none made more expensive). `npx context-doctor savings` shows both on your own history.
 
 ```bash
 npm install -g context-doctor

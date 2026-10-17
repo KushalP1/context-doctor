@@ -5,8 +5,10 @@
 The Python port of [`context-doctor`](https://github.com/KushalP1/context-doctor)'s `pack`: the same chunking, ranking and output as `npx context-doctor pack`, checked by parity tests against the TypeScript package.
 
 ```bash
-pip install context-doctor
+pip install "git+https://github.com/KushalP1/context-doctor#subdirectory=python"
 ```
+
+Not on PyPI yet: `pip install context-doctor` will work once the first release is published there.
 
 ## Trim retrieved documents to a budget (LangChain, LlamaIndex, plain text)
 
