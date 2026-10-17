@@ -213,16 +213,35 @@ export function currentCompactWindow(home = homedir()): number | undefined {
   }
 }
 
-/** Set (or with undefined, remove) autoCompactWindow in ~/.claude/settings.json. A .backup is kept. */
-export function setCompactWindow(window: number | undefined, home = homedir()): void {
+/** What setCompactWindow did, so the CLI can say exactly that. */
+export interface SetWindowResult {
+  /** False when the setting already was what was asked (or, for off, was never set). */
+  changed: boolean;
+  /** settings.json did not exist and was created. */
+  created: boolean;
+  /** The copy of the previous settings.json, when there was one to copy. */
+  backup?: string;
+}
+
+/**
+ * Set (or with undefined, remove) autoCompactWindow in ~/.claude/settings.json.
+ * Nothing is written when nothing changes: `off` with no window set used to
+ * create a settings.json of `{}`. A .backup is kept when there was a file.
+ */
+export function setCompactWindow(window: number | undefined, home = homedir()): SetWindowResult {
   if (window !== undefined && (!Number.isInteger(window) || window < MIN_WINDOW || window > MAX_WINDOW)) {
     throw new Error(`window must be a whole number of tokens between ${MIN_WINDOW} and ${MAX_WINDOW}`);
   }
   const p = settingsPath(home);
+  const existed = existsSync(p);
   const settings = readJson(p);
+  if (window === undefined ? !("autoCompactWindow" in settings) : settings.autoCompactWindow === window) {
+    return { changed: false, created: false };
+  }
   if (window === undefined) delete settings.autoCompactWindow;
   else settings.autoCompactWindow = window;
   writeJsonWithBackup(p, settings);
+  return { changed: true, created: !existed, backup: existed ? `${p}.context-doctor.backup` : undefined };
 }
 
 /** "400k" / "400000" / "0.4m" -> 400000. Undefined when unparseable. */

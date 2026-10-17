@@ -8,6 +8,7 @@
  * `-` reads from stdin, so you can pipe: `cat chat.json | context-doctor analyze -`
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { parseConversation } from "./parse.js";
@@ -684,8 +685,10 @@ async function main() {
     if (args.command === "compact-window") {
         const sub = args.file ?? "status";
         if (sub === "off") {
-            setCompactWindow(undefined);
-            console.log("✓ autoCompactWindow removed from ~/.claude/settings.json: Claude Code compacts near the model's full window again (new sessions).");
+            const r = setCompactWindow(undefined);
+            console.log(r.changed
+                ? "✓ autoCompactWindow removed from ~/.claude/settings.json: Claude Code compacts near the model's full window again (new sessions)."
+                : "No auto-compact window was set. Nothing changed.");
             return;
         }
         if (sub !== "status") {
@@ -695,8 +698,14 @@ async function main() {
                 process.exitCode = 1;
                 return;
             }
-            setCompactWindow(w);
-            console.log(`✓ autoCompactWindow = ${w} in ~/.claude/settings.json (a .backup was kept).`);
+            const r = setCompactWindow(w);
+            if (!r.changed) {
+                console.log(`autoCompactWindow is already ${w} in ~/.claude/settings.json. Nothing changed.`);
+                return;
+            }
+            // Only claim a backup that exists: a new settings.json had nothing to back up.
+            const note = r.created ? "a new file" : r.backup ? `the previous file is kept as ${r.backup.replace(homedir(), "~")}` : "";
+            console.log(`✓ autoCompactWindow = ${w} in ~/.claude/settings.json${note ? ` (${note})` : ""}.`);
             console.log("  Claude Code sessions started from now on compact as if the window were that size,");
             console.log("  in the terminal, IDEs and the desktop app. Check in a session with /context.");
             console.log(`  Undo: ${selfCommand("compact-window off")}`);

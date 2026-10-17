@@ -41,8 +41,21 @@ export declare function estimateCompactWindows(windows: number[], days?: number,
 export declare function settingsPath(home?: string): string;
 /** The autoCompactWindow Claude Code will use from user settings, if set. */
 export declare function currentCompactWindow(home?: string): number | undefined;
-/** Set (or with undefined, remove) autoCompactWindow in ~/.claude/settings.json. A .backup is kept. */
-export declare function setCompactWindow(window: number | undefined, home?: string): void;
+/** What setCompactWindow did, so the CLI can say exactly that. */
+export interface SetWindowResult {
+    /** False when the setting already was what was asked (or, for off, was never set). */
+    changed: boolean;
+    /** settings.json did not exist and was created. */
+    created: boolean;
+    /** The copy of the previous settings.json, when there was one to copy. */
+    backup?: string;
+}
+/**
+ * Set (or with undefined, remove) autoCompactWindow in ~/.claude/settings.json.
+ * Nothing is written when nothing changes: `off` with no window set used to
+ * create a settings.json of `{}`. A .backup is kept when there was a file.
+ */
+export declare function setCompactWindow(window: number | undefined, home?: string): SetWindowResult;
 /** "400k" / "400000" / "0.4m" -> 400000. Undefined when unparseable. */
 export declare function parseWindow(raw: string): number | undefined;
 export declare function renderCompactWindows(r: CompactWindowReport, current?: number): string;
