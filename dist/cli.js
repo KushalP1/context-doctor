@@ -420,6 +420,13 @@ async function main() {
         console.log((topic && commandHelp(HELP, topic)) || HELP);
         return;
     }
+    // Run by hand in a terminal, these waited forever for JSON that only
+    // Claude Code sends.
+    if ((args.command === "hook" || args.command === "statusline") && process.stdin.isTTY) {
+        const setup = args.command === "hook" ? "`context-doctor install` registers it" : "`context-doctor install --statusline` sets it up";
+        console.log(`context-doctor ${args.command} is called by Claude Code with JSON on stdin; there is nothing for it to do in a terminal (${setup}).`);
+        return;
+    }
     if (args.command === "hook") {
         void runHook();
         return;
