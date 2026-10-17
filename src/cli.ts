@@ -18,7 +18,7 @@ import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
 import { startProxy } from "./proxy.js";
 import { runInstall, runUninstall } from "./install.js";
-import { listSessions, parseSessionFile } from "./session.js";
+import { listSessions, parseSessionFile, pickCurrentSession } from "./session.js";
 import { runHook } from "./hook.js";
 import { buildImpactReport } from "./impact.js";
 import { measureTokenizer, renderTokenizer } from "./tokenizer-measure.js";
@@ -539,7 +539,10 @@ async function main(): Promise<void> {
       }
       return;
     }
-    const path = args.file ?? listSessions(1)[0]?.path;
+    // No file: the session this runs in (the plugin's checkup runs it from
+    // inside one), then this folder's newest, then the machine's newest.
+    const picked = args.file ? undefined : pickCurrentSession();
+    const path = args.file ?? picked?.path;
     if (!path) {
       console.error("No session transcript found. Pass a .jsonl path or run inside a machine with Claude Code sessions.");
       process.exit(1);
@@ -555,7 +558,7 @@ async function main(): Promise<void> {
     if (args.json) {
       console.log(
         JSON.stringify(
-          { session: { path: parsed.path, title: parsed.title, toolTimings: parsed.toolTimings ?? [], subagents: subagentReport(path) }, profile },
+          { session: { path: parsed.path, title: parsed.title, ...(picked ? { picked: picked.how } : {}), toolTimings: parsed.toolTimings ?? [], subagents: subagentReport(path) }, profile },
           null,
           2
         )
@@ -572,6 +575,7 @@ async function main(): Promise<void> {
       console.log(args.redact
         ? "Session: [redacted]\nFile:    [redacted]"
         : `Session: ${parsed.title ?? "(untitled)"}\nFile:    ${parsed.path}`);
+      if (picked) console.log(`Picked:  ${picked.how} (pass a file to profile another; --list shows them)`);
       if (parsed.compactedAway) {
         console.log(`Note:    ${parsed.compactedAway} earlier message(s) were compacted away and are NOT counted below — this is the live context the model still sees.`);
       }

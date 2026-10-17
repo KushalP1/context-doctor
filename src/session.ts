@@ -150,6 +150,49 @@ export function listSessions(limit = 20): SessionInfo[] {
   return sessions.sort((a, b) => b.modifiedAt.getTime() - a.modifiedAt.getTime()).slice(0, limit);
 }
 
+/** Claude Code's project folder for a working directory: every non-alphanumeric becomes "-". */
+export function claudeProjectDir(cwd: string, home = homedir()): string {
+  return join(home, ".claude", "projects", cwd.replace(/[^A-Za-z0-9]/g, "-"));
+}
+
+/** A session `session` picked by itself, and how, in words. */
+export interface PickedSession {
+  path: string;
+  how: string;
+}
+
+/**
+ * The session `session` profiles when no file is given: the one it is
+ * running in. Inside Claude Code (a Bash tool call, the plugin's checkup
+ * skill) CLAUDE_CODE_SESSION_ID names it; otherwise the newest transcript of
+ * this folder's project; otherwise the newest on the machine. "Newest on the
+ * machine" alone picked whichever other project had written last.
+ */
+export function pickCurrentSession(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd(), home = homedir()): PickedSession | undefined {
+  const id = env.CLAUDE_CODE_SESSION_ID?.trim();
+  const here = claudeProjectDir(cwd, home);
+  if (id && /^[\w.-]+$/.test(id)) {
+    const root = join(home, ".claude", "projects");
+    let dirs: string[] = [];
+    try { dirs = readdirSync(root); } catch { /* no projects */ }
+    const candidates = [here, ...dirs.map((d) => join(root, d))].map((d) => join(d, `${id}.jsonl`));
+    const found = candidates.find((p) => existsSync(p));
+    if (found) return { path: found, how: `the current Claude Code session (CLAUDE_CODE_SESSION_ID ${id})` };
+  }
+  let newest: { path: string; at: number } | undefined;
+  try {
+    for (const f of readdirSync(here)) {
+      if (!f.endsWith(".jsonl")) continue;
+      const p = join(here, f);
+      const at = statSync(p).mtimeMs;
+      if (!newest || at > newest.at) newest = { path: p, at };
+    }
+  } catch { /* no project folder for this directory */ }
+  if (newest) return { path: newest.path, how: "the newest Claude Code session in this folder's project" };
+  const any = listSessions(1)[0];
+  return any ? { path: any.path, how: "the newest session on this machine (none for this folder)" } : undefined;
+}
+
 /**
  * ChatGPT data export (chatgpt.com → Settings → Data controls → Export):
  * conversations.json is an array of conversations, each holding a `mapping`
