@@ -56,6 +56,13 @@ export declare function isOurPluginKey(key: string): boolean;
 export declare function claudePluginEnabled(home?: string): boolean;
 /** What `install` put into Claude Code that the plugin also provides, by name. */
 export declare function claudeInstalledCopies(home?: string): string[];
+/**
+ * A config that configures nothing: `{}`, or only empty `mcpServers` /
+ * `hooks` containers (plus `extraKeys`, e.g. the `version` install writes
+ * into Cursor's hooks.json). It is what install's own writes leave once our
+ * entries are gone, and to an app it is the same as no file at all.
+ */
+export declare function isEmptyStub(config: unknown, extraKeys?: string[]): boolean;
 export declare function readJson(path: string): Record<string, any>;
 /** Copy `path` to its .context-doctor.backup, once per run. */
 export declare function backupOnce(path: string): void;

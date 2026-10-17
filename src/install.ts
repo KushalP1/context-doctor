@@ -153,6 +153,20 @@ export function claudeInstalledCopies(home = homedir()): string[] {
   return found;
 }
 
+/**
+ * A config that configures nothing: `{}`, or only empty `mcpServers` /
+ * `hooks` containers (plus `extraKeys`, e.g. the `version` install writes
+ * into Cursor's hooks.json). It is what install's own writes leave once our
+ * entries are gone, and to an app it is the same as no file at all.
+ */
+export function isEmptyStub(config: unknown, extraKeys: string[] = []): boolean {
+  if (!config || typeof config !== "object" || Array.isArray(config)) return false;
+  const empty = (v: unknown) => v !== null && typeof v === "object" && Object.keys(v as object).length === 0;
+  return Object.entries(config as Record<string, unknown>).every(
+    ([k, v]) => ((k === "mcpServers" || k === "hooks") && empty(v)) || extraKeys.includes(k)
+  );
+}
+
 export function readJson(path: string): Record<string, any> {
   if (!existsSync(path)) return {};
   try {

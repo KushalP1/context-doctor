@@ -15,7 +15,10 @@ test("doctor runs, checks the MCP handshake, and exits 0", async () => {
     // a real home with large sessions made this test slow and machine-dependent.
     const home = mkdtempSync(join(tmpdir(), "ctxdoc-doctor-home-"));
     const out = await new Promise((resolve, reject) => {
-        execFile(process.execPath, [cliPath, "doctor"], { env: { ...sandboxEnv(home), CONTEXT_DOCTOR_HOOK_STATE: join(stateDir, "state.json") }, timeout: 20000 }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
+        execFile(process.execPath, [cliPath, "doctor"], 
+        // PATH holds only node: a gemini binary on this machine's PATH would
+        // count as Gemini CLI installed and not wired.
+        { env: { ...sandboxEnv(home), PATH: dirname(process.execPath), CONTEXT_DOCTOR_HOOK_STATE: join(stateDir, "state.json") }, timeout: 20000 }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
     });
     assert.ok(out.includes("CONTEXT DOCTOR — self-check"));
     assert.ok(out.includes("MCP server handshake"));
@@ -163,10 +166,11 @@ test("doctor reports a hook whose binary has been deleted", async () => {
     writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({
         hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: '"/gone/_npx/dead/node_modules/.bin/context-doctor" hook' }] }] },
     }));
-    const out = await new Promise((resolve, reject) => {
-        execFile(process.execPath, [cliPath, "doctor"], { env: sandboxEnv(home), timeout: 20000 }, (err, stdout) => err ? reject(err) : resolve(stdout));
+    const { code, out } = await new Promise((resolve) => {
+        execFile(process.execPath, [cliPath, "doctor"], { env: sandboxEnv(home), timeout: 20000 }, (err, stdout) => resolve({ code: err ? err.code ?? 1 : 0, out: stdout }));
     });
     assert.match(out, /✗ Every-prompt hook.*no longer exists/, "a dead hook must not report as healthy");
+    assert.equal(code, 1, "and a failed check is exit 1");
 });
 test("install keeps going past a broken app config but exits non-zero", async () => {
     const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } = await import("node:fs");
