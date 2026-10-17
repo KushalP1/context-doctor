@@ -15,7 +15,7 @@ import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
 import { optimizeConversation, STRATEGY_IDS } from "./optimize.js";
 import { commandHelp, didYouMean } from "./clihelp.js";
-import { selfCommand } from "./invocation.js";
+import { selfCommand, withInvocation } from "./invocation.js";
 import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
 import { startProxy } from "./proxy.js";
@@ -55,82 +55,74 @@ import { renderPayback, subagentPayback } from "./subagentpay.js";
 import { compactionQuality, renderCompactionQuality } from "./compactquality.js";
 const HELP = `context-doctor — profile and optimize LLM context windows
 
-Usage:
-  context-doctor analyze  <file|->  [options]   Show what's eating your tokens
-  context-doctor optimize <file|->  [options]   Apply safe fixes, print slimmed conversation
-  context-doctor proxy --autopilot  [options]   Local proxy for your own API apps (Anthropic, OpenAI,
-                                                Gemini): clears stale tool output only when the
-                                                prompt cache is cold, so it never costs more.
-                                                Plain \`proxy\` is the optimizing mode (dedupe, trim,
-                                                strip base64), which can cost more on cached traffic
+Start here:
   context-doctor install [--statusline]         Wire everything it finds: the MCP server (Claude
                                                 Desktop, Claude Code, Cursor, Codex, Gemini CLI),
                                                 the skill (Claude Code, Codex), the every-prompt
                                                 hook (Claude Code, Codex, Gemini CLI's BeforeAgent,
                                                 Cursor's postToolUse) and Claude Code's PreCompact
                                                 hook, which tells each compaction what to keep
-  context-doctor uninstall                      Undo install
-  context-doctor --version                      Print the installed version
   context-doctor savings [--days n] [--share [--copy]]
                                                 What your recent Claude Code sessions cost, and what
                                                 /compact at cold resumes, autopilot and an earlier
                                                 auto-compact window would save, replayed and priced
                                                 as billed. --share: totals only, to paste. Also
                                                 what a bare \`context-doctor\` shows
-  context-doctor compact-window [status|off|<size>]
-                                                Claude Code's own auto-compact window (e.g. 400k):
-                                                what each size would have saved on your sessions,
-                                                and set or remove it. Works in the desktop app too
-  context-doctor autopilot on|off|pause|resume|status
-                                                Every new Claude Code session started in a terminal
-                                                or IDE goes through the local proxy, which clears
-                                                stale tool output only when the prompt cache is
-                                                cold (never costs more). The desktop app's Code tab
-                                                sets its own API address, so it is not reached
-  context-doctor mcp [--http]                   The MCP server (same as context-doctor-mcp), for clients
-                                                that launch \`npx -y context-doctor mcp\`
-  context-doctor instructions [--copy]          Standing context rules to paste into claude.ai or
-                                                ChatGPT preferences (works on web and mobile too)
+  context-doctor doctor                         Self-check the installation (configs, hook, skill,
+                                                MCP handshake) with one pasteable diagnosis
+  context-doctor uninstall                      Undo install
+  context-doctor --version                      Print the installed version
+
+Measure:
+  context-doctor analyze  <file|->  [options]   Show what's eating your tokens
   context-doctor session [file]                 Profile a Claude Code session transcript or a
                                                 ChatGPT export (default: most recent; --list to browse)
   context-doctor cursor [--list]                Profile a Cursor chat from its local history
-  context-doctor statusline                     Claude Code status bar line: live context size, cache
-                                                share, cost (wired by \`install --statusline\`; reads
-                                                the status JSON on stdin)
-  context-doctor hook                           The every-prompt and PreCompact hook (installed by
-                                                \`install\`; reads hook JSON on stdin)
-  context-doctor report                         Impact report: exact proxy savings, hook activity,
-                                                and remaining recoverable waste in recent sessions
-  context-doctor doctor                         Self-check the installation (configs, hook, skill,
-                                                MCP handshake) with one pasteable diagnosis
-  context-doctor dashboard                      Local savings dashboard on 127.0.0.1 (--port n,
-                                                default 8790) — charts from your own machine only
-  context-doctor init [preset]                  Write a .contextdoctorrc from a preset
-                                                (chat, agent, batch; no argument lists them)
-  context-doctor experiment --task "<t>"         Run one task twice from the same commit, in a fresh
-                                                session and forked from an --existing one; compare
-                                                bill, cache, time, and whether --check passed
-  context-doctor diff <before> <after>          Compare two profiles: what moved, which findings
-                                                were resolved, and what it saves
-  context-doctor accuracy                       Measure the token heuristic against the API's own
-                                                counts recorded in your transcripts (--limit n)
   context-doctor overhead [--days n] [--mcp]    What every request re-reads before your message:
                                                 measured first-request size, each CLAUDE.md /
                                                 AGENTS.md / rules file priced per month, findings
-  context-doctor ci [--base <ref>] [--max-tokens n] [--max-increase n] [--markdown]
-                                                For pull requests: memory files (CLAUDE.md, AGENTS.md,
-                                                GEMINI.md, rules) at HEAD vs base; exit 1 over budget
-  context-doctor cache-plan <request.json> [--calls n] [--out file]
-                                                Where an Anthropic request should carry cache_control,
-                                                what it saves over n calls; --out writes it applied
-  context-doctor compactions [--days n]         Do sessions work worse right after compacting? Re-reads,
-                                                tool errors and your corrections, before vs after
+  context-doctor report                         Impact report: exact proxy savings, hook activity,
+                                                and remaining recoverable waste in recent sessions
   context-doctor subagents [--days n]           Which subagents paid for themselves: their bill vs
                                                 the same steps run in the parent session
   context-doctor tasks [--days n]               Cost per commit, per project: session cost at list
                                                 price vs commits made during the sessions
   context-doctor reads [--days n] [--limit n]   Files read into session after session: reads, tokens,
                                                 cost, and whether a CLAUDE.md summary or pack pays
+  context-doctor compactions [--days n]         Do sessions work worse right after compacting? Re-reads,
+                                                tool errors and your corrections, before vs after
+  context-doctor accuracy                       Measure the token heuristic against the API's own
+                                                counts recorded in your transcripts (--limit n)
+  context-doctor diff <before> <after>          Compare two profiles: what moved, which findings
+                                                were resolved, and what it saves
+  context-doctor watch [file]                   Live-monitor a growing session/agent trace: running
+                                                token/cost line per change, new findings as they appear
+                                                (--interval-ms n, default 2000)
+  context-doctor dashboard                      Local savings dashboard on 127.0.0.1 (--port n,
+                                                default 8790) — charts from your own machine only
+  context-doctor experiment --task "<t>"         Run one task twice from the same commit, in a fresh
+                                                session and forked from an --existing one; compare
+                                                bill, cache, time, and whether --check passed
+
+Fix automatically:
+  context-doctor autopilot on|off|pause|resume|status
+                                                Every new Claude Code session started in a terminal
+                                                or IDE goes through the local proxy, which clears
+                                                stale tool output only when the prompt cache is
+                                                cold (never costs more). The desktop app's Code tab
+                                                sets its own API address, so it is not reached
+  context-doctor compact-window [status|off|<size>]
+                                                Claude Code's own auto-compact window (e.g. 400k):
+                                                what each size would have saved on your sessions,
+                                                and set or remove it. Works in the desktop app too
+  context-doctor proxy --autopilot  [options]   Local proxy for your own API apps (Anthropic, OpenAI,
+                                                Gemini): clears stale tool output only when the
+                                                prompt cache is cold, so it never costs more.
+                                                Plain \`proxy\` is the optimizing mode (dedupe, trim,
+                                                strip base64), which can cost more on cached traffic
+
+Fix on request:
+  context-doctor optimize <file|->  [options]   Apply safe fixes, print slimmed conversation
   context-doctor overhead split <file> [--min-tokens n] [--write]
                                                 Move a memory file's big sections to a reference
                                                 file, leaving pointers (plan first; --write backs up)
@@ -142,9 +134,27 @@ Usage:
                                                 --semantic: also rank by meaning with a local
                                                 Ollama embedding model, when one is installed
                                                 (--embed-model <name> picks it)
-  context-doctor watch [file]                   Live-monitor a growing session/agent trace: running
-                                                token/cost line per change, new findings as they appear
-                                                (--interval-ms n, default 2000)
+  context-doctor cache-plan <request.json> [--calls n] [--out file]
+                                                Where an Anthropic request should carry cache_control,
+                                                what it saves over n calls; --out writes it applied
+
+Integrations:
+  context-doctor ci [--base <ref>] [--max-tokens n] [--max-increase n] [--markdown]
+                                                For pull requests: memory files (CLAUDE.md, AGENTS.md,
+                                                GEMINI.md, rules) at HEAD vs base; exit 1 over budget
+  context-doctor instructions [--copy]          Standing context rules to paste into claude.ai or
+                                                ChatGPT preferences (works on web and mobile too)
+  context-doctor init [preset]                  Write a .contextdoctorrc from a preset
+                                                (chat, agent, batch; no argument lists them)
+
+Internal (Claude Code and MCP clients run these for you):
+  context-doctor hook                           The every-prompt and PreCompact hook (installed by
+                                                \`install\`; reads hook JSON on stdin)
+  context-doctor statusline                     Claude Code status bar line: live context size, cache
+                                                share, cost (wired by \`install --statusline\`; reads
+                                                the status JSON on stdin)
+  context-doctor mcp [--http]                   The MCP server (same as context-doctor-mcp), for clients
+                                                that launch \`npx -y context-doctor mcp\`
 
 Project config: an optional .contextdoctorrc (nearest, walking up from cwd, then
 ~/.contextdoctorrc) can set a context budget and default strategies:
@@ -209,6 +219,25 @@ Examples:
           export OPENAI_BASE_URL=http://localhost:8787/v1
           export GOOGLE_GEMINI_BASE_URL=http://localhost:8787
 `;
+/**
+ * What a bare `context-doctor` prints when there is no Claude Code history
+ * to measure, or when stdout is not a terminal: where to begin, in a dozen
+ * lines, instead of the full reference above.
+ */
+const START_HERE = `context-doctor: see where your Claude Code tokens go, and cut them.
+
+Start here
+  In Claude Code, as a plugin:
+    /plugin marketplace add KushalP1/context-doctor
+    /plugin install context-doctor@context-doctor
+    then /context-doctor:savings, :checkup, :overhead, :compact-window, :autopilot, :pack
+  In a terminal:
+    context-doctor install     wire the MCP server, skill and hooks into the apps it finds
+    context-doctor savings     what your recent sessions cost, and what each fix would save
+    context-doctor doctor      check the installation
+
+All commands: context-doctor --help
+Guide: https://github.com/KushalP1/context-doctor#readme`;
 /** Exit 1 with a usage message: wrong arguments are the caller's to fix, not a crash. */
 function usageError(message) {
     console.error(message);
@@ -889,7 +918,8 @@ async function main() {
         return;
     }
     if (!args.command) {
-        console.log(HELP);
+        // Bare, with no history to measure or not in a terminal: where to begin.
+        console.log(withInvocation(START_HERE));
         return;
     }
     if (!args.file) {
