@@ -89,7 +89,15 @@ function isFile(p) {
 }
 export function ciReport(opts = {}) {
     const cwd = opts.cwd ?? process.cwd();
-    const root = git(["rev-parse", "--show-toplevel"], cwd)?.trim() ?? cwd;
+    // Outside a repository `git ls-files` lists nothing, which used to read as
+    // "No agent memory files" with exit 0: a CI step in the wrong directory
+    // passed every pull request. It is an error, said as one.
+    const root = git(["rev-parse", "--show-toplevel"], cwd)?.trim();
+    if (!root) {
+        throw new Error(git(["--version"], cwd) === undefined
+            ? "ci needs git, and git is not installed or not on PATH."
+            : `ci compares memory files in a git repository, and ${cwd} is not inside one. Run it from the repository's checkout.`);
+    }
     // A base git cannot resolve (a typo, or a shallow clone that never fetched
     // it) would read as an empty tree: every file "new", and a failure that
     // blames the PR for the whole memory set. Stop and say so instead.

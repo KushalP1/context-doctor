@@ -476,13 +476,37 @@ export async function autopilotOff(paths = autopilotPaths(), exec = tryRun) {
     return lines;
 }
 export function autopilotPause(paused, paths = autopilotPaths()) {
-    if (paused) {
-        writeFileSync(paths.pauseFile, new Date().toISOString());
-        return "✓ Paused: the proxy now forwards every request unchanged. `autopilot resume` turns it back on.";
+    return autopilotPauseResult(paused, paths).message;
+}
+/**
+ * Pause or resume, saying what actually happened. Without autopilot on there
+ * is no proxy to pause: this used to claim "✓ Paused" over nothing, and on a
+ * machine with no ~/.claude it threw ENOENT writing the pause file. `ok` is
+ * false when nothing was done, for the exit code.
+ */
+export function autopilotPauseResult(paused, paths = autopilotPaths()) {
+    // A config that exists but no longer parses still means a proxy may be
+    // running and routed: pausing it is the safe thing, so only absence is "off".
+    if (!existsSync(paths.config)) {
+        // A pause file left behind by an older version has nothing to pause.
+        if (!paused && existsSync(paths.pauseFile))
+            rmSync(paths.pauseFile);
+        return {
+            ok: false,
+            message: `Autopilot is off; nothing to ${paused ? "pause" : "resume"}. \`context-doctor autopilot on\` turns it on for new Claude Code sessions.`,
+        };
     }
-    if (existsSync(paths.pauseFile))
-        rmSync(paths.pauseFile);
-    return "✓ Resumed: stale tool output is cleared again.";
+    if (paused) {
+        if (existsSync(paths.pauseFile))
+            return { ok: true, message: "Already paused: the proxy forwards every request unchanged. `autopilot resume` turns it back on." };
+        mkdirSync(dirname(paths.pauseFile), { recursive: true });
+        writeFileSync(paths.pauseFile, new Date().toISOString());
+        return { ok: true, message: "✓ Paused: the proxy now forwards every request unchanged. `autopilot resume` turns it back on." };
+    }
+    if (!existsSync(paths.pauseFile))
+        return { ok: true, message: "Not paused: autopilot is already clearing stale tool output." };
+    rmSync(paths.pauseFile);
+    return { ok: true, message: "✓ Resumed: stale tool output is cleared again." };
 }
 export async function autopilotStatus(paths = autopilotPaths()) {
     const cfg = readConfig(paths);

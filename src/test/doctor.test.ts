@@ -22,7 +22,9 @@ test("doctor runs, checks the MCP handshake, and exits 0", async () => {
     execFile(
       process.execPath,
       [cliPath, "doctor"],
-      { env: { ...sandboxEnv(home), CONTEXT_DOCTOR_HOOK_STATE: join(stateDir, "state.json") }, timeout: 20000 },
+      // PATH holds only node: a gemini binary on this machine's PATH would
+      // count as Gemini CLI installed and not wired.
+      { env: { ...sandboxEnv(home), PATH: dirname(process.execPath), CONTEXT_DOCTOR_HOOK_STATE: join(stateDir, "state.json") }, timeout: 20000 },
       (err, stdout) => (err ? reject(err) : resolve(stdout))
     );
   });
@@ -225,12 +227,13 @@ test("doctor reports a hook whose binary has been deleted", async () => {
       hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: '"/gone/_npx/dead/node_modules/.bin/context-doctor" hook' }] }] },
     })
   );
-  const out = await new Promise<string>((resolve, reject) => {
+  const { code, out } = await new Promise<{ code: number; out: string }>((resolve) => {
     execFile(process.execPath, [cliPath, "doctor"], { env: sandboxEnv(home), timeout: 20000 }, (err, stdout) =>
-      err ? reject(err) : resolve(stdout)
+      resolve({ code: err ? (err as { code?: number }).code ?? 1 : 0, out: stdout })
     );
   });
   assert.match(out, /✗ Every-prompt hook.*no longer exists/, "a dead hook must not report as healthy");
+  assert.equal(code, 1, "and a failed check is exit 1");
 });
 
 test("install keeps going past a broken app config but exits non-zero", async () => {

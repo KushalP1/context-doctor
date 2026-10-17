@@ -101,7 +101,8 @@ test("compact-window: a cold re-write is charged at the session's own write mix"
     const rows = Array.from({ length: 10 }, (_, i) => assistant(i, t0 + i * 60_000, i === 0 ? usage(0, 0, 100_000) : usage(0, 99_000, 1_000)));
     const est = estimateCompactWindows([1_000_000], 30, [write(rows)]).estimates[0];
     const expected = (2 * 100_000 * 1 + 9 * 100_000 * 0.1) / 1e6;
-    assert.ok(close(est.baselineUsd, expected), `${est.baselineUsd} vs ${expected}`);
+    // The replay's own baseline; "as now" (baselineUsd) is the billed usage, as in savings.
+    assert.ok(close(est.replayBaselineUsd, expected), `${est.replayBaselineUsd} vs ${expected}`);
 });
 test("overhead: a cold start re-writes the overhead at the recorded TTL mix", () => {
     const t0 = Date.now() - 3 * 3_600_000;

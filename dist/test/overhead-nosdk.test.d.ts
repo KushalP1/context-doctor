@@ -1,6 +1,8 @@
 /**
- * `overhead --mcp` from the Claude Code plugin: the plugin runs dist/ from a
- * git checkout with no node_modules, so the MCP SDK cannot load. That must be
- * a note per server, not an ERR_MODULE_NOT_FOUND crash that loses the report.
+ * dist/ with no node_modules anywhere above it: how the Claude Code plugin
+ * runs (a git checkout), and what the npm package now is (it declares no
+ * runtime dependencies; the MCP SDK and zod are bundled into dist/mcp.js and
+ * dist/mcpclient.js). `overhead --mcp` used to note "MCP SDK not installed"
+ * there; it now measures the servers, and the server itself starts.
  */
 export {};

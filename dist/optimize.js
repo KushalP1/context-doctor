@@ -9,6 +9,8 @@
 import { createHash } from "node:crypto";
 import { charsPerTokenFor, estimateTokens } from "./tokens.js";
 import { hasBase64Blob, stripBase64Blobs } from "./blob.js";
+/** Every strategy id, for validating what a user typed. */
+export const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"];
 const TRIM_BOUNDARY_STEP = 10;
 const DEFAULTS = {
     strategies: ["dedupe", "trim-tool-results", "strip-base64"],

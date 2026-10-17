@@ -49,7 +49,7 @@ test("a truncated autopilot config is a failed check, not a crash that hides eve
     const home = claudeHome({ hooks: { UserPromptSubmit: [ourHook] } });
     writeFileSync(join(home, ".claude", ".context-doctor-autopilot.json"), '{"port": 87');
     const r = await doctor(home);
-    assert.equal(r.code, 0, r.err);
+    assert.equal(r.code, 1, "a failed check is exit 1");
     assert.ok(!/at .*doctor\.js/.test(r.err), "no stack trace");
     assert.match(r.out, /CONTEXT DOCTOR — self-check/, "the report is printed");
     assert.match(r.out, /✗ Autopilot\s+.*context-doctor-autopilot\.json/);
@@ -68,13 +68,16 @@ test("an enabled context-doctor plugin counts as the MCP server and the hook", a
     assert.match(r.out, /✓ Claude Code\s+.*plugin/);
     assert.match(r.out, /✓ Every-prompt hook\s+.*plugin/);
     assert.match(r.out, /✓ Compaction hook\s+.*plugin/);
-    // Disabled is not enabled.
+    // Disabled is not enabled. (~/.claude.json with Claude Code's own state:
+    // without one, Claude Code reads as not installed and so does the hook.)
     const off = claudeHome({ enabledPlugins: { "context-doctor@context-doctor": false } });
+    writeFileSync(join(off, ".claude.json"), JSON.stringify({ numStartups: 4 }));
     const r2 = await doctor(off);
     assert.match(r2.out, /✗ Every-prompt hook\s+not registered/);
 });
 test("~/.claude without settings.json means the hook is not registered, not that Claude Code is absent", async () => {
     const home = claudeHome();
+    writeFileSync(join(home, ".claude.json"), JSON.stringify({ numStartups: 4 }));
     const r = await doctor(home);
     assert.match(r.out, /✗ Every-prompt hook\s+not registered/);
     assert.ok(!/Claude Code not detected/.test(r.out));

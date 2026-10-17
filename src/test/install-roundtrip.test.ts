@@ -73,7 +73,7 @@ test("doctor flags an existing context-doctor-mcp npx launcher instead of callin
   // No global install: npx has nothing to fall back to, and npm answers 404.
   const bare = mkdtempSync(join(tmpdir(), "ctxdoc-emptypath-"));
   const r = await run(home, ["doctor"], { PATH: bare });
-  assert.equal(r.code, 0);
+  assert.equal(r.code, 1, "failed checks make the exit code 1");
   assert.match(r.out, /✗ Claude Code\s+.*context-doctor-mcp.*re-run: context-doctor install/);
   assert.match(r.out, /✗ Cursor\s+.*context-doctor-mcp/, "the Windows cmd /c form too");
   assert.match(r.out, /✗ Codex MCP\s+.*context-doctor-mcp/);

@@ -2,20 +2,22 @@
  * `context-doctor doctor` — self-check for a local installation.
  *
  * Verifies every integration point end to end and prints one ✓/✗/– line per
- * check, so "it doesn't work" becomes a single pasteable diagnosis. Always
- * exits 0 — absence of an app is a note, not a failure.
+ * check, so "it doesn't work" becomes a single pasteable diagnosis. Exits 1
+ * when any check fails (✗), so a script can tell; an app that is absent, or
+ * that nothing was installed into, is a note (–), not a failure.
  */
 
 import { autopilotPaths, health, installedVersion, proxyUrl, recentSurfaces } from "./autopilot.js";
 import { spawn } from "node:child_process";
-import { accessSync, constants as fsConstants, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, readFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ledgerPath } from "./ledger.js";
 import { loadConfig } from "./config.js";
-import { binOnPath, codexMcpEntry, geminiCliPresent, geminiSettingsPath, launcherNamesMissingPackage } from "./install.js";
+import { binOnPath, claudeInstalledCopies, codexMcpEntry, geminiCliPresent, geminiSettingsPath, isEmptyStub, isOurPluginKey, launcherNamesMissingPackage } from "./install.js";
 import { describeDesktopUsage, desktopUsage } from "./desktopusage.js";
+import { withInvocation } from "./invocation.js";
 
 function claudeDesktopConfigPath(): string {
   switch (platform()) {
@@ -43,11 +45,28 @@ function missingPackageCheck(label: string): Check {
     : { label, status: "fail", detail: "MCP entry runs `npx context-doctor-mcp`, a package that does not exist on npm, so the server never starts — re-run: context-doctor install" };
 }
 
+/** The "not installed" note shared by every app whose config has nothing in it. */
+const NOT_INSTALLED = "not installed (no config, or an empty one)";
+
+/**
+ * Read a JSON config for a check: undefined when it is absent or an empty
+ * stub (`{}`, `{"mcpServers":{}}`, `{"hooks":{}}`), which configure nothing
+ * and are what install leaves behind once our entries are removed. Both
+ * mean "not installed" for every app alike. Throws on invalid JSON.
+ */
+function readConfig(path: string, extraKeys: string[] = []): Record<string, any> | undefined {
+  if (!existsSync(path)) return undefined;
+  const config = JSON.parse(readFileSync(path, "utf8"));
+  return isEmptyStub(config, extraKeys) ? undefined : config;
+}
+
 function checkMcpEntry(appName: string, configPath: string, plugin = false): Check {
   const viaPlugin: Check = { label: appName, status: "ok", detail: "MCP server provided by the context-doctor plugin" };
-  if (!existsSync(configPath)) return plugin ? viaPlugin : { label: appName, status: "skip", detail: "app not detected (config file absent)" };
   try {
-    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    const config = readConfig(configPath);
+    if (!config) {
+      return plugin ? viaPlugin : { label: appName, status: "skip", detail: existsSync(configPath) ? NOT_INSTALLED : "app not detected (config file absent)" };
+    }
     const entry = config.mcpServers?.["context-doctor"];
     if (!entry && plugin) return viaPlugin;
     if (!entry) return { label: appName, status: "fail", detail: `no context-doctor entry in ${configPath} — run: context-doctor install` };
@@ -122,7 +141,7 @@ function pluginEnabled(layers: Array<Record<string, any>>): boolean {
   const state = new Map<string, boolean>();
   for (const s of layers) {
     for (const [key, on] of Object.entries((s.enabledPlugins ?? {}) as Record<string, unknown>)) {
-      if (key.startsWith("context-doctor@")) state.set(key, on === true);
+      if (isOurPluginKey(key)) state.set(key, on === true);
     }
   }
   return [...state.values()].some(Boolean);
@@ -182,15 +201,23 @@ export async function runDoctor(): Promise<void> {
   if (desktop) checks.push({ label: "Desktop chat tool use", status: "ok", detail: describeDesktopUsage(desktop, recentSurfaces(7).get("claude-desktop") ?? 0) });
   const layers = claudeSettingsLayers();
   const plugin = pluginEnabled(layers);
-  checks.push(checkMcpEntry("Claude Code", join(homedir(), ".claude.json"), plugin));
-  checks.push(checkMcpEntry("Cursor", join(homedir(), ".cursor", "mcp.json")));
+  const claudeMcp = checkMcpEntry("Claude Code", join(homedir(), ".claude.json"), plugin);
+  const cursorMcp = checkMcpEntry("Cursor", join(homedir(), ".cursor", "mcp.json"));
+  checks.push(claudeMcp, cursorMcp);
+  // A missing hook is an issue only for an app that is there to hook: when
+  // the app's own MCP check says it is absent or holds nothing of ours, the
+  // hook is "not installed" too, not a failure.
+  const missingHook = (label: string, app: Check): Check =>
+    app.status === "skip"
+      ? { label, status: "skip", detail: "not installed (nor is the MCP server, above)" }
+      : { label, status: "fail", detail: "not registered — run: context-doctor install" };
 
   // Hook registration. ~/.claude without a settings.json is Claude Code with
   // no hook registered, not Claude Code absent.
   const settingsPath = join(homedir(), ".claude", "settings.json");
   if (existsSync(settingsPath) || existsSync(join(homedir(), ".claude"))) {
     try {
-      const settings = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, "utf8")) : {};
+      const settings = readConfig(settingsPath) ?? {};
       const entries: Array<{ hooks?: Array<{ command?: string }> }> = settings.hooks?.UserPromptSubmit ?? [];
       const ours = entries.map((e) => e.hooks?.[0]?.command ?? "").find((c) => /context-doctor|cli\.js"?\s+hook/.test(c));
       if (hooksDisabled(layers)) {
@@ -204,7 +231,7 @@ export async function runDoctor(): Promise<void> {
         checks.push({ label: "Every-prompt hook", status: "ok", detail: "provided by the context-doctor plugin" });
         checks.push({ label: "Compaction hook", status: "ok", detail: "PreCompact: provided by the context-doctor plugin" });
       } else if (!ours) {
-        checks.push({ label: "Every-prompt hook", status: "fail", detail: "not registered — run: context-doctor install" });
+        checks.push(missingHook("Every-prompt hook", claudeMcp));
       } else {
         // "Registered" is not "working": a hook whose binary has been deleted
         // (an npx cache sweep, a Node upgrade) fails silently on every prompt,
@@ -230,6 +257,19 @@ export async function runDoctor(): Promise<void> {
     checks.push({ label: "Every-prompt hook", status: "skip", detail: "Claude Code not detected" });
   }
 
+  // Plugin AND install: Claude Code then starts our MCP server twice (its
+  // instructions and tools load twice) and runs the hook twice.
+  const copies = plugin ? claudeInstalledCopies() : [];
+  if (copies.length > 0) {
+    checks.push({
+      label: "Plugin + install",
+      status: "warn",
+      detail:
+        `the context-doctor plugin is enabled and \`install\` also wired Claude Code (${copies.join(", ")}), so its instructions and tools load twice. ` +
+        "Keep one: `context-doctor uninstall` removes the installed copy (then `context-doctor install` re-wires other apps and skips Claude Code while the plugin is on), or disable the plugin",
+    });
+  }
+
   // Codex (OpenAI): MCP table in config.toml, hook in hooks.json, skill.
   const codexHome = join(homedir(), ".codex");
   if (existsSync(codexHome)) {
@@ -237,20 +277,22 @@ export async function runDoctor(): Promise<void> {
     // Parsed rather than searched for one exact header: a quoted key or a
     // trailing comment is the same table to Codex.
     const codexEntry = codexMcpEntry(toml);
-    checks.push(
-      !codexEntry
-        ? { label: "Codex MCP", status: "fail", detail: "Codex detected but not wired — run: context-doctor install" }
-        : launcherNamesMissingPackage(codexEntry)
-          ? missingPackageCheck("Codex MCP")
-          : { label: "Codex MCP", status: "ok", detail: "wired in ~/.codex/config.toml" }
-    );
+    // An absent or empty config.toml is "not installed", as for every other app.
+    const codexMcp: Check = !codexEntry
+      ? toml.trim() === ""
+        ? { label: "Codex MCP", status: "skip", detail: NOT_INSTALLED }
+        : { label: "Codex MCP", status: "fail", detail: "Codex detected but not wired — run: context-doctor install" }
+      : launcherNamesMissingPackage(codexEntry)
+        ? missingPackageCheck("Codex MCP")
+        : { label: "Codex MCP", status: "ok", detail: "wired in ~/.codex/config.toml" };
+    checks.push(codexMcp);
     try {
       const hooksPath = join(codexHome, "hooks.json");
-      const hooks = existsSync(hooksPath) ? JSON.parse(readFileSync(hooksPath, "utf8")) : {};
+      const hooks = readConfig(hooksPath) ?? {};
       const entries: Array<{ hooks?: Array<{ command?: string }> }> = hooks.hooks?.UserPromptSubmit ?? [];
       const ours = entries.map((e) => e.hooks?.[0]?.command ?? "").find((c) => /context-doctor|cli\.js"?\s+hook/.test(c));
       if (!ours) {
-        checks.push({ label: "Codex hook", status: "fail", detail: "not registered — run: context-doctor install" });
+        checks.push(missingHook("Codex hook", codexMcp));
       } else {
         const missing = hookBinaryMissing(ours);
         checks.push(
@@ -270,21 +312,23 @@ export async function runDoctor(): Promise<void> {
   if (geminiCliPresent()) {
     try {
       const path = geminiSettingsPath();
-      const settings = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
+      const read = readConfig(path);
+      const settings = read ?? {};
       const geminiEntry = settings.mcpServers?.["context-doctor"];
-      checks.push(
-        !geminiEntry
-          ? { label: "Gemini CLI MCP", status: "fail", detail: "Gemini CLI detected but not wired — run: context-doctor install" }
-          : launcherNamesMissingPackage(geminiEntry)
-            ? missingPackageCheck("Gemini CLI MCP")
-            : { label: "Gemini CLI MCP", status: "ok", detail: "wired in ~/.gemini/settings.json" }
-      );
+      const geminiMcp: Check = !geminiEntry
+        ? read === undefined
+          ? { label: "Gemini CLI MCP", status: "skip", detail: NOT_INSTALLED }
+          : { label: "Gemini CLI MCP", status: "fail", detail: "Gemini CLI detected but not wired — run: context-doctor install" }
+        : launcherNamesMissingPackage(geminiEntry)
+          ? missingPackageCheck("Gemini CLI MCP")
+          : { label: "Gemini CLI MCP", status: "ok", detail: "wired in ~/.gemini/settings.json" };
+      checks.push(geminiMcp);
       const entries: Array<{ hooks?: Array<{ command?: string }> }> = settings.hooks?.BeforeAgent ?? [];
       const ours = entries.map((e) => e.hooks?.[0]?.command ?? "").find((c) => /context-doctor|cli\.js"?\s+hook/.test(c));
       const missing = ours ? hookBinaryMissing(ours) : undefined;
       checks.push(
         !ours
-          ? { label: "Gemini CLI hook", status: "fail", detail: "not registered — run: context-doctor install" }
+          ? missingHook("Gemini CLI hook", geminiMcp)
           : missing
             ? { label: "Gemini CLI hook", status: "fail", detail: `registered, but ${missing} no longer exists — re-run: context-doctor install` }
             : settings.hooksConfig?.enabled === false
@@ -303,12 +347,12 @@ export async function runDoctor(): Promise<void> {
   if (existsSync(join(homedir(), ".cursor"))) {
     const hooksPath = join(homedir(), ".cursor", "hooks.json");
     try {
-      const hooks = existsSync(hooksPath) ? JSON.parse(readFileSync(hooksPath, "utf8")) : {};
+      const hooks = readConfig(hooksPath, ["version"]) ?? {};
       const ours = ((hooks.hooks?.postToolUse ?? []) as Array<{ command?: string }>).map((e) => e.command ?? "").find((c) => /(cli\.js|context-doctor(\.cmd|\.exe|\.bat)?)"?\s+hook\s*$/.test(c));
       const missing = ours ? hookBinaryMissing(ours) : undefined;
       checks.push(
         !ours
-          ? { label: "Cursor hook", status: "fail", detail: "not registered — run: context-doctor install" }
+          ? missingHook("Cursor hook", cursorMcp)
           : missing
             ? { label: "Cursor hook", status: "fail", detail: `registered, but ${missing} no longer exists — re-run: context-doctor install` }
             : { label: "Cursor hook", status: "ok", detail: "registered in ~/.cursor/hooks.json (after each tool call in heavy chats)" }
@@ -351,10 +395,13 @@ export async function runDoctor(): Promise<void> {
   // Ledger writable. Tested without writing an entry: recordLedger swallows
   // errors (so this could never fail), and the entry it wrote counted as a
   // hook check in every report.
+  // Nor by creating its directory: doctor making ~/.claude on a machine
+  // without Claude Code made the next install and doctor see Claude Code.
   try {
     const lp = ledgerPath();
-    mkdirSync(dirname(lp), { recursive: true });
-    accessSync(existsSync(lp) ? lp : dirname(lp), fsConstants.W_OK);
+    let dir = dirname(lp);
+    while (!existsSync(dir) && dirname(dir) !== dir) dir = dirname(dir);
+    accessSync(existsSync(lp) ? lp : dir, fsConstants.W_OK);
     checks.push({ label: "Ledger", status: "ok", detail: `writable at ${lp}` });
   } catch {
     checks.push({ label: "Ledger", status: "fail", detail: `cannot write ${ledgerPath()}` });
@@ -440,11 +487,13 @@ export async function runDoctor(): Promise<void> {
   const mark = { ok: "✓", warn: "!", fail: "✗", skip: "–" } as const;
   console.log("CONTEXT DOCTOR — self-check");
   console.log("═".repeat(56));
+  // Fix hints name `context-doctor <command>`; after an npx run, `npx context-doctor <command>`.
   for (const c of checks) {
-    console.log(`${mark[c.status]} ${c.label.padEnd(22)} ${c.detail}`);
+    console.log(withInvocation(`${mark[c.status]} ${c.label.padEnd(22)} ${c.detail}`));
   }
   const fails = checks.filter((c) => c.status === "fail");
   const warns = checks.filter((c) => c.status === "warn");
+  if (fails.length > 0) process.exitCode = 1;
   console.log("");
   console.log(
     fails.length > 0

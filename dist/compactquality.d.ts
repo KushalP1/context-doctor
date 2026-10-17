@@ -40,6 +40,6 @@ export interface CompactionQuality {
         after: Signals;
     };
 }
-export declare function compactionQuality(days?: number, paths?: string[]): CompactionQuality;
+export declare function compactionQuality(days?: number, paths?: string[], onProgress?: (done: number, total: number) => void): CompactionQuality;
 export declare function renderCompactionQuality(q: CompactionQuality, days?: number): string;
 export {};

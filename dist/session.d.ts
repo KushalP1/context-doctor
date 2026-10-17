@@ -72,6 +72,21 @@ export interface ParsedSession {
 }
 /** All session transcripts on this machine, newest first. */
 export declare function listSessions(limit?: number): SessionInfo[];
+/** Claude Code's project folder for a working directory: every non-alphanumeric becomes "-". */
+export declare function claudeProjectDir(cwd: string, home?: string): string;
+/** A session `session` picked by itself, and how, in words. */
+export interface PickedSession {
+    path: string;
+    how: string;
+}
+/**
+ * The session `session` profiles when no file is given: the one it is
+ * running in. Inside Claude Code (a Bash tool call, the plugin's checkup
+ * skill) CLAUDE_CODE_SESSION_ID names it; otherwise the newest transcript of
+ * this folder's project; otherwise the newest on the machine. "Newest on the
+ * machine" alone picked whichever other project had written last.
+ */
+export declare function pickCurrentSession(env?: NodeJS.ProcessEnv, cwd?: string, home?: string): PickedSession | undefined;
 /**
  * Read a JSONL transcript line by line without ever materializing the whole
  * file as one string.

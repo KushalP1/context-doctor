@@ -68,13 +68,14 @@ export function claudeMcpConfigs(cwd = process.cwd(), home = homedir()) {
  * of them in one 30-day count). Rows without a timestamp count with their
  * file.
  */
-export function mcpUsage(days = 30, paths) {
+export function mcpUsage(days = 30, paths, onProgress) {
     const since = Date.now() - days * 86_400_000;
     const files = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
     const calls = new Map();
     const counted = new Set();
     let toolSearchSessions = 0;
-    for (const path of files) {
+    for (const [index, path] of files.entries()) {
+        onProgress?.(index, files.length);
         let searched = false;
         const scan = (file) => forEachLine(file, (line) => {
             if (!line.includes('"tool_use"') || (!line.includes('"name":"mcp__') && !line.includes('"name":"ToolSearch"')))
@@ -135,16 +136,18 @@ export async function measureServer(cfg, timeoutMs = 15_000) {
     if (!cfg.command && !(cfg.url && cfg.type !== "sse")) {
         return { name: cfg.name, error: cfg.type === "sse" ? "SSE server: not measured" : "no command or url" };
     }
-    // The SDK is a dependency of the npm package, but the Claude Code plugin runs
-    // dist/ from a git checkout with no node_modules. An import failure there
-    // used to abort the whole `overhead --mcp` report; it is a per-server note.
+    // The SDK's client comes from dist/mcpclient.js, which the build bundles
+    // with the SDK inside: the npm package has no runtime dependencies, and the
+    // Claude Code plugin runs dist/ from a git checkout with no node_modules.
+    // Should it still fail to load, that is a per-server note, never a crash
+    // that loses the whole `overhead --mcp` report.
     let client;
     let transport;
     try {
-        const sdk = await import("@modelcontextprotocol/sdk/client/index.js");
+        const sdk = await import("./mcpclient.js");
         client = new sdk.Client({ name: "context-doctor-overhead", version: "1" });
         if (cfg.command) {
-            const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
+            const { StdioClientTransport } = sdk;
             transport = new StdioClientTransport({
                 command: cfg.command,
                 args: cfg.args ?? [],
@@ -153,7 +156,7 @@ export async function measureServer(cfg, timeoutMs = 15_000) {
             });
         }
         else {
-            const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+            const { StreamableHTTPClientTransport } = sdk;
             transport = new StreamableHTTPClientTransport(new URL(cfg.url));
         }
     }

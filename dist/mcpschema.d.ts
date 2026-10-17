@@ -61,6 +61,6 @@ export declare function claudeMcpConfigs(cwd?: string, home?: string): McpServer
  * of them in one 30-day count). Rows without a timestamp count with their
  * file.
  */
-export declare function mcpUsage(days?: number, paths?: string[]): McpUsage;
+export declare function mcpUsage(days?: number, paths?: string[], onProgress?: (done: number, total: number) => void): McpUsage;
 /** Connect to one server the way a client does and size its tool list. */
 export declare function measureServer(cfg: McpServerConfig, timeoutMs?: number): Promise<McpServerSize>;

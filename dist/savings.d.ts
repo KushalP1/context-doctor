@@ -47,7 +47,10 @@ export interface SessionSavings {
 export declare function autopilotReaches(entrypoint?: string): boolean;
 export interface SavingsReport {
     days: number;
+    /** Sessions with 10+ requests in the period: the ones replayed and counted. */
     sessions: SessionSavings[];
+    /** Claude Code transcripts written in the period, replayed or not (the progress line's total). */
+    transcripts: number;
     billedUsd: number;
     savedUsd: number;
     savedTokens: number;

@@ -8,20 +8,23 @@
  * `-` reads from stdin, so you can pipe: `cat chat.json | context-doctor analyze -`
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
-import { optimizeConversation } from "./optimize.js";
+import { optimizeConversation, STRATEGY_IDS } from "./optimize.js";
+import { commandHelp, didYouMean } from "./clihelp.js";
+import { selfCommand, withInvocation } from "./invocation.js";
 import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
 import { startProxy } from "./proxy.js";
 import { runInstall, runUninstall } from "./install.js";
-import { listSessions, parseSessionFile } from "./session.js";
+import { listSessions, parseSessionFile, pickCurrentSession } from "./session.js";
 import { runHook } from "./hook.js";
 import { buildImpactReport } from "./impact.js";
 import { measureTokenizer, renderTokenizer } from "./tokenizer-measure.js";
-import { autopilotOff, autopilotOn, autopilotPause, autopilotPaths, autopilotStatus, DEFAULT_AUTOPILOT_PORT } from "./autopilot.js";
+import { autopilotOff, autopilotOn, autopilotPauseResult, autopilotPaths, autopilotStatus, DEFAULT_AUTOPILOT_PORT } from "./autopilot.js";
 import { estimateSavings, renderSavings, renderShare } from "./savings.js";
 import { currentCompactWindow, estimateCompactWindows, MAX_WINDOW, MIN_WINDOW, parseWindow, renderCompactWindows, setCompactWindow } from "./compactwindow.js";
 import { renderPreferences, copyToClipboard, CHAT_PREFERENCES } from "./preferences.js";
@@ -52,82 +55,74 @@ import { renderPayback, subagentPayback } from "./subagentpay.js";
 import { compactionQuality, renderCompactionQuality } from "./compactquality.js";
 const HELP = `context-doctor — profile and optimize LLM context windows
 
-Usage:
-  context-doctor analyze  <file|->  [options]   Show what's eating your tokens
-  context-doctor optimize <file|->  [options]   Apply safe fixes, print slimmed conversation
-  context-doctor proxy --autopilot  [options]   Local proxy for your own API apps (Anthropic, OpenAI,
-                                                Gemini): clears stale tool output only when the
-                                                prompt cache is cold, so it never costs more.
-                                                Plain \`proxy\` is the optimizing mode (dedupe, trim,
-                                                strip base64), which can cost more on cached traffic
+Start here:
   context-doctor install [--statusline]         Wire everything it finds: the MCP server (Claude
                                                 Desktop, Claude Code, Cursor, Codex, Gemini CLI),
                                                 the skill (Claude Code, Codex), the every-prompt
                                                 hook (Claude Code, Codex, Gemini CLI's BeforeAgent,
                                                 Cursor's postToolUse) and Claude Code's PreCompact
                                                 hook, which tells each compaction what to keep
-  context-doctor uninstall                      Undo install
-  context-doctor --version                      Print the installed version
   context-doctor savings [--days n] [--share [--copy]]
                                                 What your recent Claude Code sessions cost, and what
                                                 /compact at cold resumes, autopilot and an earlier
                                                 auto-compact window would save, replayed and priced
                                                 as billed. --share: totals only, to paste. Also
                                                 what a bare \`context-doctor\` shows
-  context-doctor compact-window [status|off|<size>]
-                                                Claude Code's own auto-compact window (e.g. 400k):
-                                                what each size would have saved on your sessions,
-                                                and set or remove it. Works in the desktop app too
-  context-doctor autopilot on|off|pause|resume|status
-                                                Every new Claude Code session started in a terminal
-                                                or IDE goes through the local proxy, which clears
-                                                stale tool output only when the prompt cache is
-                                                cold (never costs more). The desktop app's Code tab
-                                                sets its own API address, so it is not reached
-  context-doctor mcp [--http]                   The MCP server (same as context-doctor-mcp), for clients
-                                                that launch \`npx -y context-doctor mcp\`
-  context-doctor instructions [--copy]          Standing context rules to paste into claude.ai or
-                                                ChatGPT preferences (works on web and mobile too)
-  context-doctor session [file]                 Profile a Claude Code session transcript or a
-                                                ChatGPT export (default: most recent; --list to browse)
-  context-doctor cursor [--list]                Profile a Cursor chat from its local history
-  context-doctor statusline                     Claude Code status bar line: live context size, cache
-                                                share, cost (wired by \`install --statusline\`; reads
-                                                the status JSON on stdin)
-  context-doctor hook                           The every-prompt and PreCompact hook (installed by
-                                                \`install\`; reads hook JSON on stdin)
-  context-doctor report                         Impact report: exact proxy savings, hook activity,
-                                                and remaining recoverable waste in recent sessions
   context-doctor doctor                         Self-check the installation (configs, hook, skill,
                                                 MCP handshake) with one pasteable diagnosis
-  context-doctor dashboard                      Local savings dashboard on 127.0.0.1 (--port n,
-                                                default 8790) — charts from your own machine only
-  context-doctor init [preset]                  Write a .contextdoctorrc from a preset
-                                                (chat, agent, batch; no argument lists them)
-  context-doctor experiment --task "<t>"         Run one task twice from the same commit, in a fresh
-                                                session and forked from an --existing one; compare
-                                                bill, cache, time, and whether --check passed
-  context-doctor diff <before> <after>          Compare two profiles: what moved, which findings
-                                                were resolved, and what it saves
-  context-doctor accuracy                       Measure the token heuristic against the API's own
-                                                counts recorded in your transcripts (--limit n)
+  context-doctor uninstall                      Undo install
+  context-doctor --version                      Print the installed version
+
+Measure:
+  context-doctor analyze  <file|->  [options]   Show what's eating your tokens
+  context-doctor session [file]                 Profile a Claude Code session transcript or a
+                                                ChatGPT export (default: this session; --list to browse)
+  context-doctor cursor [--list]                Profile a Cursor chat from its local history
   context-doctor overhead [--days n] [--mcp]    What every request re-reads before your message:
                                                 measured first-request size, each CLAUDE.md /
                                                 AGENTS.md / rules file priced per month, findings
-  context-doctor ci [--base <ref>] [--max-tokens n] [--max-increase n] [--markdown]
-                                                For pull requests: memory files (CLAUDE.md, AGENTS.md,
-                                                GEMINI.md, rules) at HEAD vs base; exit 1 over budget
-  context-doctor cache-plan <request.json> [--calls n] [--out file]
-                                                Where an Anthropic request should carry cache_control,
-                                                what it saves over n calls; --out writes it applied
-  context-doctor compactions [--days n]         Do sessions work worse right after compacting? Re-reads,
-                                                tool errors and your corrections, before vs after
+  context-doctor report                         Impact report: exact proxy savings, hook activity,
+                                                and remaining recoverable waste in recent sessions
   context-doctor subagents [--days n]           Which subagents paid for themselves: their bill vs
                                                 the same steps run in the parent session
   context-doctor tasks [--days n]               Cost per commit, per project: session cost at list
                                                 price vs commits made during the sessions
   context-doctor reads [--days n] [--limit n]   Files read into session after session: reads, tokens,
                                                 cost, and whether a CLAUDE.md summary or pack pays
+  context-doctor compactions [--days n]         Do sessions work worse right after compacting? Re-reads,
+                                                tool errors and your corrections, before vs after
+  context-doctor accuracy                       Measure the token heuristic against the API's own
+                                                counts recorded in your transcripts (--limit n)
+  context-doctor diff <before> <after>          Compare two profiles: what moved, which findings
+                                                were resolved, and what it saves
+  context-doctor watch [file]                   Live-monitor a growing session/agent trace: running
+                                                token/cost line per change, new findings as they appear
+                                                (--interval-ms n, default 2000)
+  context-doctor dashboard                      Local savings dashboard on 127.0.0.1 (--port n,
+                                                default 8790) — charts from your own machine only
+  context-doctor experiment --task "<t>"         Run one task twice from the same commit, in a fresh
+                                                session and forked from an --existing one; compare
+                                                bill, cache, time, and whether --check passed
+
+Fix automatically:
+  context-doctor autopilot on|off|pause|resume|status
+                                                Every new Claude Code session started in a terminal
+                                                or IDE goes through the local proxy, which clears
+                                                stale tool output only when the prompt cache is
+                                                cold (never costs more). The desktop app's Code tab
+                                                sets its own API address, so it is not reached
+  context-doctor compact-window [status|off|<size>]
+                                                Claude Code's own auto-compact window (e.g. 400k):
+                                                what each size would have saved on your sessions,
+                                                and set or remove it. Works in the desktop app too
+  context-doctor proxy --autopilot  [options]   Local proxy for your own API apps (Anthropic, OpenAI,
+                                                Gemini): clears stale tool output only when the
+                                                prompt cache is cold, so it never costs more.
+                                                Plain \`proxy\` is the optimizing mode (dedupe, trim,
+                                                strip base64), which can cost more on cached traffic
+
+Fix on request:
+  context-doctor optimize <file|->  [options]   Apply safe fixes, print slimmed conversation
   context-doctor overhead split <file> [--min-tokens n] [--write]
                                                 Move a memory file's big sections to a reference
                                                 file, leaving pointers (plan first; --write backs up)
@@ -139,9 +134,27 @@ Usage:
                                                 --semantic: also rank by meaning with a local
                                                 Ollama embedding model, when one is installed
                                                 (--embed-model <name> picks it)
-  context-doctor watch [file]                   Live-monitor a growing session/agent trace: running
-                                                token/cost line per change, new findings as they appear
-                                                (--interval-ms n, default 2000)
+  context-doctor cache-plan <request.json> [--calls n] [--out file]
+                                                Where an Anthropic request should carry cache_control,
+                                                what it saves over n calls; --out writes it applied
+
+Integrations:
+  context-doctor ci [--base <ref>] [--max-tokens n] [--max-increase n] [--markdown]
+                                                For pull requests: memory files (CLAUDE.md, AGENTS.md,
+                                                GEMINI.md, rules) at HEAD vs base; exit 1 over budget
+  context-doctor instructions [--copy]          Standing context rules to paste into claude.ai or
+                                                ChatGPT preferences (works on web and mobile too)
+  context-doctor init [preset]                  Write a .contextdoctorrc from a preset
+                                                (chat, agent, batch; no argument lists them)
+
+Internal (Claude Code and MCP clients run these for you):
+  context-doctor hook                           The every-prompt and PreCompact hook (installed by
+                                                \`install\`; reads hook JSON on stdin)
+  context-doctor statusline                     Claude Code status bar line: live context size, cache
+                                                share, cost (wired by \`install --statusline\`; reads
+                                                the status JSON on stdin)
+  context-doctor mcp [--http]                   The MCP server (same as context-doctor-mcp), for clients
+                                                that launch \`npx -y context-doctor mcp\`
 
 Project config: an optional .contextdoctorrc (nearest, walking up from cwd, then
 ~/.contextdoctorrc) can set a context budget and default strategies:
@@ -206,161 +219,152 @@ Examples:
           export OPENAI_BASE_URL=http://localhost:8787/v1
           export GOOGLE_GEMINI_BASE_URL=http://localhost:8787
 `;
+/**
+ * What a bare `context-doctor` prints when there is no Claude Code history
+ * to measure, or when stdout is not a terminal: where to begin, in a dozen
+ * lines, instead of the full reference above.
+ */
+const START_HERE = `context-doctor: see where your Claude Code tokens go, and cut them.
+
+Start here
+  In Claude Code, as a plugin:
+    /plugin marketplace add KushalP1/context-doctor
+    /plugin install context-doctor@context-doctor
+    then /context-doctor:savings, :checkup, :overhead, :compact-window, :autopilot, :pack
+  In a terminal:
+    context-doctor install     wire the MCP server, skill and hooks into the apps it finds
+    context-doctor savings     what your recent sessions cost, and what each fix would save
+    context-doctor doctor      check the installation
+
+All commands: context-doctor --help
+Guide: https://github.com/KushalP1/context-doctor#readme`;
+/** Exit 1 with a usage message: wrong arguments are the caller's to fix, not a crash. */
+function usageError(message) {
+    console.error(message);
+    process.exit(1);
+}
+/**
+ * Every command main() handles. An unknown one is an error with a
+ * suggestion, never a silent fall-through to the help text.
+ */
+const COMMANDS = [
+    "analyze", "optimize", "proxy", "install", "uninstall", "savings", "compact-window", "autopilot", "mcp",
+    "instructions", "session", "cursor", "statusline", "hook", "report", "doctor", "dashboard", "init",
+    "experiment", "diff", "accuracy", "overhead", "ci", "cache-plan", "compactions", "subagents", "tasks",
+    "reads", "pack", "watch", "help", "version",
+];
+/** --strategy takes one of the optimizer's ids; a typo used to run nothing and report success. */
+function strategyArg(v) {
+    if (STRATEGY_IDS.includes(v))
+        return v;
+    return usageError(`--strategy "${v}" is not a strategy.${didYouMean(v, STRATEGY_IDS)} Available: ${STRATEGY_IDS.join(", ")}.`);
+}
+const FLAGS = [
+    { names: ["--json"], set: (a) => { a.json = true; } },
+    { names: ["--list"], set: (a) => { a.list = true; } },
+    { names: ["--exact"], set: (a) => { a.exact = true; } },
+    { names: ["--redact"], set: (a) => { a.redact = true; } },
+    { names: ["--fail-over-budget"], set: (a) => { a.failOverBudget = true; } },
+    { names: ["--model"], value: "text", set: (a, v) => { a.model = v; } },
+    { names: ["--out"], value: "text", set: (a, v) => { a.out = v; } },
+    { names: ["--strategy"], value: "text", set: (a, v) => { a.strategies.push(strategyArg(v)); } },
+    { names: ["--keep-recent"], value: "number", num: { min: 0, integer: true }, set: (a, v) => { a.keepRecent = v; } },
+    { names: ["--max-tool-tokens"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.maxToolTokens = v; } },
+    { names: ["--port"], value: "number", num: { min: 0, max: 65535, integer: true }, set: (a, v) => { a.port = v; } },
+    { names: ["--interval-ms"], value: "number", num: { min: 100, integer: true }, set: (a, v) => { a.intervalMs = v; } },
+    { names: ["--limit"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.limit = v; } },
+    { names: ["--task"], value: "text", set: (a, v) => { a.task = v; } },
+    { names: ["--check"], value: "text", set: (a, v) => { a.check = v; } },
+    { names: ["--existing"], value: "text", set: (a, v) => { a.existing = v; } },
+    { names: ["--budget"], value: "number", num: { min: 0 }, set: (a, v) => { a.budgetUsd = v; } },
+    { names: ["--dry-run"], set: (a) => { a.dryRun = true; } },
+    { names: ["--copy"], set: (a) => { a.copy = true; } },
+    { names: ["--share"], set: (a) => { a.share = true; } },
+    { names: ["--allow-dirty"], set: (a) => { a.allowDirty = true; } },
+    { names: ["--statusline"], set: (a) => { a.statusLine = true; } },
+    { names: ["--host"], value: "text", set: (a, v) => { a.host = v; } },
+    { names: ["--token"], value: "text", set: (a, v) => { a.token = v; } },
+    { names: ["--days"], value: "number", num: { min: 1 }, set: (a, v) => { a.days = v; } },
+    { names: ["--autopilot"], set: (a) => { a.autopilot = true; } },
+    { names: ["--autopilot-state"], value: "text", set: (a, v) => { a.autopilotState = v; } },
+    { names: ["--autopilot-pause-file"], value: "text", set: (a, v) => { a.autopilotPauseFile = v; } },
+    { names: ["--config"], value: "text", set: (a, v) => { a.config = v; } },
+    { names: ["-q", "--query"], value: "text", set: (a, v) => { a.query = v; } },
+    { names: ["--max-tokens"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.maxTokens = v; } },
+    { names: ["--chunk-tokens"], value: "number", num: { min: 50, integer: true }, set: (a, v) => { a.chunkTokens = v; } },
+    { names: ["--mcp"], set: (a) => { a.mcp = true; } },
+    { names: ["--write"], set: (a) => { a.write = true; } },
+    { names: ["--calls"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.calls = v; } },
+    { names: ["--semantic"], set: (a) => { a.semantic = a.semantic || true; } },
+    { names: ["--embed-model"], value: "text", set: (a, v) => { a.semantic = v; } },
+    { names: ["--base"], value: "text", set: (a, v) => { a.base = v; } },
+    { names: ["--markdown"], set: (a) => { a.markdown = true; } },
+    { names: ["--max-increase"], value: "number", num: { min: 0, integer: true }, set: (a, v) => { a.maxIncrease = v; } },
+    { names: ["--requests-per-day"], value: "number", num: { min: 1 }, set: (a, v) => { a.requestsPerDay = v; } },
+    { names: ["--min-tokens"], value: "number", num: { min: 50, integer: true }, set: (a, v) => { a.minTokens = v; } },
+    { names: ["--ids"], value: "text", set: (a, v) => { a.ids = v.split(",").map((x) => x.trim()).filter(Boolean); } },
+    { names: ["--upstream-anthropic"], value: "text", set: (a, v) => { a.upstreamAnthropic = v; } },
+    { names: ["--upstream-openai"], value: "text", set: (a, v) => { a.upstreamOpenai = v; } },
+    { names: ["--upstream-google"], value: "text", set: (a, v) => { a.upstreamGoogle = v; } },
+    // Read by the MCP server itself: `mcp --http [--port n] [--host h]`.
+    { names: ["--http"], set: () => { } },
+];
+const FLAG_BY_NAME = new Map(FLAGS.flatMap((f) => f.names.map((n) => [n, f])));
+const FLAG_NAMES = [...FLAG_BY_NAME.keys(), "--help", "--version"];
+/** An option, not a value: "-q", "--days". "-" (stdin) and "-1" are values. */
+function looksLikeFlag(s) {
+    return /^-[A-Za-z-]/.test(s) && s !== "--";
+}
 function parseArgs(argv) {
-    const args = { json: false, strategies: [], list: false, exact: false, redact: false, failOverBudget: false, dryRun: false, allowDirty: false, statusLine: false };
+    const args = { json: false, strategies: [], list: false, exact: false, redact: false, failOverBudget: false, dryRun: false, allowDirty: false, statusLine: false, help: false };
     const positional = [];
     for (let i = 0; i < argv.length; i++) {
-        const a = argv[i];
-        switch (a) {
-            case "-h":
-            case "--help":
-                console.log(HELP);
-                process.exit(0);
-            case "-v":
-            case "--version":
-                console.log(packageVersion());
-                process.exit(0);
-            case "--json":
-                args.json = true;
-                break;
-            case "--list":
-                args.list = true;
-                break;
-            case "--exact":
-                args.exact = true;
-                break;
-            case "--redact":
-                args.redact = true;
-                break;
-            case "--fail-over-budget":
-                args.failOverBudget = true;
-                break;
-            case "--model":
-                args.model = argv[++i];
-                break;
-            case "--out":
-                args.out = argv[++i];
-                break;
-            case "--strategy":
-                args.strategies.push(argv[++i]);
-                break;
-            case "--keep-recent":
-                args.keepRecent = numArg("--keep-recent", argv[++i], { min: 0, integer: true });
-                break;
-            case "--max-tool-tokens":
-                args.maxToolTokens = numArg("--max-tool-tokens", argv[++i], { min: 1, integer: true });
-                break;
-            case "--port":
-                args.port = numArg("--port", argv[++i], { min: 0, max: 65535, integer: true });
-                break;
-            case "--interval-ms":
-                args.intervalMs = numArg("--interval-ms", argv[++i], { min: 100, integer: true });
-                break;
-            case "--limit":
-                args.limit = numArg("--limit", argv[++i], { min: 1, integer: true });
-                break;
-            case "--task":
-                args.task = argv[++i];
-                break;
-            case "--check":
-                args.check = argv[++i];
-                break;
-            case "--existing":
-                args.existing = argv[++i];
-                break;
-            case "--budget":
-                args.budgetUsd = numArg("--budget", argv[++i], { min: 0 });
-                break;
-            case "--dry-run":
-                args.dryRun = true;
-                break;
-            case "--copy":
-                args.copy = true;
-                break;
-            case "--share":
-                args.share = true;
-                break;
-            case "--allow-dirty":
-                args.allowDirty = true;
-                break;
-            case "--statusline":
-                args.statusLine = true;
-                break;
-            case "--host":
-                args.host = argv[++i];
-                break;
-            case "--token":
-                args.token = argv[++i];
-                break;
-            case "--days":
-                args.days = numArg("--days", argv[++i], { min: 1 });
-                break;
-            case "--autopilot":
-                args.autopilot = true;
-                break;
-            case "--autopilot-state":
-                args.autopilotState = argv[++i];
-                break;
-            case "--autopilot-pause-file":
-                args.autopilotPauseFile = argv[++i];
-                break;
-            case "--config":
-                args.config = argv[++i];
-                break;
-            case "-q":
-            case "--query":
-                args.query = argv[++i];
-                break;
-            case "--max-tokens":
-                args.maxTokens = numArg("--max-tokens", argv[++i], { min: 1, integer: true });
-                break;
-            case "--chunk-tokens":
-                args.chunkTokens = numArg("--chunk-tokens", argv[++i], { min: 50, integer: true });
-                break;
-            case "--mcp":
-                args.mcp = true;
-                break;
-            case "--write":
-                args.write = true;
-                break;
-            case "--calls":
-                args.calls = numArg("--calls", argv[++i], { min: 1, integer: true });
-                break;
-            case "--semantic":
-                args.semantic = args.semantic || true;
-                break;
-            case "--embed-model":
-                args.semantic = argv[++i];
-                break;
-            case "--base":
-                args.base = argv[++i];
-                break;
-            case "--markdown":
-                args.markdown = true;
-                break;
-            case "--max-increase":
-                args.maxIncrease = numArg("--max-increase", argv[++i], { min: 0, integer: true });
-                break;
-            case "--requests-per-day":
-                args.requestsPerDay = numArg("--requests-per-day", argv[++i], { min: 1 });
-                break;
-            case "--min-tokens":
-                args.minTokens = numArg("--min-tokens", argv[++i], { min: 50, integer: true });
-                break;
-            case "--ids":
-                args.ids = (argv[++i] ?? "").split(",").map((x) => x.trim()).filter(Boolean);
-                break;
-            case "--upstream-anthropic":
-                args.upstreamAnthropic = argv[++i];
-                break;
-            case "--upstream-openai":
-                args.upstreamOpenai = argv[++i];
-                break;
-            case "--upstream-google":
-                args.upstreamGoogle = argv[++i];
-                break;
-            default: positional.push(a);
+        const raw = argv[i];
+        if (raw === "--") {
+            positional.push(...argv.slice(i + 1));
+            break;
         }
+        if (!looksLikeFlag(raw)) {
+            positional.push(raw);
+            continue;
+        }
+        const eq = raw.startsWith("--") ? raw.indexOf("=") : -1;
+        const name = eq > 0 ? raw.slice(0, eq) : raw;
+        const inline = eq > 0 ? raw.slice(eq + 1) : undefined;
+        if (name === "-h" || name === "--help") {
+            args.help = true;
+            continue;
+        }
+        if (name === "-v" || name === "--version") {
+            console.log(packageVersion());
+            process.exit(0);
+        }
+        const spec = FLAG_BY_NAME.get(name);
+        if (!spec)
+            return usageError(`Unknown option ${name}.${didYouMean(name, FLAG_NAMES)} Run \`context-doctor --help\` for the list.`);
+        if (!spec.value) {
+            if (inline !== undefined)
+                usageError(`${name} takes no value; got "${inline}".`);
+            spec.set(args);
+            continue;
+        }
+        let value = inline;
+        if (value === undefined) {
+            const next = argv[i + 1];
+            if (next !== undefined && looksLikeFlag(next)) {
+                usageError(`${name} needs a value; got the option ${next}. For a value that starts with "-", write ${name}=<value>.`);
+            }
+            if (next !== undefined) {
+                value = next;
+                i++;
+            }
+        }
+        if (spec.value === "number")
+            spec.set(args, numArg(name, value, spec.num));
+        else if (value === undefined)
+            usageError(`${name} needs a value; got nothing.`);
+        else
+            spec.set(args, value);
     }
     args.command = positional[0];
     args.file = positional[1];
@@ -420,6 +424,27 @@ function numArg(flag, raw, { min, max, integer } = {}) {
     }
     return n;
 }
+/**
+ * A one-line "n/N transcripts" counter on stderr while a report reads the
+ * history (tens of seconds on a busy machine), in a terminal only: piped or
+ * captured output gets none of it. `clear()` erases the line before the
+ * report prints.
+ */
+function progressLine(label) {
+    if (!process.stderr.isTTY)
+        return { clear() { } };
+    let shown = false;
+    return {
+        tick(done, total) {
+            shown = true;
+            process.stderr.write(`\r${label}… ${done}/${total} transcripts\x1b[K`);
+        },
+        clear() {
+            if (shown)
+                process.stderr.write("\r\x1b[K");
+        },
+    };
+}
 /** Any Claude Code transcript on this machine? One directory listing, no parsing. */
 function hasClaudeSessions() {
     try {
@@ -431,6 +456,29 @@ function hasClaudeSessions() {
 }
 async function main() {
     const args = parseArgs(process.argv.slice(2));
+    if (args.command && !COMMANDS.includes(args.command)) {
+        usageError(`Unknown command "${args.command}".${didYouMean(args.command, COMMANDS)} Run \`context-doctor --help\` for the list.`);
+    }
+    if (args.command === "version") {
+        console.log(packageVersion());
+        return;
+    }
+    // `<command> --help` and `help <command>`: that command's lines, not all of them.
+    if (args.help || args.command === "help") {
+        const topic = args.command === "help" ? args.file : args.command;
+        if (topic && !COMMANDS.includes(topic)) {
+            usageError(`Unknown command "${topic}".${didYouMean(topic, COMMANDS)} Run \`context-doctor --help\` for the list.`);
+        }
+        console.log((topic && commandHelp(HELP, topic)) || HELP);
+        return;
+    }
+    // Run by hand in a terminal, these waited forever for JSON that only
+    // Claude Code sends.
+    if ((args.command === "hook" || args.command === "statusline") && process.stdin.isTTY) {
+        const setup = args.command === "hook" ? "`context-doctor install` registers it" : "`context-doctor install --statusline` sets it up";
+        console.log(`context-doctor ${args.command} is called by Claude Code with JSON on stdin; there is nothing for it to do in a terminal (${setup}).`);
+        return;
+    }
     if (args.command === "hook") {
         void runHook();
         return;
@@ -453,7 +501,7 @@ async function main() {
             console.log("Presets for .contextdoctorrc — pick the one that matches your workload:\n");
             for (const p of PRESETS)
                 console.log(`  ${p.id.padEnd(7)} ${p.summary}`);
-            console.log("\nThen: context-doctor init <preset>");
+            console.log(`\nThen: ${selfCommand("init <preset>")}`);
             return;
         }
         const preset = findPreset(requested);
@@ -573,7 +621,10 @@ async function main() {
             }
             return;
         }
-        const path = args.file ?? listSessions(1)[0]?.path;
+        // No file: the session this runs in (the plugin's checkup runs it from
+        // inside one), then this folder's newest, then the machine's newest.
+        const picked = args.file ? undefined : pickCurrentSession();
+        const path = args.file ?? picked?.path;
         if (!path) {
             console.error("No session transcript found. Pass a .jsonl path or run inside a machine with Claude Code sessions.");
             process.exit(1);
@@ -588,7 +639,7 @@ async function main() {
         }
         const profile = profileConversation(parseConversation(parsed.conversationJson), args.model ?? parsed.model);
         if (args.json) {
-            console.log(JSON.stringify({ session: { path: parsed.path, title: parsed.title, toolTimings: parsed.toolTimings ?? [], subagents: subagentReport(path) }, profile }, null, 2));
+            console.log(JSON.stringify({ session: { path: parsed.path, title: parsed.title, ...(picked ? { picked: picked.how } : {}), toolTimings: parsed.toolTimings ?? [], subagents: subagentReport(path) }, profile }, null, 2));
             // --json is what CI pipes, so the gate must hold here too (as it does for
             // analyze); it used to run only after the text report and never failed.
             applyBudgetGate(checkBudget(loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`)).config.budget, profile).overBudget, args.failOverBudget);
@@ -599,6 +650,8 @@ async function main() {
             console.log(args.redact
                 ? "Session: [redacted]\nFile:    [redacted]"
                 : `Session: ${parsed.title ?? "(untitled)"}\nFile:    ${parsed.path}`);
+            if (picked)
+                console.log(`Picked:  ${picked.how} (pass a file to profile another; --list shows them)`);
             if (parsed.compactedAway) {
                 console.log(`Note:    ${parsed.compactedAway} earlier message(s) were compacted away and are NOT counted below — this is the live context the model still sees.`);
             }
@@ -642,14 +695,16 @@ async function main() {
         // A bare `context-doctor` in a terminal, with Claude Code history on the
         // machine, answers the question people install this for: what would it
         // save me? Scripts and pipes still get the help text.
-        const progress = process.stderr.isTTY
-            ? (done, total) => process.stderr.write(`\rReplaying your Claude Code sessions through autopilot… ${done}/${total}`)
-            : undefined;
-        const report = estimateSavings(args.days ?? 30, {}, undefined, progress);
-        if (progress)
-            process.stderr.write("\r\x1b[K");
+        const replaying = progressLine("Replaying your Claude Code sessions through autopilot");
+        const report = estimateSavings(args.days ?? 30, {}, undefined, replaying.tick);
+        replaying.clear();
         const setWindow = currentCompactWindow();
-        const cwReport = estimateCompactWindows([setWindow ?? 400_000], args.days ?? 30, undefined, compactionQuality(60).extraRereadTokensPerCompaction);
+        const measuring = progressLine("Measuring your compactions");
+        const reread = compactionQuality(60, undefined, measuring.tick).extraRereadTokensPerCompaction;
+        measuring.clear();
+        const windowing = progressLine("Replaying an earlier auto-compact window");
+        const cwReport = estimateCompactWindows([setWindow ?? 400_000], args.days ?? 30, undefined, reread, windowing.tick);
+        windowing.clear();
         const est = cwReport.estimates[0];
         const cwLine = cwReport.sessions > 0 && est
             ? { window: est.window, savedUsd: est.savedUsd, compactionsPerWeek: (est.compactions / cwReport.days) * 7, nowPerWeek: (cwReport.actualCompactions / cwReport.days) * 7, isCurrent: setWindow !== undefined }
@@ -666,7 +721,7 @@ async function main() {
         else {
             console.log(renderSavings(report, on, cwLine));
             if (!args.command)
-                console.log("\nAll commands: context-doctor --help");
+                console.log(`\nAll commands: ${selfCommand("--help")}`);
         }
         return;
     }
@@ -682,8 +737,10 @@ async function main() {
     if (args.command === "compact-window") {
         const sub = args.file ?? "status";
         if (sub === "off") {
-            setCompactWindow(undefined);
-            console.log("✓ autoCompactWindow removed from ~/.claude/settings.json: Claude Code compacts near the model's full window again (new sessions).");
+            const r = setCompactWindow(undefined);
+            console.log(r.changed
+                ? "✓ autoCompactWindow removed from ~/.claude/settings.json: Claude Code compacts near the model's full window again (new sessions)."
+                : "No auto-compact window was set. Nothing changed.");
             return;
         }
         if (sub !== "status") {
@@ -693,19 +750,30 @@ async function main() {
                 process.exitCode = 1;
                 return;
             }
-            setCompactWindow(w);
-            console.log(`✓ autoCompactWindow = ${w} in ~/.claude/settings.json (a .backup was kept).`);
+            const r = setCompactWindow(w);
+            if (!r.changed) {
+                console.log(`autoCompactWindow is already ${w} in ~/.claude/settings.json. Nothing changed.`);
+                return;
+            }
+            // Only claim a backup that exists: a new settings.json had nothing to back up.
+            const note = r.created ? "a new file" : r.backup ? `the previous file is kept as ${r.backup.replace(homedir(), "~")}` : "";
+            console.log(`✓ autoCompactWindow = ${w} in ~/.claude/settings.json${note ? ` (${note})` : ""}.`);
             console.log("  Claude Code sessions started from now on compact as if the window were that size,");
             console.log("  in the terminal, IDEs and the desktop app. Check in a session with /context.");
-            console.log("  Undo: context-doctor compact-window off");
+            console.log(`  Undo: ${selfCommand("compact-window off")}`);
             return;
         }
         const current = currentCompactWindow();
         const windows = [200_000, 300_000, 400_000, 600_000, 800_000];
         if (current && !windows.includes(current))
             windows.push(current);
-        const reread = compactionQuality(60).extraRereadTokensPerCompaction;
-        console.log(renderCompactWindows(estimateCompactWindows(windows.sort((a, b) => a - b), args.days ?? 30, undefined, reread), current));
+        const measuring = progressLine("Measuring your compactions");
+        const reread = compactionQuality(60, undefined, measuring.tick).extraRereadTokensPerCompaction;
+        measuring.clear();
+        const replaying = progressLine("Replaying your sessions at each window");
+        const cw = estimateCompactWindows(windows.sort((a, b) => a - b), args.days ?? 30, undefined, reread, replaying.tick);
+        replaying.clear();
+        console.log(renderCompactWindows(cw, current));
         return;
     }
     if (args.command === "autopilot") {
@@ -721,7 +789,10 @@ async function main() {
             console.log((await autopilotOff()).join("\n"));
         }
         else if (sub === "pause" || sub === "resume") {
-            console.log(autopilotPause(sub === "pause"));
+            const r = autopilotPauseResult(sub === "pause");
+            console.log(r.message);
+            if (!r.ok)
+                process.exitCode = 1;
         }
         else if (sub === "status") {
             console.log((await autopilotStatus()).join("\n"));
@@ -777,7 +848,9 @@ async function main() {
         return;
     }
     if (args.command === "subagents") {
-        const report = subagentPayback(args.days ?? 30);
+        const reading = progressLine("Reading your sessions' subagents");
+        const report = subagentPayback(args.days ?? 30, undefined, reading.tick);
+        reading.clear();
         console.log(args.json ? JSON.stringify(report, null, 2) : renderPayback(report, args.limit ?? 8));
         return;
     }
@@ -851,7 +924,14 @@ async function main() {
         return;
     }
     if (args.command === "overhead") {
-        const report = overheadReport({ days: args.days });
+        const sessions = progressLine("Measuring each session's first request");
+        const tools = progressLine("Counting MCP tool calls");
+        const report = overheadReport({
+            days: args.days,
+            onProgress: (done, total, stage) => (stage === "sessions" ? sessions : tools).tick?.(done, total),
+        });
+        sessions.clear();
+        tools.clear();
         if (args.mcp)
             await measureMcpSizes(report);
         console.log(args.json ? JSON.stringify(report, (_k, v) => (v instanceof Map ? Object.fromEntries(v) : v), 2) : renderOverhead(report));
@@ -874,14 +954,14 @@ async function main() {
         console.log(args.json ? JSON.stringify({ ...result, chunks: undefined, outline: result.chunks.map(({ text, ...c }) => c) }, null, 2) : renderPack(result));
         return;
     }
-    if (!args.command || !args.file) {
-        const known = ["analyze", "optimize"];
-        if (args.command && !known.includes(args.command)) {
-            console.error(`Unknown command "${args.command}". Run \`context-doctor --help\` for the list.`);
-            process.exit(1);
-        }
-        console.log(HELP);
-        process.exit(args.command ? 1 : 0);
+    if (!args.command) {
+        // Bare, with no history to measure or not in a terminal: where to begin.
+        console.log(withInvocation(START_HERE));
+        return;
+    }
+    if (!args.file) {
+        // analyze/optimize without a file: say what is missing, then how to call it.
+        usageError(`${args.command} needs a conversation file (or - to read stdin).\n\n${commandHelp(HELP, args.command) ?? ""}`);
     }
     let input;
     try {
@@ -891,9 +971,16 @@ async function main() {
         console.error(`Could not read ${args.file}: ${e.message}`);
         process.exit(1);
     }
+    // Broken JSON, or JSON that is not a conversation, used to profile as a
+    // few tokens (or none) and report the context "in good shape". Raw text
+    // stays a supported input: it parses without a warning.
+    const conversation = parseConversation(input);
+    if (conversation.parseWarning) {
+        usageError(`Could not ${args.command} ${args.file === "-" ? "stdin" : args.file}: ${conversation.parseWarning}`);
+    }
     if (args.command === "analyze") {
         const loaded = loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`));
-        const profile = profileConversation(parseConversation(input), args.model ?? loaded.config.model);
+        const profile = profileConversation(conversation, args.model ?? loaded.config.model);
         // The exact count is awaited before anything prints: with --json it goes
         // inside the one JSON object. Printed after it, as it once was, the extra
         // lines made stdout invalid JSON for every script that parsed it.

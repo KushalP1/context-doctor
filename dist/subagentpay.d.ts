@@ -45,5 +45,5 @@ export interface PaybackReport {
     sessions: number;
     subagents: SubagentPayback[];
 }
-export declare function subagentPayback(days?: number, paths?: string[]): PaybackReport;
+export declare function subagentPayback(days?: number, paths?: string[], onProgress?: (done: number, total: number) => void): PaybackReport;
 export declare function renderPayback(r: PaybackReport, top?: number): string;

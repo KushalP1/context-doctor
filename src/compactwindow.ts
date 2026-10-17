@@ -14,17 +14,21 @@
  * The trade-off is real: more compactions, each replacing history with a
  * summary. So this measures both sides on the user's own history and changes
  * nothing until asked. The replay uses the usage every transcript records;
- * its baseline came within 9% of the billed figure on the author's history
- * (on the low side, so savings are, if anything, understated).
+ * its baseline came within 9% of the billed figure on the author's history.
+ * Like `savings`, the replay decides each session's SHARE saved, and that
+ * share is applied to what the session was billed (its recorded usage at
+ * list price): "as now" is the same billed figure `savings` shows, over the
+ * same sessions (10+ requests in the window), so the two never disagree.
  */
 
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { forEachLine, listSessions, replyCounter } from "./session.js";
-import { cacheWriteSplit, pricingFor, writeMultiplier } from "./pricing.js";
+import { cacheWriteSplit, pricingFor, usageCost, writeMultiplier } from "./pricing.js";
 import { realModel } from "./tokens.js";
 import { readJson, writeJsonWithBackup } from "./install.js";
+import { withInvocation } from "./invocation.js";
 
 /** Claude Code compacts at about this share of the window (970k of 1M, measured). */
 const TRIGGER_SHARE = 0.97;
@@ -39,7 +43,10 @@ export const MAX_WINDOW = 1_000_000;
 
 export interface WindowEstimate {
   window: number;
+  /** Input billed as the sessions ran ("as now"): recorded usage at list price, as `savings` reports it. */
   baselineUsd: number;
+  /** The replay's own model of the same baseline, from which each session's share saved is taken. */
+  replayBaselineUsd: number;
   withWindowUsd: number;
   savedUsd: number;
   savedPct: number;
@@ -49,7 +56,10 @@ export interface WindowEstimate {
 
 export interface CompactWindowReport {
   days: number;
+  /** Sessions with 10+ requests in the period: the ones replayed (the same rule as `savings`). */
   sessions: number;
+  /** Claude Code transcripts written in the period, replayed or not. */
+  transcripts: number;
   /** Compactions that actually happened over the period (Claude Code's own, or /compact). */
   actualCompactions: number;
   estimates: WindowEstimate[];
@@ -64,7 +74,7 @@ export interface CompactWindowReport {
  * not billed twice.
  */
 type Req =
-  | { at: number; prompt: number; inPerM: number; readPerM: number; outPerM: number; copy: boolean }
+  | { at: number; prompt: number; inPerM: number; readPerM: number; outPerM: number; copy: boolean; billedUsd: number }
   | { compact: true; copy: boolean };
 
 /**
@@ -103,7 +113,7 @@ function readRequests(path: string, runRows?: Set<string>): { reqs: Req[]; write
     const w = cacheWriteSplit(u);
     writes5m += w.fiveMinute;
     writes1h += w.oneHour;
-    reqs.push({ at, prompt, inPerM: p?.inputPerM ?? 0, readPerM: p?.cacheReadPerM ?? 0, outPerM: p?.outputPerM ?? 0, copy: seen === "copy" });
+    reqs.push({ at, prompt, inPerM: p?.inputPerM ?? 0, readPerM: p?.cacheReadPerM ?? 0, outPerM: p?.outputPerM ?? 0, copy: seen === "copy", billedUsd: p ? usageCost(u, p).promptUsd : 0 });
   });
   return { reqs, writeMult: writeMultiplier(writes5m, writes1h), priced };
 }
@@ -160,40 +170,63 @@ function replay(reqs: Req[], window: number, since: number, reread = 0, writeMul
   return { base, sim, extra, actual };
 }
 
-export function estimateCompactWindows(windows: number[], days = 30, paths?: string[], rereadTokens = 0): CompactWindowReport {
+export function estimateCompactWindows(
+  windows: number[],
+  days = 30,
+  paths?: string[],
+  rereadTokens = 0,
+  onProgress?: (done: number, total: number) => void
+): CompactWindowReport {
   const since = Date.now() - days * 86_400_000;
   const targets = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
-  const acc = windows.map((w) => ({ window: w, base: 0, sim: 0, extra: 0 }));
+  const acc = windows.map((w) => ({ window: w, billed: 0, saved: 0, replayBase: 0, extra: 0 }));
   let sessions = 0, actualCompactions = 0;
   // Shared by every transcript of the run, so a fork's copy counts once.
   const runRows = new Set<string>();
-  for (const p of targets) {
+  for (const [i, p] of targets.entries()) {
+    onProgress?.(i, targets.length);
     let parsed: ReturnType<typeof readRequests>;
     try { parsed = readRequests(p, runRows); } catch { continue; }
-    if (!parsed.priced || parsed.reqs.filter((r) => !("compact" in r) && r.at >= since && !r.copy).length < 10) continue;
+    // The same sessions `savings` counts: 10+ requests of its own in the
+    // period. An unpriced session counts too, at $0, as it does there.
+    const counted = parsed.reqs.filter((r): r is Extract<Req, { at: number }> => !("compact" in r) && r.at >= since && !r.copy);
+    if (counted.length < 10) continue;
     sessions++;
+    const billed = counted.reduce((n, r) => n + r.billedUsd, 0);
     actualCompactions += replay(parsed.reqs, Number.MAX_SAFE_INTEGER, since, 0, parsed.writeMult).actual;
     for (const a of acc) {
       const r = replay(parsed.reqs, a.window, since, rereadTokens, parsed.writeMult);
-      a.base += r.base / 1e6;
-      a.sim += r.sim / 1e6;
+      // The replay's share saved, applied to what this session was billed.
+      const share = r.base > 0 ? (r.base - r.sim) / r.base : 0;
+      a.billed += billed;
+      a.saved += share * billed;
+      a.replayBase += r.base / 1e6;
       a.extra += r.extra;
     }
   }
+  onProgress?.(targets.length, targets.length);
   return {
     days,
     sessions,
+    transcripts: targets.length,
     actualCompactions,
     rereadTokens,
     estimates: acc.map((a) => ({
       window: a.window,
-      baselineUsd: a.base,
-      withWindowUsd: a.sim,
-      savedUsd: a.base - a.sim,
-      savedPct: a.base > 0 ? (a.base - a.sim) / a.base : 0,
+      baselineUsd: a.billed,
+      replayBaselineUsd: a.replayBase,
+      withWindowUsd: a.billed - a.saved,
+      savedUsd: a.saved,
+      savedPct: a.billed > 0 ? a.saved / a.billed : 0,
       compactions: a.extra,
     })),
   };
+}
+
+/** "37 sessions with 10+ requests (of 85 transcripts)": what the replayed reports count, said the same way. */
+export function sessionsLabel(sessions: number, transcripts: number): string {
+  const s = `${sessions} session${sessions === 1 ? "" : "s"} with 10+ requests`;
+  return transcripts > sessions ? `${s} (of ${transcripts} transcripts)` : s;
 }
 
 export function settingsPath(home = homedir()): string {
@@ -212,16 +245,35 @@ export function currentCompactWindow(home = homedir()): number | undefined {
   }
 }
 
-/** Set (or with undefined, remove) autoCompactWindow in ~/.claude/settings.json. A .backup is kept. */
-export function setCompactWindow(window: number | undefined, home = homedir()): void {
+/** What setCompactWindow did, so the CLI can say exactly that. */
+export interface SetWindowResult {
+  /** False when the setting already was what was asked (or, for off, was never set). */
+  changed: boolean;
+  /** settings.json did not exist and was created. */
+  created: boolean;
+  /** The copy of the previous settings.json, when there was one to copy. */
+  backup?: string;
+}
+
+/**
+ * Set (or with undefined, remove) autoCompactWindow in ~/.claude/settings.json.
+ * Nothing is written when nothing changes: `off` with no window set used to
+ * create a settings.json of `{}`. A .backup is kept when there was a file.
+ */
+export function setCompactWindow(window: number | undefined, home = homedir()): SetWindowResult {
   if (window !== undefined && (!Number.isInteger(window) || window < MIN_WINDOW || window > MAX_WINDOW)) {
     throw new Error(`window must be a whole number of tokens between ${MIN_WINDOW} and ${MAX_WINDOW}`);
   }
   const p = settingsPath(home);
+  const existed = existsSync(p);
   const settings = readJson(p);
+  if (window === undefined ? !("autoCompactWindow" in settings) : settings.autoCompactWindow === window) {
+    return { changed: false, created: false };
+  }
   if (window === undefined) delete settings.autoCompactWindow;
   else settings.autoCompactWindow = window;
   writeJsonWithBackup(p, settings);
+  return { changed: true, created: !existed, backup: existed ? `${p}.context-doctor.backup` : undefined };
 }
 
 /** "400k" / "400000" / "0.4m" -> 400000. Undefined when unparseable. */
@@ -238,12 +290,13 @@ const k = (n: number) => `${Math.round(n / 1000)}k`;
 export function renderCompactWindows(r: CompactWindowReport, current?: number): string {
   const lines: string[] = [];
   lines.push("Auto-compact window: compact earlier, automatically (Claude Code's own setting)");
-  lines.push(`Your last ${r.days} days, ${r.sessions} Claude Code session${r.sessions === 1 ? "" : "s"}, priced at list prices`);
+  // Counted and said exactly as `savings` says it, so the two screens agree.
+  lines.push(`Last ${r.days} days, ${sessionsLabel(r.sessions, r.transcripts ?? r.sessions)}, at list prices`);
   lines.push("─".repeat(66));
   lines.push(`Now: ${current ? `${k(current)} (set in ~/.claude/settings.json)` : "not set: Claude Code compacts near the model's full window"}`);
   if (r.sessions === 0) {
     lines.push("No sessions with 10+ requests in the window to replay.");
-    return lines.join("\n");
+    return withInvocation(lines.join("\n"));
   }
   lines.push("");
   lines.push("  window   input cost   saved            compactions");
@@ -253,6 +306,8 @@ export function renderCompactWindows(r: CompactWindowReport, current?: number): 
   }
   lines.push(`  as now   ${usd(r.estimates[0]?.baselineUsd ?? 0).padStart(10)}                    ${String(r.actualCompactions).padStart(4)} (${((r.actualCompactions / r.days) * 7).toFixed(1)}/week)`);
   lines.push("");
+  lines.push("\"as now\" is what you were billed (transcript usage at list price, as in");
+  lines.push("`context-doctor savings`); each window saves the replay's share of it.");
   if (r.rereadTokens) {
     lines.push(`Each simulated compaction also pays for ~${Math.round(r.rereadTokens / 100) / 10}k tokens of files read again afterwards`);
     lines.push("(measured on your compactions: context-doctor compactions).");
@@ -260,5 +315,5 @@ export function renderCompactWindows(r: CompactWindowReport, current?: number): 
   lines.push("Each compaction replaces the session's history with a summary, so a smaller");
   lines.push("window trades detail for cost. Set one with:  context-doctor compact-window 400k");
   lines.push("Undo with:  context-doctor compact-window off");
-  return lines.join("\n");
+  return withInvocation(lines.join("\n"));
 }

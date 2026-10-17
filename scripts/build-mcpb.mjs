@@ -32,7 +32,8 @@ cpSync(join(root, "dist"), join(stage, "dist"), { recursive: true, filter: (src)
 cpSync(join(root, "LICENSE"), join(stage, "LICENSE"));
 cpSync(join(root, "assets", "icon.png"), join(stage, "icon.png"));
 
-// Production dependencies only; devDependencies (typescript, @types) would triple the bundle.
+// Production dependencies only. dist/mcp.js carries the MCP SDK and zod inside
+// it (scripts/bundle-mcp.mjs), so there are none to install.
 writeFileSync(join(stage, "package.json"), JSON.stringify({
   name: pkg.name, version: pkg.version, type: pkg.type, private: true, dependencies: pkg.dependencies,
 }, null, 2));
