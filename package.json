@@ -1,6 +1,6 @@
 {
   "name": "context-doctor",
-  "version": "0.32.0",
+  "version": "0.33.0",
   "description": "Context and token optimizer for LLM agents: see where Claude Code, Cursor, Codex and Gemini CLI tokens go, then cut them: an every-prompt hook, smarter compaction, an autopilot proxy that edits history only when the prompt cache is cold, RAG chunk packing and an MCP server. Local, no API key. By gAI Ventures.",
   "keywords": [
     "agent",
