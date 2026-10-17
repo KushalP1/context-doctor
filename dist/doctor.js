@@ -16,6 +16,7 @@ import { ledgerPath } from "./ledger.js";
 import { loadConfig } from "./config.js";
 import { binOnPath, claudeInstalledCopies, codexMcpEntry, geminiCliPresent, geminiSettingsPath, isEmptyStub, isOurPluginKey, launcherNamesMissingPackage } from "./install.js";
 import { describeDesktopUsage, desktopUsage } from "./desktopusage.js";
+import { withInvocation } from "./invocation.js";
 function claudeDesktopConfigPath() {
     switch (platform()) {
         case "darwin": return join(homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
@@ -469,8 +470,9 @@ export async function runDoctor() {
     const mark = { ok: "✓", warn: "!", fail: "✗", skip: "–" };
     console.log("CONTEXT DOCTOR — self-check");
     console.log("═".repeat(56));
+    // Fix hints name `context-doctor <command>`; after an npx run, `npx context-doctor <command>`.
     for (const c of checks) {
-        console.log(`${mark[c.status]} ${c.label.padEnd(22)} ${c.detail}`);
+        console.log(withInvocation(`${mark[c.status]} ${c.label.padEnd(22)} ${c.detail}`));
     }
     const fails = checks.filter((c) => c.status === "fail");
     const warns = checks.filter((c) => c.status === "warn");

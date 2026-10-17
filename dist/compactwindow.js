@@ -24,6 +24,7 @@ import { forEachLine, listSessions, replyCounter } from "./session.js";
 import { cacheWriteSplit, pricingFor, writeMultiplier } from "./pricing.js";
 import { realModel } from "./tokens.js";
 import { readJson, writeJsonWithBackup } from "./install.js";
+import { withInvocation } from "./invocation.js";
 /** Claude Code compacts at about this share of the window (970k of 1M, measured). */
 const TRIGGER_SHARE = 0.97;
 /** Context right after a compaction: system prompt, tools and the summary (median 75,447, measured). */
@@ -236,7 +237,7 @@ export function renderCompactWindows(r, current) {
     lines.push(`Now: ${current ? `${k(current)} (set in ~/.claude/settings.json)` : "not set: Claude Code compacts near the model's full window"}`);
     if (r.sessions === 0) {
         lines.push("No sessions with 10+ requests in the window to replay.");
-        return lines.join("\n");
+        return withInvocation(lines.join("\n"));
     }
     lines.push("");
     lines.push("  window   input cost   saved            compactions");
@@ -253,5 +254,5 @@ export function renderCompactWindows(r, current) {
     lines.push("Each compaction replaces the session's history with a summary, so a smaller");
     lines.push("window trades detail for cost. Set one with:  context-doctor compact-window 400k");
     lines.push("Undo with:  context-doctor compact-window off");
-    return lines.join("\n");
+    return withInvocation(lines.join("\n"));
 }

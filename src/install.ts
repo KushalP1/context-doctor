@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, copyFi
 import { homedir, platform } from "node:os";
 import { delimiter, dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { selfCommand, withInvocation } from "./invocation.js";
 
 interface Target {
   name: string;
@@ -677,8 +678,8 @@ export function runInstall(options: { statusLine?: boolean } = {}): InstallResul
     console.log("  provides them already; installing them as well would load its instructions and tools twice.");
     const copies = claudeInstalledCopies();
     if (copies.length > 0) {
-      console.log(`  An earlier install is still in place (${copies.join(", ")}): \`context-doctor uninstall\``);
-      console.log("  removes it, then `context-doctor install` wires the other apps again.");
+      console.log(`  An earlier install is still in place (${copies.join(", ")}): \`${selfCommand("uninstall")}\``);
+      console.log(`  removes it, then \`${selfCommand("install")}\` wires the other apps again.`);
     }
   }
   for (const target of found) {
@@ -761,9 +762,9 @@ export function runInstall(options: { statusLine?: boolean } = {}): InstallResul
   } else {
     console.log("\nDone. Restart the apps to pick up the new tools, then try:");
     console.log('  "What\'s eating my context?" — or paste a conversation and ask for a profile.');
-    console.log("See what it is worth on your own sessions:   context-doctor savings");
+    console.log(`See what it is worth on your own sessions:   ${selfCommand("savings")}`);
     console.log("Chat apps (Claude Desktop, claude.ai, ChatGPT, phones) have no hook. To make the rules standing there:");
-    console.log("  context-doctor instructions --copy   then paste into the app's preferences (it tells you where).");
+    console.log(`  ${selfCommand("instructions --copy")}   then paste into the app's preferences (it tells you where).`);
   }
   return { failures };
 }
@@ -794,7 +795,7 @@ async function uninstallAutopilot(): Promise<void> {
     // `autopilot pause` is advice for someone keeping the package; not here.
     for (const line of await autopilotOff(paths)) if (!line.includes("autopilot pause")) console.log(line);
   } catch (e) {
-    console.error(`✗ Autopilot: ${(e as Error).message} (run: context-doctor autopilot off)`);
+    console.error(withInvocation(`✗ Autopilot: ${(e as Error).message} (run: context-doctor autopilot off)`));
     return;
   }
   // `off` restores only what a readable config describes. A damaged one

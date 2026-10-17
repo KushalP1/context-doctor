@@ -15,6 +15,7 @@ import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
 import { optimizeConversation, STRATEGY_IDS, StrategyId } from "./optimize.js";
 import { commandHelp, didYouMean } from "./clihelp.js";
+import { selfCommand } from "./invocation.js";
 import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
 import { startProxy } from "./proxy.js";
@@ -517,7 +518,7 @@ async function main(): Promise<void> {
     if (!requested || args.list) {
       console.log("Presets for .contextdoctorrc — pick the one that matches your workload:\n");
       for (const p of PRESETS) console.log(`  ${p.id.padEnd(7)} ${p.summary}`);
-      console.log("\nThen: context-doctor init <preset>");
+      console.log(`\nThen: ${selfCommand("init <preset>")}`);
       return;
     }
     const preset = findPreset(requested);
@@ -746,7 +747,7 @@ async function main(): Promise<void> {
       if (args.copy) console.log(copyToClipboard(text) ? "\n(copied to the clipboard)" : "\n(no clipboard tool found; copy the lines above)");
     } else {
       console.log(renderSavings(report, on, cwLine));
-      if (!args.command) console.log("\nAll commands: context-doctor --help");
+      if (!args.command) console.log(`\nAll commands: ${selfCommand("--help")}`);
     }
     return;
   }
@@ -779,7 +780,7 @@ async function main(): Promise<void> {
       console.log(`✓ autoCompactWindow = ${w} in ~/.claude/settings.json (a .backup was kept).`);
       console.log("  Claude Code sessions started from now on compact as if the window were that size,");
       console.log("  in the terminal, IDEs and the desktop app. Check in a session with /context.");
-      console.log("  Undo: context-doctor compact-window off");
+      console.log(`  Undo: ${selfCommand("compact-window off")}`);
       return;
     }
     const current = currentCompactWindow();

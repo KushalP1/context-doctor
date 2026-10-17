@@ -17,6 +17,7 @@ import { coldResumeEvents } from "./coldresume.js";
 import { forEachLine, listSessions, replyCounter } from "./session.js";
 import { CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, pricingFor, usageCost, writeMultiplier } from "./pricing.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
+import { withInvocation } from "./invocation.js";
 /** System prompt and tool schemas: sent on every request, identical in both arms. */
 const FIXED_TOKENS = 54_000;
 const CLAUDE_CODE_TTL_MS = 3_600_000;
@@ -249,7 +250,7 @@ export function renderSavings(r, autopilotOn = false, cw) {
     if (r.sessions.length === 0) {
         lines.push(`No Claude Code sessions with 10+ requests in the last ${r.days} days to replay.`);
         lines.push("Use Claude Code for a while, then run this again: `context-doctor savings`.");
-        return lines.join("\n");
+        return withInvocation(lines.join("\n"));
     }
     const n = r.sessions.length;
     const allDesktop = r.unreachableSessions === n;
@@ -294,7 +295,8 @@ export function renderSavings(r, autopilotOn = false, cw) {
     lines.push("Replayed request by request through the shipped code and priced as the");
     lines.push("prompt cache bills. On a subscription the same tokens come out of your");
     lines.push("usage limit instead. Share yours: context-doctor savings --share");
-    return lines.join("\n");
+    // Hints as the user can type them: `npx context-doctor …` after an npx run.
+    return withInvocation(lines.join("\n"));
 }
 /**
  * `savings --share`: a few lines people can paste or screenshot. Totals only:
