@@ -217,6 +217,7 @@ test("the cache advisor says where to put the breakpoint, not just that one is m
     assert.match(advice, /Add \{"cache_control":\{"type":"ephemeral"\}\} to the last entry in "tools"/, "names the block for the system/tools breakpoint");
     assert.match(advice, /messages #0-#\d+ \(~\d+ tokens\) were identical to the previous/, "names the stable message run");
     assert.match(advice, /on the last content block of message #\d+/, "and the exact message to mark");
+    assert.match(advice, /top-level "cache_control".*automatic caching/, "or automatic caching, which needs no placing");
   } finally {
     proxy.close();
     upstream.close();

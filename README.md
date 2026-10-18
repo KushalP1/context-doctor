@@ -139,7 +139,7 @@ The MCP server hands these standing rules, verbatim, to every chat where it is e
 | `context-doctor reads [--days n] [--limit n]` | Files read into session after session: reads, tokens, cost, and whether a CLAUDE.md summary or `pack` pays |
 | `context-doctor subagents [--days n]` | Which subagents paid for themselves: each one's bill vs the same steps run in the parent session |
 | `context-doctor compactions [--days n]` | Do sessions work worse right after compacting? Re-reads, tool errors and your corrections, before vs after each compaction |
-| `context-doctor cache-plan <request.json> [--calls n] [--out file]` | Where an Anthropic API request should carry `cache_control`, and what it saves over n calls; `--out` writes it applied |
+| `context-doctor cache-plan <request.json> [--calls n] [--out file] [--explicit]` | Where an Anthropic API request should carry `cache_control` (top-level automatic caching for the moving end, unless `--explicit`), and what it saves over n calls; `--out` writes it applied |
 | `context-doctor accuracy` | How much of what you are billed for is visible in your transcript (the fixed harness baseline, per-turn injected content), plus a tokenizer check: real chars/token per model from the API's own counts, next to the ratio the estimator uses |
 | `context-doctor report` | Machine-wide impact report (proxy savings persist across restarts): exact proxy savings, hook activity, how often the cold-resume `/compact` offer was followed by a compaction, recoverable waste in recent sessions |
 | `context-doctor dashboard` | Local savings dashboard on 127.0.0.1: tokens saved per day, sessions by context in use vs recoverable, budget status |

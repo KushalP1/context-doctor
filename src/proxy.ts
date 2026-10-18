@@ -438,7 +438,7 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
                   : `the last block of "system"`;
                 advise(
                   `~${stablePrefixTokens}+ tokens of stable system/tools on ${requestModel} without cache_control. ` +
-                    `Add {"cache_control":{"type":"ephemeral"}} to ${where}; everything before it then bills at ~10% on every call`
+                    `Add {"cache_control":{"type":"ephemeral"}} to ${where}; everything before it then bills at the cache-read rate (2.5-10% of input) on every call`
                 );
               }
               const fp = fnv1a(stablePrefix);
@@ -467,7 +467,8 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
                   if (stableTokens >= minCacheable) {
                     advise(
                       `messages #0-#${stable - 1} (~${stableTokens} tokens) were identical to the previous ${requestModel} request and carry no cache_control. ` +
-                        `Put {"cache_control":{"type":"ephemeral"}} on the last content block of message #${stable - 1}; that run then reads from cache instead of re-billing each turn`
+                        `Simplest: a top-level "cache_control":{"type":"ephemeral"} (automatic caching marks the last block and moves it forward each turn); ` +
+                        `or put {"cache_control":{"type":"ephemeral"}} on the last content block of message #${stable - 1}. That run then reads from cache instead of re-billing each turn`
                     );
                   }
                 }

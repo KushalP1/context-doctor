@@ -136,9 +136,10 @@ Fix on request:
                                                 --semantic: also rank by meaning with a local
                                                 Ollama embedding model, when one is installed
                                                 (--embed-model <name> picks it)
-  context-doctor cache-plan <request.json> [--calls n] [--out file]
+  context-doctor cache-plan <request.json> [--calls n] [--out file] [--explicit]
                                                 Where an Anthropic request should carry cache_control,
                                                 what it saves over n calls; --out writes it applied
+                                                (top-level automatic caching unless --explicit)
 
 Integrations:
   context-doctor ci [--base <ref>] [--max-tokens n] [--max-increase n] [--markdown]
@@ -286,6 +287,7 @@ interface Args {
   mcp?: boolean;
   write?: boolean;
   calls?: number;
+  explicit?: boolean;
   semantic?: boolean | string;
   base?: string;
   markdown?: boolean;
@@ -369,6 +371,7 @@ const FLAGS: FlagSpec[] = [
   { names: ["--mcp"], set: (a) => { a.mcp = true; } },
   { names: ["--write"], set: (a) => { a.write = true; } },
   { names: ["--calls"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.calls = v; } },
+  { names: ["--explicit"], set: (a) => { a.explicit = true; } },
   { names: ["--semantic"], set: (a) => { a.semantic = a.semantic || true; } },
   { names: ["--embed-model"], value: "text", set: (a, v) => { a.semantic = v; } },
   { names: ["--base"], value: "text", set: (a, v) => { a.base = v; } },
@@ -938,12 +941,12 @@ async function main(): Promise<void> {
   if (args.command === "cache-plan") {
     const file = args.positionals?.[0];
     if (!file) {
-      console.error("usage: context-doctor cache-plan <request.json|-> [--calls 10] [--out planned.json]");
+      console.error("usage: context-doctor cache-plan <request.json|-> [--calls 10] [--out planned.json] [--explicit]");
       process.exit(1);
     }
     let result;
     try {
-      result = planCache(readInput(file), args.calls ?? 10, args.model);
+      result = planCache(readInput(file), args.calls ?? 10, args.model, { explicit: args.explicit });
     } catch (e) {
       console.error(`Could not read a request from ${file}: ${(e as Error).message}`);
       process.exit(1);

@@ -6,25 +6,39 @@
  * messages. A breakpoint caches everything up to and including the block it
  * sits on, a prefix under the model's minimum (512 to 4,096 tokens, see
  * minCacheableTokens) is not cached at all, a request may carry at most 4
- * breakpoints, and the cache looks back at most 20 blocks from a breakpoint
- * for an earlier hit.
+ * breakpoints, and the cache looks back at most 20 positions from a
+ * breakpoint for an earlier hit (a run of tool_use blocks, or of
+ * tool_result blocks, is one position).
+ *
+ * Automatic caching (prompt-caching docs, Oct 2026): one top-level
+ * `cache_control` puts a breakpoint on the last cacheable block and moves it
+ * forward as the conversation grows, so the app never re-places it. It takes
+ * one of the 4 slots; with 4 explicit breakpoints as well, or an explicit one
+ * on the last block at a different TTL, the API answers 400. Every platform
+ * has it except Bedrock's legacy integration (Opus 4.6 and earlier), which
+ * rejects the field.
+ *
  * The planner places breakpoints at the ends of the stable parts (last tool,
- * last system block) and on the last block of the conversation, adds a
- * middle anchor when the conversation is longer than the 20-block lookback,
- * prices the request sent N times with and without the plan, and with
- * --out saves the request with the breakpoints in place.
+ * last system block) and at the end of the conversation, there by automatic
+ * caching unless the platform lacks it or --explicit asks for a block-level
+ * one; adds a middle anchor when the conversation is longer than the
+ * 20-position lookback; prices the request sent N times with and without the
+ * plan; and with --out saves the request with the breakpoints in place.
  *
  * Pricing assumes the same request is sent N times (an agent loop's steps, a
  * shared system prompt and document set); cache writes cost 1.25x input
- * (2x with ttl "1h"), reads 0.1x.
+ * (2x with ttl "1h"), reads the model's own cache-read rate (0.1x; 0.05x on
+ * Opus 5.5 and Sonnet 5.5; 0.025x on Fable and Mythos 5.1).
  */
 
 import { estimateTokens, formatTokens } from "./tokens.js";
 import { formatUsd, pricingFor } from "./pricing.js";
 
 export interface Breakpoint {
-  /** Where: "tools[3]", "system[1]", "messages[12].content[0]". */
+  /** Where: "tools[3]", "system[1]", "messages[12].content[0]", or "top level (automatic)". */
   at: string;
+  /** The top-level automatic breakpoint: it lands on the last block and follows the conversation. */
+  automatic?: boolean;
   /** Prefix tokens cached up to and including this point. */
   prefixTokens: number;
   why: string;
@@ -42,6 +56,8 @@ export interface CachePlan {
   calls: number;
   usdWithout?: number;
   usdWith?: number;
+  /** Cache reads relative to input, for this model. */
+  readMultiplier?: number;
   notes: string[];
 }
 
@@ -50,7 +66,11 @@ interface Block {
   tokens: number;
   /** Section the block belongs to, in cache order. */
   section: "tools" | "system" | "messages";
+  /** The block's type: runs of tool_use or tool_result blocks count as one lookback position. */
+  type?: string;
   hasBreakpoint: boolean;
+  /** The TTL of the breakpoint it carries, when it carries one. */
+  ttl?: "5m" | "1h";
   set: (on: boolean) => void;
 }
 
@@ -98,7 +118,7 @@ function blocksOf(req: Record<string, any>, model?: string, longTtl = false): Bl
   };
   const tok = (x: unknown) => estimateTokens(typeof x === "string" ? x : JSON.stringify(x ?? ""), model);
   (Array.isArray(req.tools) ? req.tools : []).forEach((t: any, i: number) => {
-    out.push({ at: `tools[${i}]`, tokens: tok(t), section: "tools", hasBreakpoint: Boolean(t?.cache_control), set: mark(t) });
+    out.push({ at: `tools[${i}]`, tokens: tok(t), section: "tools", hasBreakpoint: Boolean(t?.cache_control), ttl: blockTtl(t), set: mark(t) });
   });
   if (typeof req.system === "string" && req.system) {
     // A string system prompt cannot carry cache_control: it becomes one text block when planned.
@@ -114,7 +134,7 @@ function blocksOf(req: Record<string, any>, model?: string, longTtl = false): Bl
       },
     });
   } else if (Array.isArray(req.system)) {
-    req.system.forEach((b: any, i: number) => out.push({ at: `system[${i}]`, tokens: tok(b?.text ?? b), section: "system", hasBreakpoint: Boolean(b?.cache_control), set: mark(b) }));
+    req.system.forEach((b: any, i: number) => out.push({ at: `system[${i}]`, tokens: tok(b?.text ?? b), section: "system", hasBreakpoint: Boolean(b?.cache_control), ttl: blockTtl(b), set: mark(b) }));
   }
   (Array.isArray(req.messages) ? req.messages : []).forEach((m: any, i: number) => {
     if (typeof m?.content === "string") {
@@ -132,14 +152,47 @@ function blocksOf(req: Record<string, any>, model?: string, longTtl = false): Bl
     } else if (Array.isArray(m?.content)) {
       m.content.forEach((b: any, j: number) => {
         const isImage = b?.type === "image";
-        out.push({ at: `messages[${i}].content[${j}]`, tokens: isImage ? 1600 : tok(b?.text ?? b?.content ?? b) + (j === 0 ? 4 : 0), section: "messages", hasBreakpoint: Boolean(b?.cache_control), set: mark(b) });
+        out.push({ at: `messages[${i}].content[${j}]`, tokens: isImage ? 1600 : tok(b?.text ?? b?.content ?? b) + (j === 0 ? 4 : 0), section: "messages", type: b?.type, hasBreakpoint: Boolean(b?.cache_control), ttl: blockTtl(b), set: mark(b) });
       });
     }
   });
   return out;
 }
 
-export function planCache(request: unknown, calls = 10, modelOverride?: string): { plan: CachePlan; apply: () => Record<string, any> } {
+const blockTtl = (obj: any): "5m" | "1h" | undefined => (obj?.cache_control ? (obj.cache_control.ttl === "1h" ? "1h" : "5m") : undefined);
+
+/**
+ * Bedrock's legacy integration rejects a top-level cache_control (400): its
+ * ids are `anthropic.claude-…` (with an optional region prefix) and it serves
+ * Opus 4.6 and earlier.
+ */
+function legacyBedrock(model?: string): boolean {
+  const m = (model ?? "").toLowerCase();
+  if (!/^(?:[a-z]{2,6}\.)?anthropic\.claude/.test(m)) return false;
+  const cur = /(opus|sonnet|haiku)-(\d+)(?:-(\d{1,2}))?(?!\d)/.exec(m);
+  if (cur) return Number(cur[2]) + Number(cur[3] ?? 0) / 10 <= 4.6;
+  return /claude-\d(?:-\d)?-(opus|sonnet|haiku)/.test(m); // Claude 3.x
+}
+
+/** Lookback positions of each block: a run of tool_use (or tool_result) blocks is one. */
+function positions(blocks: Block[]): number[] {
+  const out: number[] = [];
+  let pos = -1;
+  blocks.forEach((b, i) => {
+    const prev = blocks[i - 1];
+    const sameRun = prev && b.section === "messages" && prev.section === "messages" && (b.type === "tool_use" || b.type === "tool_result") && prev.type === b.type;
+    if (!sameRun) pos++;
+    out.push(pos);
+  });
+  return out;
+}
+
+export interface CachePlanOptions {
+  /** Place the conversation's breakpoint on its last block instead of using top-level automatic caching. */
+  explicit?: boolean;
+}
+
+export function planCache(request: unknown, calls = 10, modelOverride?: string, opts: CachePlanOptions = {}): { plan: CachePlan; apply: () => Record<string, any> } {
   const req = (typeof request === "string" ? JSON.parse(request) : request) as Record<string, any>;
   const model = modelOverride ?? (typeof req.model === "string" ? req.model : undefined);
   const notes: string[] = [];
@@ -166,37 +219,66 @@ export function planCache(request: unknown, calls = 10, modelOverride?: string):
   const prefixAt = (i: number) => blocks.slice(0, i + 1).reduce((s, b) => s + b.tokens, 0);
   const lastIndex = (section: Block["section"]) => blocks.map((b) => b.section).lastIndexOf(section);
 
-  const picks: Array<{ i: number; why: string }> = [];
-  const pick = (i: number, why: string) => {
-    if (i < 0 || picks.some((p) => p.i === i) || prefixAt(i) < minCacheable) return;
-    picks.push({ i, why });
+  // A top-level cache_control already in the request is automatic caching.
+  const autoNow = req.cache_control && typeof req.cache_control === "object" ? req.cache_control : undefined;
+  const bedrock = legacyBedrock(model);
+  const useAuto = !bedrock && (!opts.explicit || autoNow !== undefined);
+
+  const picks: Array<{ i: number; why: string; auto?: boolean }> = [];
+  const pick = (i: number, why: string, auto = false) => {
+    if (i < 0 || picks.some((p) => p.i === i && !p.auto) || prefixAt(i) < minCacheable) return;
+    picks.push({ i, why, auto });
   };
   const lastMsg = lastIndex("messages");
+  // Automatic caching lands on the last cacheable block, whichever section it is in.
+  const lastBlock = blocks.length - 1;
   pick(lastIndex("tools"), "end of the tool definitions: stable across every call");
   pick(lastIndex("system"), "end of the system prompt: stable across every call");
   // The conversation boundary moves forward each turn; a breakpoint on the last block caches the whole history for the next call.
-  pick(lastMsg, "last block of the conversation: the next call reads everything before it from cache");
-  // Beyond 20 blocks back from the moving breakpoint the cache stops looking; anchor the middle.
-  const firstMsg = blocks.findIndex((b) => b.section === "messages");
-  if (firstMsg >= 0 && lastMsg - firstMsg > LOOKBACK_BLOCKS && picks.length < MAX_BREAKPOINTS) {
-    pick(lastMsg - LOOKBACK_BLOCKS, `anchor ${LOOKBACK_BLOCKS} blocks back: the cache only looks back ${LOOKBACK_BLOCKS} blocks from a breakpoint`);
+  if (useAuto) {
+    // An explicit breakpoint where the automatic one lands adds nothing.
+    const dup = picks.findIndex((p) => p.i === lastBlock);
+    if (dup >= 0) picks.splice(dup, 1);
+    pick(lastBlock, "automatic caching: one top-level cache_control puts the breakpoint on the last block and moves it forward as the conversation grows", true);
+  } else {
+    pick(lastMsg, "last block of the conversation: the next call reads everything before it from cache");
   }
-  picks.sort((a, b) => a.i - b.i);
+  // Beyond 20 positions back from the moving breakpoint the cache stops looking; anchor the middle.
+  const pos = positions(blocks);
+  const firstMsg = blocks.findIndex((b) => b.section === "messages");
+  if (firstMsg >= 0 && lastMsg >= 0 && pos[lastMsg] - pos[firstMsg] > LOOKBACK_BLOCKS && picks.length < MAX_BREAKPOINTS) {
+    const target = pos[lastMsg] - LOOKBACK_BLOCKS;
+    pick(pos.findIndex((p) => p >= target), `anchor ${LOOKBACK_BLOCKS} positions back: the cache only looks back ${LOOKBACK_BLOCKS} positions from a breakpoint`);
+  }
+  picks.sort((a, b) => a.i - b.i || Number(a.auto) - Number(b.auto));
   while (picks.length > MAX_BREAKPOINTS) picks.splice(1, 1);
 
-  const existing = blocks.filter((b) => b.hasBreakpoint).map((b) => b.at);
-  if (existing.length > MAX_BREAKPOINTS) notes.push(`The request carries ${existing.length} breakpoints; the API rejects more than ${MAX_BREAKPOINTS}.`);
+  const explicitNow = blocks.filter((b) => b.hasBreakpoint);
+  const existing = [...(autoNow ? ["top level (automatic)"] : []), ...explicitNow.map((b) => b.at)];
+  if (existing.length > MAX_BREAKPOINTS) {
+    notes.push(autoNow
+      ? `The request carries ${explicitNow.length} block breakpoints and a top-level cache_control, which takes a slot of its own: the API rejects more than ${MAX_BREAKPOINTS} (400).`
+      : `The request carries ${existing.length} breakpoints; the API rejects more than ${MAX_BREAKPOINTS}.`);
+  }
+  const last = blocks[blocks.length - 1];
+  const ttlOf = (c: any) => (c?.ttl === "1h" ? "1h" : "5m");
+  if (autoNow && last?.hasBreakpoint && last.ttl !== ttlOf(autoNow)) {
+    notes.push(`The last block's own cache_control (${last.ttl}) differs from the top-level one (${ttlOf(autoNow)}): the API answers 400. Remove one.`);
+  }
+  if (bedrock && autoNow) notes.push("Bedrock's legacy integration (Opus 4.6 and earlier) answers a top-level cache_control with a 400: use block-level breakpoints there (this plan does).");
+  if (useAuto && picks.length === 1 && picks[0].auto) notes.push("Automatic caching is all this request needs: one top-level field, nothing to move as the conversation grows.");
   if (total < minCacheable) notes.push(`The whole request is ~${formatTokens(total)} tokens, under the ${formatTokens(minCacheable)} minimum ${model ?? "this model"} caches: caching cannot help until it grows.`);
   const cachedTokens = picks.length ? prefixAt(picks[picks.length - 1].i) : 0;
 
   const price = pricingFor(model);
   const writeMult = longTtl ? 2 : 1.25;
-  let usdWithout: number | undefined, usdWith: number | undefined;
+  let usdWithout: number | undefined, usdWith: number | undefined, readMultiplier: number | undefined;
   if (price) {
     const p = price.inputPerM / 1e6;
+    readMultiplier = price.cacheReadPerM / price.inputPerM;
     usdWithout = calls * total * p;
     const rest = total - cachedTokens;
-    usdWith = cachedTokens * writeMult * p + rest * p + (calls - 1) * (cachedTokens * 0.1 * p + rest * p);
+    usdWith = cachedTokens * writeMult * p + rest * p + (calls - 1) * (cachedTokens * readMultiplier * p + rest * p);
   }
   return {
     plan: {
@@ -205,16 +287,23 @@ export function planCache(request: unknown, calls = 10, modelOverride?: string):
       totalTokens: total,
       minCacheable,
       existing,
-      plan: picks.map((p) => ({ at: blocks[p.i].at, prefixTokens: prefixAt(p.i), why: p.why })),
+      plan: picks.map((p) => (p.auto
+        ? { at: "top level (automatic)", automatic: true, prefixTokens: prefixAt(p.i), why: p.why }
+        : { at: blocks[p.i].at, prefixTokens: prefixAt(p.i), why: p.why })),
       cachedTokens,
       calls,
       usdWithout,
       usdWith,
+      readMultiplier,
       notes,
     },
     apply: () => {
       for (const b of blocks) b.set(false);
-      for (const p of picks) blocks[p.i].set(true);
+      delete req.cache_control;
+      for (const p of picks) {
+        if (p.auto) req.cache_control = autoNow ?? (longTtl ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" });
+        else blocks[p.i].set(true);
+      }
       return req;
     },
   };
@@ -233,13 +322,14 @@ export function renderCachePlan(p: CachePlan): string {
   } else {
     out.push(`Place cache_control on (${p.plan.length} of ${MAX_BREAKPOINTS} allowed):`);
     for (const b of p.plan) out.push(`  ${b.at.padEnd(26)} prefix ~${formatTokens(b.prefixTokens).padStart(6)}  ${b.why}`);
+    if (p.plan.some((b) => b.automatic)) out.push(`  (top level: "cache_control": {"type": "ephemeral"} beside "model"; --explicit plans a block-level one instead)`);
   }
   if (p.usdWithout !== undefined && p.usdWith !== undefined && p.plan.length) {
     const saved = p.usdWithout - p.usdWith;
     out.push(
       "",
       `Sent ${p.calls} times: ${formatUsd(p.usdWithout)} of input without caching, ${formatUsd(p.usdWith)} with this plan (${saved >= 0 ? "saves" : "costs"} ${formatUsd(Math.abs(saved))}, ${Math.round((Math.abs(saved) / p.usdWithout) * 100)}%).`,
-      `(~${formatTokens(p.cachedTokens)} tokens read at 0.1x after the first call, which writes them once at the cache-write rate.)`
+      `(~${formatTokens(p.cachedTokens)} tokens read at ${p.readMultiplier !== undefined ? `${+p.readMultiplier.toFixed(3)}x` : "the cache-read rate"} after the first call, which writes them once at the cache-write rate.)`
     );
   }
   if (p.notes.length) out.push("", ...p.notes.map((n) => `! ${n}`));
