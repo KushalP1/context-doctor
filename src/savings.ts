@@ -93,7 +93,10 @@ const UNPRICED: ModelPricing = { inputPerM: 1, outputPerM: 5, cacheReadPerM: 0.1
  * (`usd(writeMult)`), since the mix is only known once the whole transcript
  * has been read.
  */
-function arm(model: string | undefined, clearer: AutoClearer | null) {
+/** What an arm needs from a clearer: autopilot's AutoClearer, or the simulated server-side rule (serverclear.ts). */
+export interface ReplayClearer { apply(body: Record<string, unknown>, now: number): { firstChanged: number } }
+
+function arm(model: string | undefined, clearer: ReplayClearer | null) {
   const msgs: Msg[] = [];
   const tok: number[] = [];
   let total = 0, prevLen = 0, readUsd = 0, writeAtInput = 0, raw = 0;
@@ -136,9 +139,9 @@ function arm(model: string | undefined, clearer: AutoClearer | null) {
  * `coldRows` does the same for the cold-resume count, which reads the
  * transcript again after the replay has added its rows to `runRows`.
  */
-export function replaySession(path: string, options: AutoClearOptions = {}, since = 0, runRows?: Set<string>, coldRows?: Set<string>): SessionSavings | undefined {
+export function replaySession(path: string, options: AutoClearOptions = {}, since = 0, runRows?: Set<string>, coldRows?: Set<string>, makeClearer: (model?: string) => ReplayClearer = () => new AutoClearer(options)): SessionSavings | undefined {
   let model: string | undefined;
-  let base = arm(undefined, null), auto = arm(undefined, new AutoClearer(options));
+  let base = arm(undefined, null), auto = arm(undefined, makeClearer());
   let baseUsd = 0, autoUsd = 0, baseRaw = 0, autoRaw = 0;
   let entrypoint: string | undefined;
   let billed = 0, billedUsd = 0, billedRaw = 0, requests = 0, lastId: string | undefined, lastTs: number | null = null;
@@ -158,7 +161,7 @@ export function replaySession(path: string, options: AutoClearOptions = {}, sinc
       // Compaction replaces the history in both arms alike: start fresh.
       flush();
       base = arm(model, null);
-      auto = arm(model, new AutoClearer(options));
+      auto = arm(model, makeClearer(model));
       return;
     }
     if (e.type === "assistant" && e.message) {

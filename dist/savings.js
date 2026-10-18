@@ -33,13 +33,6 @@ export function autopilotReaches(entrypoint) {
 }
 /** Without a price on file the arms still need relative weights: Claude's usual 10% read rate. */
 const UNPRICED = { inputPerM: 1, outputPerM: 5, cacheReadPerM: 0.1 };
-/**
- * One arm of the replay: the history as sent, priced incrementally at each
- * request's own model. Reads are priced as they go; writes are kept at the
- * input price and multiplied by the session's write TTL mix at the end
- * (`usd(writeMult)`), since the mix is only known once the whole transcript
- * has been read.
- */
 function arm(model, clearer) {
     const msgs = [];
     const tok = [];
@@ -90,9 +83,9 @@ function arm(model, clearer) {
  * `coldRows` does the same for the cold-resume count, which reads the
  * transcript again after the replay has added its rows to `runRows`.
  */
-export function replaySession(path, options = {}, since = 0, runRows, coldRows) {
+export function replaySession(path, options = {}, since = 0, runRows, coldRows, makeClearer = () => new AutoClearer(options)) {
     let model;
-    let base = arm(undefined, null), auto = arm(undefined, new AutoClearer(options));
+    let base = arm(undefined, null), auto = arm(undefined, makeClearer());
     let baseUsd = 0, autoUsd = 0, baseRaw = 0, autoRaw = 0;
     let entrypoint;
     let billed = 0, billedUsd = 0, billedRaw = 0, requests = 0, lastId, lastTs = null;
@@ -118,7 +111,7 @@ export function replaySession(path, options = {}, since = 0, runRows, coldRows) 
             // Compaction replaces the history in both arms alike: start fresh.
             flush();
             base = arm(model, null);
-            auto = arm(model, new AutoClearer(options));
+            auto = arm(model, makeClearer(model));
             return;
         }
         if (e.type === "assistant" && e.message) {

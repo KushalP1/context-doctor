@@ -64,6 +64,19 @@ export interface SavingsReport {
     coldResumeNetUsd: number;
 }
 /**
+ * One arm of the replay: the history as sent, priced incrementally at each
+ * request's own model. Reads are priced as they go; writes are kept at the
+ * input price and multiplied by the session's write TTL mix at the end
+ * (`usd(writeMult)`), since the mix is only known once the whole transcript
+ * has been read.
+ */
+/** What an arm needs from a clearer: autopilot's AutoClearer, or the simulated server-side rule (serverclear.ts). */
+export interface ReplayClearer {
+    apply(body: Record<string, unknown>, now: number): {
+        firstChanged: number;
+    };
+}
+/**
  * Replay one Claude Code transcript. Undefined when it holds too few requests
  * to mean anything. `runRows` is shared by every transcript of one report: a
  * forked session starts as a copy of its parent's history, which replays
@@ -71,7 +84,7 @@ export interface SavingsReport {
  * `coldRows` does the same for the cold-resume count, which reads the
  * transcript again after the replay has added its rows to `runRows`.
  */
-export declare function replaySession(path: string, options?: AutoClearOptions, since?: number, runRows?: Set<string>, coldRows?: Set<string>): SessionSavings | undefined;
+export declare function replaySession(path: string, options?: AutoClearOptions, since?: number, runRows?: Set<string>, coldRows?: Set<string>, makeClearer?: (model?: string) => ReplayClearer): SessionSavings | undefined;
 export declare function estimateSavings(days?: number, options?: AutoClearOptions, paths?: string[], onProgress?: (done: number, total: number) => void): SavingsReport;
 /** Optional third lever, computed by compactwindow.ts and passed in by the CLI. */
 export interface CompactWindowLine {
