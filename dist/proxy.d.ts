@@ -48,6 +48,13 @@ export interface ProxyOptions extends OptimizeOptions {
     googleUpstream?: string;
     /** Where Codex signed in with ChatGPT is relayed (testing); see the handler. */
     chatgptUpstream?: string;
+    /**
+     * Add a conversation prompt_cache_key to OpenAI requests that lack one
+     * (cachekey.ts). Default: on toward api.openai.com, off toward any other
+     * OpenAI-compatible upstream, which may reject the field;
+     * CONTEXT_DOCTOR_CACHE_KEY=0 or 1 overrides.
+     */
+    promptCacheKey?: boolean;
 }
 /** Reported by /health so `autopilot status` can tell an outdated service from a current one. */
 export declare const PROXY_VERSION = "0.33.0";
@@ -94,6 +101,10 @@ export interface ProxyStats {
     /** Cache reads/writes reported upstream (Anthropic), so autopilot's effect on the cache is visible. */
     upstreamCacheReadTokens: number;
     upstreamCacheWriteTokens: number;
+    /** OpenAI's cached_tokens: the part of upstreamInputTokens its responses say was read from cache. */
+    openaiCachedTokens: number;
+    /** OpenAI requests sent with a conversation prompt_cache_key the proxy added (cachekey.ts). */
+    cacheKeysAdded: number;
     autopilot?: {
         enabled: boolean;
         paused: boolean;

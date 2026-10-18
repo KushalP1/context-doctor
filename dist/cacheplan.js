@@ -156,7 +156,7 @@ export function planCache(request, calls = 10, modelOverride, opts = {}) {
     const isOpenAI = Array.isArray(req.input) || (Array.isArray(req.messages) && req.messages.some((m) => m?.role === "system" || m?.role === "developer" || m?.role === "tool"));
     if (isOpenAI || /gpt|^o\d/i.test(model ?? "")) {
         const text = JSON.stringify(req.tools ?? "") + JSON.stringify(req.messages ?? req.input ?? "");
-        notes.push("OpenAI caches automatically: any request prefix over 1,024 tokens that matches an earlier one is billed at the cached rate, with no markers to place.", "What you control is order: keep tools, instructions and reference documents first and identical between calls, and put per-call content last.", "Set `prompt_cache_key` to a stable value per conversation or tenant so requests that share a prefix land on the same cache.");
+        notes.push("OpenAI caches automatically: any request prefix over 1,024 tokens that matches an earlier one is billed at the cached rate, with no markers to place.", "What you control is order: keep tools, instructions and reference documents first and identical between calls, and put per-call content last.", "Set `prompt_cache_key` to a stable value per conversation or tenant so requests that share a prefix land on the same cache (models before GPT-5.6; from 5.6 on it only separates cache accounting). The context-doctor proxy adds one per conversation when a request has none.");
         return {
             plan: { provider: "openai", model, totalTokens: estimateTokens(text, model), minCacheable: 1024, existing: [], plan: [], cachedTokens: 0, calls, notes },
             apply: () => req,

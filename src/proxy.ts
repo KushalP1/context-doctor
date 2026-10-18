@@ -22,6 +22,7 @@ import { formatTokens, CHARS_PER_TOKEN, providerFor } from "./tokens.js";
 import { formatUsd, inputCostUsd, pricingFor } from "./pricing.js";
 import { recordLedger } from "./ledger.js";
 import { minCacheableTokens } from "./cacheplan.js";
+import { withPromptCacheKey } from "./cachekey.js";
 
 export interface ProxyOptions extends OptimizeOptions {
   /** Per-model-prefix overrides; first match wins, global options otherwise. */
@@ -58,6 +59,13 @@ export interface ProxyOptions extends OptimizeOptions {
   googleUpstream?: string;
   /** Where Codex signed in with ChatGPT is relayed (testing); see the handler. */
   chatgptUpstream?: string;
+  /**
+   * Add a conversation prompt_cache_key to OpenAI requests that lack one
+   * (cachekey.ts). Default: on toward api.openai.com, off toward any other
+   * OpenAI-compatible upstream, which may reject the field;
+   * CONTEXT_DOCTOR_CACHE_KEY=0 or 1 overrides.
+   */
+  promptCacheKey?: boolean;
 }
 
 /** Reported by /health so `autopilot status` can tell an outdated service from a current one. */
@@ -146,6 +154,10 @@ export interface ProxyStats {
   /** Cache reads/writes reported upstream (Anthropic), so autopilot's effect on the cache is visible. */
   upstreamCacheReadTokens: number;
   upstreamCacheWriteTokens: number;
+  /** OpenAI's cached_tokens: the part of upstreamInputTokens its responses say was read from cache. */
+  openaiCachedTokens: number;
+  /** OpenAI requests sent with a conversation prompt_cache_key the proxy added (cachekey.ts). */
+  cacheKeysAdded: number;
   autopilot?: {
     enabled: boolean;
     paused: boolean;
@@ -266,6 +278,9 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
     if (clearer) clearer.noteEditsRejected(account);
     else refusing.add(account);
   };
+  const openaiBase = opts.openaiUpstream ?? "https://api.openai.com";
+  const keyEnv = process.env.CONTEXT_DOCTOR_CACHE_KEY;
+  const addCacheKeys = opts.promptCacheKey ?? (keyEnv === "0" ? false : keyEnv === "1" ? true : /^https:\/\/api\.openai\.com\/?$/.test(openaiBase));
   const stats: ProxyStats = {
     startedAt: new Date().toISOString(),
     requests: 0,
@@ -279,6 +294,8 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
     advice: [],
     upstreamCacheReadTokens: 0,
     upstreamCacheWriteTokens: 0,
+    openaiCachedTokens: 0,
+    cacheKeysAdded: 0,
     autopilot: opts.autopilot
       ? { enabled: true, paused: false, requests: 0, changedRequests: 0, batches: 0, coldBatches: 0, resultsCleared: 0, tokensRemoved: 0, lastReason: "" }
       : undefined,
@@ -521,6 +538,19 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
         }
       }
 
+      // A stable prompt_cache_key per conversation, where the app sent none
+      // and the model routes by it (GPT before 5.6): its requests then land
+      // on one cache. Added after autopilot, so its view of the conversation
+      // is the app's own.
+      if (addCacheKeys && !chatgpt && req.method === "POST" && body && /^\/v1\/(chat\/completions|responses)(\?|$)/.test(url) && upstreamBase === openaiBase) {
+        const keyed = withPromptCacheKey(body);
+        if (keyed) {
+          body = keyed.body;
+          stats.cacheKeysAdded++;
+          note += `; prompt_cache_key ${keyed.key.slice(0, 11)}…`;
+        }
+      }
+
       const headers: Record<string, string> = {};
       for (const [key, value] of Object.entries(req.headers)) {
         if (!SKIP_REQUEST_HEADERS.has(key.toLowerCase()) && typeof value === "string") headers[key] = value;
@@ -591,6 +621,7 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
           const lastNum = (re: RegExp): number => { let m: RegExpExecArray | null, v = 0; while ((m = re.exec(scanBuf)) !== null) v = Number(m[1]); return v; };
           stats.upstreamCacheReadTokens += lastNum(/"cache_read_input_tokens"\s*:\s*(\d+)/g);
           stats.upstreamCacheWriteTokens += lastNum(/"cache_creation_input_tokens"\s*:\s*(\d+)/g);
+          stats.openaiCachedTokens += lastNum(/"cached_tokens"\s*:\s*(\d+)/g);
         }
       }
       res.end();

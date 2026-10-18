@@ -1,8 +1,9 @@
 // End-to-end check of the proxy on OpenAI's APIs, against a local mock of
 // OpenAI (no key, no network): /v1/models passthrough, the Authorization
 // header, incremental streaming of Chat Completions, the Responses API, usage
-// captured from streams, and autopilot clearing stale tool output on a cold
-// request while keeping the recent ones.
+// captured from streams, autopilot clearing stale tool output on a cold
+// request while keeping the recent ones, and a stable prompt_cache_key per
+// conversation where the app sent none (GPT before 5.6; never over the app's).
 //   HOME=$(mktemp -d) node scripts/smoke-openai-proxy.mjs    (from the repo root, after npm run build)
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
@@ -44,7 +45,7 @@ const seed = new AutoClearer({ statePath });
 seed.apply({ model: "gpt-5.5", messages: [{ role: "system", content: "You are an agent." }, { role: "user", content: "check the logs" }] }, Date.now() - 7_200_000);
 seed.apply({ model: "gpt-5.5", input: [{ role: "user", content: "go" }] }, Date.now() - 7_200_000);
 seed.flush();
-const proxy = spawn(process.execPath, [new URL("../dist/cli.js", import.meta.url).pathname, "proxy", "--autopilot", "--port", String(port), "--autopilot-state", statePath, "--upstream-openai", `http://127.0.0.1:${upPort}`], { stdio: ["ignore", "pipe", "pipe"], env: process.env });
+const proxy = spawn(process.execPath, [new URL("../dist/cli.js", import.meta.url).pathname, "proxy", "--autopilot", "--port", String(port), "--autopilot-state", statePath, "--upstream-openai", `http://127.0.0.1:${upPort}`], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CONTEXT_DOCTOR_CACHE_KEY: "1" } });
 await new Promise((r) => proxy.stderr.on("data", (d) => /listening/.test(String(d)) && r()));
 const base = `http://127.0.0.1:${port}`;
 const H = { "content-type": "application/json", authorization: "Bearer sk-test-not-real" };
@@ -77,8 +78,27 @@ check(rr.status === 200 && rtext.includes("response.completed"), "POST /v1/respo
 const outs = seen.at(-1).body.input.filter((x) => x.type === "function_call_output");
 check(outs.some((o) => o.output.length < big.length) && outs.at(-1).output === big, "Responses: stale function_call_output cleared, recent kept");
 
+// 4. prompt_cache_key: one per conversation, stable across its turns; the app's own wins; GPT-5.6+ and server-side conversations untouched
+const keyOf = () => seen.at(-1).body.prompt_cache_key;
+const post = (path, body) => fetch(`${base}${path}`, { method: "POST", headers: H, body: JSON.stringify(body) }).then((x) => x.text());
+const chatKey = seen.filter((x) => x.url.startsWith("/v1/chat/completions")).at(-1).body.prompt_cache_key;
+check(/^cd-[0-9a-f]{32}$/.test(chatKey ?? ""), "a keyless gpt-5.5 conversation gets a prompt_cache_key", chatKey);
+await post("/v1/chat/completions", { model: "gpt-5.5", messages: [...msgs, { role: "assistant", content: "done" }, { role: "user", content: "and now?" }] });
+check(keyOf() === chatKey, "the same key on the conversation's next turn");
+await post("/v1/chat/completions", { model: "gpt-5.5", messages: [{ role: "system", content: "You are an agent." }, { role: "user", content: "a different task" }] });
+check(keyOf() !== chatKey && /^cd-/.test(keyOf()), "another conversation, another key");
+await post("/v1/chat/completions", { model: "gpt-5.5", prompt_cache_key: "app-tenant-7", messages: [{ role: "user", content: "hi" }] });
+check(keyOf() === "app-tenant-7", "a key the app set is never overridden");
+await post("/v1/chat/completions", { model: "gpt-5.6-sol", messages: [{ role: "user", content: "hi" }] });
+check(keyOf() === undefined, "GPT-5.6 and later: left alone (the key only separates accounting there)");
+await post("/v1/responses", { model: "gpt-5.5", previous_response_id: "resp_1", input: [{ role: "user", content: "next" }] });
+check(keyOf() === undefined, "a server-side conversation (previous_response_id): left alone");
+const respKey = seen.filter((x) => x.url.startsWith("/v1/responses") && x.body?.input?.length > 2).at(-1).body.prompt_cache_key;
+check(/^cd-/.test(respKey ?? ""), "Responses requests are keyed too", respKey);
+
 await new Promise((r) => setTimeout(r, 200));
 const stats = await (await fetch(`${base}/stats`)).json();
+check(stats.cacheKeysAdded === 4 && stats.openaiCachedTokens >= 1000, "/stats counts the keys added and OpenAI's cached tokens", `${stats.cacheKeysAdded} keys, ${stats.openaiCachedTokens} cached tokens`);
 check(stats.requests >= 2 && stats.upstreamInputTokens >= 1200, "usage captured from OpenAI streams", `requests ${stats.requests}, upstream input ${stats.upstreamInputTokens}, autopilot cleared ${stats.autopilot.resultsCleared}`);
 proxy.kill(); up.close();
 console.log(fail ? `${fail} failed` : "all OpenAI proxy checks passed"); process.exit(fail ? 1 : 0);

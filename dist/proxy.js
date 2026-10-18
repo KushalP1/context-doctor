@@ -20,6 +20,7 @@ import { formatTokens, CHARS_PER_TOKEN, providerFor } from "./tokens.js";
 import { formatUsd, inputCostUsd, pricingFor } from "./pricing.js";
 import { recordLedger } from "./ledger.js";
 import { minCacheableTokens } from "./cacheplan.js";
+import { withPromptCacheKey } from "./cachekey.js";
 /** Reported by /health so `autopilot status` can tell an outdated service from a current one. */
 export const PROXY_VERSION = "0.33.0";
 /** Connection-level headers that must not be forwarded. */
@@ -185,6 +186,9 @@ export function startProxy(opts = {}) {
         else
             refusing.add(account);
     };
+    const openaiBase = opts.openaiUpstream ?? "https://api.openai.com";
+    const keyEnv = process.env.CONTEXT_DOCTOR_CACHE_KEY;
+    const addCacheKeys = opts.promptCacheKey ?? (keyEnv === "0" ? false : keyEnv === "1" ? true : /^https:\/\/api\.openai\.com\/?$/.test(openaiBase));
     const stats = {
         startedAt: new Date().toISOString(),
         requests: 0,
@@ -198,6 +202,8 @@ export function startProxy(opts = {}) {
         advice: [],
         upstreamCacheReadTokens: 0,
         upstreamCacheWriteTokens: 0,
+        openaiCachedTokens: 0,
+        cacheKeysAdded: 0,
         autopilot: opts.autopilot
             ? { enabled: true, paused: false, requests: 0, changedRequests: 0, batches: 0, coldBatches: 0, resultsCleared: 0, tokensRemoved: 0, lastReason: "" }
             : undefined,
@@ -452,6 +458,18 @@ export function startProxy(opts = {}) {
                     /* not a conversation payload — forward as-is */
                 }
             }
+            // A stable prompt_cache_key per conversation, where the app sent none
+            // and the model routes by it (GPT before 5.6): its requests then land
+            // on one cache. Added after autopilot, so its view of the conversation
+            // is the app's own.
+            if (addCacheKeys && !chatgpt && req.method === "POST" && body && /^\/v1\/(chat\/completions|responses)(\?|$)/.test(url) && upstreamBase === openaiBase) {
+                const keyed = withPromptCacheKey(body);
+                if (keyed) {
+                    body = keyed.body;
+                    stats.cacheKeysAdded++;
+                    note += `; prompt_cache_key ${keyed.key.slice(0, 11)}…`;
+                }
+            }
             const headers = {};
             for (const [key, value] of Object.entries(req.headers)) {
                 if (!SKIP_REQUEST_HEADERS.has(key.toLowerCase()) && typeof value === "string")
@@ -525,6 +543,7 @@ export function startProxy(opts = {}) {
                         v = Number(m[1]); return v; };
                     stats.upstreamCacheReadTokens += lastNum(/"cache_read_input_tokens"\s*:\s*(\d+)/g);
                     stats.upstreamCacheWriteTokens += lastNum(/"cache_creation_input_tokens"\s*:\s*(\d+)/g);
+                    stats.openaiCachedTokens += lastNum(/"cached_tokens"\s*:\s*(\d+)/g);
                 }
             }
             res.end();
