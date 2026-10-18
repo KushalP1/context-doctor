@@ -13,17 +13,17 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 | Claude Code, terminal and IDE | every-prompt hook, autopilot proxy, compact-window, status line | savings, session, watch, report, pack, overhead, MCP tools, plugin | — |
 | Claude Code, desktop app Code tab | hook (incl. cold-resume `/compact` offer), compact-window | same as above | autopilot: the app sets its own API address |
 | Claude Desktop chat | standing MCP instructions (now incl. pack_context) | profile_context sketch, pack_context on local files, checkup prompt | no hook API, no transcript on disk ; Desktop's log shows the tools offered on every launch and called once; `doctor` reports both |
-| Cursor agent | native postToolUse hook | MCP tools, cursor profiler, editor extension | Cursor's own models never pass through a local process |
+| Cursor agent | native postToolUse, postToolUseFailure and sessionStart hooks (delivered from Cursor 3.17) | MCP tools, cursor profiler, editor extension | Cursor's own models never pass through a local process |
 | Codex (app, IDE, CLI) | every-prompt hook; autopilot on an API key (`openai_base_url`) | MCP tools (read-only, no approval needed), session | autopilot only with an API key |
 | Gemini CLI | every-prompt hook (`BeforeAgent`, with the API's own token counts); autopilot on an API key (`GOOGLE_GEMINI_BASE_URL`) | MCP tools, session, watch, overhead (GEMINI.md and the measured start-of-session cost) | autopilot cannot see Google sign-in traffic |
 | claude.ai, ChatGPT, phone apps | standing preferences (`instructions --copy`) | analyze an exported chat | nothing runs there |
 | Your own API apps (Anthropic, OpenAI, Gemini) | autopilot or the optimizing proxy; `withContextDoctor(client)` without a proxy (Anthropic, OpenAI and Google Gen AI SDKs) | library: profile, optimize, pack | — |
 | CI | `analyze --fail-over-budget`; the GitHub Action (`uses: KushalP1/context-doctor@<tag>`) comments memory-file growth on PRs and gates on a budget | `ci` locally | Not listed in the GitHub Marketplace: it lists only repositories with no workflow files, and the owner chose to keep context-doctor one repository (no separate Marketplace copy) |
 
-## Verified 2026-10-17
+## Verified 2026-10-18
 
-- `npm test`: 444 of 444 pass locally (CI runs the suite on macOS, Linux and Windows, Node 20/22/24).
-- `scripts/verify-local.sh` after the audit: build, tests, MCP smoke over stdio and streamable HTTP, OpenAI and Gemini proxy smokes, the published package, Python 3.9/3.11/3.14 with parity fixtures current, every CLI command on the author's real history (no crash, no NaN), install/doctor/uninstall round trip in a throwaway HOME with nothing of ours left, and the GitHub Action's steps; the real ledger was left untouched.
+- `npm test`: 468 of 468 pass locally (CI runs the suite on macOS, Linux and Windows, Node 20/22/24).
+- `scripts/verify-local.sh` for 0.34.0: 43 of 43 checks: build, tests, MCP smoke over stdio and streamable HTTP, OpenAI (now with `prompt_cache_key`) and Gemini proxy smokes, the real Codex binary (0.153.4) through autopilot against a local mock, the published package, Python 3.9/3.11/3.14 with parity fixtures current, every CLI command on the author's real history (no crash, no NaN), install/doctor/uninstall round trip in a throwaway HOME with nothing of ours left, and the GitHub Action's steps; the real ledger was left untouched.
 
 ## Next: the cross-platform plan (2026-10-17)
 

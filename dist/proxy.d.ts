@@ -57,7 +57,7 @@ export interface ProxyOptions extends OptimizeOptions {
     promptCacheKey?: boolean;
 }
 /** Reported by /health so `autopilot status` can tell an outdated service from a current one. */
-export declare const PROXY_VERSION = "0.33.0";
+export declare const PROXY_VERSION = "0.34.0";
 /**
  * Remove a leading `/t/<token>` from a request path, or return undefined when
  * the prefix is absent or the token differs. The comparison is constant time
