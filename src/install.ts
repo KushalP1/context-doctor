@@ -148,7 +148,7 @@ export function claudeInstalledCopies(home = homedir()): string[] {
   } catch { /* unreadable: not ours to judge here */ }
   try {
     const hooks = readJson(join(home, ".claude", "settings.json")).hooks ?? {};
-    if (["UserPromptSubmit", "PreCompact"].some((ev) => (hooks[ev] ?? []).some?.(isOurHookEntry))) found.push("hooks in ~/.claude/settings.json");
+    if (["UserPromptSubmit", "PreCompact", "SessionStart"].some((ev) => (hooks[ev] ?? []).some?.(isOurHookEntry))) found.push("hooks in ~/.claude/settings.json");
   } catch { /* unreadable */ }
   if (existsSync(join(home, ".claude", "skills", "context-doctor", "SKILL.md"))) found.push("skill in ~/.claude/skills/context-doctor");
   return found;
@@ -319,8 +319,12 @@ function isOurHookEntry(entry: unknown): boolean {
 function installHook(): string | null {
   const settings = join(homedir(), ".claude", "settings.json");
   const path = installHookInto(settings, join(homedir(), ".claude"));
-  // The same command also answers PreCompact: what each compaction's summary must keep.
-  if (path) installHookInto(settings, join(homedir(), ".claude"), "PreCompact");
+  // The same command also answers PreCompact (what each compaction's summary
+  // must keep) and SessionStart (Claude Code's verdict on a resumed cache).
+  if (path) {
+    installHookInto(settings, join(homedir(), ".claude"), "PreCompact");
+    installHookInto(settings, join(homedir(), ".claude"), "SessionStart");
+  }
   return path;
 }
 
@@ -362,6 +366,7 @@ function installHookInto(settingsPath: string, gateDir: string, event = "UserPro
 function uninstallHook(): void {
   uninstallHookFrom(join(homedir(), ".claude", "settings.json"), "Claude Code every-prompt hook");
   uninstallHookFrom(join(homedir(), ".claude", "settings.json"), "Claude Code compaction hook", "PreCompact");
+  uninstallHookFrom(join(homedir(), ".claude", "settings.json"), "Claude Code session-start hook", "SessionStart");
   uninstallHookFrom(join(homedir(), ".codex", "hooks.json"), "Codex every-prompt hook");
   uninstallHookFrom(geminiSettingsPath(), "Gemini CLI every-prompt hook", "BeforeAgent");
   uninstallCursorHook();

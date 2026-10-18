@@ -19,6 +19,7 @@
 import { forEachLine, listSessions, queuedUserPrompt } from "./session.js";
 import { readLedger } from "./ledger.js";
 import { estimateTokens, formatTokens } from "./tokens.js";
+import { isIdleCompactNotice } from "./coldresume.js";
 
 const WINDOW = 15;
 const CORRECTION = /^(no\b|nope\b|wrong\b|that'?s (not|wrong)|not what i|you forgot|i (said|told you|asked)|revert\b|undo\b|stop\b|again\??$|why did you)/i;
@@ -48,6 +49,8 @@ interface Signals {
 
 export interface CompactionQuality {
   compactions: number;
+  /** Of those, Claude Code's idle compactions: a quiet session compacted before its cache expired, not a full window. */
+  idle: number;
   /** Tokens re-read after a compaction beyond the before-window rate, per compaction. */
   extraRereadTokensPerCompaction: number;
   sessions: number;
@@ -80,7 +83,7 @@ export function compactionQuality(days = 60, paths?: string[], onProgress?: (don
   const since = Date.now() - days * 86_400_000;
   const files = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
   const shapedAt = readLedger().filter((e) => e.ev === "precompact").map((e) => e.ts);
-  const q: CompactionQuality = { compactions: 0, extraRereadTokensPerCompaction: 0, sessions: 0, before: empty(), after: empty() };
+  const q: CompactionQuality = { compactions: 0, idle: 0, extraRereadTokensPerCompaction: 0, sessions: 0, before: empty(), after: empty() };
   const shaped = { compactions: 0, before: empty(), after: empty() };
   // A forked session copies its parent's compactions (same row uuid): one compaction, counted once.
   const countedBoundaries = new Set<string>();
@@ -88,7 +91,7 @@ export function compactionQuality(days = 60, paths?: string[], onProgress?: (don
     onProgress?.(fileIndex, files.length);
     const reqs: Req[] = [];
     /** `at` is NaN when the row carries no timestamp. */
-    const boundaries: Array<{ index: number; at: number }> = [];
+    const boundaries: Array<{ index: number; at: number; idle?: boolean }> = [];
     let cur: Req | undefined;
     // User messages between a compaction and the next request belong to the "after" side.
     let pendingUser = 0, pendingCorrections = 0;
@@ -108,6 +111,12 @@ export function compactionQuality(days = 60, paths?: string[], onProgress?: (don
         if (typeof e.uuid === "string") countedBoundaries.add(e.uuid);
         if (!copy) boundaries.push({ index: reqs.length, at });
         cur = undefined;
+        return;
+      }
+      // Claude Code's idle compaction writes this right after its boundary.
+      if (isIdleCompactNotice(e)) {
+        const last = boundaries[boundaries.length - 1];
+        if (last && last.index === reqs.length) last.idle = true;
         return;
       }
       // Typed while the agent worked: a user message recorded only as an
@@ -164,6 +173,7 @@ export function compactionQuality(days = 60, paths?: string[], onProgress?: (don
       add(q.before, before, earlier);
       add(q.after, after, readBefore);
       q.compactions++;
+      if (b.idle) q.idle++;
       counted = true;
       if (shapedAt.some((t) => Math.abs(t - b.at) < 10 * 60_000)) {
         shaped.compactions++;
@@ -196,7 +206,7 @@ export function renderCompactionQuality(q: CompactionQuality, days = 60): string
   const row = (label: string, x: number, y: number) => `  ${label.padEnd(36)} ${pct(x).padStart(7)}  ${pct(y).padStart(7)}   ${y - x > 0.0005 ? "+" : y - x < -0.0005 ? "−" : " "}${pct(Math.abs(y - x))}`;
   const thin = q.before.reads + q.after.reads < 50;
   out.push(
-    `${q.compactions} compactions in ${q.sessions} sessions, last ${days} days; ${WINDOW} requests before vs after each.`,
+    `${q.compactions} compactions in ${q.sessions} sessions, last ${days} days; ${WINDOW} requests before vs after each.${q.idle ? ` ${q.idle} of them were Claude Code's idle compactions (a quiet session compacted before its cache expired).` : ""}`,
     `Sample: ${q.before.reads} file reads before, ${q.after.reads} after; ${q.before.calls} and ${q.after.calls} tool calls; ${q.before.userMsgs} and ${q.after.userMsgs} of your messages.${thin ? " Few reads: the re-read figure is a weak signal." : ""}`,
     "",
     `  ${"".padEnd(36)} ${"before".padStart(7)}  ${"after".padStart(7)}   change`,

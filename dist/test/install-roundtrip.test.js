@@ -147,12 +147,13 @@ test("the .backup an install leaves is the user's original settings, not our own
     mkdirSync(claude, { recursive: true });
     const original = JSON.stringify({ theme: "dark", hooks: { Stop: [{ hooks: [{ type: "command", command: "my-stop-hook" }] }] } });
     writeFileSync(join(claude, "settings.json"), original);
-    // One run writes settings.json three times: prompt hook, compaction hook, status line.
+    // One run writes settings.json four times: prompt, compaction and session-start hooks, status line.
     const r = await run(home, ["install", "--statusline"]);
     assert.equal(r.code, 0, r.err);
     const backup = join(claude, "settings.json.context-doctor.backup");
     assert.equal(readFileSync(backup, "utf8"), original, "the backup must hold none of our own entries");
-    assert.ok(JSON.parse(readFileSync(join(claude, "settings.json"), "utf8")).hooks.UserPromptSubmit, "install did its work");
+    const hooks = JSON.parse(readFileSync(join(claude, "settings.json"), "utf8")).hooks;
+    assert.ok(hooks.UserPromptSubmit && hooks.PreCompact && hooks.SessionStart, "install did its work");
 });
 test("install, doctor and uninstall leave no trace in any app's config", async () => {
     const home = mkdtempSync(join(tmpdir(), "ctxdoc-roundtrip-"));

@@ -42,6 +42,8 @@ export interface CompactWindowReport {
     transcripts: number;
     /** Compactions that actually happened over the period (Claude Code's own, or /compact). */
     actualCompactions: number;
+    /** Of those, Claude Code's idle compactions (a quiet session compacted before its cache expired). */
+    idleCompactions?: number;
     estimates: WindowEstimate[];
     /** Re-read tokens charged to each simulated compaction (0 when not measured). */
     rereadTokens?: number;

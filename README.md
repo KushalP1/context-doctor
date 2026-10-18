@@ -117,7 +117,7 @@ The MCP server hands these standing rules, verbatim, to every chat where it is e
 
 | Command | What it does |
 |---|---|
-| `context-doctor install` / `uninstall` | Wire (or remove) everything it finds: the MCP server for Claude Desktop, Claude Code, Cursor, Codex and Gemini CLI; the Agent Skill (Claude Code, Codex); the every-prompt hook (Claude Code, Codex, Gemini CLI's `BeforeAgent`, Cursor's `postToolUse`); Claude Code's `PreCompact` hook. `--statusline` adds the status bar line ([details](./docs/install.md)) |
+| `context-doctor install` / `uninstall` | Wire (or remove) everything it finds: the MCP server for Claude Desktop, Claude Code, Cursor, Codex and Gemini CLI; the Agent Skill (Claude Code, Codex); the every-prompt hook (Claude Code, Codex, Gemini CLI's `BeforeAgent`, Cursor's `postToolUse`); Claude Code's `PreCompact` and `SessionStart` hooks. `--statusline` adds the status bar line ([details](./docs/install.md)) |
 | `context-doctor doctor` | Self-check the whole installation — one pasteable ✓/✗ diagnosis with fixes |
 | `context-doctor savings [--days n] [--share [--copy]]` | What your recent Claude Code sessions cost, and what `/compact` at cold resumes, autopilot and an earlier auto-compact window would save, replayed through the shipped code against your actual billed usage. `--share` prints totals only (no project names or paths) to post. A bare `context-doctor` in a terminal shows the same |
 | `context-doctor autopilot on\|off\|pause\|resume\|status` | Every new Claude Code session started in a terminal or IDE goes through the local proxy, which clears stale tool output only when the prompt cache is cold: measured 12.7% less input cost, no session worse ([details](./docs/autopilot.md)) |

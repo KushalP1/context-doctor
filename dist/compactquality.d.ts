@@ -28,6 +28,8 @@ interface Signals {
 }
 export interface CompactionQuality {
     compactions: number;
+    /** Of those, Claude Code's idle compactions: a quiet session compacted before its cache expired, not a full window. */
+    idle: number;
     /** Tokens re-read after a compaction beyond the before-window rate, per compaction. */
     extraRereadTokensPerCompaction: number;
     sessions: number;

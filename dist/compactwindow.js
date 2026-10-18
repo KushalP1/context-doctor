@@ -28,6 +28,7 @@ import { cacheWriteSplit, pricingFor, usageCost, writeMultiplier } from "./prici
 import { realModel } from "./tokens.js";
 import { readJson, writeJsonWithBackup } from "./install.js";
 import { withInvocation } from "./invocation.js";
+import { idleCompactMinTokens, isIdleCompactNotice } from "./coldresume.js";
 /** Claude Code compacts at about this share of the window (970k of 1M, measured). */
 const TRIGGER_SHARE = 0.97;
 /** Context right after a compaction: system prompt, tools and the summary (median 75,447, measured). */
@@ -66,6 +67,13 @@ function readRequests(path, runRows) {
             reqs.push({ compact: true, copy });
             return;
         }
+        // Claude Code's idle compaction marks its boundary with a notice row.
+        if (isIdleCompactNotice(e)) {
+            const last = reqs[reqs.length - 1];
+            if (last && "compact" in last)
+                last.idle = true;
+            return;
+        }
         if (e.type !== "assistant" || !e.message)
             return;
         const seen = sighting(e);
@@ -100,13 +108,25 @@ function readRequests(path, runRows) {
  * summary dropped them (measured by `context-doctor compactions`). Each
  * simulated compaction writes them to the cache and carries them onward.
  */
-function replay(reqs, window, since, reread = 0, writeMult = 1.25) {
-    let base = 0, sim = 0, extra = 0, actual = 0;
+function replay(reqs, window, since, reread = 0, writeMult = 1.25, idleMin = idleCompactMinTokens()) {
+    let base = 0, sim = 0, extra = 0, actual = 0, idle = 0;
     let removed = 0, prevActual, prevSim, prevAt;
     for (const r of reqs) {
         if ("compact" in r) {
-            if (prevAt !== undefined && prevAt >= since && !r.copy)
+            if (prevAt !== undefined && prevAt >= since && !r.copy) {
                 actual++;
+                if (r.idle)
+                    idle++;
+            }
+            // An idle compaction acts only on a context of idleMin or more: where
+            // the smaller window had already left less, Claude Code would not have
+            // compacted the simulated session here. It keeps its own context (now
+            // larger than the real one, so `removed` turns negative), and its cache.
+            if (r.idle && removed > 0 && prevSim !== undefined && prevSim < idleMin) {
+                removed = AFTER_COMPACT - prevSim;
+                prevActual = undefined;
+                continue;
+            }
             // A real compaction in the transcript: the simulated arm compacts there too.
             if (prevAt !== undefined && prevAt >= since && removed === 0 && !r.copy)
                 extra++;
@@ -150,13 +170,13 @@ function replay(reqs, window, since, reread = 0, writeMult = 1.25) {
         prevSim = ctx;
         prevAt = r.at;
     }
-    return { base, sim, extra, actual };
+    return { base, sim, extra, actual, idle };
 }
 export function estimateCompactWindows(windows, days = 30, paths, rereadTokens = 0, onProgress) {
     const since = Date.now() - days * 86_400_000;
     const targets = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
     const acc = windows.map((w) => ({ window: w, billed: 0, saved: 0, replayBase: 0, extra: 0 }));
-    let sessions = 0, actualCompactions = 0;
+    let sessions = 0, actualCompactions = 0, idleCompactions = 0;
     // Shared by every transcript of the run, so a fork's copy counts once.
     const runRows = new Set();
     for (const [i, p] of targets.entries()) {
@@ -175,7 +195,9 @@ export function estimateCompactWindows(windows, days = 30, paths, rereadTokens =
             continue;
         sessions++;
         const billed = counted.reduce((n, r) => n + r.billedUsd, 0);
-        actualCompactions += replay(parsed.reqs, Number.MAX_SAFE_INTEGER, since, 0, parsed.writeMult).actual;
+        const asNow = replay(parsed.reqs, Number.MAX_SAFE_INTEGER, since, 0, parsed.writeMult);
+        actualCompactions += asNow.actual;
+        idleCompactions += asNow.idle;
         for (const a of acc) {
             const r = replay(parsed.reqs, a.window, since, rereadTokens, parsed.writeMult);
             // The replay's share saved, applied to what this session was billed.
@@ -192,6 +214,7 @@ export function estimateCompactWindows(windows, days = 30, paths, rereadTokens =
         sessions,
         transcripts: targets.length,
         actualCompactions,
+        idleCompactions,
         rereadTokens,
         estimates: acc.map((a) => ({
             window: a.window,
@@ -274,7 +297,7 @@ export function renderCompactWindows(r, current) {
         const mark = current === e.window ? "  ← current" : "";
         lines.push(`  ${k(e.window).padStart(6)}   ${usd(e.withWindowUsd).padStart(10)}   ${(usd(e.savedUsd) + ` (${Math.round(e.savedPct * 100)}%)`).padEnd(16)} ${String(e.compactions).padStart(4)} (${((e.compactions / r.days) * 7).toFixed(1)}/week)${mark}`);
     }
-    lines.push(`  as now   ${usd(r.estimates[0]?.baselineUsd ?? 0).padStart(10)}                    ${String(r.actualCompactions).padStart(4)} (${((r.actualCompactions / r.days) * 7).toFixed(1)}/week)`);
+    lines.push(`  as now   ${usd(r.estimates[0]?.baselineUsd ?? 0).padStart(10)}                    ${String(r.actualCompactions).padStart(4)} (${((r.actualCompactions / r.days) * 7).toFixed(1)}/week${r.idleCompactions ? `; ${r.idleCompactions} while idle` : ""})`);
     lines.push("");
     lines.push("\"as now\" is what you were billed (transcript usage at list price, as in");
     lines.push("`context-doctor savings`); each window saves the replay's share of it.");

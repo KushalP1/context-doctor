@@ -25,10 +25,67 @@
  * host-orchestrated and drops a settings-file ANTHROPIC_BASE_URL, but it runs
  * the every-prompt hook, which is where this is called from.
  */
-import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { forEachLine, replyCounter } from "./session.js";
 import { cacheWriteSplit, pricingFor, formatUsd, writeMultiplier } from "./pricing.js";
-import { formatTokens, realModel } from "./tokens.js";
+import { contextWindowFor, formatTokens, realModel } from "./tokens.js";
+/**
+ * Claude Code's own idle compaction (2.1.290+, account-gated by a server
+ * flag; the `idleCompaction` setting can only turn it off). Read from the
+ * 2.1.295 and 2.1.299 binaries: while a session sits idle on the 1-hour
+ * cache, it compacts at 90% of the cache's lifetime (~54 minutes), while the
+ * cache is still warm, when the context holds at least
+ * CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS (floor 100k; default 200,000). It
+ * skips 5-minute caches ("not_one_hour"), smaller sessions ("small"), a cache
+ * that already lapsed (a machine asleep) and sessions near a usage limit.
+ * The compact boundary it writes says trigger "auto", the same as a full
+ * window, and is followed by an informational row with this text; the
+ * headless host's variant (CLAUDE_CODE_SLEEP_COMPACT) queues a hidden
+ * `/compact` instead. Either way a compaction ends the idle period, so the
+ * cold-resume offer below stays silent after it, and keeps covering what
+ * idle compaction skips: 5-minute caches, sessions of 150k-200k tokens, and
+ * returns after the machine slept through the compaction moment.
+ */
+export const IDLE_COMPACT_NOTICE = "Compacted while idle";
+/** Claude Code's idle-compaction minimum when CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS is unset (2.1.299). */
+export const IDLE_COMPACT_MIN_TOKENS = 200_000;
+/** The row Claude Code writes after an idle compaction's boundary. */
+export function isIdleCompactNotice(e) {
+    return e?.type === "system" && typeof e.content === "string" && e.content.startsWith(IDLE_COMPACT_NOTICE);
+}
+/** The context at which Claude Code's idle compaction acts, as it reads the environment. */
+export function idleCompactMinTokens(env = process.env) {
+    const n = Number(env.CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS);
+    return env.CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS && Number.isFinite(n) ? Math.max(100_000, n) : IDLE_COMPACT_MIN_TOKENS;
+}
+/**
+ * The context at which Claude Code is certain to compact before sending:
+ * its auto-compact window, which is the model's, or smaller when
+ * CLAUDE_CODE_AUTO_COMPACT_WINDOW or the `autoCompactWindow` setting says
+ * so. Not a share of it: on the author's history, cold returns at 95-99% of
+ * a 1M window went on for 2 to 51 requests before Claude Code compacted, so
+ * an offer there still paid; the one that compacted on the spot came at 96%.
+ * The note to the model covers that case instead. Undefined when
+ * auto-compaction is off or the window is unknown.
+ */
+export function autoCompactsAt(model, home = homedir(), env = process.env) {
+    if (env.DISABLE_AUTO_COMPACT || env.DISABLE_COMPACT)
+        return undefined;
+    let settings = {};
+    try {
+        settings = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8")) ?? {};
+    }
+    catch { /* no settings */ }
+    if (settings.autoCompactEnabled === false)
+        return undefined;
+    const window = contextWindowFor(model);
+    const fromEnv = Number(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW);
+    const set = fromEnv > 0 ? fromEnv : typeof settings.autoCompactWindow === "number" && settings.autoCompactWindow > 0 ? settings.autoCompactWindow : undefined;
+    const effective = set !== undefined ? Math.min(window ?? set, set) : window;
+    return effective;
+}
 /** Just past Claude Code's one-hour cache, as Claude Code's own idle clearing uses. */
 export const COLD_IDLE_MS = 65 * 60_000;
 /** Margin past a cache's lifetime before a return counts as cold. */
@@ -63,6 +120,28 @@ export const COLD_MIN_TOKENS = 150_000;
 const AFTER_COMPACT_TOKENS = 45_000;
 /** Output tokens a compaction summary costs, at the model's output price. */
 const SUMMARY_OUTPUT_TOKENS = 8_000;
+export function resumeVerdict(input, now = Date.now()) {
+    if (input?.hook_event_name !== "SessionStart" || (input.source !== "resume" && input.source !== "fork"))
+        return undefined;
+    const secs = input.seconds_since_last_response;
+    if (typeof input.prompt_cache_likely_expired !== "boolean" || typeof secs !== "number" || !Number.isFinite(secs))
+        return undefined;
+    const usd = input.estimated_cache_write_usd;
+    return { replyAt: now - secs * 1000, at: now, expired: input.prompt_cache_likely_expired, usd: typeof usd === "number" && Number.isFinite(usd) ? usd : undefined };
+}
+/**
+ * Apply Claude Code's resume verdict to what the transcript showed. It
+ * describes this idle period when its reply time matches (seconds are
+ * rounded); a "still warm" verdict holds only for the cache's shortest life
+ * after it was given. Undefined: no offer.
+ */
+export function withResumeVerdict(c, v, now = Date.now()) {
+    if (!c || !v || Math.abs(c.lastReplyAt - v.replyAt) > 5_000)
+        return c;
+    if (!v.expired)
+        return now - v.at < FIVE_MIN_MS ? undefined : c;
+    return v.usd !== undefined ? { ...c, resumeUsd: v.usd, claudeCodePriced: true } : c;
+}
 function tailLines(path, bytes = 256 * 1024) {
     const size = statSync(path).size;
     const n = Math.min(size, bytes);
@@ -96,7 +175,7 @@ export function detectColdResume(path, now = Date.now(), idleMs, minTokens = COL
             // context, and there is nothing large left to warn about.
             if (e?.type === "system" && e.subtype === "compact_boundary")
                 return undefined;
-            if (e?.isCompactSummary)
+            if (e?.isCompactSummary || isIdleCompactNotice(e))
                 return undefined;
             if (e?.type !== "assistant" || e.isSidechain)
                 continue;
@@ -203,19 +282,19 @@ function duration(ms) {
  */
 export function renderColdResumeNotice(c) {
     const cheaper = Math.max(0, Math.round((1 - AFTER_COMPACT_TOKENS / c.tokens) * 100));
-    const money = c.resumeUsd !== undefined ? ` (~${formatUsd(c.resumeUsd)} at list price)` : "";
+    const money = c.resumeUsd !== undefined ? ` (~${formatUsd(c.resumeUsd)} ${c.claudeCodePriced ? "by Claude Code's estimate" : "at list price"})` : "";
     return `context-doctor: idle ${duration(c.idleMs)}, so this message re-sent the whole ~${formatTokens(c.tokens)}-token context${money}. If you keep working here, /compact now makes each later message ~${cheaper}% cheaper.`;
 }
 /** The note the hook hands the model: the numbers, and one sentence to say. */
 export function renderColdResume(c) {
     const cheaper = Math.max(0, Math.round((1 - AFTER_COMPACT_TOKENS / c.tokens) * 100));
     const money = c.resumeUsd !== undefined
-        ? ` (~${formatUsd(c.resumeUsd)} at list price), and every later message re-reads it (~${formatUsd(c.perMessageUsd)} each)`
+        ? ` (~${formatUsd(c.resumeUsd)} ${c.claudeCodePriced ? "by Claude Code's estimate" : "at list price"}), and every later message re-reads it${c.perMessageUsd !== undefined ? ` (~${formatUsd(c.perMessageUsd)} each)` : ""}`
         : ", and every later message re-reads it";
     return [
         `This session was idle for ${duration(c.idleMs)}, longer than the prompt cache lasts, so this message re-sends the whole ~${formatTokens(c.tokens)}-token context at the full cache-write rate${money}.`,
         `If the user is going to keep working in this session, running /compact now restarts it from a short summary and makes each later message roughly ${cheaper}% cheaper; the cache is being rebuilt anyway, so now is when compaction costs least.`,
-        "Begin your reply with one short sentence offering that (only the user can run /compact), then answer the request normally. Do not raise it again this session unless it goes idle again.",
+        "Begin your reply with one short sentence offering that (only the user can run /compact), then answer the request normally; if the conversation was compacted just before this message, say nothing about it. Do not raise it again this session unless it goes idle again.",
     ].join("\n");
 }
 /**

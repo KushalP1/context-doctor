@@ -135,7 +135,7 @@ export function claudeInstalledCopies(home = homedir()) {
     catch { /* unreadable: not ours to judge here */ }
     try {
         const hooks = readJson(join(home, ".claude", "settings.json")).hooks ?? {};
-        if (["UserPromptSubmit", "PreCompact"].some((ev) => (hooks[ev] ?? []).some?.(isOurHookEntry)))
+        if (["UserPromptSubmit", "PreCompact", "SessionStart"].some((ev) => (hooks[ev] ?? []).some?.(isOurHookEntry)))
             found.push("hooks in ~/.claude/settings.json");
     }
     catch { /* unreadable */ }
@@ -306,9 +306,12 @@ function isOurHookEntry(entry) {
 function installHook() {
     const settings = join(homedir(), ".claude", "settings.json");
     const path = installHookInto(settings, join(homedir(), ".claude"));
-    // The same command also answers PreCompact: what each compaction's summary must keep.
-    if (path)
+    // The same command also answers PreCompact (what each compaction's summary
+    // must keep) and SessionStart (Claude Code's verdict on a resumed cache).
+    if (path) {
         installHookInto(settings, join(homedir(), ".claude"), "PreCompact");
+        installHookInto(settings, join(homedir(), ".claude"), "SessionStart");
+    }
     return path;
 }
 /**
@@ -350,6 +353,7 @@ function installHookInto(settingsPath, gateDir, event = "UserPromptSubmit") {
 function uninstallHook() {
     uninstallHookFrom(join(homedir(), ".claude", "settings.json"), "Claude Code every-prompt hook");
     uninstallHookFrom(join(homedir(), ".claude", "settings.json"), "Claude Code compaction hook", "PreCompact");
+    uninstallHookFrom(join(homedir(), ".claude", "settings.json"), "Claude Code session-start hook", "SessionStart");
     uninstallHookFrom(join(homedir(), ".codex", "hooks.json"), "Codex every-prompt hook");
     uninstallHookFrom(geminiSettingsPath(), "Gemini CLI every-prompt hook", "BeforeAgent");
     uninstallCursorHook();

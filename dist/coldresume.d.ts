@@ -25,6 +25,41 @@
  * host-orchestrated and drops a settings-file ANTHROPIC_BASE_URL, but it runs
  * the every-prompt hook, which is where this is called from.
  */
+/**
+ * Claude Code's own idle compaction (2.1.290+, account-gated by a server
+ * flag; the `idleCompaction` setting can only turn it off). Read from the
+ * 2.1.295 and 2.1.299 binaries: while a session sits idle on the 1-hour
+ * cache, it compacts at 90% of the cache's lifetime (~54 minutes), while the
+ * cache is still warm, when the context holds at least
+ * CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS (floor 100k; default 200,000). It
+ * skips 5-minute caches ("not_one_hour"), smaller sessions ("small"), a cache
+ * that already lapsed (a machine asleep) and sessions near a usage limit.
+ * The compact boundary it writes says trigger "auto", the same as a full
+ * window, and is followed by an informational row with this text; the
+ * headless host's variant (CLAUDE_CODE_SLEEP_COMPACT) queues a hidden
+ * `/compact` instead. Either way a compaction ends the idle period, so the
+ * cold-resume offer below stays silent after it, and keeps covering what
+ * idle compaction skips: 5-minute caches, sessions of 150k-200k tokens, and
+ * returns after the machine slept through the compaction moment.
+ */
+export declare const IDLE_COMPACT_NOTICE = "Compacted while idle";
+/** Claude Code's idle-compaction minimum when CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS is unset (2.1.299). */
+export declare const IDLE_COMPACT_MIN_TOKENS = 200000;
+/** The row Claude Code writes after an idle compaction's boundary. */
+export declare function isIdleCompactNotice(e: any): boolean;
+/** The context at which Claude Code's idle compaction acts, as it reads the environment. */
+export declare function idleCompactMinTokens(env?: NodeJS.ProcessEnv): number;
+/**
+ * The context at which Claude Code is certain to compact before sending:
+ * its auto-compact window, which is the model's, or smaller when
+ * CLAUDE_CODE_AUTO_COMPACT_WINDOW or the `autoCompactWindow` setting says
+ * so. Not a share of it: on the author's history, cold returns at 95-99% of
+ * a 1M window went on for 2 to 51 requests before Claude Code compacted, so
+ * an offer there still paid; the one that compacted on the spot came at 96%.
+ * The note to the model covers that case instead. Undefined when
+ * auto-compaction is off or the window is unknown.
+ */
+export declare function autoCompactsAt(model: string | undefined, home?: string, env?: NodeJS.ProcessEnv): number | undefined;
 /** Just past Claude Code's one-hour cache, as Claude Code's own idle clearing uses. */
 export declare const COLD_IDLE_MS: number;
 /** Below this, a rebuilt cache is cheap and compaction is not worth the interruption. */
@@ -40,7 +75,34 @@ export interface ColdResume {
     resumeUsd?: number;
     /** Each later message's cost to re-read the context, at list price. */
     perMessageUsd?: number;
+    /** `resumeUsd` is Claude Code's own estimate (SessionStart), which honours a managed modelPricing. */
+    claudeCodePriced?: boolean;
 }
+/**
+ * What Claude Code's SessionStart hook says on a resume (2.1.29x):
+ * `seconds_since_last_response`, `context_tokens`,
+ * `prompt_cache_likely_expired` (idle past the TTL the transcript wrote at)
+ * and `estimated_cache_write_usd` (re-caching context_tokens at that TTL, at
+ * the managed modelPricing when set, otherwise list price). The hook keeps
+ * it with the session's state, and the first prompt after the resume uses
+ * it: Claude Code's verdict and price over the transcript's inference.
+ */
+export interface ResumeVerdict {
+    /** When the resumed transcript's last reply was written (now - seconds_since_last_response). */
+    replyAt: number;
+    /** When the session started (the verdict's moment). */
+    at: number;
+    expired: boolean;
+    usd?: number;
+}
+export declare function resumeVerdict(input: any, now?: number): ResumeVerdict | undefined;
+/**
+ * Apply Claude Code's resume verdict to what the transcript showed. It
+ * describes this idle period when its reply time matches (seconds are
+ * rounded); a "still warm" verdict holds only for the cache's shortest life
+ * after it was given. Undefined: no offer.
+ */
+export declare function withResumeVerdict(c: ColdResume | undefined, v: ResumeVerdict | undefined, now?: number): ColdResume | undefined;
 /**
  * Is the prompt being submitted now a return to a large, cache-cold session?
  * Reads only the transcript's tail. Undefined when not (or when unreadable).

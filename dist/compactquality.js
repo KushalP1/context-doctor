@@ -18,6 +18,7 @@
 import { forEachLine, listSessions, queuedUserPrompt } from "./session.js";
 import { readLedger } from "./ledger.js";
 import { estimateTokens, formatTokens } from "./tokens.js";
+import { isIdleCompactNotice } from "./coldresume.js";
 const WINDOW = 15;
 const CORRECTION = /^(no\b|nope\b|wrong\b|that'?s (not|wrong)|not what i|you forgot|i (said|told you|asked)|revert\b|undo\b|stop\b|again\??$|why did you)/i;
 const empty = () => ({ requests: 0, rereads: 0, rereadTokens: 0, reads: 0, calls: 0, errors: 0, userMsgs: 0, corrections: 0 });
@@ -41,7 +42,7 @@ export function compactionQuality(days = 60, paths, onProgress) {
     const since = Date.now() - days * 86_400_000;
     const files = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
     const shapedAt = readLedger().filter((e) => e.ev === "precompact").map((e) => e.ts);
-    const q = { compactions: 0, extraRereadTokensPerCompaction: 0, sessions: 0, before: empty(), after: empty() };
+    const q = { compactions: 0, idle: 0, extraRereadTokensPerCompaction: 0, sessions: 0, before: empty(), after: empty() };
     const shaped = { compactions: 0, before: empty(), after: empty() };
     // A forked session copies its parent's compactions (same row uuid): one compaction, counted once.
     const countedBoundaries = new Set();
@@ -84,6 +85,13 @@ export function compactionQuality(days = 60, paths, onProgress) {
                 if (!copy)
                     boundaries.push({ index: reqs.length, at });
                 cur = undefined;
+                return;
+            }
+            // Claude Code's idle compaction writes this right after its boundary.
+            if (isIdleCompactNotice(e)) {
+                const last = boundaries[boundaries.length - 1];
+                if (last && last.index === reqs.length)
+                    last.idle = true;
                 return;
             }
             // Typed while the agent worked: a user message recorded only as an
@@ -148,6 +156,8 @@ export function compactionQuality(days = 60, paths, onProgress) {
             add(q.before, before, earlier);
             add(q.after, after, readBefore);
             q.compactions++;
+            if (b.idle)
+                q.idle++;
             counted = true;
             if (shapedAt.some((t) => Math.abs(t - b.at) < 10 * 60_000)) {
                 shaped.compactions++;
@@ -180,7 +190,7 @@ export function renderCompactionQuality(q, days = 60) {
     const pct = (x) => `${(x * 100).toFixed(1)}%`;
     const row = (label, x, y) => `  ${label.padEnd(36)} ${pct(x).padStart(7)}  ${pct(y).padStart(7)}   ${y - x > 0.0005 ? "+" : y - x < -0.0005 ? "−" : " "}${pct(Math.abs(y - x))}`;
     const thin = q.before.reads + q.after.reads < 50;
-    out.push(`${q.compactions} compactions in ${q.sessions} sessions, last ${days} days; ${WINDOW} requests before vs after each.`, `Sample: ${q.before.reads} file reads before, ${q.after.reads} after; ${q.before.calls} and ${q.after.calls} tool calls; ${q.before.userMsgs} and ${q.after.userMsgs} of your messages.${thin ? " Few reads: the re-read figure is a weak signal." : ""}`, "", `  ${"".padEnd(36)} ${"before".padStart(7)}  ${"after".padStart(7)}   change`, row("files re-read (forgotten)", b.reread, a.reread), row("tool calls that errored", b.error, a.error), row("your messages correcting course", b.correction, a.correction));
+    out.push(`${q.compactions} compactions in ${q.sessions} sessions, last ${days} days; ${WINDOW} requests before vs after each.${q.idle ? ` ${q.idle} of them were Claude Code's idle compactions (a quiet session compacted before its cache expired).` : ""}`, `Sample: ${q.before.reads} file reads before, ${q.after.reads} after; ${q.before.calls} and ${q.after.calls} tool calls; ${q.before.userMsgs} and ${q.after.userMsgs} of your messages.${thin ? " Few reads: the re-read figure is a weak signal." : ""}`, "", `  ${"".padEnd(36)} ${"before".padStart(7)}  ${"after".padStart(7)}   change`, row("files re-read (forgotten)", b.reread, a.reread), row("tool calls that errored", b.error, a.error), row("your messages correcting course", b.correction, a.correction));
     if (q.shaped) {
         const sb = rates(q.shaped.before), sa = rates(q.shaped.after);
         out.push("", `Shaped by context-doctor's PreCompact hook (${q.shaped.compactions}): re-reads ${pct(sb.reread)} → ${pct(sa.reread)}, errors ${pct(sb.error)} → ${pct(sa.error)}, corrections ${pct(sb.correction)} → ${pct(sa.correction)}.`);

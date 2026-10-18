@@ -22,7 +22,7 @@ import { profileConversation } from "./profile.js";
 import { parseSessionFile } from "./session.js";
 import { formatTokens, CHARS_PER_TOKEN, LARGEST_WINDOW } from "./tokens.js";
 import { ensureProxyUp } from "./autopilot.js";
-import { detectColdResume, renderColdResume, renderColdResumeNotice, sessionWriteMultiplier } from "./coldresume.js";
+import { autoCompactsAt, detectColdResume, renderColdResume, renderColdResumeNotice, resumeVerdict, sessionWriteMultiplier, withResumeVerdict, type ResumeVerdict } from "./coldresume.js";
 import { formatUsd, pricingFor } from "./pricing.js";
 import { checkBudget, loadConfig } from "./config.js";
 import { compactFacts, compactInstructions } from "./precompact.js";
@@ -71,6 +71,7 @@ interface SessionState {
   t: number; // tokens at last warning (0 = parsed but never warned)
   b: number; // transcript bytes at last full parse
   cr?: number; // last reply timestamp of the idle period already advised on (cold resume)
+  rv?: ResumeVerdict; // Claude Code's SessionStart verdict on the resumed cache
 }
 
 /**
@@ -164,6 +165,14 @@ export async function runHook(): Promise<void> {
       hook_event_name?: string; conversation_id?: string; model?: string; workspace_roots?: string[]; cursor_version?: string;
     };
     await heal;
+    // A resumed session: Claude Code says whether its cache expired and what
+    // re-caching costs. Kept for the first prompt, which decides the offer
+    // (an offer before any message would come before the rebuild it prices).
+    if (input.hook_event_name === "SessionStart") {
+      const verdict = resumeVerdict(input);
+      if (verdict && input.session_id) writeSessionState(input.session_id, { ...readSessionState(input.session_id), rv: verdict });
+      return;
+    }
     // Before a compaction: tell the summary what this session cannot lose.
     // Claude Code adds a PreCompact hook's plain-text output to the
     // compaction's instructions (auto and manual alike).
@@ -208,7 +217,14 @@ export async function runHook(): Promise<void> {
     // Once per idle period; the tail read is ~1 ms and only on large files.
     const notes: string[] = [];
     let notice: string | undefined;
-    const cold = detectColdResume(transcriptPath);
+    // Silent when Claude Code compacts this very prompt itself (the context
+    // is past its auto-compact window, e.g. one set smaller since): an offer
+    // would arrive after the compaction it proposes. Below the window the
+    // note tells the model to stay quiet if a compaction came first (seen
+    // once in 516 cold returns: a 964k session compacted, then the reply
+    // offered /compact on the fresh summary).
+    let cold = withResumeVerdict(detectColdResume(transcriptPath), prev.rv);
+    if (cold && cold.tokens >= (autoCompactsAt(cold.model ?? input.model) ?? Infinity)) cold = undefined;
     let cr = prev.cr;
     if (cold && cold.lastReplyAt !== prev.cr) {
       notes.push(renderColdResume(cold));
