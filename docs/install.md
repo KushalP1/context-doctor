@@ -21,7 +21,7 @@ Each config edit makes a `.backup` first:
 5. **Every-prompt hook** → `~/.claude/settings.json` (`UserPromptSubmit`) — the per-query context check for Claude Code
 6. **Compaction hook** → `~/.claude/settings.json` (`PreCompact`) — tells each compaction what the session cannot lose (files changed, open tasks, your instructions, failing commands)
    **Session-start hook** → `~/.claude/settings.json` (`SessionStart`) — on a resumed session, keeps Claude Code's own verdict on whether the prompt cache expired and what re-caching costs, for the cold-resume offer on your first prompt; prints nothing
-7. **Cursor hook**, when Cursor is present → `~/.cursor/hooks.json` (`postToolUse`) — the same check for Cursor's agent, after each tool call
+7. **Cursor hooks**, when Cursor is present → `~/.cursor/hooks.json` (`postToolUse`, `postToolUseFailure`, `sessionStart`) — the same check for Cursor's agent, after each tool call (failed ones included) and at the start of a resumed chat. Cursor 3.17 and later deliver the text to the model; earlier versions dropped it, and `doctor` says which you have
 8. **Codex**, when present: MCP server in `~/.codex/config.toml`, the hook in `~/.codex/hooks.json`, the skill in `~/.codex/skills/`. Codex runs a new hook only after you trust it once: type `/hooks` in Codex
 9. **Gemini CLI**, when present: MCP server and the every-prompt hook (`BeforeAgent`) in `~/.gemini/settings.json`
 10. With `--statusline`: live context size, cache share and cost in Claude Code's status bar ([details](./editor-and-statusline.md))

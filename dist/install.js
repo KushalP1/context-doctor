@@ -369,7 +369,16 @@ function uninstallHook() {
 export function cursorHooksPath() {
     return join(homedir(), ".cursor", "hooks.json");
 }
-const isOurCursorEntry = (e) => /(cli\.js|context-doctor(\.cmd|\.exe|\.bat)?)"?\s+hook\s*$/.test(String(e?.command ?? ""));
+export const isOurCursorEntry = (e) => /(cli\.js|context-doctor(\.cmd|\.exe|\.bat)?)"?\s+hook\s*$/.test(String(e?.command ?? ""));
+/**
+ * Cursor's events whose `additional_context` can reach its agent: after a
+ * tool call, after a failed one, and at the start of a chat. Cursor 3.18's
+ * agent runtime attaches the first two to the tool result (Cursor confirmed
+ * postToolUseFailure delivery in 3.17.8); before 3.17 it dropped postToolUse
+ * output (staff-confirmed, March 2026). sessionStart is the documented way
+ * to add context to a chat's start, and serves a resumed heavy chat.
+ */
+export const CURSOR_HOOK_EVENTS = ["postToolUse", "postToolUseFailure", "sessionStart"];
 export function installCursorHook() {
     if (!existsSync(join(homedir(), ".cursor")))
         return null;
@@ -377,13 +386,18 @@ export function installCursorHook() {
     const config = readJson(path);
     config.version = config.version ?? 1;
     config.hooks = config.hooks ?? {};
-    const entries = config.hooks.postToolUse ?? [];
     const want = hookCommand();
-    const ours = entries.filter(isOurCursorEntry);
-    if (ours.length === 1 && ours[0].command === want)
-        return path; // already correct
-    config.hooks.postToolUse = [...entries.filter((e) => !isOurCursorEntry(e)), { command: want, timeout: 10 }];
-    writeJsonWithBackup(path, config);
+    let changed = false;
+    for (const event of CURSOR_HOOK_EVENTS) {
+        const entries = config.hooks[event] ?? [];
+        const ours = entries.filter(isOurCursorEntry);
+        if (ours.length === 1 && ours[0].command === want)
+            continue; // already correct
+        config.hooks[event] = [...entries.filter((e) => !isOurCursorEntry(e)), { command: want, timeout: 10 }];
+        changed = true;
+    }
+    if (changed)
+        writeJsonWithBackup(path, config);
     return path;
 }
 function uninstallCursorHook() {
@@ -391,18 +405,24 @@ function uninstallCursorHook() {
     if (!existsSync(path))
         return;
     const config = readJson(path);
-    const entries = config.hooks?.postToolUse;
-    if (!entries)
+    let removed = false;
+    for (const event of CURSOR_HOOK_EVENTS) {
+        const entries = config.hooks?.[event];
+        if (!entries)
+            continue;
+        const filtered = entries.filter((e) => !isOurCursorEntry(e));
+        if (filtered.length === entries.length)
+            continue;
+        removed = true;
+        if (filtered.length === 0)
+            delete config.hooks[event];
+        else
+            config.hooks[event] = filtered;
+    }
+    if (!removed)
         return;
-    const filtered = entries.filter((e) => !isOurCursorEntry(e));
-    if (filtered.length === entries.length)
-        return;
-    if (filtered.length === 0)
-        delete config.hooks.postToolUse;
-    else
-        config.hooks.postToolUse = filtered;
     writeUninstalled(path, config, ["version"]);
-    done("✓ Cursor after-tool-call hook removed");
+    done("✓ Cursor hooks removed");
 }
 function uninstallHookFrom(settingsPath, label, event = "UserPromptSubmit") {
     if (!existsSync(settingsPath))
@@ -724,7 +744,7 @@ export function runInstall(options = {}) {
     try {
         const cursorHook = installCursorHook();
         if (cursorHook)
-            console.log(`✓ Cursor after-tool-call hook installed (${cursorHook}) — Cursor's agent gets the same guidance in heavy sessions`);
+            console.log(`✓ Cursor hooks installed (${cursorHook}: after each tool call, after a failed one, at chat start) — Cursor's agent gets the same guidance in heavy sessions`);
     }
     catch (e) {
         console.error(`✗ Cursor hook: ${e.message}`);

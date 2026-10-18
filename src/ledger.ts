@@ -31,6 +31,8 @@ export interface LedgerEntry {
   requests?: number;
   saved?: number;
   model?: string;
+  /** The Cursor version that ran the hook (its input's cursor_version), for `doctor`. */
+  cv?: string;
   /** rollup only: sums carried forward from entries rotation removed. */
   carried?: CarriedTotals;
 }

@@ -193,7 +193,9 @@ export async function runHook(): Promise<void> {
     // Cursor marks every hook input with cursor_version; any of its events but
     // postToolUse would only spend the once-per-growth warning on output Cursor
     // drops.
-    const cursor = input.hook_event_name === "postToolUse";
+    // postToolUseFailure and sessionStart carry additional_context too: the
+    // first serves a chat whose tool calls fail, the second a resumed heavy chat.
+    const cursor = input.hook_event_name === "postToolUse" || input.hook_event_name === "postToolUseFailure" || input.hook_event_name === "sessionStart";
     if (input.hook_event_name === "beforeSubmitPrompt" || (input.cursor_version && !cursor)) return;
     const transcriptPath = input.transcript_path;
     if (!transcriptPath || !existsSync(transcriptPath)) return;
@@ -272,7 +274,7 @@ export async function runHook(): Promise<void> {
     // warning needed 1.4x a size the session no longer had (seen: warned at
     // 843k, compacted, then regrew to 809k without a word).
     writeSessionState(sessionId, { t: shouldWarn ? liveTokens : Math.min(prev.t, liveTokens), b: sizeBytes, cr });
-    recordLedger({ ev: "check", sid: sessionId.slice(0, 12), tok: liveTokens, warn: shouldWarn });
+    recordLedger({ ev: "check", sid: sessionId.slice(0, 12), tok: liveTokens, warn: shouldWarn, ...(input.cursor_version ? { cv: input.cursor_version } : {}) });
     if (!shouldWarn) { emit(notes); return; }
 
     // An estimate past the window (no API figure, e.g. a history imported into

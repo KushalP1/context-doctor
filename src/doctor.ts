@@ -13,9 +13,10 @@ import { accessSync, constants as fsConstants, existsSync, readFileSync } from "
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ledgerPath } from "./ledger.js";
+import { ledgerPath, readLedger } from "./ledger.js";
 import { loadConfig } from "./config.js";
 import { codexRouting } from "./codexroute.js";
+import { CURSOR_HOOK_EVENTS } from "./install.js";
 import { binOnPath, claudeInstalledCopies, codexMcpEntry, geminiCliPresent, geminiSettingsPath, isEmptyStub, isOurPluginKey, launcherNamesMissingPackage } from "./install.js";
 import { describeDesktopUsage, desktopUsage } from "./desktopusage.js";
 import { withInvocation } from "./invocation.js";
@@ -354,21 +355,32 @@ export async function runDoctor(): Promise<void> {
     checks.push({ label: "Gemini CLI", status: "skip", detail: "not detected" });
   }
 
-  // Cursor: its agent gets the guidance through a native postToolUse hook
-  // (the Claude Code hook it also runs cannot add context there).
+  // Cursor: its agent gets the guidance through native hooks (the Claude
+  // Code hook it also runs cannot add context there). Whether the text then
+  // reaches the model depends on the Cursor version, and Cursor logs only
+  // that the hook ran, so this says what is known rather than "✓".
   if (existsSync(join(homedir(), ".cursor"))) {
     const hooksPath = join(homedir(), ".cursor", "hooks.json");
     try {
       const hooks = readConfig(hooksPath, ["version"]) ?? {};
-      const ours = ((hooks.hooks?.postToolUse ?? []) as Array<{ command?: string }>).map((e) => e.command ?? "").find((c) => /(cli\.js|context-doctor(\.cmd|\.exe|\.bat)?)"?\s+hook\s*$/.test(c));
+      const oursIn = (event: string) => ((hooks.hooks?.[event] ?? []) as Array<{ command?: string }>).map((e) => e.command ?? "").find((c) => /(cli\.js|context-doctor(\.cmd|\.exe|\.bat)?)"?\s+hook\s*$/.test(c));
+      const ours = oursIn("postToolUse");
       const missing = ours ? hookBinaryMissing(ours) : undefined;
-      checks.push(
-        !ours
-          ? missingHook("Cursor hook", cursorMcp)
-          : missing
-            ? { label: "Cursor hook", status: "fail", detail: `registered, but ${missing} no longer exists — re-run: context-doctor install` }
-            : { label: "Cursor hook", status: "ok", detail: "registered in ~/.cursor/hooks.json (after each tool call in heavy chats)" }
-      );
+      const fallbacks = CURSOR_HOOK_EVENTS.filter((e) => !oursIn(e));
+      if (!ours) checks.push(missingHook("Cursor hook", cursorMcp));
+      else if (missing) checks.push({ label: "Cursor hook", status: "fail", detail: `registered, but ${missing} no longer exists — re-run: context-doctor install` });
+      else {
+        const v = cursorVersion();
+        const delivered = v ? versionAtLeast(v, 3, 17) : undefined;
+        const where = `registered in ~/.cursor/hooks.json for ${CURSOR_HOOK_EVENTS.filter((e) => oursIn(e)).join(", ")}`;
+        checks.push(
+          delivered === false
+            ? { label: "Cursor hook", status: "warn", detail: `${where}, but Cursor ${v} drops hook additional_context before the model (confirmed by Cursor staff, March 2026; reported through 3.10): update Cursor to 3.17 or later; until then the MCP tools are the way in` }
+            : fallbacks.length
+              ? { label: "Cursor hook", status: "warn", detail: `${where}; re-run context-doctor install to add ${fallbacks.join(" and ")} (the fallbacks Cursor 3.17+ delivers)` }
+              : { label: "Cursor hook", status: "ok", detail: `${where}. ${v ? `Cursor ${v}` : "Cursor 3.17 and later"} attaches their additional_context to the tool result; Cursor does not log what the model saw: in a long chat, ask its agent what context-doctor said` }
+        );
+      }
     } catch (e) {
       checks.push({ label: "Cursor hook", status: "fail", detail: `~/.cursor/hooks.json unreadable (${(e as Error).message})` });
     }
@@ -514,4 +526,27 @@ export async function runDoctor(): Promise<void> {
         ? `No problems; ${warns.length} note(s) marked ! above.`
         : "All good."
   );
+}
+
+/** "3.18.25" >= major.minor. */
+function versionAtLeast(v: string, major: number, minor: number): boolean {
+  const m = /^(\d+)\.(\d+)/.exec(v);
+  if (!m) return true;
+  return Number(m[1]) > major || (Number(m[1]) === major && Number(m[2]) >= minor);
+}
+
+/**
+ * The Cursor version here: the newest one that ran the hook (its input
+ * carries cursor_version, on every platform), else the macOS app bundle.
+ */
+export function cursorVersion(): string | undefined {
+  const fromLedger = readLedger().reverse().find((e) => typeof e.cv === "string")?.cv;
+  if (fromLedger) return fromLedger;
+  for (const plist of ["/Applications/Cursor.app/Contents/Info.plist", join(homedir(), "Applications", "Cursor.app", "Contents", "Info.plist")]) {
+    try {
+      const m = /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/.exec(readFileSync(plist, "utf8"));
+      if (m) return m[1];
+    } catch { /* not there */ }
+  }
+  return undefined;
 }

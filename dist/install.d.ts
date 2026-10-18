@@ -91,6 +91,16 @@ export declare function installStatusLine(): "installed" | "already" | "kept-for
  * tool call, which the hook's stat-only fast path and regrowth gate make cheap.
  */
 export declare function cursorHooksPath(): string;
+export declare const isOurCursorEntry: (e: unknown) => boolean;
+/**
+ * Cursor's events whose `additional_context` can reach its agent: after a
+ * tool call, after a failed one, and at the start of a chat. Cursor 3.18's
+ * agent runtime attaches the first two to the tool result (Cursor confirmed
+ * postToolUseFailure delivery in 3.17.8); before 3.17 it dropped postToolUse
+ * output (staff-confirmed, March 2026). sessionStart is the documented way
+ * to add context to a chat's start, and serves a resumed heavy chat.
+ */
+export declare const CURSOR_HOOK_EVENTS: readonly ["postToolUse", "postToolUseFailure", "sessionStart"];
 export declare function installCursorHook(): string | null;
 export declare function codexDir(): string;
 /**

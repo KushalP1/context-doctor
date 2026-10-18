@@ -61,7 +61,7 @@ From an audit of the first-run experience, the docs against the code, and each p
 
 | # | Item | Why | How we will know it works |
 |---|---|---|---|
-| X1 | **Cursor: check the guidance arrives** | Cursor staff confirmed `postToolUse` `additional_context` was not injected (forum, March 2026; still reported in July). Add fallbacks on `postToolUseFailure` and `sessionStart`, cap oversized MCP results with `updated_mcp_tool_output`, and a live check in `doctor` | A Cursor agent quotes the guidance in a heavy chat |
+| X1 | ✅ **Cursor: check the guidance arrives** (0.34.0) | Cursor staff confirmed `postToolUse` `additional_context` was dropped (forum, March 2026; still reported on 3.7.36 in June). Since then: Cursor confirmed `postToolUseFailure` delivery on 3.17.8 (August), and the installed 3.18.25's agent runtime turns preToolUse/postToolUse/postToolUseFailure `additional_context` (≤10,000 chars) into carriers attached to the tool result. `sessionStart` takes `additional_context` per the docs (a timing bug dropped it on 3.1.15) | Shipped: `install` adds `postToolUseFailure` and `sessionStart` beside `postToolUse` (the hook answers all three); the hook records the Cursor version it ran under; `doctor` says what that version does (warns below 3.17, asks for a re-install when the fallbacks are missing, and says Cursor does not log what the model saw). `updated_mcp_tool_output` capping closed by measurement (below). Still needs a person: a Cursor agent quoting the guidance in a heavy chat |
 | X2 | **GitHub Copilot target** | VS Code agent hooks add context on SessionStart and Pre/PostToolUse (preview, 1.109+); Copilot CLI's postToolUse `modifiedResult` can replace a result ([docs](https://code.visualstudio.com/docs/copilot/customization/hooks), [CLI](https://docs.github.com/en/copilot/reference/hooks-configuration)) | `install` wires Copilot; `doctor` checks it |
 | X3 | **Devin Desktop (formerly Windsurf) and Antigravity CLI** | Devin Local hooks add context and read `~/.claude` hooks; Gemini CLI consumer accounts moved to Antigravity CLI on 2026-06-18 | Detected and wired by `install` where hooks are documented |
 
@@ -78,6 +78,10 @@ From an audit of the first-run experience, the docs against the code, and each p
 ## Closed by measurement
 
 Ideas that were built or specified, measured on real sessions, and dropped because the numbers did not justify them. Newest first.
+
+### 2026-10-18: capping oversized MCP results in Cursor (`updated_mcp_tool_output`)
+
+The idea: Cursor's postToolUse hook may replace an MCP tool's output, so oversized MCP results could be cut before they enter the context. Cursor's transcripts never record tool output, so the measurement used the author's Claude Code history, which runs the same kinds of MCP servers: 9,064 MCP results in the last 30 days (1,306 transcripts), median ~600 tokens, p99 ~4.3k, largest ~20k; 29 exceeded 10k tokens, and capping them at 10k would have removed ~137k tokens, 1.6% of MCP result tokens. Most of the volume is browser screenshots, which a text cap cannot shrink. Not shipped: a lossy rewrite of content the model asked for, for a saving that small.
 
 ### 2026-10-13: distilling noisy tool output in a PostToolUse hook
 
