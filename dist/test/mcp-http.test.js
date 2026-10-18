@@ -139,6 +139,11 @@ test("the standing instruction is action-shaped and small, and the checkup promp
         assert.match(instructions, /~30 turns/);
         assert.match(instructions, /Do not estimate token counts yourself/);
         assert.ok(instructions.length <= 700, `instructions ride in every chat; ${instructions.length} chars is too many`);
+        // ChatGPT's guide: keep what matters most in the first 512 characters.
+        const head = instructions.slice(0, 512);
+        assert.match(head, /^Context hygiene rules/);
+        for (const must of [/call profile_context .*BEFORE answering/, /~30 turns/, /Do not estimate token counts yourself/, /over ~2k tokens/, /inline base64\./])
+            assert.match(head, must);
         const { prompts } = await client.listPrompts();
         assert.deepEqual(prompts.map((p) => p.name), ["context_checkup"]);
         const got = await client.getPrompt({ name: "context_checkup", arguments: {} });

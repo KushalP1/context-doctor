@@ -44,12 +44,18 @@ import { packContextSemantic, readSources, renderPack } from "./pack.js";
 // will usually not, while "when X, call Y before answering" is followed. The
 // thresholds keep it from firing on every turn, which would cost more context
 // than it saves.
+/**
+ * The standing rules every chat gets. ChatGPT's MCP guide says to keep the
+ * most important details in the first 512 characters, so rules 1-3 (when to
+ * measure, and the two habits) end before character 512; the two that need
+ * a particular tool come after.
+ */
 const SERVER_INSTRUCTIONS = `Context hygiene rules (always on):
-1. Summarize any paste or tool result over ~2k tokens into the points you need; don't carry it verbatim unless you will edit or quote it exactly.
-2. Refer to earlier content by name; never re-quote it or inline base64.
-3. Once, at ~30 turns or 3+ large pastes, and when asked about tokens, cost, speed or limits: call profile_context BEFORE answering; act on its top finding. In a chat app pass a \`sketch\` (turns + big blocks). Do not estimate token counts yourself.
-4. If optimize_context returns a pruned-turns digest, write its ≤150-token summary.
-5. To answer from a big file or folder you won't edit, call pack_context with the question; don't read it whole.`;
+1. When asked about tokens, cost, speed or limits, and once at ~30 turns or 3+ large pastes: call profile_context BEFORE answering; act on its top finding. In a chat app pass a \`sketch\` (turns + big blocks). Do not estimate token counts yourself.
+2. Summarize any paste or tool result over ~2k tokens into the points you need; keep it verbatim only to edit or quote it exactly.
+3. Refer to earlier content by name; never re-quote it or inline base64.
+4. To answer from a big file or folder you won't edit, call pack_context with the question; don't read it whole.
+5. If optimize_context returns a pruned-turns digest, write its ≤150-token summary.`;
 
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"] as const;
 
