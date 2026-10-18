@@ -15,6 +15,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ledgerPath } from "./ledger.js";
 import { loadConfig } from "./config.js";
+import { codexRouting } from "./codexroute.js";
 import { binOnPath, claudeInstalledCopies, codexMcpEntry, geminiCliPresent, geminiSettingsPath, isEmptyStub, isOurPluginKey, launcherNamesMissingPackage } from "./install.js";
 import { describeDesktopUsage, desktopUsage } from "./desktopusage.js";
 import { withInvocation } from "./invocation.js";
@@ -303,6 +304,17 @@ export async function runDoctor(): Promise<void> {
       }
     } catch (e) {
       checks.push({ label: "Codex hook", status: "fail", detail: `~/.codex/hooks.json unreadable (${(e as Error).message})` });
+    }
+    // Autopilot reaches Codex through openai_base_url (OPENAI_BASE_URL no
+    // longer routes it), and only on an API key.
+    const route = codexRouting(homedir());
+    const local = route.baseUrl && /^http:\/\/(127\.0\.0\.1|localhost):\d+\/v1\/?$/.test(route.baseUrl);
+    if (local && route.auth !== "apikey") {
+      checks.push({ label: "Codex autopilot", status: "warn", detail: `openai_base_url points at ${route.baseUrl} while Codex signs in ${route.auth === "chatgpt" ? "with ChatGPT" : "without an API key"}: autopilot routes Codex only on an API key (the proxy relays ChatGPT traffic unedited meanwhile); remove the line from ~/.codex/config.toml` });
+    } else if (local) {
+      checks.push({ label: "Codex autopilot", status: "ok", detail: `Codex (API key) sends its requests through ${route.baseUrl}` });
+    } else if (process.env.OPENAI_BASE_URL && route.auth === "apikey") {
+      checks.push({ label: "Codex autopilot", status: "warn", detail: "OPENAI_BASE_URL is set, but Codex no longer reads it: `context-doctor autopilot on` sets openai_base_url in ~/.codex/config.toml" });
     }
   } else {
     checks.push({ label: "Codex", status: "skip", detail: "not detected (ChatGPT's Codex agent, IDE extension or CLI)" });

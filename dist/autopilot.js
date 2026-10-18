@@ -25,6 +25,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isEphemeralPath, readJson, writeJsonWithBackup } from "./install.js";
 import { formatTokens } from "./tokens.js";
+import { codexAuthMode, codexHomeIn, codexRouting, routeCodex, unrouteCodex } from "./codexroute.js";
 export const DEFAULT_AUTOPILOT_PORT = 8787;
 const LABEL = "com.gai-ventures.context-doctor.proxy";
 export function autopilotPaths(home = homedir()) {
@@ -297,6 +298,9 @@ function isOurProxyUrl(url, port, paths) {
  * proxy's. With the config damaged, settings.json already holds the proxy URL
  * from the last `on`, and recording that made `off` put the proxy URL back.
  */
+/** Codex's address for the proxy: the OpenAI routes live under /v1. */
+const codexUrl = (port) => `${proxyUrl(port)}/v1`;
+const isOurCodexUrl = (port, paths) => (u) => isOurProxyUrl(u.replace(/\/v1\/?$/, ""), port, paths);
 export function baseUrlToRestore(paths, port, current) {
     const prev = readConfig(paths);
     if (prev?.previousBaseUrl !== undefined)
@@ -431,7 +435,15 @@ export async function autopilotOn(port = DEFAULT_AUTOPILOT_PORT, paths = autopil
     env.ANTHROPIC_BASE_URL = proxyUrl(port);
     const setToolSearch = keepToolSearch(env);
     writeJsonWithBackup(paths.settings, settings);
-    writeFileSync(paths.config, JSON.stringify({ port, previousBaseUrl, setToolSearch, node: process.execPath, cli }, null, 2));
+    // Codex on an API key: its address is openai_base_url in config.toml.
+    let codex = { routed: false };
+    try {
+        codex = routeCodex(homeOf(paths), codexUrl(port), isOurCodexUrl(port, paths));
+    }
+    catch (e) {
+        codex = { routed: false, line: `! Codex not routed: ${e.message}` };
+    }
+    writeFileSync(paths.config, JSON.stringify({ port, previousBaseUrl, setToolSearch, codexRouted: codex.routed || undefined, node: process.execPath, cli }, null, 2));
     if (existsSync(paths.pauseFile))
         rmSync(paths.pauseFile);
     lines.push(`✓ Claude Code routed through it (env.ANTHROPIC_BASE_URL in ${paths.settings})`);
@@ -439,8 +451,10 @@ export async function autopilotOn(port = DEFAULT_AUTOPILOT_PORT, paths = autopil
         lines.push("✓ MCP tool search kept on (env.ENABLE_TOOL_SEARCH=auto): Claude Code turns it off behind a non-Anthropic address, which would load every MCP tool definition on every request");
     lines.push("  Applies to Claude Code sessions started from now on in a terminal or IDE (the desktop app's Code tab sets its own address).");
     lines.push("  Sessions already open keep their old route until restarted.");
+    if (codex.line)
+        lines.push(codex.line);
     lines.push(...reachNote());
-    lines.push(`  GPT apps on your own OpenAI key get the same: export OPENAI_BASE_URL=${proxyUrl(port)}/v1`);
+    lines.push(`  GPT apps on your own OpenAI key get the same: export OPENAI_BASE_URL=${proxyUrl(port)}/v1 (Codex reads openai_base_url instead)`);
     return { ok: true, lines };
 }
 export async function autopilotOff(paths = autopilotPaths(), exec = tryRun) {
@@ -465,6 +479,12 @@ export async function autopilotOff(paths = autopilotPaths(), exec = tryRun) {
         writeJsonWithBackup(paths.settings, settings);
         lines.push("✓ Claude Code no longer routed through the proxy (new sessions)");
     }
+    // Our address in Codex's config.toml goes too, whether or not we recorded it.
+    try {
+        if (unrouteCodex(homeOf(paths), isOurCodexUrl(cfg?.port, paths)))
+            lines.push("✓ Codex no longer routed through the proxy (new sessions)");
+    }
+    catch { /* an unreadable config.toml is the user's to fix */ }
     removeService(homeOf(paths), exec, Boolean(cfg) || existsSync(paths.config));
     if (existsSync(paths.config))
         rmSync(paths.config);
@@ -517,6 +537,12 @@ export async function autopilotStatus(paths = autopilotPaths()) {
     const env = (readJson(paths.settings).env ?? {});
     lines.push(`${h.ok ? "✓" : "✗"} Proxy ${proxyUrl(cfg.port)} ${h.ok ? `up (v${h.version ?? "?"})` : "NOT RESPONDING (the next Claude Code prompt restarts it via the hook)"}`);
     lines.push(`${env.ANTHROPIC_BASE_URL === proxyUrl(cfg.port) ? "✓" : "✗"} Claude Code routed through it`);
+    const cx = codexRouting(homeOf(paths));
+    if (cx.present) {
+        lines.push(cx.baseUrl === codexUrl(cfg.port)
+            ? "✓ Codex (API key) routed through it"
+            : `  Codex not routed${cx.auth === "apikey" ? "" : " (it signs in with ChatGPT; autopilot routes Codex only on an API key)"}`);
+    }
     if (existsSync(paths.pauseFile))
         lines.push("! Paused: requests pass through unchanged");
     if (h.ok) {
@@ -552,6 +578,15 @@ export async function ensureProxyUp(paths = autopilotPaths(), exec = tryRun) {
     if (!cfg)
         return;
     migrateToolSearch(paths, cfg);
+    // Signed in with ChatGPT since `autopilot on`? Then Codex must not be
+    // pointed at the proxy: take our address out before its next session.
+    if (cfg.codexRouted && codexAuthMode(codexHomeIn(homeOf(paths))) !== "apikey") {
+        try {
+            unrouteCodex(homeOf(paths), isOurCodexUrl(cfg.port, paths));
+            writeFileSync(paths.config, JSON.stringify({ ...cfg, codexRouted: undefined }, null, 2));
+        }
+        catch { /* never fail a prompt over this */ }
+    }
     const h = await health(cfg.port, 300);
     if (h.ok) {
         // A service keeps running the code it started with: after an update it

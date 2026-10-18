@@ -46,6 +46,8 @@ export interface ProxyOptions extends OptimizeOptions {
     anthropicUpstream?: string;
     openaiUpstream?: string;
     googleUpstream?: string;
+    /** Where Codex signed in with ChatGPT is relayed (testing); see the handler. */
+    chatgptUpstream?: string;
 }
 /** Reported by /health so `autopilot status` can tell an outdated service from a current one. */
 export declare const PROXY_VERSION = "0.33.0";

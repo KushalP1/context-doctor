@@ -26,6 +26,7 @@ run "MCP over streamable HTTP" env HOME=$H node scripts/smoke-mcp.mjs --http htt
 kill $MP 2>/dev/null
 run "OpenAI proxy + autopilot" env HOME=$(sb) node scripts/smoke-openai-proxy.mjs
 run "Gemini proxy + autopilot" env HOME=$(sb) node scripts/smoke-gemini-proxy.mjs
+run "Codex (real binary, if installed) through autopilot" env HOME=$(sb) node scripts/smoke-codex.mjs
 
 echo "== 3. Published npm package"
 v=$(npm view context-doctor version); [ "$v" = "$(node -p 'require("./package.json").version')" ] && ok "npm latest = repo version ($v)" || bad "npm $v vs repo $(node -p 'require("./package.json").version')"

@@ -67,12 +67,6 @@ export interface Health {
     version?: string;
 }
 export declare function health(port: number, timeoutMs?: number): Promise<Health>;
-/**
- * The ANTHROPIC_BASE_URL `off` should restore, decided at `on`: the one an
- * earlier `on` recorded, else what settings.json holds now, but never our own
- * proxy's. With the config damaged, settings.json already holds the proxy URL
- * from the last `on`, and recording that made `off` put the proxy URL back.
- */
 export declare function baseUrlToRestore(paths: AutopilotPaths, port: number, current: string | null): string | null;
 /** Which Claude Code surfaces ran recent sessions: entrypoint -> count. */
 export declare function recentSurfaces(days?: number, home?: string): Map<string, number>;

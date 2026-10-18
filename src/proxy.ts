@@ -13,6 +13,7 @@
  */
 
 import http from "node:http";
+import type { Duplex } from "node:stream";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { optimizeConversation, OptimizeOptions } from "./optimize.js";
 import { AutoClearer, optsIntoThinkingCheck, thinkingAfter } from "./autoclear.js";
@@ -55,6 +56,8 @@ export interface ProxyOptions extends OptimizeOptions {
   anthropicUpstream?: string;
   openaiUpstream?: string;
   googleUpstream?: string;
+  /** Where Codex signed in with ChatGPT is relayed (testing); see the handler. */
+  chatgptUpstream?: string;
 }
 
 /** Reported by /health so `autopilot status` can tell an outdated service from a current one. */
@@ -326,7 +329,15 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
         return;
       }
 
-      const upstreamBase = upstreamFor(url, opts, req.headers);
+      // Codex signed in with ChatGPT, reading a config.toml whose
+      // openai_base_url points here (the ChatGPT app's Codex tab shares
+      // ~/.codex with a CLI on an API key): without its address it would
+      // talk to ChatGPT's Codex backend, so it is relayed there byte for
+      // byte. Its path loses the /v1 the OpenAI routes carry, and no rule
+      // below matches it: it is never edited.
+      const chatgpt = typeof req.headers["chatgpt-account-id"] === "string" && url.startsWith("/v1/");
+      if (chatgpt) url = url.slice(3);
+      const upstreamBase = chatgpt ? (opts.chatgptUpstream ?? "https://chatgpt.com/backend-api/codex") : upstreamFor(url, opts, req.headers);
       if (!upstreamBase) {
         res.statusCode = 404;
         res.setHeader("content-type", "application/json");
@@ -641,6 +652,18 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
   };
   liveServers.add(drain);
   installSignalHandlers();
+  // A WebSocket upgrade cannot be relayed (or edited) here. Codex tries
+  // Responses over WebSocket first and, on anything but 426, retries five
+  // times (~15 s) before it falls back to HTTP; 426 Upgrade Required makes it
+  // switch to HTTP for the session at once (codex-rs core/src/client.rs).
+  // Answered on the raw socket, which is then closed: handled as an ordinary
+  // request, the upgrade left the connection in a state where the client's
+  // next request on it never got an answer.
+  server.on("upgrade", (_req, socket: Duplex) => {
+    const body = JSON.stringify({ error: "context-doctor proxy: WebSocket transport is not supported here; send the request over HTTP" });
+    socket.on("error", () => {});
+    socket.end(`HTTP/1.1 426 Upgrade Required\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+  });
   server.on("close", () => {
     liveServers.delete(drain);
     checkpoint();
