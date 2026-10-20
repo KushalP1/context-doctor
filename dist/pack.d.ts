@@ -57,6 +57,17 @@ export interface PackResult {
     chunks: Chunk[];
     /** Ids asked for that do not exist. */
     missingIds: string[];
+    /**
+     * Chunks that were asked for by id, or matched the query, but did not fit
+     * what was left of the budget, in priority order. With nothing selected,
+     * this is the difference between "nothing matched" and "the budget is too
+     * small for what matched".
+     */
+    unfit: Array<{
+        id: string;
+        tokens: number;
+        requested: boolean;
+    }>;
     /** What semantic ranking did, or why it was off (packContextSemantic only). */
     semanticNote?: string;
     sources: Array<{
@@ -94,18 +105,36 @@ export declare const PACK_LIMITS: {
     fileBytes: number;
     totalBytes: number;
 };
+/** Why `path` looks like a secrets file, or undefined when it does not. */
+export declare function secretFileReason(path: string): string | undefined;
+export interface ReadSourcesOptions {
+    /** Names are shown relative to this (default: the working directory). */
+    cwd?: string;
+    /**
+     * Pack secrets files (.env, .npmrc, private keys, …) and paths in credential
+     * folders (~/.ssh, ~/.aws, …) too. CLI `--include-secrets` only; the MCP
+     * tool has no way to set it.
+     */
+    includeSecrets?: boolean;
+    /** How the caller can opt in, appended to a "secret, skipped" note. */
+    secretsHint?: string;
+}
 /**
  * Read files and directories (recursively, skipping build and dependency
- * folders, binaries, and anything past the size limits) into sources.
- * `skipped` says what was left out and why, so nothing vanishes silently.
+ * folders, hidden entries, binaries, secrets files, and anything past the size
+ * limits) into sources. `skipped` says what was left out and why, so nothing
+ * vanishes silently.
  *
  * A path named here is read even through a symlink; a symlink met inside a
  * folder is not followed, as git does not follow one either. A link out of
  * the folder would pack files nobody named (a tracked link to /etc/hosts, or
  * to a secret beside the repo), a link to a parent loops, and what a link
  * inside points at is read under its own name (or left out by .gitignore).
+ *
+ * An unreadable entry (permission denied, a device, /dev/fd) is reported as
+ * skipped, never thrown: one locked file must not lose the rest of a folder.
  */
-export declare function readSources(paths: string[], cwd?: string): {
+export declare function readSources(paths: string[], cwdOrOptions?: string | ReadSourcesOptions): {
     sources: PackSource[];
     skipped: string[];
 };

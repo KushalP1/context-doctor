@@ -191,6 +191,8 @@ Options:
   --max-tokens <n>        (pack) Token budget (default 4000); (ci) fail over this many tokens
   --chunk-tokens <n>      (pack) Largest chunk, in tokens (default 400)
   --ids <a#2,b#5>         (pack) Return these chunks by id
+  --include-secrets       (pack) Also pack .env, .npmrc, private keys and other credential files,
+                          and paths under ~/.ssh, ~/.aws and similar (skipped by default)
   --min-tokens <n>        (overhead split) Smallest section to move, in tokens (default 400)
   --requests-per-day <n>  (ci --markdown) Price the change at this many requests a day
   --check <cmd>           (experiment) Command whose exit code is the pass/fail for each arm
@@ -289,6 +291,7 @@ interface Args {
   calls?: number;
   explicit?: boolean;
   semantic?: boolean | string;
+  includeSecrets?: boolean;
   base?: string;
   markdown?: boolean;
   maxIncrease?: number;
@@ -374,6 +377,7 @@ const FLAGS: FlagSpec[] = [
   { names: ["--explicit"], set: (a) => { a.explicit = true; } },
   { names: ["--semantic"], set: (a) => { a.semantic = a.semantic || true; } },
   { names: ["--embed-model"], value: "text", set: (a, v) => { a.semantic = v; } },
+  { names: ["--include-secrets"], set: (a) => { a.includeSecrets = true; } },
   { names: ["--base"], value: "text", set: (a, v) => { a.base = v; } },
   { names: ["--markdown"], set: (a) => { a.markdown = true; } },
   { names: ["--max-increase"], value: "number", num: { min: 0, integer: true }, set: (a, v) => { a.maxIncrease = v; } },
@@ -461,8 +465,16 @@ function applyBudgetGate(overBudget: boolean, failOverBudget: boolean): void {
 }
 
 function readInput(file: string): string {
-  if (file === "-") return readFileSync(0, "utf8");
-  return readFileSync(file, "utf8");
+  return stripBom(readFileSync(file === "-" ? 0 : file, "utf8"));
+}
+
+/**
+ * A UTF-8 byte-order mark (Windows editors, PowerShell's Out-File) is not
+ * part of the text: left in, JSON.parse rejects the file and a valid
+ * conversation was reported as not being one.
+ */
+function stripBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
 /** The installed package's version, read from its package.json so it cannot drift. */
@@ -1032,9 +1044,12 @@ async function main(): Promise<void> {
       console.error('usage: context-doctor pack <files|dirs...> --query "<question>" [--max-tokens 4000] [--ids a#2,b#5] [--json]');
       process.exit(1);
     }
-    const { sources, skipped } = paths.includes("-")
-      ? { sources: [{ name: "stdin", text: readFileSync(0, "utf8") }], skipped: [] as string[] }
-      : readSources(paths);
+    // "-" is stdin, read once beside any other paths (it used to drop them silently).
+    const files = paths.filter((p) => p !== "-");
+    const { sources, skipped } = files.length
+      ? readSources(files, { includeSecrets: args.includeSecrets, secretsHint: " (--include-secrets packs it)" })
+      : { sources: [], skipped: [] as string[] };
+    if (paths.includes("-")) sources.unshift({ name: "stdin", text: stripBom(readFileSync(0, "utf8")) });
     for (const s of skipped) console.error(`context-doctor: skipped ${s}`);
     if (sources.length === 0) process.exit(1);
     const result = await packContextSemantic(sources, { query: args.query, budget: args.maxTokens, ids: args.ids, maxChunkTokens: args.chunkTokens, model: args.model, semantic: args.semantic });

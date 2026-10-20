@@ -16,6 +16,7 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { estimateTokens, formatTokens } from "./tokens.js";
 import { EXTRACTABLE, extractText } from "./extract.js";
@@ -67,6 +68,13 @@ export interface PackResult {
   chunks: Chunk[];
   /** Ids asked for that do not exist. */
   missingIds: string[];
+  /**
+   * Chunks that were asked for by id, or matched the query, but did not fit
+   * what was left of the budget, in priority order. With nothing selected,
+   * this is the difference between "nothing matched" and "the budget is too
+   * small for what matched".
+   */
+  unfit: Array<{ id: string; tokens: number; requested: boolean }>;
   /** What semantic ranking did, or why it was off (packContextSemantic only). */
   semanticNote?: string;
   sources: Array<{ name: string; tokens: number; chunks: number; selected: number }>;
@@ -306,9 +314,14 @@ function select(sources: PackSource[], perSource: Chunk[][], query: string | und
   const chunks = perSource.flat();
   const pick: Chunk[] = [];
   const missingIds: string[] = [];
+  const unfit: PackResult["unfit"] = [];
   let used = 0;
-  const take = (c: Chunk) => {
-    if (pick.includes(c) || used + c.tokens > budget) return;
+  const take = (c: Chunk, requested: boolean) => {
+    if (pick.includes(c)) return;
+    if (used + c.tokens > budget) {
+      if (!unfit.some((u) => u.id === c.id)) unfit.push({ id: c.id, tokens: c.tokens, requested });
+      return;
+    }
     pick.push(c);
     used += c.tokens;
   };
@@ -318,13 +331,13 @@ function select(sources: PackSource[], perSource: Chunk[][], query: string | und
     const byId = new Map(chunks.map((c) => [c.id, c]));
     for (const id of opts.ids) {
       const c = byId.get(id);
-      if (c) take(c);
+      if (c) take(c, true);
       else missingIds.push(id);
     }
   }
   if (query) {
     if (mode === "outline") mode = "query";
-    for (const c of [...chunks].filter((c) => c.score > 0).sort((a, b) => b.score - a.score)) take(c);
+    for (const c of [...chunks].filter((c) => c.score > 0).sort((a, b) => b.score - a.score)) take(c, false);
   }
   const order = new Map(chunks.map((c, i) => [c, i]));
   pick.sort((a, b) => order.get(a)! - order.get(b)!);
@@ -338,6 +351,7 @@ function select(sources: PackSource[], perSource: Chunk[][], query: string | und
     selected: pick,
     chunks,
     missingIds,
+    unfit,
     sources: sources.map((s, i) => ({
       name: s.name,
       tokens: perSource[i].reduce((sum, c) => sum + c.tokens, 0),
@@ -372,6 +386,23 @@ export function renderPack(r: PackResult, { outlineLimit = 60 }: { outlineLimit?
   );
   if (r.missingIds.length) out.push(`Unknown ids: ${r.missingIds.join(", ")}.`);
   if (r.semanticNote) out.push(`(${r.semanticNote})`);
+  const unfitRequested = (r.unfit ?? []).filter((u) => u.requested);
+  if (r.selected.length > 0 && unfitRequested.length > 0) {
+    out.push(`Did not fit the budget of ${formatTokens(r.budget)}: ${unfitRequested.map((u) => `${u.id} (~${formatTokens(u.tokens)})`).join(", ")}. Ask for it alone or with a larger budget (--max-tokens; MCP max_tokens).`);
+  }
+  if (r.selected.length === 0 && (r.unfit ?? []).length > 0) {
+    // Something matched (or was asked for by id); the budget is what stopped it.
+    // "Rephrase" would send the user after the wrong problem.
+    const best = r.unfit[0];
+    const chunk = r.chunks.find((c) => c.id === best.id);
+    out.push(
+      `Nothing fit the budget of ${formatTokens(r.budget)} tokens: ${best.requested ? "the requested chunk" : "the best match"} ` +
+        `${best.id}${chunk?.heading ? ` (${chunk.heading})` : ""} is ~${formatTokens(best.tokens)} tokens. ` +
+        `Raise the budget to at least ${best.tokens} (--max-tokens; MCP max_tokens), or use smaller chunks (--chunk-tokens).`
+    );
+    out.push(...outline(r.chunks, outlineLimit));
+    return out.join("\n");
+  }
   if (r.selected.length === 0) {
     out.push("No chunk matched. Choose from the outline by id, or rephrase with words the document would use.");
     out.push(...outline(r.chunks, outlineLimit));
@@ -418,17 +449,105 @@ function within(root: string, inner: string): boolean {
 }
 
 /**
+ * Files that hold credentials by convention. Packing one puts its keys into a
+ * model's context (and, through MCP, into a transcript on disk): measured on
+ * a folder outside git, `pack .` returned an .env's API key and an .npmrc's
+ * token verbatim. They are skipped even when named outright or tracked by
+ * git; only the CLI's --include-secrets packs them.
+ */
+const SECRET_NAMES = new Set([".npmrc", ".pypirc", ".netrc", "_netrc", ".git-credentials", ".pgpass", ".htpasswd"]);
+const SECRET_EXT = new Set([".pem", ".key", ".p12", ".pfx", ".keystore", ".jks"]);
+
+/** Why `path` looks like a secrets file, or undefined when it does not. */
+export function secretFileReason(path: string): string | undefined {
+  const name = basename(path);
+  const lower = name.toLowerCase();
+  if (lower === ".env" || lower.startsWith(".env.")) return "an .env file";
+  if (SECRET_NAMES.has(lower)) return `a credentials file (${name})`;
+  if (/^id_(rsa|dsa|ecdsa|ed25519)(_sk)?$/.test(lower) || (/^id_(rsa|dsa|ecdsa|ed25519)/.test(lower) && !lower.endsWith(".pub"))) {
+    return "a private SSH key";
+  }
+  if (SECRET_EXT.has(extname(lower))) return `a key or certificate store (${extname(lower)})`;
+  const parts = path.split(/[\\/]+/);
+  if (lower === "credentials" && parts[parts.length - 2] === ".aws") return "AWS credentials";
+  return undefined;
+}
+
+/**
+ * Folders that hold credentials whatever the files inside are called. A path
+ * in one is refused unless secrets are allowed (never over MCP).
+ */
+function sensitiveDirs(): string[] {
+  const home = homedir();
+  const dirs = [
+    ...[".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", join(".config", "gcloud"), join("Library", "Keychains"), ".password-store"].map((d) => join(home, d)),
+    "/etc/shadow", "/etc/gshadow", "/etc/sudoers", "/etc/master.passwd", "/etc/ssh",
+  ];
+  // Compared against real paths: /etc is /private/etc on macOS, and a home
+  // under /var/folders is really /private/var/folders.
+  const real = dirs.map((d) => {
+    try {
+      return realpathSync(d);
+    } catch {
+      return d;
+    }
+  });
+  return [...new Set([...dirs, ...real])];
+}
+
+/** The denylisted folder `path` (a real path) sits in, if any. */
+function inSensitiveDir(path: string, dirs: string[]): string | undefined {
+  return dirs.find((d) => within(d, path));
+}
+
+export interface ReadSourcesOptions {
+  /** Names are shown relative to this (default: the working directory). */
+  cwd?: string;
+  /**
+   * Pack secrets files (.env, .npmrc, private keys, …) and paths in credential
+   * folders (~/.ssh, ~/.aws, …) too. CLI `--include-secrets` only; the MCP
+   * tool has no way to set it.
+   */
+  includeSecrets?: boolean;
+  /** How the caller can opt in, appended to a "secret, skipped" note. */
+  secretsHint?: string;
+}
+
+/** A short reason for a filesystem error: EACCES reads as "permission denied", not a stack trace. */
+function fsReason(e: unknown): string {
+  const code = (e as NodeJS.ErrnoException)?.code;
+  if (code === "ENOENT") return "not found";
+  if (code === "EACCES" || code === "EPERM") return "permission denied";
+  if (code === "ENOTDIR") return "not a directory";
+  if (code === "EISDIR") return "is a directory";
+  if (code === "ELOOP") return "too many symlinks";
+  return code ? `unreadable (${code})` : `unreadable (${(e as Error)?.message ?? e})`;
+}
+
+/**
  * Read files and directories (recursively, skipping build and dependency
- * folders, binaries, and anything past the size limits) into sources.
- * `skipped` says what was left out and why, so nothing vanishes silently.
+ * folders, hidden entries, binaries, secrets files, and anything past the size
+ * limits) into sources. `skipped` says what was left out and why, so nothing
+ * vanishes silently.
  *
  * A path named here is read even through a symlink; a symlink met inside a
  * folder is not followed, as git does not follow one either. A link out of
  * the folder would pack files nobody named (a tracked link to /etc/hosts, or
  * to a secret beside the repo), a link to a parent loops, and what a link
  * inside points at is read under its own name (or left out by .gitignore).
+ *
+ * An unreadable entry (permission denied, a device, /dev/fd) is reported as
+ * skipped, never thrown: one locked file must not lose the rest of a folder.
  */
-export function readSources(paths: string[], cwd = process.cwd()): { sources: PackSource[]; skipped: string[] } {
+export function readSources(
+  paths: string[],
+  cwdOrOptions: string | ReadSourcesOptions = process.cwd()
+): { sources: PackSource[]; skipped: string[] } {
+  const options: ReadSourcesOptions = typeof cwdOrOptions === "string" ? { cwd: cwdOrOptions } : cwdOrOptions;
+  const cwd = options.cwd ?? process.cwd();
+  const includeSecrets = options.includeSecrets === true;
+  const secretsHint = options.secretsHint ?? "";
+  const denied = includeSecrets ? [] : sensitiveDirs();
   const sources: PackSource[] = [];
   const skipped: string[] = [];
   let bytes = 0;
@@ -437,6 +556,17 @@ export function readSources(paths: string[], cwd = process.cwd()): { sources: Pa
   const seen = new Set<string>();
   // Real location of the path being read: a link out of it is reported, not just dropped.
   let root = "";
+  // Hidden files and folders passed over in a walk outside git, per named folder.
+  let hidden = 0;
+  // Whether the folder being walked was listed by git (hidden tracked files are source there).
+  let insideGit = false;
+  const realOf = (p: string): string => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return resolve(p);
+    }
+  };
   const visit = (p: string, top: boolean) => {
     if (sources.length >= PACK_LIMITS.files) {
       if (top || skipped.length < 20) skipped.push(`${p}: over ${PACK_LIMITS.files} files`);
@@ -445,8 +575,8 @@ export function readSources(paths: string[], cwd = process.cwd()): { sources: Pa
     let st;
     try {
       st = top ? statSync(p) : lstatSync(p);
-    } catch {
-      skipped.push(`${p}: not found`);
+    } catch (e) {
+      skipped.push(`${p}: ${fsReason(e)}`);
       return;
     }
     if (st.isSymbolicLink()) {
@@ -459,12 +589,26 @@ export function readSources(paths: string[], cwd = process.cwd()): { sources: Pa
       if (!within(root, target)) skipped.push(`${p}: symlink pointing outside the folder (not followed)`);
       return;
     }
+    if (denied.length > 0) {
+      const dir = inSensitiveDir(realOf(p), denied);
+      if (dir) {
+        // Once per named path: a folder of keys is one refusal, not one per key.
+        if (top) skipped.push(`${p}: refused, ${dir} holds credentials${secretsHint}`);
+        return;
+      }
+    }
     if (st.isDirectory()) {
-      if (!top && (SKIP_DIRS.has(basename(p)) || basename(p).startsWith("."))) return;
+      const name = basename(p);
+      if (!top && SKIP_DIRS.has(name)) return;
+      if (!top && name.startsWith(".")) {
+        hidden++;
+        return;
+      }
       // Inside a git repository the repository says what is source: tracked
       // files plus untracked ones not ignored, so .gitignore'd build output,
       // data dumps and secrets stay out. Elsewhere, walk with SKIP_DIRS.
       const listed = top ? gitFiles(p) : undefined;
+      if (top) insideGit = listed !== undefined;
       if (listed) {
         // A folder named outright that git lists nothing in is still not read
         // (that is the .gitignore guarantee), but the user hears why.
@@ -474,16 +618,34 @@ export function readSources(paths: string[], cwd = process.cwd()): { sources: Pa
         for (const f of listed) visit(join(p, f), false);
         return;
       }
-      for (const e of readdirSync(p).sort()) visit(join(p, e), false);
+      let entries: string[];
+      try {
+        entries = readdirSync(p).sort();
+      } catch (e) {
+        skipped.push(`${p}: ${fsReason(e)}`);
+        return;
+      }
+      for (const e of entries) visit(join(p, e), false);
       return;
     }
-    if (!st.isFile()) return;
-    let real: string;
-    try {
-      real = realpathSync(p);
-    } catch {
-      real = resolve(p);
+    if (!st.isFile()) {
+      if (top) skipped.push(`${p}: not a regular file`);
+      return;
     }
+    if (!includeSecrets) {
+      const why = secretFileReason(p);
+      if (why) {
+        skipped.push(`${p}: ${why}, likely holding secrets; not packed${secretsHint}`);
+        return;
+      }
+    }
+    // Outside git, a hidden file is passed over like a hidden folder (.DS_Store,
+    // editor state, tool configs with tokens in them). Named outright, it is read.
+    if (!top && basename(p).startsWith(".") && !insideGit) {
+      hidden++;
+      return;
+    }
+    const real = realOf(p);
     if (seen.has(real)) return;
     if (st.size > PACK_LIMITS.fileBytes || bytes + st.size > PACK_LIMITS.totalBytes) {
       skipped.push(`${p}: too large (${Math.round(st.size / 1024)} KB)`);
@@ -501,7 +663,13 @@ export function readSources(paths: string[], cwd = process.cwd()): { sources: Pa
       }
       return;
     }
-    const buf = readFileSync(p);
+    let buf: Buffer;
+    try {
+      buf = readFileSync(p);
+    } catch (e) {
+      skipped.push(`${p}: ${fsReason(e)}`);
+      return;
+    }
     if (buf.subarray(0, 8000).includes(0)) {
       if (top) skipped.push(`${p}: binary (pack reads text, PDF and Word/PowerPoint/ODT files)`);
       return;
@@ -515,12 +683,11 @@ export function readSources(paths: string[], cwd = process.cwd()): { sources: Pa
       skipped.push(`${p}: not found`);
       continue;
     }
-    try {
-      root = realpathSync(p);
-    } catch {
-      root = resolve(p);
-    }
+    root = realOf(p);
+    hidden = 0;
+    insideGit = false;
     visit(p, true);
+    if (hidden > 0) skipped.push(`${p}: ${hidden} hidden file(s) or folder(s) not read (name one to pack it)`);
   }
   return { sources, skipped };
 }

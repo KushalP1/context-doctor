@@ -15,6 +15,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { estimateTokens, formatTokens } from "./tokens.js";
 import { EXTRACTABLE, extractText } from "./extract.js";
@@ -248,10 +249,16 @@ function select(sources, perSource, query, opts) {
     const chunks = perSource.flat();
     const pick = [];
     const missingIds = [];
+    const unfit = [];
     let used = 0;
-    const take = (c) => {
-        if (pick.includes(c) || used + c.tokens > budget)
+    const take = (c, requested) => {
+        if (pick.includes(c))
             return;
+        if (used + c.tokens > budget) {
+            if (!unfit.some((u) => u.id === c.id))
+                unfit.push({ id: c.id, tokens: c.tokens, requested });
+            return;
+        }
         pick.push(c);
         used += c.tokens;
     };
@@ -262,7 +269,7 @@ function select(sources, perSource, query, opts) {
         for (const id of opts.ids) {
             const c = byId.get(id);
             if (c)
-                take(c);
+                take(c, true);
             else
                 missingIds.push(id);
         }
@@ -271,7 +278,7 @@ function select(sources, perSource, query, opts) {
         if (mode === "outline")
             mode = "query";
         for (const c of [...chunks].filter((c) => c.score > 0).sort((a, b) => b.score - a.score))
-            take(c);
+            take(c, false);
     }
     const order = new Map(chunks.map((c, i) => [c, i]));
     pick.sort((a, b) => order.get(a) - order.get(b));
@@ -284,6 +291,7 @@ function select(sources, perSource, query, opts) {
         selected: pick,
         chunks,
         missingIds,
+        unfit,
         sources: sources.map((s, i) => ({
             name: s.name,
             tokens: perSource[i].reduce((sum, c) => sum + c.tokens, 0),
@@ -317,6 +325,21 @@ export function renderPack(r, { outlineLimit = 60 } = {}) {
         out.push(`Unknown ids: ${r.missingIds.join(", ")}.`);
     if (r.semanticNote)
         out.push(`(${r.semanticNote})`);
+    const unfitRequested = (r.unfit ?? []).filter((u) => u.requested);
+    if (r.selected.length > 0 && unfitRequested.length > 0) {
+        out.push(`Did not fit the budget of ${formatTokens(r.budget)}: ${unfitRequested.map((u) => `${u.id} (~${formatTokens(u.tokens)})`).join(", ")}. Ask for it alone or with a larger budget (--max-tokens; MCP max_tokens).`);
+    }
+    if (r.selected.length === 0 && (r.unfit ?? []).length > 0) {
+        // Something matched (or was asked for by id); the budget is what stopped it.
+        // "Rephrase" would send the user after the wrong problem.
+        const best = r.unfit[0];
+        const chunk = r.chunks.find((c) => c.id === best.id);
+        out.push(`Nothing fit the budget of ${formatTokens(r.budget)} tokens: ${best.requested ? "the requested chunk" : "the best match"} ` +
+            `${best.id}${chunk?.heading ? ` (${chunk.heading})` : ""} is ~${formatTokens(best.tokens)} tokens. ` +
+            `Raise the budget to at least ${best.tokens} (--max-tokens; MCP max_tokens), or use smaller chunks (--chunk-tokens).`);
+        out.push(...outline(r.chunks, outlineLimit));
+        return out.join("\n");
+    }
     if (r.selected.length === 0) {
         out.push("No chunk matched. Choose from the outline by id, or rephrase with words the document would use.");
         out.push(...outline(r.chunks, outlineLimit));
@@ -360,17 +383,94 @@ function within(root, inner) {
     return rel === "" || (rel !== ".." && !rel.startsWith(".." + sep) && !isAbsolute(rel));
 }
 /**
+ * Files that hold credentials by convention. Packing one puts its keys into a
+ * model's context (and, through MCP, into a transcript on disk): measured on
+ * a folder outside git, `pack .` returned an .env's API key and an .npmrc's
+ * token verbatim. They are skipped even when named outright or tracked by
+ * git; only the CLI's --include-secrets packs them.
+ */
+const SECRET_NAMES = new Set([".npmrc", ".pypirc", ".netrc", "_netrc", ".git-credentials", ".pgpass", ".htpasswd"]);
+const SECRET_EXT = new Set([".pem", ".key", ".p12", ".pfx", ".keystore", ".jks"]);
+/** Why `path` looks like a secrets file, or undefined when it does not. */
+export function secretFileReason(path) {
+    const name = basename(path);
+    const lower = name.toLowerCase();
+    if (lower === ".env" || lower.startsWith(".env."))
+        return "an .env file";
+    if (SECRET_NAMES.has(lower))
+        return `a credentials file (${name})`;
+    if (/^id_(rsa|dsa|ecdsa|ed25519)(_sk)?$/.test(lower) || (/^id_(rsa|dsa|ecdsa|ed25519)/.test(lower) && !lower.endsWith(".pub"))) {
+        return "a private SSH key";
+    }
+    if (SECRET_EXT.has(extname(lower)))
+        return `a key or certificate store (${extname(lower)})`;
+    const parts = path.split(/[\\/]+/);
+    if (lower === "credentials" && parts[parts.length - 2] === ".aws")
+        return "AWS credentials";
+    return undefined;
+}
+/**
+ * Folders that hold credentials whatever the files inside are called. A path
+ * in one is refused unless secrets are allowed (never over MCP).
+ */
+function sensitiveDirs() {
+    const home = homedir();
+    const dirs = [
+        ...[".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", join(".config", "gcloud"), join("Library", "Keychains"), ".password-store"].map((d) => join(home, d)),
+        "/etc/shadow", "/etc/gshadow", "/etc/sudoers", "/etc/master.passwd", "/etc/ssh",
+    ];
+    // Compared against real paths: /etc is /private/etc on macOS, and a home
+    // under /var/folders is really /private/var/folders.
+    const real = dirs.map((d) => {
+        try {
+            return realpathSync(d);
+        }
+        catch {
+            return d;
+        }
+    });
+    return [...new Set([...dirs, ...real])];
+}
+/** The denylisted folder `path` (a real path) sits in, if any. */
+function inSensitiveDir(path, dirs) {
+    return dirs.find((d) => within(d, path));
+}
+/** A short reason for a filesystem error: EACCES reads as "permission denied", not a stack trace. */
+function fsReason(e) {
+    const code = e?.code;
+    if (code === "ENOENT")
+        return "not found";
+    if (code === "EACCES" || code === "EPERM")
+        return "permission denied";
+    if (code === "ENOTDIR")
+        return "not a directory";
+    if (code === "EISDIR")
+        return "is a directory";
+    if (code === "ELOOP")
+        return "too many symlinks";
+    return code ? `unreadable (${code})` : `unreadable (${e?.message ?? e})`;
+}
+/**
  * Read files and directories (recursively, skipping build and dependency
- * folders, binaries, and anything past the size limits) into sources.
- * `skipped` says what was left out and why, so nothing vanishes silently.
+ * folders, hidden entries, binaries, secrets files, and anything past the size
+ * limits) into sources. `skipped` says what was left out and why, so nothing
+ * vanishes silently.
  *
  * A path named here is read even through a symlink; a symlink met inside a
  * folder is not followed, as git does not follow one either. A link out of
  * the folder would pack files nobody named (a tracked link to /etc/hosts, or
  * to a secret beside the repo), a link to a parent loops, and what a link
  * inside points at is read under its own name (or left out by .gitignore).
+ *
+ * An unreadable entry (permission denied, a device, /dev/fd) is reported as
+ * skipped, never thrown: one locked file must not lose the rest of a folder.
  */
-export function readSources(paths, cwd = process.cwd()) {
+export function readSources(paths, cwdOrOptions = process.cwd()) {
+    const options = typeof cwdOrOptions === "string" ? { cwd: cwdOrOptions } : cwdOrOptions;
+    const cwd = options.cwd ?? process.cwd();
+    const includeSecrets = options.includeSecrets === true;
+    const secretsHint = options.secretsHint ?? "";
+    const denied = includeSecrets ? [] : sensitiveDirs();
     const sources = [];
     const skipped = [];
     let bytes = 0;
@@ -379,6 +479,18 @@ export function readSources(paths, cwd = process.cwd()) {
     const seen = new Set();
     // Real location of the path being read: a link out of it is reported, not just dropped.
     let root = "";
+    // Hidden files and folders passed over in a walk outside git, per named folder.
+    let hidden = 0;
+    // Whether the folder being walked was listed by git (hidden tracked files are source there).
+    let insideGit = false;
+    const realOf = (p) => {
+        try {
+            return realpathSync(p);
+        }
+        catch {
+            return resolve(p);
+        }
+    };
     const visit = (p, top) => {
         if (sources.length >= PACK_LIMITS.files) {
             if (top || skipped.length < 20)
@@ -389,8 +501,8 @@ export function readSources(paths, cwd = process.cwd()) {
         try {
             st = top ? statSync(p) : lstatSync(p);
         }
-        catch {
-            skipped.push(`${p}: not found`);
+        catch (e) {
+            skipped.push(`${p}: ${fsReason(e)}`);
             return;
         }
         if (st.isSymbolicLink()) {
@@ -405,13 +517,29 @@ export function readSources(paths, cwd = process.cwd()) {
                 skipped.push(`${p}: symlink pointing outside the folder (not followed)`);
             return;
         }
-        if (st.isDirectory()) {
-            if (!top && (SKIP_DIRS.has(basename(p)) || basename(p).startsWith(".")))
+        if (denied.length > 0) {
+            const dir = inSensitiveDir(realOf(p), denied);
+            if (dir) {
+                // Once per named path: a folder of keys is one refusal, not one per key.
+                if (top)
+                    skipped.push(`${p}: refused, ${dir} holds credentials${secretsHint}`);
                 return;
+            }
+        }
+        if (st.isDirectory()) {
+            const name = basename(p);
+            if (!top && SKIP_DIRS.has(name))
+                return;
+            if (!top && name.startsWith(".")) {
+                hidden++;
+                return;
+            }
             // Inside a git repository the repository says what is source: tracked
             // files plus untracked ones not ignored, so .gitignore'd build output,
             // data dumps and secrets stay out. Elsewhere, walk with SKIP_DIRS.
             const listed = top ? gitFiles(p) : undefined;
+            if (top)
+                insideGit = listed !== undefined;
             if (listed) {
                 // A folder named outright that git lists nothing in is still not read
                 // (that is the .gitignore guarantee), but the user hears why.
@@ -422,19 +550,37 @@ export function readSources(paths, cwd = process.cwd()) {
                     visit(join(p, f), false);
                 return;
             }
-            for (const e of readdirSync(p).sort())
+            let entries;
+            try {
+                entries = readdirSync(p).sort();
+            }
+            catch (e) {
+                skipped.push(`${p}: ${fsReason(e)}`);
+                return;
+            }
+            for (const e of entries)
                 visit(join(p, e), false);
             return;
         }
-        if (!st.isFile())
+        if (!st.isFile()) {
+            if (top)
+                skipped.push(`${p}: not a regular file`);
             return;
-        let real;
-        try {
-            real = realpathSync(p);
         }
-        catch {
-            real = resolve(p);
+        if (!includeSecrets) {
+            const why = secretFileReason(p);
+            if (why) {
+                skipped.push(`${p}: ${why}, likely holding secrets; not packed${secretsHint}`);
+                return;
+            }
         }
+        // Outside git, a hidden file is passed over like a hidden folder (.DS_Store,
+        // editor state, tool configs with tokens in them). Named outright, it is read.
+        if (!top && basename(p).startsWith(".") && !insideGit) {
+            hidden++;
+            return;
+        }
+        const real = realOf(p);
         if (seen.has(real))
             return;
         if (st.size > PACK_LIMITS.fileBytes || bytes + st.size > PACK_LIMITS.totalBytes) {
@@ -454,7 +600,14 @@ export function readSources(paths, cwd = process.cwd()) {
             }
             return;
         }
-        const buf = readFileSync(p);
+        let buf;
+        try {
+            buf = readFileSync(p);
+        }
+        catch (e) {
+            skipped.push(`${p}: ${fsReason(e)}`);
+            return;
+        }
         if (buf.subarray(0, 8000).includes(0)) {
             if (top)
                 skipped.push(`${p}: binary (pack reads text, PDF and Word/PowerPoint/ODT files)`);
@@ -469,13 +622,12 @@ export function readSources(paths, cwd = process.cwd()) {
             skipped.push(`${p}: not found`);
             continue;
         }
-        try {
-            root = realpathSync(p);
-        }
-        catch {
-            root = resolve(p);
-        }
+        root = realOf(p);
+        hidden = 0;
+        insideGit = false;
         visit(p, true);
+        if (hidden > 0)
+            skipped.push(`${p}: ${hidden} hidden file(s) or folder(s) not read (name one to pack it)`);
     }
     return { sources, skipped };
 }

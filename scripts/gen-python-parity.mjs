@@ -42,6 +42,10 @@ const out = {
     { q: null, budget: 4000 },
     { q: "zzzz nothing matches", budget: 500 },
     { q: "billing", budget: 50, ids: ["notes.txt#1", "nope#3"] },
+    // Matches exist but none fits: the budget, not the query, is named.
+    { q: "signing key rotation", budget: 5 },
+    { q: null, budget: 5, ids: ["notes.txt#1"] },
+    { q: null, budget: 40, ids: ["notes.txt#1", "server.log#1"] },
   ].map((c) => {
     const r = packContext(sources, { query: c.q ?? undefined, budget: c.budget, ids: c.ids });
     return { ...c, packed: r.packedTokens, total: r.totalTokens, mode: r.mode, selected: r.selected.map((x) => x.id), scores: r.chunks.map((x) => x.score), rendered: renderPack(r) };

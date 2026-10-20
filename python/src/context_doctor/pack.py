@@ -96,6 +96,9 @@ class PackResult:
     chunks: List[Chunk]
     missing_ids: List[str]
     sources: List[dict] = field(default_factory=list)
+    # Chunks asked for by id, or matching the query, that did not fit what was
+    # left of the budget, in priority order: {"id", "tokens", "requested"}.
+    unfit: List[dict] = field(default_factory=list)
 
     def render(self, outline_limit: int = 60) -> str:
         return render_pack(self, outline_limit)
@@ -306,11 +309,16 @@ def pack_context(
     pick: List[Chunk] = []
     picked = set()
     missing: List[str] = []
+    unfit: List[dict] = []
     used = 0
 
-    def take(c: Chunk) -> None:
+    def take(c: Chunk, requested: bool) -> None:
         nonlocal used
-        if id(c) in picked or used + c.tokens > budget:
+        if id(c) in picked:
+            return
+        if used + c.tokens > budget:
+            if not any(u["id"] == c.id for u in unfit):
+                unfit.append({"id": c.id, "tokens": c.tokens, "requested": requested})
             return
         pick.append(c)
         picked.add(id(c))
@@ -324,14 +332,14 @@ def pack_context(
             by_id[c.id] = c
         for i in ids:
             if i in by_id:
-                take(by_id[i])
+                take(by_id[i], True)
             else:
                 missing.append(i)
     if q:
         if mode == "outline":
             mode = "query"
         for c in sorted((c for c in chunks if c.score > 0), key=lambda c: -c.score):
-            take(c)
+            take(c, False)
     order = {id(c): i for i, c in enumerate(chunks)}
     pick.sort(key=lambda c: order[id(c)])
     return PackResult(
@@ -347,6 +355,7 @@ def pack_context(
             {"name": s.name, "tokens": sum(c.tokens for c in cs), "chunks": len(cs), "selected": sum(1 for c in cs if id(c) in picked)}
             for s, cs in zip(srcs, per_source)
         ],
+        unfit=unfit,
     )
 
 
@@ -372,6 +381,22 @@ def render_pack(r: PackResult, outline_limit: int = 60) -> str:
     )
     if r.missing_ids:
         out.append(f"Unknown ids: {', '.join(r.missing_ids)}.")
+    unfit_requested = [u for u in r.unfit if u["requested"]]
+    if r.selected and unfit_requested:
+        listed = ", ".join(f"{u['id']} (~{format_tokens(u['tokens'])})" for u in unfit_requested)
+        out.append(f"Did not fit the budget of {format_tokens(r.budget)}: {listed}. Ask for it alone or with a larger budget (--max-tokens; MCP max_tokens).")
+    if not r.selected and r.unfit:
+        # Something matched (or was asked for by id); the budget is what stopped it.
+        best = r.unfit[0]
+        chunk = next((c for c in r.chunks if c.id == best["id"]), None)
+        heading = f" ({chunk.heading})" if chunk is not None and chunk.heading else ""
+        out.append(
+            f"Nothing fit the budget of {format_tokens(r.budget)} tokens: {'the requested chunk' if best['requested'] else 'the best match'} "
+            f"{best['id']}{heading} is ~{format_tokens(best['tokens'])} tokens. "
+            f"Raise the budget to at least {best['tokens']} (--max-tokens; MCP max_tokens), or use smaller chunks (--chunk-tokens)."
+        )
+        out.extend(_outline(r.chunks, outline_limit))
+        return "\n".join(out)
     if not r.selected:
         out.append("No chunk matched. Choose from the outline by id, or rephrase with words the document would use.")
         out.extend(_outline(r.chunks, outline_limit))
