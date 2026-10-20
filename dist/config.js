@@ -96,14 +96,127 @@ export function validateConfig(config, path) {
         const value = c[key];
         if (value === undefined)
             continue;
-        if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+        if (!isPositiveInt(value)) {
             warnings.push(`${where(key)} must be a positive whole number, got ${JSON.stringify(value)} — ignored`);
         }
     }
-    if (c.routes !== undefined && !Array.isArray(c.routes)) {
-        warnings.push(`${where("routes")} must be an array — ignored`);
+    if (c.model !== undefined && (typeof c.model !== "string" || !c.model.trim())) {
+        warnings.push(`${where("model")} must be a model name, got ${JSON.stringify(c.model)} — ignored`);
+    }
+    if (c.routes !== undefined) {
+        if (!Array.isArray(c.routes)) {
+            warnings.push(`${where("routes")} must be an array — ignored`);
+        }
+        else {
+            warnings.push(...validateRoutes(c.routes, path));
+        }
     }
     return warnings;
+}
+/** Warnings for the entries of a `routes` array (rc file or `proxy --config`). */
+export function validateRoutes(routes, path) {
+    const warnings = [];
+    routes.forEach((r, i) => {
+        const at = `${path}: routes[${i}]`;
+        if (!r || typeof r !== "object" || Array.isArray(r)) {
+            warnings.push(`${at} must be an object — ignored`);
+            return;
+        }
+        const route = r;
+        if (typeof route.modelPrefix !== "string") {
+            warnings.push(`${at}.modelPrefix must be a string — route ignored`);
+            return;
+        }
+        if (route.strategies !== undefined) {
+            if (!Array.isArray(route.strategies))
+                warnings.push(`${at}.strategies must be an array — ignored`);
+            else
+                for (const id of route.strategies) {
+                    if (!KNOWN_STRATEGIES.has(String(id)))
+                        warnings.push(`${at}.strategies: "${id}" is not a strategy — ignored`);
+                }
+        }
+        for (const key of ["keepRecent", "maxToolResultTokens"]) {
+            const value = route[key];
+            if (value !== undefined && !isPositiveInt(value)) {
+                warnings.push(`${at}.${key} must be a positive whole number, got ${JSON.stringify(value)} — ignored`);
+            }
+        }
+    });
+    return warnings;
+}
+function isPositiveInt(value) {
+    return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+/** Valid strategy ids from a raw value; undefined when it is not an array or nothing valid is left. */
+function validStrategies(value) {
+    if (!Array.isArray(value))
+        return undefined;
+    // An explicit empty list is a choice (no strategies); a list whose every
+    // entry is a typo is not, and falls back to the defaults like a missing one.
+    if (value.length === 0)
+        return [];
+    const kept = value.filter((id) => KNOWN_STRATEGIES.has(String(id)));
+    return kept.length > 0 ? kept : undefined;
+}
+/** The valid routes of a raw `routes` value, each with only its valid settings. */
+export function sanitizeRoutes(value) {
+    if (!Array.isArray(value))
+        return undefined;
+    const routes = [];
+    for (const r of value) {
+        if (!r || typeof r !== "object" || Array.isArray(r))
+            continue;
+        const route = r;
+        if (typeof route.modelPrefix !== "string")
+            continue;
+        const out = { modelPrefix: route.modelPrefix };
+        const strategies = validStrategies(route.strategies);
+        if (strategies)
+            out.strategies = strategies;
+        if (isPositiveInt(route.keepRecent))
+            out.keepRecent = route.keepRecent;
+        if (isPositiveInt(route.maxToolResultTokens))
+            out.maxToolResultTokens = route.maxToolResultTokens;
+        routes.push(out);
+    }
+    return routes;
+}
+/**
+ * The settings of a parsed rc file that are actually in effect: exactly the
+ * values validateConfig does not call ignored. Returning the raw object, as
+ * this once did, warned that `keepRecent: -5` was ignored and then applied
+ * it, which cut the live tool result in `optimize` and the proxy.
+ */
+export function sanitizeConfig(config) {
+    if (!config || typeof config !== "object" || Array.isArray(config))
+        return {};
+    const c = config;
+    const out = {};
+    if (c.budget && typeof c.budget === "object" && !Array.isArray(c.budget)) {
+        const budget = {};
+        for (const [key, value] of Object.entries(c.budget)) {
+            if (!KNOWN_BUDGET_KEYS.has(key))
+                continue;
+            if (typeof value !== "number" || !Number.isFinite(value) || value <= 0)
+                continue;
+            budget[key] = value;
+        }
+        out.budget = budget;
+    }
+    const strategies = validStrategies(c.strategies);
+    if (strategies)
+        out.strategies = strategies;
+    for (const key of ["keepRecent", "maxToolResultTokens", "trimBoundaryStep"]) {
+        if (isPositiveInt(c[key]))
+            out[key] = c[key];
+    }
+    const routes = sanitizeRoutes(c.routes);
+    if (routes)
+        out.routes = routes;
+    if (typeof c.model === "string" && c.model.trim())
+        out.model = c.model;
+    return out;
 }
 export function loadConfig(startDir = process.cwd(), onWarn) {
     for (const path of candidatePaths(startDir)) {
@@ -116,7 +229,7 @@ export function loadConfig(startDir = process.cwd(), onWarn) {
                 const warnings = validateConfig(parsed, path);
                 for (const warning of warnings)
                     onWarn?.(warning);
-                return { config: parsed, path, warnings };
+                return { config: sanitizeConfig(parsed), path, warnings };
             }
             onWarn?.(`${path}: expected a JSON object — ignoring`);
             return { config: {}, path, error: "expected a JSON object" };

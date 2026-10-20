@@ -60,6 +60,17 @@ export interface LoadedConfig {
  * doing nothing is the worst available behaviour.
  */
 export declare function validateConfig(config: unknown, path: string): string[];
+/** Warnings for the entries of a `routes` array (rc file or `proxy --config`). */
+export declare function validateRoutes(routes: unknown[], path: string): string[];
+/** The valid routes of a raw `routes` value, each with only its valid settings. */
+export declare function sanitizeRoutes(value: unknown): ContextDoctorConfig["routes"];
+/**
+ * The settings of a parsed rc file that are actually in effect: exactly the
+ * values validateConfig does not call ignored. Returning the raw object, as
+ * this once did, warned that `keepRecent: -5` was ignored and then applied
+ * it, which cut the live tool result in `optimize` and the proxy.
+ */
+export declare function sanitizeConfig(config: unknown): ContextDoctorConfig;
 export declare function loadConfig(startDir?: string, onWarn?: (msg: string) => void): LoadedConfig;
 export interface BudgetVerdict {
     /** True when any configured limit is exceeded. */

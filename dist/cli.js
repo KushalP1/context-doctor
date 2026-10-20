@@ -39,7 +39,7 @@ import { findPreset, PRESETS, RC_FILENAME } from "./config.js";
 import { runWatch } from "./watch.js";
 import { exactTokenCount } from "./exact.js";
 import { modelFamily, recordCalibration } from "./calibration.js";
-import { checkBudget, loadConfig } from "./config.js";
+import { checkBudget, loadConfig, sanitizeRoutes, validateRoutes } from "./config.js";
 import { startDashboard } from "./dashboard.js";
 import { listCursorChats, parseCursorChat } from "./cursor.js";
 import { analyzeCacheUsage, renderCacheReport } from "./cache.js";
@@ -818,7 +818,14 @@ async function main() {
         let routes = loadedRc.config.routes;
         if (args.config) {
             try {
-                routes = JSON.parse(readFileSync(args.config, "utf8")).routes;
+                const raw = JSON.parse(readFileSync(args.config, "utf8")).routes;
+                // The same rule as the rc file: a value the warning calls ignored is not applied.
+                if (raw !== undefined && !Array.isArray(raw))
+                    console.error(`context-doctor: ${args.config}: routes must be an array — ignored`);
+                else if (Array.isArray(raw))
+                    for (const w of validateRoutes(raw, args.config))
+                        console.error(`context-doctor: ${w}`);
+                routes = sanitizeRoutes(raw);
             }
             catch (e) {
                 console.error(`Could not read --config ${args.config}: ${e.message}`);
@@ -826,7 +833,7 @@ async function main() {
             }
         }
         startProxy({
-            routes: routes,
+            routes,
             port: args.port,
             host: args.host,
             token: args.token ?? process.env.CONTEXT_DOCTOR_PROXY_TOKEN,

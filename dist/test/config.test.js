@@ -125,3 +125,43 @@ test("trimBoundaryStep is a known, validated rc setting", async () => {
     assert.match(validateConfig({ trimBoundaryStep: 0 }, "/x").join("\n"), /trimBoundaryStep must be a positive whole number/);
     assert.match(validateConfig({ trimBoundaryStep: "big" }, "/x").join("\n"), /trimBoundaryStep must be a positive whole number/);
 });
+test("rc values the warnings call ignored are not applied (keepRecent -5 never reaches optimize)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ctxdoc-cfg-ignored-"));
+    writeFileSync(join(root, RC_FILENAME), JSON.stringify({
+        keepRecent: -5,
+        maxToolResultTokens: "300",
+        trimBoundaryStep: 2.5,
+        strategies: ["trim-tool-result", "dedupe"],
+        budget: { maxTokens: -1, maxWindowPct: 50, nope: 3 },
+        routes: [{ modelPrefix: "claude", keepRecent: 0, strategies: ["typo"] }, { keepRecent: 3 }, "x"],
+        model: 42,
+        extra: true,
+    }));
+    const warnings = [];
+    const loaded = loadConfig(root, (m) => warnings.push(m));
+    assert.ok(warnings.some((w) => w.includes("keepRecent")), "still warns");
+    assert.equal(loaded.config.keepRecent, undefined);
+    assert.equal(loaded.config.maxToolResultTokens, undefined);
+    assert.equal(loaded.config.trimBoundaryStep, undefined);
+    assert.deepEqual(loaded.config.strategies, ["dedupe"]);
+    assert.deepEqual(loaded.config.budget, { maxWindowPct: 50 });
+    assert.deepEqual(loaded.config.routes, [{ modelPrefix: "claude" }]);
+    assert.equal(loaded.config.model, undefined);
+    assert.equal(loaded.config.extra, undefined);
+    assert.ok(warnings.some((w) => w.includes("routes[1].modelPrefix")));
+    // End to end: the live (last) tool result survives `optimize` untouched.
+    const big = "line of tool output\n".repeat(400);
+    const chat = join(root, "chat.json");
+    writeFileSync(chat, JSON.stringify({
+        messages: [
+            { role: "user", content: "run it" },
+            { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }] },
+            { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: big }] },
+        ],
+    }));
+    const out = await new Promise((resolve, reject) => {
+        execFile(process.execPath, [cliPath, "optimize", chat, "--strategy", "trim-tool-results"], { cwd: root, env: { ...process.env, HOME: root, USERPROFILE: root } }, (err, stdout) => err ? reject(err) : resolve(stdout));
+    });
+    assert.ok(out.includes(JSON.stringify(big).slice(1, 200)), "the live tool result is intact");
+    assert.ok(!out.includes("trimmed"), out.slice(0, 400));
+});
