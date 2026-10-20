@@ -225,10 +225,18 @@ export function renderCompactionQuality(q: CompactionQuality, days = 60): string
     // Rounded: an average below 1k otherwise printed as "~237.46428571428572".
     out.push(`Compacting forgets files: each compaction is followed by ~${formatTokens(Math.round(q.extraRereadTokensPerCompaction))} tokens of extra re-reads. compact-window charges that to every compaction it simulates.`);
   }
+  // "No higher" only when neither went up: 0% before and 4.8% after is under
+  // the margin for "worse", and it is still higher, so it is said as such.
+  const higher = [
+    a.error - b.error > 0.0005 ? `tool errors ${pct(b.error)} → ${pct(a.error)}` : "",
+    a.correction - b.correction > 0.0005 ? `corrections ${pct(b.correction)} → ${pct(a.correction)}` : "",
+  ].filter(Boolean);
   out.push(
     worse
       ? "Sessions also work worse after compacting (more tool errors or corrections): compact less often, and let the PreCompact hook tell each summary what to keep."
-      : "No sign of worse work after compacting: tool errors and corrections are no higher. The cost of compacting here is tokens, not quality.",
+      : higher.length === 0
+        ? "No sign of worse work after compacting: tool errors and corrections are no higher. The cost of compacting here is tokens, not quality."
+        : `Little sign of worse work after compacting: ${higher.join(" and ")}, up by less than the margin counted as worse here (3 points for errors, 5 for corrections). The cost of compacting here is mostly tokens.`,
   );
   return out.join("\n");
 }

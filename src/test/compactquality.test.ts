@@ -29,3 +29,13 @@ test("a file read before the compaction and again after counts as forgotten; err
   assert.ok(q.extraRereadTokensPerCompaction > 0);
   assert.match(renderCompactionQuality(q, 30), /Compacting forgets files/);
 });
+
+test("corrections going from 0% to 4.8% are not called 'no higher'", () => {
+  const sig = (corrections: number, userMsgs: number) => ({ requests: 20, rereads: 0, rereadTokens: 0, reads: 30, calls: 40, errors: 0, userMsgs, corrections });
+  const q = { compactions: 3, idle: 0, extraRereadTokensPerCompaction: 0, sessions: 2, before: sig(0, 21), after: sig(1, 21) };
+  const out = renderCompactionQuality(q, 30);
+  assert.doesNotMatch(out, /no higher/);
+  assert.match(out, /corrections 0\.0% → 4\.8%, up by less than the margin/);
+  const same = renderCompactionQuality({ ...q, after: sig(0, 21) }, 30);
+  assert.match(same, /tool errors and corrections are no higher/);
+});
