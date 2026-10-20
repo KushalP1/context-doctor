@@ -153,3 +153,35 @@ class Fixes(unittest.TestCase):
         self.assertGreater(len(chunks), 100)
         self.assertEqual("".join(c.text for c in chunks), "var a=1;" * 600_000)
 
+
+
+class PackSecrets(unittest.TestCase):
+    def _folder(self):
+        import os
+        import tempfile
+        d = tempfile.mkdtemp()
+        for name, text in [(".env", "OPENAI_API_KEY=sk-live-123"), (".npmrc", "//r/:_authToken=npm_secret"), (".prettierrc", "{}"), ("server.pem", "-----BEGIN PRIVATE KEY-----"), ("guide.md", "# Guide\n\nHello.\n")]:
+            with open(os.path.join(d, name), "w") as fh:
+                fh.write(text)
+        return d
+
+    def test_folder_outside_git_skips_hidden_files_and_secrets(self):
+        from context_doctor.__main__ import _read
+        d = self._folder()
+        skipped = []
+        sources = list(_read([d], skipped))
+        self.assertEqual([s.name.replace("\\", "/").split("/")[-1] for s in sources], ["guide.md"])
+        self.assertFalse(any("sk-live" in s.text or "npm_secret" in s.text or "PRIVATE KEY" in s.text for s in sources))
+        self.assertTrue(any("server.pem: a key or certificate store" in n for n in skipped), skipped)
+        self.assertTrue(any("hidden file(s)" in n for n in skipped), skipped)
+
+    def test_named_secrets_are_skipped_unless_included(self):
+        import os
+        from context_doctor.__main__ import _read
+        d = self._folder()
+        skipped = []
+        names = [s.name for s in _read([os.path.join(d, ".env"), os.path.join(d, ".prettierrc")], skipped)]
+        self.assertEqual([n.replace("\\", "/").split("/")[-1] for n in names], [".prettierrc"])
+        self.assertTrue(any("an .env file" in n and "--include-secrets" in n for n in skipped), skipped)
+        opted = list(_read([os.path.join(d, ".env")], [], include_secrets=True))
+        self.assertIn("sk-live-123", opted[0].text)
