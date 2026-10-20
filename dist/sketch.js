@@ -65,9 +65,18 @@ export function blockTokens(b, model) {
 export function exchangeTokens(model) {
     return Math.round(CHARS_PER_EXCHANGE / CHARS_PER_TOKEN[providerFor(model)].prose);
 }
+/** Longest label echoed back, in characters. */
+export const MAX_LABEL_CHARS = 60;
+function shortLabel(label) {
+    const clean = String(label ?? "").replace(/\s+/g, " ").trim() || "unnamed block";
+    return clean.length > MAX_LABEL_CHARS ? clean.slice(0, MAX_LABEL_CHARS - 1) + "…" : clean;
+}
 export function profileSketch(sketch) {
     const turns = Math.max(0, Math.floor(sketch.turns || 0));
-    const blocks = Array.isArray(sketch.blocks) ? sketch.blocks : [];
+    // A label is a short name the model chose. One that is really the content
+    // (a pasted block as its own "label") would be echoed into every finding,
+    // re-adding the tokens the sketch exists to avoid; it is cut to a name.
+    const blocks = (Array.isArray(sketch.blocks) ? sketch.blocks : []).map((b) => ({ ...b, label: shortLabel(b?.label) }));
     const perExchange = exchangeTokens(sketch.model);
     const baselineTokens = turns * perExchange;
     // A repeated block costs its size every time it appears.

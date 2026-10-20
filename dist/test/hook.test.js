@@ -174,3 +174,14 @@ test("an estimate past the model's window is not reported as the live context", 
     assert.match(ctx, /transcript holds ~[\d.]+[kM] tokens, more than the model's ~128k window/);
     assert.doesNotMatch(ctx, /% of the window|\$/);
 });
+test("odd hook input (a number or object where a path belongs) is ignored without a DeprecationWarning", async () => {
+    for (const payload of [{ session_id: "s", transcript_path: 12345 }, { session_id: 7, transcript_path: { a: 1 }, cwd: 3 }, [1, 2], null, { hook_event_name: "PreCompact", transcript_path: 5 }]) {
+        const { code, stderr, stdout } = await new Promise((resolve) => {
+            const child = execFile(process.execPath, [cliPath, "hook"], { env: { ...process.env, CONTEXT_DOCTOR_HOOK_STATE: statePath } }, (err, stdout, stderr) => resolve({ code: err ? 1 : 0, stderr, stdout }));
+            child.stdin.end(JSON.stringify(payload));
+        });
+        assert.equal(code, 0, JSON.stringify(payload));
+        assert.doesNotMatch(stderr, /DeprecationWarning|DEP0187/, JSON.stringify(payload));
+        assert.equal(stdout, "");
+    }
+});

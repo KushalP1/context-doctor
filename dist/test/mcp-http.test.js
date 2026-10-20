@@ -170,3 +170,23 @@ test("the tool definitions stay small: they ride on every request in clients tha
         await client.close();
     }
 });
+test("profile_context: both inputs get a note; a label that is really content is cut to a name", async () => {
+    const longLabel = "the full nginx config " + "server { listen 80; } ".repeat(200);
+    const { json } = await rpc({
+        jsonrpc: "2.0",
+        id: 7,
+        method: "tools/call",
+        params: {
+            name: "profile_context",
+            arguments: {
+                conversation: JSON.stringify({ messages: [{ role: "user", content: "hello" }] }),
+                sketch: { turns: 12, blocks: [{ turn: 2, kind: "paste", label: longLabel, approx_tokens: 9000, repeated: 3 }] },
+            },
+        },
+    });
+    const text = json.result.content[0].text;
+    assert.match(text, /both `conversation` and `sketch` were passed; profiled the sketch only/);
+    assert.ok(!text.includes(longLabel.slice(0, 200)), "the long label is not echoed whole");
+    assert.match(text, /the full nginx config/);
+    assert.ok(text.length < 3000, `short output (${text.length} chars)`);
+});

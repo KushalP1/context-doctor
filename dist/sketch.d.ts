@@ -57,6 +57,8 @@ export interface SketchProfile {
 export declare function blockTokens(b: SketchBlock, model?: string): number;
 /** Tokens for one plain exchange under this model's tokenizer. */
 export declare function exchangeTokens(model?: string): number;
+/** Longest label echoed back, in characters. */
+export declare const MAX_LABEL_CHARS = 60;
 export declare function profileSketch(sketch: ConversationSketch): SketchProfile;
 export declare function renderSketchProfile(p: SketchProfile): string;
 /** Profile a sketch, log it to the ledger like a hook check, and render. */

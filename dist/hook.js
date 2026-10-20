@@ -143,6 +143,23 @@ function settingsHasOurHook() {
         return false;
     }
 }
+/**
+ * Hook input with the string fields checked. A number or object where a path
+ * belongs reached fs.existsSync, which on current Node prints a
+ * DeprecationWarning into the user's session (and will throw on a later one).
+ */
+export function hookInput(raw) {
+    const obj = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+    const out = { ...obj };
+    for (const key of ["session_id", "transcript_path", "cwd", "hook_event_name", "conversation_id", "model", "cursor_version"]) {
+        if (typeof obj[key] !== "string" || obj[key] === "")
+            delete out[key];
+    }
+    out.workspace_roots = Array.isArray(obj.workspace_roots) ? obj.workspace_roots.filter((r) => typeof r === "string") : undefined;
+    if (out.workspace_roots === undefined)
+        delete out.workspace_roots;
+    return out;
+}
 export async function runHook() {
     // A hook must never break the user's prompt: any failure exits silently.
     try {
@@ -156,7 +173,7 @@ export async function runHook() {
             await heal;
             return;
         }
-        const input = JSON.parse(await readStdin());
+        const input = hookInput(JSON.parse(await readStdin()));
         await heal;
         // A resumed session: Claude Code says whether its cache expired and what
         // re-caching costs. Kept for the first prompt, which decides the offer

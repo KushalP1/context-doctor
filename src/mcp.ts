@@ -96,7 +96,10 @@ function createServer({ fileAccess = true }: { fileAccess?: boolean } = {}): Mcp
   { title: "Profile context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async ({ conversation, sketch, model }) => {
     if (sketch) {
-      return { content: [{ type: "text", text: runSketch({ ...sketch, model: sketch.model ?? model }) }] };
+      // Both given: the sketch is used. Say so, or the model reads a sketch
+      // profile as the profile of the conversation it passed.
+      const both = conversation ? "Note: both `conversation` and `sketch` were passed; profiled the sketch only. Pass one.\n\n" : "";
+      return { content: [{ type: "text", text: both + runSketch({ ...sketch, model: sketch.model ?? model }) }] };
     }
     if (!conversation) {
       return {
