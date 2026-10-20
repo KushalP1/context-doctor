@@ -16,9 +16,10 @@ import { ledgerPath, readLedger } from "./ledger.js";
 import { loadConfig } from "./config.js";
 import { codexRouting } from "./codexroute.js";
 import { CURSOR_HOOK_EVENTS } from "./install.js";
-import { binOnPath, claudeInstalledCopies, codexMcpEntry, geminiCliPresent, geminiSettingsPath, isEmptyStub, isOurPluginKey, launcherNamesMissingPackage } from "./install.js";
+import { binOnPath, claudeCodeInstallsFromEnv, claudeInstalledCopies, codexMcpEntry, geminiCliPresent, geminiSettingsPath, isEmptyStub, isOurPluginKey, launcherNamesMissingPackage } from "./install.js";
 import { describeDesktopUsage, desktopUsage } from "./desktopusage.js";
 import { withInvocation } from "./invocation.js";
+import { describeInstalls, modelSwitchReadiness, PRE_MODEL_SWITCH_SINCE } from "./modelswitch.js";
 function claudeDesktopConfigPath() {
     switch (platform()) {
         case "darwin": return join(homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
@@ -141,6 +142,36 @@ function pluginEnabled(layers) {
     }
     return [...state.values()].some(Boolean);
 }
+/**
+ * The model-switch warning (PreModelSwitch). Its entry in settings.json is a
+ * failure next to a Claude Code older than the event: that version skips the
+ * whole file, every other setting and hook with it.
+ */
+function modelSwitchCheck(settings, plugin) {
+    const label = "Model-switch warning";
+    const entries = settings.hooks?.PreModelSwitch ?? [];
+    const ours = entries.some((e) => /context-doctor|cli\.js"?\s+hook/.test(e.hooks?.[0]?.command ?? ""));
+    const readiness = modelSwitchReadiness(claudeCodeInstallsFromEnv());
+    if (Array.isArray(settings.hooks?.PreModelSwitch) && readiness.old.length > 0) {
+        return {
+            label,
+            status: "fail",
+            detail: `~/.claude/settings.json has a PreModelSwitch hook${ours ? "" : " (not ours)"}, and ${describeInstalls(readiness.old)} predates that event (${PRE_MODEL_SWITCH_SINCE}): it skips the whole file, every setting and hook in it. Update that Claude Code, or ${ours ? "run context-doctor install (it takes ours out)" : "remove the entry"}`,
+        };
+    }
+    if (ours)
+        return { label, status: "ok", detail: "PreModelSwitch: before a model switch, the price of re-writing the context into the new model's cache" };
+    if (plugin) {
+        return readiness.old.length > 0
+            ? { label, status: "skip", detail: `the plugin carries it, but ${describeInstalls(readiness.old)} predates PreModelSwitch (${PRE_MODEL_SWITCH_SINCE}) and drops it` }
+            : { label, status: "ok", detail: "PreModelSwitch: provided by the context-doctor plugin" };
+    }
+    if (readiness.old.length > 0)
+        return { label, status: "skip", detail: `not installed: ${describeInstalls(readiness.old)} predates PreModelSwitch (${PRE_MODEL_SWITCH_SINCE}); update it, then run context-doctor install` };
+    if (!readiness.ok)
+        return { label, status: "skip", detail: `not installed: no Claude Code version found to check (needs ${PRE_MODEL_SWITCH_SINCE})` };
+    return { label, status: "warn", detail: "not registered: model switches re-write the whole context into the new model's cache unannounced; run context-doctor install" };
+}
 /** Claude Code's disableAllHooks: when true, no hook of anyone's runs. */
 function hooksDisabled(layers) {
     return layers.reduce((off, s) => (typeof s.disableAllHooks === "boolean" ? s.disableAllHooks : off), false);
@@ -236,6 +267,7 @@ export async function runDoctor() {
                     ? { label: "Compaction hook", status: "ok", detail: "PreCompact: each compaction's summary keeps the session's files, open tasks, your instructions and failing commands" }
                     : { label: "Compaction hook", status: "warn", detail: "not registered: compactions use generic instructions; run context-doctor install" });
             }
+            checks.push(modelSwitchCheck(settings, plugin));
         }
         catch (e) {
             checks.push({ label: "Every-prompt hook", status: "fail", detail: `settings.json unreadable (${e.message})` });

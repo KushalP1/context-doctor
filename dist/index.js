@@ -33,3 +33,5 @@ export * from "./cacheplan.js";
 export * from "./subagentpay.js";
 export * from "./compactquality.js";
 export * from "./precompact.js";
+export * from "./cachemisses.js";
+export * from "./modelswitch.js";

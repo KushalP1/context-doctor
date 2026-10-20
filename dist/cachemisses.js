@@ -320,6 +320,6 @@ export function renderCacheMisses(r) {
             out.push(`  ${m.at.slice(0, 16).replace("T", " ")}  ${m.model.slice(0, 18).padEnd(18)} ~${formatTokens(m.contextTokens).padStart(5)} ctx, ${m.gapSeconds}s gap, ${m.cause}${m.extraUsd !== undefined ? `, ${money(m.extraUsd)}` : ""}  ${file}`);
         }
     }
-    out.push("", "A miss: within the cache lifetime of both requests (5 min, or 1 h when written at", "the 1-hour TTL), no compaction between, previous context over 20k, and the request", "wrote over 60% of that context again. Model switches always miss: each model has", "its own cache.");
+    out.push("", "A miss: within the cache lifetime of both requests (5 min, or 1 h when written at", "the 1-hour TTL), no compaction between, previous context over 20k, and the request", "wrote over 60% of that context again. Model switches always miss: each model has", "its own cache. On Claude Code 2.1.251+, `context-doctor install` (or the plugin)", "shows that price before a /model switch.");
     return out.join("\n");
 }

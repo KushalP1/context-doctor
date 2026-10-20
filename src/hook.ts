@@ -25,6 +25,7 @@ import { ensureProxyUp } from "./autopilot.js";
 import { autoCompactsAt, detectColdResume, renderColdResume, renderColdResumeNotice, resumeVerdict, sessionWriteMultiplier, withResumeVerdict, type ResumeVerdict } from "./coldresume.js";
 import { formatUsd, pricingFor } from "./pricing.js";
 import { checkBudget, loadConfig } from "./config.js";
+import { modelSwitchMessage } from "./modelswitch.js";
 import { compactFacts, compactInstructions } from "./precompact.js";
 
 /** Default nudge threshold; a project budget or env var can lower/raise it. */
@@ -141,9 +142,12 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function settingsHasOurHook(): boolean {
+function settingsHasOurHook(event = "UserPromptSubmit"): boolean {
   try {
-    const hooks = JSON.parse(readFileSync(join(homedir(), ".claude", "settings.json"), "utf8"))?.hooks?.UserPromptSubmit;
+    // Per event: a settings.json that has our prompt hook but not our
+    // PreModelSwitch one (install skips it next to an older Claude Code)
+    // must not silence the plugin's copy of the event it lacks.
+    const hooks = JSON.parse(readFileSync(join(homedir(), ".claude", "settings.json"), "utf8"))?.hooks?.[event || "UserPromptSubmit"];
     return JSON.stringify(hooks ?? "").includes("context-doctor");
   } catch {
     return false;
@@ -182,9 +186,18 @@ export async function runHook(): Promise<void> {
     const heal = ensureProxyUp().catch(() => undefined);
     // Installed both ways (plugin and `context-doctor install`)? The plugin
     // copy stays silent so the model is told once, not twice.
-    if (process.env.CLAUDE_PLUGIN_ROOT && settingsHasOurHook()) { await heal; return; }
     const input = hookInput(JSON.parse(await readStdin()));
+    if (process.env.CLAUDE_PLUGIN_ROOT && settingsHasOurHook(input.hook_event_name)) { await heal; return; }
     await heal;
+    // Before a model switch: what re-writing this context into the new
+    // model's cache costs, shown to the user. Never blocks (no decision, exit
+    // 0); a hook that failed or timed out here would block the switch, so
+    // this path only reads the transcript's tail.
+    if (input.hook_event_name === "PreModelSwitch") {
+      const message = modelSwitchMessage(input);
+      if (message) process.stdout.write(JSON.stringify({ systemMessage: message }) + "\n");
+      return;
+    }
     // A resumed session: Claude Code says whether its cache expired and what
     // re-caching costs. Kept for the first prompt, which decides the offer
     // (an offer before any message would come before the rebuild it prices).

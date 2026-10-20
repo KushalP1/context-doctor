@@ -11,6 +11,7 @@ import { homedir, platform } from "node:os";
 import { delimiter, dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { selfCommand, withInvocation } from "./invocation.js";
+import { claudeCodeInstalls, describeInstalls, modelSwitchReadiness, PRE_MODEL_SWITCH_SINCE } from "./modelswitch.js";
 function claudeDesktopConfigPath() {
     switch (platform()) {
         case "darwin": return join(homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
@@ -135,7 +136,7 @@ export function claudeInstalledCopies(home = homedir()) {
     catch { /* unreadable: not ours to judge here */ }
     try {
         const hooks = readJson(join(home, ".claude", "settings.json")).hooks ?? {};
-        if (["UserPromptSubmit", "PreCompact", "SessionStart"].some((ev) => (hooks[ev] ?? []).some?.(isOurHookEntry)))
+        if (["UserPromptSubmit", "PreCompact", "SessionStart", "PreModelSwitch"].some((ev) => (hooks[ev] ?? []).some?.(isOurHookEntry)))
             found.push("hooks in ~/.claude/settings.json");
     }
     catch { /* unreadable */ }
@@ -356,6 +357,7 @@ function uninstallHook(attempt) {
     attempt("Claude Code every-prompt hook", () => uninstallHookFrom(claude, "Claude Code every-prompt hook"));
     attempt("Claude Code compaction hook", () => uninstallHookFrom(claude, "Claude Code compaction hook", "PreCompact"));
     attempt("Claude Code session-start hook", () => uninstallHookFrom(claude, "Claude Code session-start hook", "SessionStart"));
+    attempt("Claude Code model-switch warning", () => uninstallHookFrom(claude, "Claude Code model-switch warning", "PreModelSwitch"));
     attempt("Codex every-prompt hook", () => uninstallHookFrom(join(homedir(), ".codex", "hooks.json"), "Codex every-prompt hook"));
     attempt("Gemini CLI every-prompt hook", () => uninstallHookFrom(geminiSettingsPath(), "Gemini CLI every-prompt hook", "BeforeAgent"));
     attempt("Cursor hooks", () => uninstallCursorHook());
@@ -425,6 +427,37 @@ function uninstallCursorHook() {
         return;
     writeUninstalled(path, config, ["version"]);
     done("✓ Cursor hooks removed");
+}
+/**
+ * The model-switch warning (PreModelSwitch) goes into ~/.claude/settings.json
+ * only when every Claude Code found here runs that event: an older one skips
+ * the WHOLE file over an event it does not know (measured on 2.1.62: none of
+ * the user's settings or hooks ran). With an older one present, an entry an
+ * earlier install wrote is taken out again.
+ */
+export function installModelSwitchHook(readiness = modelSwitchReadiness(claudeCodeInstallsFromEnv())) {
+    const dir = join(homedir(), ".claude");
+    if (!existsSync(dir))
+        return "no-claude-code";
+    const settingsPath = join(dir, "settings.json");
+    if (readiness.ok) {
+        installHookInto(settingsPath, dir, "PreModelSwitch");
+        return "installed";
+    }
+    uninstallHookFrom(settingsPath, "Claude Code model-switch warning (an older Claude Code here would skip the whole file)", "PreModelSwitch");
+    return readiness.old.length > 0 ? "old" : "unknown";
+}
+/**
+ * The Claude Code versions to plan for: CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS
+ * ("2.1.299,2.1.62") when detection cannot see an install, else what
+ * claudeCodeInstalls finds.
+ */
+export function claudeCodeInstallsFromEnv() {
+    const forced = process.env.CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS;
+    if (forced !== undefined) {
+        return forced.split(",").map((v) => v.trim()).filter((v) => /^\d+\.\d+\.\d+$/.test(v)).map((version) => ({ path: "CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS", version, source: "cli" }));
+    }
+    return claudeCodeInstalls();
 }
 function uninstallHookFrom(settingsPath, label, event = "UserPromptSubmit") {
     if (!existsSync(settingsPath))
@@ -742,6 +775,27 @@ export function runInstall(options = {}) {
         // the run; it is a failed target like any other.
         console.error(`✗ Claude Code every-prompt hook: ${e.message}`);
         failures.push("Claude Code hook");
+    }
+    if (!viaPlugin && existsSync(join(homedir(), ".claude"))) {
+        try {
+            const readiness = modelSwitchReadiness(claudeCodeInstallsFromEnv());
+            switch (installModelSwitchHook(readiness)) {
+                case "installed":
+                    console.log("✓ Claude Code model-switch warning installed (PreModelSwitch): before /model switches, the price of re-writing this context into the new model's cache");
+                    break;
+                case "old":
+                    console.log(`– Claude Code model-switch warning skipped: ${describeInstalls(readiness.old)} predates PreModelSwitch (${PRE_MODEL_SWITCH_SINCE}) and would`);
+                    console.log("  ignore your whole ~/.claude/settings.json with it. Update or remove it, then run install again.");
+                    break;
+                case "unknown":
+                    console.log(`– Claude Code model-switch warning skipped: no Claude Code version found to check (it needs ${PRE_MODEL_SWITCH_SINCE} or later).`);
+                    break;
+            }
+        }
+        catch (e) {
+            console.error(`✗ Claude Code model-switch warning: ${e.message}`);
+            failures.push("Claude Code model-switch warning");
+        }
     }
     try {
         const cursorHook = installCursorHook();

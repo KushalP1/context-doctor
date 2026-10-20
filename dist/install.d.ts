@@ -6,6 +6,7 @@
  * Every config edit is a careful JSON merge with a .backup file written first.
  * `context-doctor uninstall` reverses it.
  */
+import { type ClaudeCodeInstall, type ModelSwitchReadiness } from "./modelswitch.js";
 export declare function geminiSettingsPath(): string;
 export declare function geminiCliPresent(): boolean;
 /**
@@ -102,6 +103,20 @@ export declare const isOurCursorEntry: (e: unknown) => boolean;
  */
 export declare const CURSOR_HOOK_EVENTS: readonly ["postToolUse", "postToolUseFailure", "sessionStart"];
 export declare function installCursorHook(): string | null;
+/**
+ * The model-switch warning (PreModelSwitch) goes into ~/.claude/settings.json
+ * only when every Claude Code found here runs that event: an older one skips
+ * the WHOLE file over an event it does not know (measured on 2.1.62: none of
+ * the user's settings or hooks ran). With an older one present, an entry an
+ * earlier install wrote is taken out again.
+ */
+export declare function installModelSwitchHook(readiness?: ModelSwitchReadiness): "installed" | "old" | "unknown" | "no-claude-code";
+/**
+ * The Claude Code versions to plan for: CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS
+ * ("2.1.299,2.1.62") when detection cannot see an install, else what
+ * claudeCodeInstalls finds.
+ */
+export declare function claudeCodeInstallsFromEnv(): ClaudeCodeInstall[];
 export declare function codexDir(): string;
 /**
  * Add or replace our [mcp_servers.context-doctor] table in config.toml without

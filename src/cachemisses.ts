@@ -405,7 +405,8 @@ export function renderCacheMisses(r: CacheMissReport): string {
     "A miss: within the cache lifetime of both requests (5 min, or 1 h when written at",
     "the 1-hour TTL), no compaction between, previous context over 20k, and the request",
     "wrote over 60% of that context again. Model switches always miss: each model has",
-    "its own cache."
+    "its own cache. On Claude Code 2.1.251+, `context-doctor install` (or the plugin)",
+    "shows that price before a /model switch."
   );
   return out.join("\n");
 }

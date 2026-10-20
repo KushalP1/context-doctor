@@ -1,0 +1,16 @@
+{
+  "description": "PreModelSwitch lives in its own file: Claude Code before 2.1.251 rejects a hooks file that names an event it does not know, and this way it drops only this one, not the plugin's other hooks in plugin.json.",
+  "hooks": {
+    "PreModelSwitch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/cli.js\" hook",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
