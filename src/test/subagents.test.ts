@@ -26,7 +26,9 @@ function usage(input: number, read: number, write: number, out: number, model = 
 function session(): { transcript: string; subs: string } {
   const project = mkdtempSync(join(tmpdir(), "ctxdoc-subs-"));
   const transcript = join(project, "sess-1.jsonl");
-  writeFileSync(transcript, [line("user", "parent turn"), line("assistant", "ok", usage(1000, 0, 0, 10))].join("\n") + "\n");
+  // The parent's own turns are its main chain (isSidechain false), as Claude Code writes them.
+  const main = (l: string) => l.replace('"isSidechain":true', '"isSidechain":false');
+  writeFileSync(transcript, [main(line("user", "parent turn")), main(line("assistant", "ok", usage(1000, 0, 0, 10)))].join("\n") + "\n");
   const subs = join(project, "sess-1", "subagents");
   mkdirSync(subs, { recursive: true });
   return { transcript, subs };

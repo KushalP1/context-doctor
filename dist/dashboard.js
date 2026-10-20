@@ -154,9 +154,23 @@ export function startDashboard(opts = {}) {
             res.end(`dashboard error: ${e.message}`);
         }
     });
+    // A busy port used to surface as an unhandled 'error' event: a stack
+    // trace, and nothing about what to do. Say it, and exit 1 (nothing else
+    // keeps the process alive once the server is gone).
+    server.on("error", (e) => {
+        const reason = e.code === "EADDRINUSE"
+            ? `port ${port} is already in use (a dashboard may already be running: open http://127.0.0.1:${port}). Pass --port <n> to use another.`
+            : e.code === "EACCES"
+                ? `not allowed to listen on port ${port}. Pass --port <n> above 1024.`
+                : e.message;
+        console.error(`context-doctor dashboard: ${reason}`);
+        process.exitCode = 1;
+        server.close();
+    });
     // Loopback only: this page exposes local usage data.
     server.listen(port, "127.0.0.1", () => {
-        console.error(`context-doctor dashboard on http://127.0.0.1:${port}`);
+        const bound = server.address()?.port ?? port;
+        console.error(`context-doctor dashboard on http://127.0.0.1:${bound}`);
     });
     return server;
 }

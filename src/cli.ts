@@ -724,7 +724,17 @@ async function main(): Promise<void> {
       console.error(`Could not read session: ${(e as Error).message}`);
       process.exit(1);
     }
-    const profile = profileConversation(parseConversation(parsed.conversationJson), args.model ?? parsed.model);
+    const sessionConversation = parseConversation(parsed.conversationJson);
+    // A file that is not a transcript parses to no messages. It used to print
+    // the warning inside a normal report and exit 0; analyze exits 1 for the
+    // same thing, and a script cannot tell a profile from a non-file otherwise.
+    if (sessionConversation.parseWarning) {
+      usageError(
+        `Could not profile ${path} as a session: no conversation messages in it. ` +
+          "session reads Claude Code, Codex and Gemini CLI transcripts and ChatGPT exports; for a conversation JSON or a prompt, use analyze."
+      );
+    }
+    const profile = profileConversation(sessionConversation, args.model ?? parsed.model);
     if (args.json) {
       console.log(
         JSON.stringify(
