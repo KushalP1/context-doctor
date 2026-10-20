@@ -88,3 +88,22 @@ test("only the SKILL.md install copied is removed from the skill folder", async 
   assert.ok(!existsSync(join(home, ".claude", "skills", "context-doctor", "SKILL.md")));
   assert.ok(existsSync(mine), "a file the user put there is theirs");
 });
+
+test("a malformed config for one app does not stop uninstall from removing the rest", async () => {
+  const home = apps();
+  mkdirSync(join(home, ".gemini"), { recursive: true });
+  assert.equal((await run(home, ["install", "--statusline"])).code, 0);
+  // The user breaks Gemini's settings after install.
+  writeFileSync(join(home, ".gemini", "settings.json"), "{ broken");
+  const r = await run(home, ["uninstall"]);
+  assert.equal(r.code, 1, "a step that failed is not a clean uninstall");
+  assert.match(r.err, /✗ Gemini CLI[^\n]*not valid JSON/);
+  assert.match(r.err, /Not removed: .*Gemini CLI/);
+  // Everything after it in the old order still went.
+  const settings = json(join(home, ".claude", "settings.json"));
+  assert.equal(settings.statusLine, undefined, "status line removed");
+  assert.equal(settings.hooks, undefined, "Claude Code hooks removed");
+  assert.ok(!existsSync(join(home, ".codex", "config.toml")) || !readFileSync(join(home, ".codex", "config.toml"), "utf8").includes("context-doctor"));
+  assert.ok(!existsSync(join(home, ".cursor", "hooks.json")), "Cursor hooks removed");
+  assert.equal(readFileSync(join(home, ".gemini", "settings.json"), "utf8"), "{ broken", "the broken file is left as the user had it");
+});

@@ -363,13 +363,15 @@ function installHookInto(settingsPath: string, gateDir: string, event = "UserPro
   return settingsPath;
 }
 
-function uninstallHook(): void {
-  uninstallHookFrom(join(homedir(), ".claude", "settings.json"), "Claude Code every-prompt hook");
-  uninstallHookFrom(join(homedir(), ".claude", "settings.json"), "Claude Code compaction hook", "PreCompact");
-  uninstallHookFrom(join(homedir(), ".claude", "settings.json"), "Claude Code session-start hook", "SessionStart");
-  uninstallHookFrom(join(homedir(), ".codex", "hooks.json"), "Codex every-prompt hook");
-  uninstallHookFrom(geminiSettingsPath(), "Gemini CLI every-prompt hook", "BeforeAgent");
-  uninstallCursorHook();
+/** Each hook removal on its own: a malformed file for one app must not leave the others installed. */
+function uninstallHook(attempt: (label: string, fn: () => void) => void): void {
+  const claude = join(homedir(), ".claude", "settings.json");
+  attempt("Claude Code every-prompt hook", () => uninstallHookFrom(claude, "Claude Code every-prompt hook"));
+  attempt("Claude Code compaction hook", () => uninstallHookFrom(claude, "Claude Code compaction hook", "PreCompact"));
+  attempt("Claude Code session-start hook", () => uninstallHookFrom(claude, "Claude Code session-start hook", "SessionStart"));
+  attempt("Codex every-prompt hook", () => uninstallHookFrom(join(homedir(), ".codex", "hooks.json"), "Codex every-prompt hook"));
+  attempt("Gemini CLI every-prompt hook", () => uninstallHookFrom(geminiSettingsPath(), "Gemini CLI every-prompt hook", "BeforeAgent"));
+  attempt("Cursor hooks", () => uninstallCursorHook());
 }
 
 /**
@@ -957,41 +959,62 @@ export async function runUninstall(): Promise<void> {
   // the user's file from before install, and overwriting it with the
   // installed state (as every write here used to) lost that original.
   for (const p of configPaths()) backedUp.add(p);
+  // Every step stands alone. A malformed ~/.gemini/settings.json used to
+  // throw out of the whole uninstall midway, leaving everything after it
+  // (status line, Codex, bookkeeping files) installed; now that one target
+  // is reported and the rest still go.
+  const failures: string[] = [];
+  const attempt = (label: string, fn: () => void): void => {
+    try {
+      fn();
+    } catch (e) {
+      failures.push(label);
+      console.error(`✗ ${label}: ${(e as Error).message}`);
+    }
+  };
   // First: if anything below fails, Claude Code must still reach the API.
   const hadAutopilot = existsSync(join(homedir(), ".claude", ".context-doctor-autopilot.json"));
-  await uninstallAutopilot();
-  if (hadAutopilot) changes++;
+  try {
+    await uninstallAutopilot();
+    if (hadAutopilot) changes++;
+  } catch (e) {
+    failures.push("autopilot");
+    console.error(`✗ autopilot: ${(e as Error).message}`);
+  }
   for (const target of targets().filter((t) => t.detect())) {
-    try {
-      if (!existsSync(target.configPath)) continue;
+    attempt(target.name, () => {
+      if (!existsSync(target.configPath)) return;
       const config = readJson(target.configPath);
       if (config.mcpServers?.["context-doctor"]) {
         delete config.mcpServers["context-doctor"];
         writeUninstalled(target.configPath, config);
         done(`✓ ${target.name}: MCP server removed`);
       }
-    } catch (e) {
-      console.error(`✗ ${target.name}: ${(e as Error).message}`);
-    }
+    });
   }
-  removeSkill(join(homedir(), ".claude", "skills", "context-doctor"), "Agent Skill");
-  uninstallHook();
-  uninstallStatusLine();
-  uninstallCodex();
+  attempt("Agent Skill", () => removeSkill(join(homedir(), ".claude", "skills", "context-doctor"), "Agent Skill"));
+  uninstallHook(attempt);
+  attempt("Claude Code status line", () => uninstallStatusLine());
+  attempt("Codex", () => uninstallCodex());
   // Remove our bookkeeping files too — uninstall means gone. The hook's
   // per-session state is a directory, one small file per session.
   for (const file of OUR_CLAUDE_FILES) {
     const p = join(homedir(), ".claude", file);
-    if (existsSync(p)) {
-      rmSync(p, { recursive: true, force: true });
-      done(`✓ Removed ${file}`);
-    }
+    attempt(file, () => {
+      if (existsSync(p)) {
+        rmSync(p, { recursive: true, force: true });
+        done(`✓ Removed ${file}`);
+      }
+    });
   }
   if (deletedStubs.length > 0) {
     console.log(`✓ Deleted ${deletedStubs.length === 1 ? "a file" : "files"} install had created, now empty: ${deletedStubs.map(tilde).join(", ")}`);
   }
   const backups = configPaths().map((p) => p + BACKUP_SUFFIX).filter((b) => existsSync(b));
-  if (changes === 0) console.log("Nothing of context-doctor's was installed.");
+  if (failures.length > 0) {
+    console.error(`Not removed: ${failures.join(", ")} (see above). Everything else was${changes === 0 ? " checked" : " removed"}; fix those files and run uninstall again.`);
+    process.exitCode = 1;
+  } else if (changes === 0) console.log("Nothing of context-doctor's was installed.");
   else console.log("Done.");
   if (backups.length > 0) {
     console.log("Backups install made of your configs, from before it changed them, are kept:");
