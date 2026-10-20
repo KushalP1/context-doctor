@@ -113,7 +113,11 @@ export function renderProfile(profile, options = {}) {
         for (const [id, held] of heldPerKind) {
             if (held.count === 0)
                 continue;
-            const more = held.savings > 0 ? `, ~${formatTokens(held.savings)} more recoverable` : "";
+            // Findings overlap (the same tokens can be a duplicate and an oversized
+            // result), so their sum can pass what the context holds. The total
+            // recovery below is a union; no subset of findings can claim more.
+            const heldSavings = Math.min(held.savings, p.totalEstSavings);
+            const more = heldSavings > 0 ? `, up to ~${formatTokens(heldSavings)} more recoverable` : "";
             lines.push(`  … and ${held.count} more of the same kind (${id})${more}. Use --json for the full list.`);
         }
         lines.push("");

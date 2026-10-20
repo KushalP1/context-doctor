@@ -5,7 +5,7 @@
 
 import { createHash } from "node:crypto";
 import { NormalizedConversation, NormalizedMessage } from "./parse.js";
-import { contextWindowFor, estimateTokens, MESSAGE_OVERHEAD_TOKENS, providerFor } from "./tokens.js";
+import { contextWindowFor, estimateTokens, formatTokens, MESSAGE_OVERHEAD_TOKENS, providerFor } from "./tokens.js";
 import { estimatedTtftSeconds, inputCostUsd, pricingFor } from "./pricing.js";
 import { hasBase64Blob } from "./blob.js";
 import { calibrationFor } from "./calibration.js";
@@ -118,11 +118,15 @@ function unionSavings(findings: Finding[], totalTokens: number): number {
       unscoped += f.estSavings;
       continue;
     }
-    const target = f.messages[f.messages.length - 1];
-    perMessage.set(target, Math.max(perMessage.get(target) ?? 0, f.estSavings));
+    // A cluster of similar messages saves on every copy after the first;
+    // spread its claim over them, so each competes with that message's
+    // other findings rather than one message holding the whole cluster.
+    const targets = f.id === "near_duplicate" && f.messages.length > 2 ? f.messages.slice(1) : [f.messages[f.messages.length - 1]];
+    const share = f.estSavings / targets.length;
+    for (const target of targets) perMessage.set(target, Math.max(perMessage.get(target) ?? 0, share));
   }
 
-  const scoped = [...perMessage.values()].reduce((a, b) => a + b, 0);
+  const scoped = Math.round([...perMessage.values()].reduce((a, b) => a + b, 0));
   // Whole-conversation findings can only claim tokens no message-scoped
   // finding already claimed.
   const headroom = Math.max(0, totalTokens - scoped);
@@ -320,6 +324,17 @@ export function profileConversation(conv: NormalizedConversation, model?: string
     const exactDup = new Set(
       findings.filter((f) => f.id === "duplicate_content").flatMap((f) => f.messages)
     );
+    // Similar messages are clustered, not reported per pair: 40 variants of
+    // one text are 780 pairs, and a finding per pair reported 781 findings
+    // and "868k more recoverable" on a 58k context. One finding per cluster,
+    // its saving counted once per message that could become a reference.
+    const parent = candidates.map((_, i) => i);
+    const root = (i: number): number => {
+      while (parent[i] !== i) i = parent[i] = parent[parent[i]];
+      return i;
+    };
+    // Per candidate: its most similar partner, which its saving is measured against.
+    const best = candidates.map(() => ({ sim: 0, partnerTokens: 0 }));
     for (let i = 0; i < candidates.length; i++) {
       for (let j = i + 1; j < candidates.length; j++) {
         const a = candidates[i];
@@ -329,19 +344,41 @@ export function profileConversation(conv: NormalizedConversation, model?: string
         const large = Math.max(sizes[i], sizes[j]);
         if (large === 0 || small / large < SIMILARITY_THRESHOLD) continue; // cannot clear the bar
         const sim = jaccard(shingleSets[i], shingleSets[j]);
-        if (sim >= SIMILARITY_THRESHOLD) {
-          const smaller = Math.min(a.tokens, b.tokens);
-          const [first, second] = a.msg.index <= b.msg.index ? [a, b] : [b, a];
-          findings.push({
-            id: "near_duplicate",
-            severity: "warn",
-            estSavings: Math.round(smaller * sim * 0.9),
-            message: `Messages #${first.msg.index} and #${second.msg.index} are ~${Math.round(sim * 100)}% similar (~${smaller} tokens repeated with different framing).`,
-            suggestion: "Replace the later copy with a short reference to the first — repeats survive even when the surrounding words differ.",
-            messages: [first.msg.index, second.msg.index],
-          });
-        }
+        if (sim < SIMILARITY_THRESHOLD) continue;
+        parent[root(i)] = root(j);
+        if (sim > best[i].sim) best[i] = { sim, partnerTokens: b.tokens };
+        if (sim > best[j].sim) best[j] = { sim, partnerTokens: a.tokens };
       }
+    }
+    const clusters = new Map<number, number[]>();
+    candidates.forEach((_, i) => {
+      if (best[i].sim === 0) return;
+      const r = root(i);
+      clusters.set(r, [...(clusters.get(r) ?? []), i]);
+    });
+    for (const members of clusters.values()) {
+      if (members.length < 2) continue;
+      members.sort((x, y) => candidates[x].msg.index - candidates[y].msg.index);
+      // The earliest copy stays; every later one could become a reference to it.
+      const later = members.slice(1);
+      const saving = later.reduce((n, i) => n + Math.round(Math.min(candidates[i].tokens, best[i].partnerTokens) * best[i].sim * 0.9), 0);
+      const sims = members.map((i) => best[i].sim);
+      const lo = Math.round(Math.min(...sims) * 100);
+      const hi = Math.round(Math.max(...sims) * 100);
+      const indexes = members.map((i) => candidates[i].msg.index);
+      const pct = lo === hi ? `~${hi}%` : `${lo}-${hi}%`;
+      const repeated = later.reduce((n, i) => n + candidates[i].tokens, 0);
+      findings.push({
+        id: "near_duplicate",
+        severity: "warn",
+        estSavings: saving,
+        message:
+          members.length === 2
+            ? `Messages #${indexes[0]} and #${indexes[1]} are ${pct} similar (~${Math.min(candidates[members[0]].tokens, candidates[members[1]].tokens)} tokens repeated with different framing).`
+            : `${members.length} messages are ${pct} similar to each other (${indexes.slice(0, 6).map((n) => `#${n}`).join(", ")}${indexes.length > 6 ? ", …" : ""}): ~${formatTokens(repeated)} tokens in the ${later.length} later copies repeat the first with different framing.`,
+        suggestion: "Replace the later copies with a short reference to the first — repeats survive even when the surrounding words differ.",
+        messages: indexes,
+      });
     }
   }
 
