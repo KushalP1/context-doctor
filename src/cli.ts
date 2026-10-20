@@ -52,6 +52,7 @@ import { ciReport, renderCiMarkdown, renderCiText } from "./ci.js";
 import { renderReads, repeatedReads } from "./reads.js";
 import { costPerTask, renderTasks } from "./tasks.js";
 import { planCache, renderCachePlan } from "./cacheplan.js";
+import { cacheMisses, cacheMissesLine, cacheMissesSignificant, renderCacheMisses } from "./cachemisses.js";
 import { renderPayback, subagentPayback } from "./subagentpay.js";
 import { compactionQuality, renderCompactionQuality } from "./compactquality.js";
 
@@ -93,6 +94,9 @@ Measure:
                                                 cost, and whether a CLAUDE.md summary or pack pays
   context-doctor compactions [--days n]         Do sessions work worse right after compacting? Re-reads,
                                                 tool errors and your corrections, before vs after
+  context-doctor cache-misses [--days n]        Requests that re-wrote the prompt cache while it was
+                                                still warm: priced, by model and context size, with
+                                                the cause where the transcript shows one
   context-doctor accuracy                       Measure the token heuristic against the API's own
                                                 counts recorded in your transcripts (--limit n)
   context-doctor diff <before> <after>          Compare two profiles: what moved, which findings
@@ -185,7 +189,8 @@ Options:
   --max-tool-tokens <n>   (optimize) Token budget for trimmed tool results (default 300)
   --limit <n>             (accuracy, session --list, reads, tasks, subagents) How many to sample
                           or list
-  --days <n>              (savings, compact-window, overhead, reads, tasks, subagents, compactions)
+  --days <n>              (savings, compact-window, overhead, reads, tasks, subagents, compactions,
+                          cache-misses)
                           Days of history to read (default 30; compactions 60)
   -q, --query <text>      (pack) The question to rank chunks against
   --max-tokens <n>        (pack) Token budget (default 4000); (ci) fail over this many tokens
@@ -314,7 +319,7 @@ function usageError(message: string): never {
 const COMMANDS = [
   "analyze", "optimize", "proxy", "install", "uninstall", "savings", "compact-window", "autopilot", "mcp",
   "instructions", "session", "cursor", "statusline", "hook", "report", "doctor", "dashboard", "init",
-  "experiment", "diff", "accuracy", "overhead", "ci", "cache-plan", "compactions", "subagents", "tasks",
+  "experiment", "diff", "accuracy", "overhead", "ci", "cache-plan", "compactions", "cache-misses", "subagents", "tasks",
   "reads", "pack", "watch", "help", "version",
 ];
 
@@ -818,14 +823,19 @@ async function main(): Promise<void> {
     const cwLine = cwReport.sessions > 0 && est
       ? { window: est.window, savedUsd: est.savedUsd, compactionsPerWeek: (est.compactions / cwReport.days) * 7, nowPerWeek: (cwReport.actualCompactions / cwReport.days) * 7, isCurrent: setWindow !== undefined }
       : undefined;
+    const checking = progressLine("Checking for cache misses");
+    const misses = cacheMisses(args.days ?? 30, undefined, checking.tick);
+    checking.clear();
     const on = existsSync(autopilotPaths().config);
-    if (args.json) console.log(JSON.stringify(report, null, 2));
-    else if (args.share) {
+    if (args.json) {
+      const { largest: _largest, ...missSummary } = misses;
+      console.log(JSON.stringify({ ...report, cacheMisses: missSummary }, null, 2));
+    } else if (args.share) {
       const text = renderShare(report);
       console.log(text);
       if (args.copy) console.log(copyToClipboard(text) ? "\n(copied to the clipboard)" : "\n(no clipboard tool found; copy the lines above)");
     } else {
-      console.log(renderSavings(report, on, cwLine));
+      console.log(renderSavings(report, on, cwLine, cacheMissesSignificant(misses) ? cacheMissesLine(misses) : undefined));
       if (!args.command) console.log(`\nAll commands: ${selfCommand("--help")}`);
     }
     return;
@@ -947,6 +957,14 @@ async function main(): Promise<void> {
       trimBoundaryStep: loadedRc.config.trimBoundaryStep,
     });
     return; // server keeps the process alive
+  }
+
+  if (args.command === "cache-misses") {
+    const reading = progressLine("Reading your Claude Code transcripts");
+    const report = cacheMisses(args.days ?? 30, undefined, reading.tick);
+    reading.clear();
+    console.log(args.json ? JSON.stringify(report, null, 2) : renderCacheMisses(report));
+    return;
   }
 
   if (args.command === "compactions") {
