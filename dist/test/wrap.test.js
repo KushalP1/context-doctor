@@ -85,3 +85,40 @@ test("Google Gen AI clients: generateContent histories are slimmed on a copy; co
     assert.equal(sent[1].contents, "plain string prompt");
     assert.equal(contextDoctorStats(wrapped).changed, 1);
 });
+test("clients built on #private fields keep working through the wrapper", async () => {
+    class Messages {
+        #sent = [];
+        create(params) {
+            this.#sent.push(params);
+            return Promise.resolve({ count: this.#sent.length });
+        }
+        get count() {
+            return this.#sent.length;
+        }
+    }
+    class Client {
+        #key = "sk-test-not-real";
+        #timeout = 10;
+        messages = new Messages();
+        get apiKey() {
+            return this.#key;
+        }
+        get timeout() {
+            return this.#timeout;
+        }
+        set timeout(v) {
+            this.#timeout = v;
+        }
+        describe() {
+            return `key ${this.#key.slice(0, 7)}`;
+        }
+    }
+    const wrapped = withContextDoctor(new Client());
+    assert.equal(wrapped.apiKey, "sk-test-not-real");
+    assert.equal(wrapped.describe(), "key sk-test");
+    wrapped.timeout = 30;
+    assert.equal(wrapped.timeout, 30);
+    assert.equal(wrapped.describe, wrapped.describe, "a method has one identity");
+    assert.deepEqual(await wrapped.messages.create(conversation(1)), { count: 1 });
+    assert.equal(wrapped.messages.count, 1);
+});

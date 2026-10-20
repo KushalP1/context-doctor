@@ -228,12 +228,31 @@ export function withContextDoctor<T extends object>(client: T, options: WrapOpti
     clearer.forget(accepted ? result.appliedIds : result.newIds, result.conversation);
   };
 
+  // The client itself is the receiver for everything not wrapped: a getter
+  // or method that reads a #private field throws a TypeError when `this` is
+  // the Proxy (it has no private slots), which broke SDK clients built on
+  // them. Methods are bound to the client, once each, so identity holds.
+  const bound = new WeakMap<object, WeakMap<Function, Function>>();
+  const boundTo = (obj: object, fn: Function): Function => {
+    // Classes keep their identity: binding one loses its statics.
+    if (/^class[\s{]/.test(Function.prototype.toString.call(fn))) return fn;
+    let perObj = bound.get(obj);
+    if (!perObj) bound.set(obj, (perObj = new WeakMap()));
+    const known = perObj.get(fn);
+    if (known) return known;
+    const b = fn.bind(obj);
+    perObj.set(fn, b);
+    return b;
+  };
   const wrap = (target: object, path: string): object =>
     new Proxy(target, {
-      get(obj, prop, receiver) {
+      set(obj, prop, value) {
+        return Reflect.set(obj, prop, value);
+      },
+      get(obj, prop) {
         if (prop === STATS && path === "") return stats;
-        const value = Reflect.get(obj, prop, receiver);
-        if (typeof prop !== "string") return value;
+        const value = Reflect.get(obj, prop);
+        if (typeof prop !== "string") return typeof value === "function" ? boundTo(obj, value) : value;
         const full = path ? `${path}.${prop}` : prop;
         if (WRAPPED.has(full) && typeof value === "function") {
           return function (this: unknown, params: unknown, ...rest: unknown[]) {
@@ -244,7 +263,7 @@ export function withContextDoctor<T extends object>(client: T, options: WrapOpti
           };
         }
         if (PARENTS.has(full) && value && typeof value === "object") return wrap(value, full);
-        return value;
+        return typeof value === "function" ? boundTo(obj, value) : value;
       },
     });
 
