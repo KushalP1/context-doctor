@@ -16,7 +16,23 @@ from typing import Any, Dict, List, Optional
 from .tokens import estimate_tokens, format_tokens
 
 MESSAGE_OVERHEAD_TOKENS = 4
-_BASE64 = re.compile(r"[A-Za-z0-9+/]{400,}={0,2}")
+# The TypeScript rule (src/blob.ts): a run of the alphabet is base64 only when it
+# looks like encoded binary. Hex digests, ids and "aaaa…" match the charset too,
+# and calling them base64 overstated savings.
+_BASE64 = re.compile(r"(?:data:[A-Za-z0-9_/+.-]+;base64,)?[A-Za-z0-9+/]{500,}={0,2}")
+_MIN_DISTINCT_CHARS = 24
+_MAX_SINGLE_CHAR_SHARE = 0.35
+
+
+def _is_base64_blob(candidate: str) -> bool:
+    if candidate.startswith("data:"):
+        return True
+    counts: Dict[str, int] = {}
+    for ch in candidate:
+        counts[ch] = counts.get(ch, 0) + 1
+    if len(counts) < _MIN_DISTINCT_CHARS:
+        return False
+    return max(counts.values()) / len(candidate) < _MAX_SINGLE_CHAR_SHARE
 
 
 @dataclass
@@ -111,7 +127,7 @@ def profile_messages(conversation: Any, model: Optional[str] = None, large_tool_
         total += n
         if cat == "tool_result" and n > large_tool_result:
             findings.append(Finding("large_tool_result", f"A tool result is ~{format_tokens(n)} tokens.", "Keep only the fields the model used; summarize the rest.", n - 300))
-        b64 = sum(len(m.group(0)) for m in _BASE64.finditer(text))
+        b64 = sum(len(m.group(0)) for m in _BASE64.finditer(text) if _is_base64_blob(m.group(0)))
         if b64:
             saved = estimate_tokens("x" * b64, model)
             findings.append(Finding("base64_blob", f"Inline base64 (~{format_tokens(saved)} tokens).", "Send files and images through the provider's file or image API.", saved))

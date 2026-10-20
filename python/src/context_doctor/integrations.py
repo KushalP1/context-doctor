@@ -54,10 +54,23 @@ def pack_documents(
     Documents with the same source name are numbered apart, so chunk ids stay unique.
     """
     sources = [_to_source(d, i) for i, d in enumerate(docs)]
-    seen: dict = {}
+    # Every name in use, given or generated: numbering only against the given
+    # names let x.md, x.md, x.md~2 become x.md, x.md~2, x.md~2 (one id twice).
+    given = {s.name for s in sources}
+    taken = set()
+    counts: dict = {}
     for s in sources:
-        n = seen.get(s.name, 0)
-        seen[s.name] = n + 1
-        if n:
-            s.name = f"{s.name}~{n + 1}"
+        if s.name not in taken:
+            taken.add(s.name)
+            continue
+        base = s.name
+        n = counts.get(base, 1)
+        while True:
+            n += 1
+            candidate = f"{base}~{n}"
+            if candidate not in taken and candidate not in given:
+                break
+        counts[base] = n
+        s.name = candidate
+        taken.add(candidate)
     return pack_context(sources, query=query, budget=budget, max_chunk_tokens=max_chunk_tokens, model=model)

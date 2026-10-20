@@ -162,6 +162,40 @@ def _units(lines: List[str], kind: str) -> List[dict]:
     return out
 
 
+def _cut_long_line(line: str, max_chars: int) -> List[str]:
+    """Pieces of a line longer than max_chars UTF-16 units, cut as the TypeScript does: at the
+    last space within reach when it is past halfway, never between the halves of a surrogate
+    pair. The last piece is the remainder (at most max_chars units)."""
+    out: List[str] = []
+    if all(ord(c) < 0xD800 or 0xE000 <= ord(c) < 0x10000 for c in line):
+        # One UTF-16 unit per character and no surrogates: plain string indexes, C-speed search.
+        pos, end = 0, len(line)
+        while end - pos > max_chars:
+            cut = line.rfind(" ", pos, pos + max_chars + 1)
+            rel = cut - pos if cut >= 0 else -1
+            at = rel + 1 if rel > max_chars / 2 else max_chars
+            out.append(line[pos:pos + at])
+            pos += at
+        out.append(line[pos:])
+        return out
+    u = _units16(line)
+    pos, end = 0, len(u)
+    while end - pos > max_chars:
+        rel = -1
+        for k in range(pos + max_chars, pos - 1, -1):
+            if u[k] == 0x20:
+                rel = k - pos
+                break
+        at = rel + 1 if rel > max_chars / 2 else max_chars
+        # Never cut between the two halves of a surrogate pair (an emoji would leave a lone half on each side).
+        if 0xD800 <= u[pos + at - 1] <= 0xDBFF and 0xDC00 <= u[pos + at] <= 0xDFFF:
+            at -= 1
+        out.append(_from16(u[pos:pos + at]))
+        pos += at
+    out.append(_from16(u[pos:]))
+    return out
+
+
 def chunk_source(source: PackSource, max_chunk_tokens: Optional[int] = None, model: Optional[str] = None) -> List[Chunk]:
     """Split one source into chunks of at most `max_chunk_tokens`, along its own structure."""
     max_tokens = max(50, max_chunk_tokens if max_chunk_tokens is not None else DEFAULT_CHUNK_TOKENS)
@@ -172,17 +206,14 @@ def chunk_source(source: PackSource, max_chunk_tokens: Optional[int] = None, mod
     max_chars = math.floor(max_tokens * 2.4)
     for n, line in enumerate(re.sub(r"\r\n?", "\n", source.text).split("\n")):
         if js_len(line) > max_chars:
-            u = _units16(line)
-            while len(u) > max_chars:
-                cut = max((k for k in range(min(max_chars, len(u) - 1), -1, -1) if u[k] == 0x20), default=-1)
-                at = cut + 1 if cut > max_chars / 2 else max_chars
-                # Never cut between the two halves of a surrogate pair (an emoji would leave a lone half on each side).
-                if 0xD800 <= u[at - 1] <= 0xDBFF and 0xDC00 <= u[at] <= 0xDFFF:
-                    at -= 1
-                lines.append(_from16(u[:at]))
+            # Index-based: slicing the remainder off on every piece copied the
+            # rest of the line each time, quadratic on one long line (a 5 MB
+            # minified file took 21 s). One pass now, linear in the line.
+            for piece in _cut_long_line(line, max_chars):
+                lines.append(piece)
                 line_no.append(n + 1)
-                u = u[at:]
-            line = _from16(u)
+            line = lines.pop()
+            line_no.pop()
         lines.append(line)
         line_no.append(n + 1)
 

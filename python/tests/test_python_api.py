@@ -120,3 +120,36 @@ class PackReadsWhatGitDoes(unittest.TestCase):
         if linked:
             self.assertFalse(any("outside secret" in t for t in texts), "a link out of the folder is not followed")
             self.assertTrue(any("symlink pointing outside" in n for n in skipped))
+
+
+class Fixes(unittest.TestCase):
+    def test_pack_documents_ids_stay_unique_when_a_name_looks_generated(self):
+        docs = [{"name": "x.md", "text": "alpha one"}, {"name": "x.md", "text": "beta two"}, {"name": "x.md~2", "text": "gamma three"}]
+        r = pack_documents(docs)
+        names = [s["name"] for s in r.sources]
+        self.assertEqual(len(names), len(set(names)), names)
+        ids = [c.id for c in r.chunks]
+        self.assertEqual(len(ids), len(set(ids)), ids)
+        self.assertIn("x.md~2", names)
+
+    def test_hex_runs_are_not_base64_but_real_base64_is(self):
+        import base64
+        import os
+        hex_run = "deadbeef0123456789abcdef" * 40
+        p = profile_messages([{"role": "user", "content": "digest " + hex_run}])
+        self.assertFalse([f for f in p.findings if f.id == "base64_blob"])
+        blob = base64.b64encode(os.urandom(3000)).decode()
+        p = profile_messages([{"role": "user", "content": "image " + blob}])
+        self.assertTrue([f for f in p.findings if f.id == "base64_blob"])
+        p = profile_messages([{"role": "user", "content": "a" * 5000}])
+        self.assertFalse([f for f in p.findings if f.id == "base64_blob"])
+
+    def test_one_huge_line_packs_in_linear_time(self):
+        import time
+        from context_doctor.pack import chunk_source, PackSource
+        start = time.time()
+        chunks = chunk_source(PackSource("min.js", "var a=1;" * 600_000))
+        self.assertLess(time.time() - start, 5)
+        self.assertGreater(len(chunks), 100)
+        self.assertEqual("".join(c.text for c in chunks), "var a=1;" * 600_000)
+
