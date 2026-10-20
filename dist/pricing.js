@@ -56,6 +56,14 @@ const PRICING = [
     [/gpt-4o|gpt-4\.1/i, { inputPerM: 2.5, outputPerM: 10, cacheReadPerM: 1.25 }],
     [/gpt-4-turbo/i, { inputPerM: 10, outputPerM: 30, cacheReadPerM: 10 }],
     [/o[13](-|$)/i, { inputPerM: 2, outputPerM: 8, cacheReadPerM: 1 }],
+    // Gemini 3, paid tier (ai.google.dev/gemini-api/docs/pricing, Oct 2026). 3.6/3.8 Flash
+    // double from 2027-01-01; 3.1 Pro bills prompts over 200k at $4/$18/$0.40, a tier
+    // this per-token table does not model.
+    [/gemini-3[.\d]*-flash-lite/i, rate(0.3, 2.5, 0.03)],
+    [/gemini-3\.1-flash-lite/i, rate(0.25, 1.5, 0.025)],
+    [/gemini-3-flash/i, rate(0.5, 3, 0.05)],
+    [/gemini-3[.\d]*-flash/i, rate(0.75, 3.75, 0.075)],
+    [/gemini-3[.\d]*-pro/i, rate(2, 12, 0.2)],
     [/gemini.*flash/i, { inputPerM: 0.1, outputPerM: 0.4, cacheReadPerM: 0.025 }],
     [/gemini.*pro/i, { inputPerM: 1.25, outputPerM: 5, cacheReadPerM: 0.31 }],
 ];

@@ -15,6 +15,20 @@ import { profileConversation } from "./profile.js";
 import { formatTokens } from "./tokens.js";
 import { formatUsd, inputCostUsd, pricingFor } from "./pricing.js";
 import { coldResumeFollowThrough } from "./coldresume.js";
+/**
+ * The dollar figure for `tokens`, of which only `priced` have a model with a
+ * known price. Pricing the whole total at the priced part's rate, or showing
+ * the priced part's dollars beside the whole total unlabeled, overstated it.
+ */
+function pricedNote(usd, priced, tokens) {
+    if (tokens <= 0)
+        return "";
+    if (priced <= 0 || usd <= 0)
+        return " (no known price for these models)";
+    if (priced >= tokens)
+        return ` ≈ ${formatUsd(usd)}`;
+    return ` ≈ ${formatUsd(usd)} on the ${formatTokens(priced)} with a known price; ${formatTokens(tokens - priced)} unpriced`;
+}
 /** Sessions larger than this are skipped in the report (keeps it snappy). */
 const MAX_SESSION_BYTES = 30 * 1024 * 1024;
 /**
@@ -105,12 +119,16 @@ export async function buildImpactReport(proxyPort = 8787) {
     const optimizeSaved = optimizes.reduce((s, e) => s + (e.saved ?? 0), 0) + carried.optimizeSaved;
     const savedByFamily = new Map();
     let optimizeUsd = 0;
+    /** The part of optimizeSaved whose model has a known price: the dollars cover only this. */
+    let optimizePriced = 0;
     for (const e of optimizes) {
         const family = /claude/i.test(e.model ?? "") ? "claude" : /gpt|^o\d/i.test(e.model ?? "") ? "gpt" : "other";
         savedByFamily.set(family, (savedByFamily.get(family) ?? 0) + (e.saved ?? 0));
         const pricing = pricingFor(e.model);
-        if (pricing && e.saved)
+        if (pricing && e.saved) {
             optimizeUsd += inputCostUsd(e.saved, pricing);
+            optimizePriced += e.saved;
+        }
     }
     const proxy = await fetchProxyStats(proxyPort);
     // Persisted checkpoints cover earlier runs AND the live one's past minutes;
@@ -141,7 +159,7 @@ export async function buildImpactReport(proxyPort = 8787) {
         .join(", ");
     lines.push(`  · optimizations applied via CLI/chat tools (exact): ${formatTokens(optimizeSaved)} over ${optimizes.length} run(s)` +
         (familyNote ? ` [${familyNote}]` : "") +
-        (optimizeUsd > 0 ? ` ≈ ${formatUsd(optimizeUsd)}` : ""));
+        pricedNote(optimizeUsd, optimizePriced, optimizeSaved));
     lines.push("");
     lines.push(`Sessions that got smaller after a hygiene warning: ${formatTokens(totalReduction)} tokens`);
     lines.push("  (mostly compaction, by you or Claude Code; not counted above, because a warning");
@@ -182,6 +200,8 @@ export async function buildImpactReport(proxyPort = 8787) {
         let totalTokens = 0;
         let totalWaste = 0;
         let totalWasteUsd = 0;
+        /** Recoverable tokens in sessions whose model has a known price: the dollars cover only these. */
+        let pricedWaste = 0;
         for (const s of sessions) {
             try {
                 const parsed = parseSessionFile(s.path);
@@ -193,8 +213,10 @@ export async function buildImpactReport(proxyPort = 8787) {
                 // Claude Code sessions run on the prompt cache, so recoverable tokens
                 // cost the cached rate on each message, not the full input rate.
                 const pr = pricingFor(p.model);
-                if (p.cost && pr)
+                if (p.cost && pr) {
                     totalWasteUsd += p.cost.savingsPerCallUsd * (pr.cacheReadPerM / pr.inputPerM);
+                    pricedWaste += p.totalEstSavings;
+                }
                 const wastePct = p.totalTokens > 0 ? Math.round((p.totalEstSavings / p.totalTokens) * 100) : 0;
                 // Ledger sids are the session UUID's first 12 chars (= filename prefix).
                 const sid = (s.path.split(/[\\/]/).pop() ?? "").slice(0, 12);
@@ -210,7 +232,13 @@ export async function buildImpactReport(proxyPort = 8787) {
         }
         lines.push("");
         lines.push(`Across these sessions: ~${formatTokens(totalTokens)} tokens held; ~${formatTokens(totalWaste)} still recoverable` +
-            (totalWasteUsd > 0 ? ` (≈ ${formatUsd(totalWasteUsd)} of input per message sent in them)` : ""));
+            (totalWasteUsd > 0
+                ? pricedWaste < totalWaste
+                    ? ` (≈ ${formatUsd(totalWasteUsd)} of input per message on the ~${formatTokens(pricedWaste)} with a known price; ~${formatTokens(totalWaste - pricedWaste)} unpriced)`
+                    : ` (≈ ${formatUsd(totalWasteUsd)} of input per message sent in them)`
+                : totalWaste > 0
+                    ? " (no known price for these models)"
+                    : ""));
     }
     lines.push("");
     lines.push("What no report can show: tokens Claude AVOIDED adding thanks to the standing");

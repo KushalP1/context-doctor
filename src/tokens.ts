@@ -22,6 +22,9 @@ const MODEL_WINDOWS: Array<[pattern: RegExp, window: number]> = [
   [/gpt-4(?!o|\.|-turbo)/i, 8_192],
   [/gpt-3\.5/i, 16_385],
   [/gemini.*(1\.5|2\.|2-5)/i, 1_000_000],
+  // Every Gemini 3 text model (3 Flash, 3.1 Pro, 3.1/3.5 Flash-Lite, 3.6/3.8
+  // Flash): 1,048,576 input tokens (ai.google.dev/gemini-api/docs/models, Oct 2026).
+  [/gemini-?3/i, 1_048_576],
   [/llama.*3/i, 128_000],
   [/mistral|mixtral/i, 32_000],
 ];
@@ -107,11 +110,18 @@ export function formatTokens(n: number): string {
   // A NaN reaching a report renders literally as "NaN tokens"; show nothing
   // rather than something false.
   if (!Number.isFinite(n)) return "0";
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 10_000) return `${Math.round(n / 1000)}k`;
-  if (n >= 1_000) return `${(n / 1000).toFixed(1)}k`;
-  return String(n);
+  if (n < 0) return `-${formatTokens(-n)}`;
+  // Round to what is shown BEFORE choosing the unit: choosing first printed
+  // 999,999.9 as "1000k" and 9,999 as "10.0k".
+  const r = Math.round(n);
+  if (r < 1_000) return String(r);
+  const tenthsK = Math.round(r / 100);
+  if (tenthsK < 100) return `${(tenthsK / 10).toFixed(1)}k`;
+  const k = Math.round(r / 1_000);
+  if (k < 1_000) return `${k}k`;
+  const tenthsM = Math.round(r / 100_000);
+  if (tenthsM < 10_000) return `${(tenthsM / 10).toFixed(1)}M`;
+  return `${(Math.round(r / 100_000_000) / 10).toFixed(1)}B`;
 }
 
 /**

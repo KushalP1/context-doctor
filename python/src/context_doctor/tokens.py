@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import math
 import re
-from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
 CHARS_PER_TOKEN = {
@@ -65,11 +64,6 @@ def estimate_tokens(text: str, model: Optional[str] = None) -> int:
     return math.ceil(js_len(text) / chars_per_token_for(text, model))
 
 
-def _to_fixed1(x: float) -> str:
-    # JavaScript's toFixed rounds the exact binary value, ties away from zero.
-    return str(Decimal(x).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
-
-
 def js_round(x: float) -> int:
     """JavaScript's Math.round: halves round up."""
     return math.floor(x + 0.5)
@@ -78,12 +72,20 @@ def js_round(x: float) -> int:
 def format_tokens(n: float) -> str:
     if not isinstance(n, (int, float)) or n != n or n in (float("inf"), float("-inf")):
         return "0"
-    if n >= 1_000_000_000:
-        return f"{_to_fixed1(n / 1_000_000_000)}B"
-    if n >= 1_000_000:
-        return f"{_to_fixed1(n / 1_000_000)}M"
-    if n >= 10_000:
-        return f"{js_round(n / 1000)}k"
-    if n >= 1_000:
-        return f"{_to_fixed1(n / 1000)}k"
-    return str(int(n)) if float(n).is_integer() else str(n)
+    if n < 0:
+        return "-" + format_tokens(-n)
+    # Round to what is shown before choosing the unit (999,999.9 is "1.0M", not "1000k").
+    r = js_round(n)
+    if r < 1_000:
+        return str(r)
+    tenths_k = js_round(r / 100)
+    if tenths_k < 100:
+        return f"{tenths_k // 10}.{tenths_k % 10}k"
+    k = js_round(r / 1_000)
+    if k < 1_000:
+        return f"{k}k"
+    tenths_m = js_round(r / 100_000)
+    if tenths_m < 10_000:
+        return f"{tenths_m // 10}.{tenths_m % 10}M"
+    tenths_b = js_round(r / 100_000_000)
+    return f"{tenths_b // 10}.{tenths_b % 10}B"

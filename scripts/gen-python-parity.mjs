@@ -31,7 +31,7 @@ const { sources, texts } = JSON.parse(readFileSync(inputsPath, "utf8"));
 const models = [undefined, "claude", "claude-sonnet-5", "gpt-5", "gemini-3-pro", "llama-3"];
 const out = {
   estimate: texts.flatMap((t) => models.map((m) => ({ text: t, model: m ?? null, tokens: estimateTokens(t, m) }))),
-  format: [0, 7, 999, 1000, 1049, 1050, 1250, 1350, 9949, 9950, 9999, 10_000, 10_499, 10_500, 12_345, 999_999, 1_000_000, 1_250_000, 2_550_000_000].map((n) => ({ n, s: formatTokens(n) })),
+  format: [0, 7, 999, 999.4, 999.9, 1000, 1049, 1050, 1250, 1350, 9949, 9950, 9999, 10_000, 10_499, 10_500, 12_345, 999_499, 999_999, 999_999.9, 1_000_000, 1_250_000, 999_950_000, 2_550_000_000, -1500].map((n) => ({ n, s: formatTokens(n) })),
   terms: ["How do the parseConfig_files work?", "Rotating keys: keyctl rotate --signing", "Café naïve résumé 東京の天気", "policies classes boss buses IDs x2 ab", "HTTPServer getHTTPResponse snake_case_name"].map((t) => ({ text: t, terms: terms(t) })),
   chunks: sources.flatMap((s) => [undefined, 120].map((max) => ({ source: s, max: max ?? null, chunks: chunkSource(s, { maxChunkTokens: max }) }))),
   packs: [
