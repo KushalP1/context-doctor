@@ -252,9 +252,20 @@ function conversationKey(view, body) {
         h.update("\0").update(tag);
     return h.digest("hex");
 }
+/**
+ * Cleared ids and result sizes are per conversation. Tool call ids are only
+ * unique within one: OpenAI-compatible clients number them call_0, call_1…
+ * in every conversation, so a global map cleared a new, warm conversation's
+ * results on its first request because another conversation had cleared
+ * the same ids, and reported the other conversation's sizes for them.
+ */
+function scoped(conversation, id) {
+    return `${conversation}\u0000${id}`;
+}
 export class AutoClearer {
+    /** Cleared results, keyed by scoped(conversation, id): tokens the output had. */
     cleared = new Map();
-    /** Tool results never change once sent, so their size is computed once per id. */
+    /** Tool results never change once sent, so their size is computed once per conversation and id. */
     sizes = new Map();
     convs = new Map();
     opts;
@@ -298,10 +309,11 @@ export class AutoClearer {
                 this.convs.delete(this.convs.keys().next().value);
             this.convsDirty = true;
             const results = view.results.map((r) => {
-                let tokens = this.sizes.get(r.id);
+                const sk = scoped(key, r.id);
+                let tokens = this.sizes.get(sk);
                 if (tokens === undefined) {
                     tokens = resultTokens(r.content, model);
-                    this.sizes.set(r.id, tokens);
+                    this.sizes.set(sk, tokens);
                     if (this.sizes.size > 100_000)
                         this.sizes.delete(this.sizes.keys().next().value);
                 }
@@ -312,7 +324,7 @@ export class AutoClearer {
             const eligible = results.slice(0, Math.max(0, results.length - this.opts.keepRecent))
                 .filter((r) => r.unit <= view.seenUpTo && CLEARABLE_TOOLS.has(view.toolName.get(r.id) ?? ""));
             const eligibleIds = new Set(eligible.map((r) => r.id));
-            const pending = eligible.filter((r) => !this.cleared.has(r.id) && r.tokens > 200);
+            const pending = eligible.filter((r) => !this.cleared.has(scoped(key, r.id)) && r.tokens > 200);
             const pendingTokens = pending.reduce((n, r) => n + r.tokens, 0);
             let reason = "nothing to clear";
             let taken = [];
@@ -342,7 +354,7 @@ export class AutoClearer {
                 reason = "thinking blocks follow the stale output and this account rejects edited history: left as is";
             }
             for (const r of taken)
-                this.cleared.set(r.id, r.tokens);
+                this.cleared.set(scoped(key, r.id), r.tokens);
             if (taken.length)
                 this.dirty = true;
             // Apply every clearing ever decided for this conversation, so the
@@ -354,9 +366,10 @@ export class AutoClearer {
             let firstChanged = -1;
             const appliedIds = [];
             for (const r of results) {
-                if (!this.cleared.has(r.id) || !eligibleIds.has(r.id))
+                const sk = scoped(key, r.id);
+                if (!this.cleared.has(sk) || !eligibleIds.has(r.id))
                     continue;
-                const note = clearedNote(this.cleared.get(r.id));
+                const note = clearedNote(this.cleared.get(sk));
                 if (r.content === note)
                     continue;
                 removed += Math.max(0, r.tokens - estimateTokens(note, model));
@@ -367,7 +380,7 @@ export class AutoClearer {
                     firstChanged = r.unit;
             }
             this.save();
-            return { changed, newlyCleared: taken.length, tokensRemoved: removed, cold, reason, firstChanged, newIds: taken.map((r) => r.id), appliedIds };
+            return { changed, newlyCleared: taken.length, tokensRemoved: removed, cold, reason, firstChanged, newIds: taken.map((r) => r.id), appliedIds, conversation: key };
         }
         catch {
             return none("error: request forwarded unchanged");
@@ -411,10 +424,20 @@ export class AutoClearer {
      * them, and any thinking it produces from now on is bound to the history
      * without them.
      */
-    forget(ids) {
+    forget(ids, conversation) {
         let any = false;
-        for (const id of ids)
-            any = this.cleared.delete(id) || any;
+        if (conversation !== undefined) {
+            for (const id of ids)
+                any = this.cleared.delete(scoped(conversation, id)) || any;
+        }
+        else {
+            // No conversation named: these ids in every conversation.
+            const wanted = new Set(ids);
+            for (const k of [...this.cleared.keys()]) {
+                if (wanted.has(k.slice(k.indexOf("\u0000") + 1)))
+                    any = this.cleared.delete(k) || any;
+            }
+        }
         if (any) {
             this.dirty = true;
             this.save();
@@ -425,17 +448,29 @@ export class AutoClearer {
             return;
         try {
             const data = JSON.parse(readFileSync(this.opts.statePath, "utf8"));
-            for (const [id, tokens] of data.cleared ?? [])
-                this.cleared.set(id, tokens);
-            for (const account of data.rejectsEdits ?? [])
-                if (typeof account === "string")
-                    this.rejecting.add(account);
+            // Through 0.34 cleared ids were global (`cleared: [id, tokens][]`) and
+            // say nothing about which conversation they belong to; they are not
+            // carried over. An open conversation re-clears at its next cold gap.
+            for (const entry of Array.isArray(data.clearedByConversation) ? data.clearedByConversation : []) {
+                if (!Array.isArray(entry))
+                    continue;
+                const [conv, id, tokens] = entry;
+                if (typeof conv === "string" && typeof id === "string" && typeof tokens === "number")
+                    this.cleared.set(scoped(conv, id), tokens);
+            }
             // Each conversation's last request time, so a restart does not make
             // every open conversation "unseen" (cold) and rewrite a warm cache.
-            for (const [key, last, requests] of data.convs ?? []) {
+            for (const entry of Array.isArray(data.convs) ? data.convs : []) {
+                if (!Array.isArray(entry))
+                    continue;
+                const [key, last, requests] = entry;
                 if (typeof key === "string" && typeof last === "number")
                     this.convs.set(key, { last: last + CONV_SAVE_MS, requests: Number(requests) || 1 });
             }
+            if (Array.isArray(data.rejectsEdits))
+                for (const account of data.rejectsEdits)
+                    if (typeof account === "string")
+                        this.rejecting.add(account);
         }
         catch {
             /* a corrupt state file only means results may be re-cleared once */
@@ -452,10 +487,13 @@ export class AutoClearer {
         this.lastSave = Date.now();
         try {
             // Newest 50k ids: far more than any live session holds.
-            const entries = [...this.cleared.entries()].slice(-50_000);
+            const entries = [...this.cleared.entries()].slice(-50_000).map(([k, tokens]) => {
+                const at = k.indexOf("\u0000");
+                return [k.slice(0, at), k.slice(at + 1), tokens];
+            });
             const convs = [...this.convs.entries()].map(([k, c]) => [k, c.last, c.requests]);
             mkdirSync(dirname(this.opts.statePath), { recursive: true });
-            writeFileSync(this.opts.statePath, JSON.stringify({ cleared: entries, convs, rejectsEdits: [...this.rejecting] }));
+            writeFileSync(this.opts.statePath, JSON.stringify({ clearedByConversation: entries, convs, rejectsEdits: [...this.rejecting] }));
         }
         catch {
             /* persistence is best effort */

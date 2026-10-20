@@ -225,7 +225,7 @@ export function withContextDoctor<T extends object>(client: T, options: WrapOpti
     if (/bound to a different conversation/.test(refusal) || accepted) clearer.noteEditsRejected(account);
     stats.changed--;
     stats.tokensRemoved -= result.tokensRemoved;
-    clearer.forget(accepted ? result.appliedIds : result.newIds);
+    clearer.forget(accepted ? result.appliedIds : result.newIds, result.conversation);
   };
 
   const wrap = (target: object, path: string): object =>

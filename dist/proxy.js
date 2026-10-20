@@ -338,7 +338,7 @@ export function startProxy(opts = {}) {
                                     // Refused unedited as well: the earlier clearings are what
                                     // older thinking is bound to; only this request's new ones
                                     // never reached the model.
-                                    clearer.forget(originalAccepted ? r.appliedIds : r.newIds);
+                                    clearer.forget(originalAccepted ? r.appliedIds : r.newIds, r.conversation);
                                 };
                                 note = `autopilot: ${formatTokens(r.tokensRemoved)} tokens of stale tool output not sent (${r.reason})`;
                             }

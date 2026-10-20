@@ -217,7 +217,7 @@ export function withContextDoctor(client, options = {}) {
             clearer.noteEditsRejected(account);
         stats.changed--;
         stats.tokensRemoved -= result.tokensRemoved;
-        clearer.forget(accepted ? result.appliedIds : result.newIds);
+        clearer.forget(accepted ? result.appliedIds : result.newIds, result.conversation);
     };
     const wrap = (target, path) => new Proxy(target, {
         get(obj, prop, receiver) {

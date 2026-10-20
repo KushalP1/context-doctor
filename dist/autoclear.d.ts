@@ -83,6 +83,8 @@ export interface AutoClearResult {
     newIds: string[];
     /** Every id whose clearing this request carries, earlier batches included. */
     appliedIds: string[];
+    /** The conversation these ids belong to; pass it back to forget(). */
+    conversation?: string;
 }
 /**
  * Whether a thinking block comes at or after message `index`. On current
@@ -140,8 +142,9 @@ export declare function clearedNote(tokens: number): string;
 export declare function requestTtlMs(body: Record<string, unknown>): number;
 export declare function viewOf(body: Record<string, unknown>): View | undefined;
 export declare class AutoClearer {
+    /** Cleared results, keyed by scoped(conversation, id): tokens the output had. */
     private cleared;
-    /** Tool results never change once sent, so their size is computed once per id. */
+    /** Tool results never change once sent, so their size is computed once per conversation and id. */
     private sizes;
     private convs;
     private opts;
@@ -179,7 +182,7 @@ export declare class AutoClearer {
      * them, and any thinking it produces from now on is bound to the history
      * without them.
      */
-    forget(ids: string[]): void;
+    forget(ids: string[], conversation?: string): void;
     private load;
     private save;
 }
