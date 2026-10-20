@@ -20,10 +20,11 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 | Your own API apps (Anthropic, OpenAI, Gemini) | autopilot or the optimizing proxy; `withContextDoctor(client)` without a proxy (Anthropic, OpenAI and Google Gen AI SDKs) | library: profile, optimize, pack | — |
 | CI | `analyze --fail-over-budget`; the GitHub Action (`uses: KushalP1/context-doctor@<tag>`) comments memory-file growth on PRs and gates on a budget | `ci` locally | Not listed in the GitHub Marketplace: it lists only repositories with no workflow files, and the owner chose to keep context-doctor one repository (no separate Marketplace copy) |
 
-## Verified 2026-10-18
+## Verified 2026-10-20
 
-- `npm test`: 468 of 468 pass locally (CI runs the suite on macOS, Linux and Windows, Node 20/22/24).
-- `scripts/verify-local.sh` for 0.34.0: 43 of 43 checks: build, tests, MCP smoke over stdio and streamable HTTP, OpenAI (now with `prompt_cache_key`) and Gemini proxy smokes, the real Codex binary (0.153.4) through autopilot against a local mock, the published package, Python 3.9/3.11/3.14 with parity fixtures current, every CLI command on the author's real history (no crash, no NaN), install/doctor/uninstall round trip in a throwaway HOME with nothing of ours left, and the GitHub Action's steps; the real ledger was left untouched.
+- `npm test`: 517 of 517 pass locally (CI runs the suite on macOS, Linux and Windows, Node 20/22/24); Python unit and parity tests on 3.9 and 3.14.
+- `scripts/verify-local.sh` for 0.35.0: every check passes: build, tests, MCP smoke over stdio and streamable HTTP, OpenAI and Gemini proxy smokes, the real Codex binary through autopilot against a local mock, the published package, Python 3.9/3.11/3.14 with parity fixtures current, every CLI command (now `cache-misses` too) on the author's real history, install/doctor/uninstall round trip in a throwaway HOME with nothing of ours left, and the GitHub Action's steps; the real ledger was left untouched.
+- `PreModelSwitch` end to end on Claude Code 2.1.299 (settings and plugin), and the settings-file trap on 2.1.62, both in a throwaway HOME against a local mock API.
 
 ## Next: the cross-platform plan (2026-10-17)
 
@@ -143,6 +144,30 @@ the estimator to noise. Calibration needs a real tokenizer, not this data.
 ## History: what shipped, newest first
 
 Each release with the measurements behind it. Dollar figures are as measured when the release shipped, with the prices and counting of the time; the 0.32 audit fixed both, and the README's headline figures are the re-measured ones.
+
+## Shipped in 0.35.0: cache misses, a model-switch price, and a QA pass
+
+- **`cache-misses`** (C5) and **the model-switch price** (C6), measured above; **Devin** in `doctor` (X3).
+- **`pack` and secrets.** Outside git, `pack .` returned an `.env`'s API key and an `.npmrc` token. Folder walks now pass over hidden files as they did hidden folders; `.env*`, `.npmrc`, `.pypirc`, `.netrc`, private SSH keys, `*.pem`/`*.key`/`*.p12`/`*.keystore`, `.aws/credentials` and `.git-credentials` are skipped even when named or tracked by git, and paths under `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, `/etc/ssh`, `/etc/shadow` and the like are refused, each reported; only the CLI's `--include-secrets` lifts it (the MCP tool cannot). Unreadable entries (chmod 000, `/dev/fd`) are skipped with a reason instead of crashing the walk.
+
+Fixed from a QA pass (each with a regression test):
+
+| Was | Now |
+|---|---|
+| `.contextdoctorrc` values warned as "ignored" were applied: `keepRecent: -5` cut the live tool result in `optimize` and the proxy | Only validated values take effect, routes (rc and `proxy --config`) per entry |
+| `optimize` counted message content only: OpenAI `tool_calls` arguments were invisible, so trimming them "saved nothing" and the optimizing proxy forwarded the untrimmed body | Totals count `tool_calls`, system and tools; the proxy forwards the trim |
+| Autopilot's cleared ids and sizes were global: a new warm conversation reusing `call_0…` got another conversation's clearings | Keyed by conversation; the old state file's global list is ignored safely |
+| A malformed `~/.gemini/settings.json` aborted `uninstall` midway | Each target on its own; failures listed, exit 1 |
+| 40 similar messages gave 781 near-duplicate findings and "426k more recoverable" on a 30k context | One finding per cluster, counted once; "more of the same kind" capped at the union |
+| Python: one 5 MB line packed in 21 s; hex runs flagged as base64; `pack_documents` could repeat an id | 0.15 s; the TypeScript base64 rule; unique ids |
+| `session` on a non-transcript exited 0; `dashboard` on a busy port threw | Exit 1 with a reason |
+| `pack` said "No chunk matched … rephrase" when matches existed but did not fit | Names the chunk and its size, suggests `--max-tokens` (Python too, parity cases added) |
+| A UTF-8 BOM made a conversation unreadable; the broken-JSON message claimed the CLI was profiling it | BOM stripped; the message says what happened |
+| `cache-plan` read a Gemini request as Anthropic (~0 tokens); `apply()` mutated the caller's object | Gemini caching advice (implicit from 2.5, explicit `cachedContent`); plans on a copy |
+| The proxy kept only the last `Set-Cookie`, and buffered any body size | Every value forwarded; 413 past 100 MB |
+| `withContextDoctor` broke clients with `#private` getters or methods | The client is the receiver; methods bound once |
+| `formatTokens(999999.9)` printed "1000k"; no Gemini 3 windows; `report` priced unpriced tokens; `compactions` called 0% → 4.8% "no higher" | Rounded before the unit (TS and Python); Gemini 3 windows (1,048,576) and prices; unpriced tokens labelled; rises named |
+| Gemini `contents` and Responses `input` were "not a conversation"; `parseConversation` threw on non-strings; null OpenAI content previewed as `""`; `prune-history` with `keep_recent` 0/1 did nothing; long sketch labels echoed whole; `pack -` dropped the other paths; a non-string `transcript_path` printed a DeprecationWarning; Codex developer messages and `local_shell_call` were dropped | Profiled; tolerated; empty; prunes keeping the last two; cut to 60 chars, with a note when both inputs are given; read together; ignored quietly; counted |
 
 ## Shipped in 0.32.0: fixed by a local audit (2026-10-13)
 

@@ -24,7 +24,7 @@ import { withPromptCacheKey } from "./cachekey.js";
 /** Default request body cap: far above any real request (a 1M-token context is ~4 MB of JSON, images aside). */
 export const DEFAULT_MAX_BODY_BYTES = 100 * 1024 * 1024;
 /** Reported by /health so `autopilot status` can tell an outdated service from a current one. */
-export const PROXY_VERSION = "0.34.0";
+export const PROXY_VERSION = "0.35.0";
 /** Connection-level headers that must not be forwarded. */
 const SKIP_REQUEST_HEADERS = new Set(["host", "content-length", "connection", "transfer-encoding", "accept-encoding", "expect"]);
 const SKIP_RESPONSE_HEADERS = new Set(["content-length", "content-encoding", "transfer-encoding", "connection"]);

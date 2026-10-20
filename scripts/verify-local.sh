@@ -44,7 +44,7 @@ run "Python wheel installs and imports from a clean venv" bash -c "cd /tmp && $V
 
 echo "== 5. CLI on real history (read-only)"
 cd "$R/.."
-for cmd in "doctor" "savings --days 7" "overhead" "reads --days 7" "tasks --days 7" "session" "compact-window status" "autopilot status" "accuracy --limit 3" "report" "statusline </dev/null" "instructions" "init" "--version"; do
+for cmd in "doctor" "savings --days 7" "cache-misses --days 7" "overhead" "reads --days 7" "tasks --days 7" "session" "compact-window status" "autopilot status" "accuracy --limit 3" "report" "statusline </dev/null" "instructions" "init" "--version"; do
   out=$(eval node $R/dist/cli.js $cmd 2>&1); st=$?
   if [ $st -eq 0 ] && ! echo "$out" | grep -qiE "TypeError|ReferenceError|undefined is not|NaN|Cannot read"; then ok "cli: $cmd"; else bad "cli: $cmd (exit $st)"; echo "$out" | tail -5 | sed 's/^/    /'; fi
 done

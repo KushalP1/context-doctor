@@ -84,6 +84,7 @@ Per subagent: what it was asked, how many calls it made, the context it ended wi
 - `reads`: files read into session after session, and whether a few lines in CLAUDE.md or `pack` would pay.
 - `subagents`: each subagent's bill against the same steps run in the parent.
 - `compactions`: whether sessions work worse right after compacting (re-reads, tool errors, your corrections, before and after).
+- `cache-misses`: requests that re-wrote the prompt cache while it should still have been warm (within the lifetime of both requests, no compaction between, previous context over 20k, over 60% of it written again), priced above the cache-read rate, by model and context size, with the cause where the transcript shows one; recommends model versions that miss less when the numbers support it.
 - `accuracy`: how much of what you are billed for the transcript shows, and the tokenizer check ([token counts](./tokenizer.md)).
 
 ## Measuring the impact: `context-doctor report`
