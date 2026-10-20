@@ -6,6 +6,8 @@
  *  - Anthropic format:      { system?, messages: [{ role, content: string | Block[] }] }
  *    where Block = { type: "text" | "tool_use" | "tool_result" | "image", ... }
  *  - Bare message array:    [{ role, content }, ...]
+ *  - Gemini (generateContent): { systemInstruction?, contents: [{ role, parts }] }
+ *  - OpenAI Responses:      { instructions?, input: string | Item[] }
  *  - Raw text:              treated as a single user message (last-resort fallback)
  */
 export type MessageKind = "system" | "user" | "assistant" | "tool_call" | "tool_result" | "image" | "other";
@@ -33,7 +35,7 @@ export interface NormalizedMessage {
 export interface NormalizedConversation {
     messages: NormalizedMessage[];
     /** Format detected, for reporting. */
-    sourceFormat: "openai" | "anthropic" | "array" | "text";
+    sourceFormat: "openai" | "anthropic" | "array" | "text" | "gemini" | "responses";
     /** The request's own `model` field, when it has one. Picks the tokenizer ratios. */
     model?: string;
     /**

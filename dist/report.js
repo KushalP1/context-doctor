@@ -41,7 +41,9 @@ export function renderProfile(profile, options = {}) {
     // report that does not say so reads as a confident answer to the wrong
     // question. Lead with the warning.
     if (p.parseWarning) {
-        lines.push(`⚠ ${p.parseWarning}`);
+        // Say what the numbers below are, when there are any: the raw text,
+        // profiled as one message. With nothing profiled, the warning stands alone.
+        lines.push(`⚠ ${p.parseWarning}${p.sourceFormat === "text" && p.messageCount > 0 ? " Profiled as raw text below, which is almost certainly not what you want." : ""}`);
         lines.push("");
     }
     lines.push(`Total: ~${formatTokens(p.totalTokens)} tokens across ${p.messageCount} messages (${p.sourceFormat} format)`);

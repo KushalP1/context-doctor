@@ -116,7 +116,7 @@ server.tool(
     conversation: z.string().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array)"),
     strategies: z.array(z.enum(STRATEGY_IDS)).optional()
       .describe("Default: dedupe, trim-tool-results, strip-base64. Add trim-tool-calls for big inline file writes, prune-history for lossy compaction of old turns."),
-    keep_recent: z.number().int().nonnegative().optional().describe("Messages at the tail to leave untouched (default 6; 0 = none)"),
+    keep_recent: z.number().int().nonnegative().optional().describe("Messages at the tail to leave untouched (default 6; 0 = none; prune-history keeps at least 2)"),
     max_tool_result_tokens: z.number().int().positive().optional().describe("Token budget for trimmed tool results (default 300)"),
   },
   // Pure: reads its input and returns text. Clients (Codex, ChatGPT) may skip approval for read-only tools.

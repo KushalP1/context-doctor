@@ -6,11 +6,17 @@
  *  - Anthropic format:      { system?, messages: [{ role, content: string | Block[] }] }
  *    where Block = { type: "text" | "tool_use" | "tool_result" | "image", ... }
  *  - Bare message array:    [{ role, content }, ...]
+ *  - Gemini (generateContent): { systemInstruction?, contents: [{ role, parts }] }
+ *  - OpenAI Responses:      { instructions?, input: string | Item[] }
  *  - Raw text:              treated as a single user message (last-resort fallback)
  */
 function flattenContent(content) {
     if (typeof content === "string")
         return { text: content, hasBinary: false };
+    // OpenAI sends `content: null` on an assistant message that only calls
+    // tools. It is no text, not the two-character string `""`.
+    if (content == null)
+        return { text: "", hasBinary: false };
     if (!Array.isArray(content))
         return { text: JSON.stringify(content ?? ""), hasBinary: false };
     let text = "";
@@ -27,6 +33,9 @@ function flattenContent(content) {
         const b = block;
         switch (b.type) {
             case "text":
+            // OpenAI Responses' text parts.
+            case "input_text":
+            case "output_text":
                 text += b.text ?? "";
                 break;
             case "tool_use": {
@@ -119,7 +128,7 @@ function rawText(input, parseError) {
     const parseWarning = input.trim() === ""
         ? "Input is empty — nothing to profile."
         : parseError && (head === "{" || head === "[")
-            ? `Input starts like JSON but does not parse (${parseError.message}). Profiling it as raw text, which is almost certainly not what you want.`
+            ? `Input starts like JSON but does not parse (${parseError.message}), so it is not a conversation file.`
             : undefined;
     return {
         sourceFormat: "text",
@@ -129,7 +138,93 @@ function rawText(input, parseError) {
         messages: input.trim() === "" ? [] : [{ index: 0, role: "user", kind: "user", text: input, hasBinary: false }],
     };
 }
+/** A Gemini part: text, an attachment, or a function call or response. */
+function geminiPart(part) {
+    if (typeof part === "string")
+        return { text: part, hasBinary: false };
+    if (!part || typeof part !== "object")
+        return { text: "", hasBinary: false };
+    const p = part;
+    if (typeof p.text === "string")
+        return { text: p.text, hasBinary: false };
+    if (p.inlineData || p.fileData)
+        return { text: "[file]", hasBinary: true };
+    if (p.functionCall) {
+        const call = `[tool call: ${p.functionCall.name}] ${JSON.stringify(p.functionCall.args ?? {})}`;
+        return { text: call, hasBinary: false, kind: "tool_call", toolName: p.functionCall.name, call };
+    }
+    if (p.functionResponse) {
+        const r = p.functionResponse.response;
+        const out = typeof r?.output === "string" ? r.output : typeof r?.content === "string" ? r.content : JSON.stringify(r ?? {});
+        return { text: out, hasBinary: false, kind: "tool_result", toolName: p.functionResponse.name };
+    }
+    if (p.executableCode)
+        return { text: String(p.executableCode.code ?? ""), hasBinary: false };
+    if (p.codeExecutionResult)
+        return { text: String(p.codeExecutionResult.output ?? ""), hasBinary: false };
+    return { text: JSON.stringify(p), hasBinary: false };
+}
+function geminiMessage(raw, index) {
+    const c = raw && typeof raw === "object" ? raw : {};
+    const role = c.role === "model" ? "assistant" : String(c.role ?? "user");
+    const parts = Array.isArray(c.parts) ? c.parts : [];
+    let text = "";
+    let hasBinary = false;
+    let kind;
+    let toolName;
+    let toolCallText = "";
+    for (const part of parts) {
+        const f = geminiPart(part);
+        text += (text && f.text ? "\n" : "") + f.text;
+        hasBinary ||= f.hasBinary;
+        if (f.kind)
+            kind = f.kind;
+        toolName ??= f.toolName;
+        if (f.call)
+            toolCallText += f.call;
+    }
+    const fallback = ["system", "user", "assistant"].includes(role) ? role : "other";
+    return { index, role, kind: kind ?? fallback, text, toolName, toolCallText: toolCallText || undefined, hasBinary };
+}
+/** One OpenAI Responses input item: a message, a function or shell call, its output, or reasoning. */
+function responsesItem(raw, index) {
+    if (typeof raw === "string")
+        return { index, role: "user", kind: "user", text: raw, hasBinary: false };
+    const it = raw && typeof raw === "object" ? raw : {};
+    const type = it.type;
+    if (type === "function_call" || type === "custom_tool_call" || type === "local_shell_call") {
+        const name = it.name ?? (type === "local_shell_call" ? "local_shell" : undefined);
+        const args = typeof it.arguments === "string" ? it.arguments : JSON.stringify(it.input ?? it.action ?? {});
+        const call = `[tool call: ${name}] ${args}`;
+        return { index, role: "assistant", kind: "tool_call", text: call, toolName: name, toolCallText: call, hasBinary: false };
+    }
+    if (type === "function_call_output" || type === "custom_tool_call_output" || type === "local_shell_call_output") {
+        const out = it.output;
+        const flat = typeof out === "string" ? { text: out, hasBinary: false } : flattenContent(out);
+        return { index, role: "tool", kind: "tool_result", text: flat.text, hasBinary: flat.hasBinary };
+    }
+    if (type === "reasoning") {
+        const summary = Array.isArray(it.summary) ? it.summary.map((p) => p?.text ?? "").join("\n") : "";
+        return { index, role: "assistant", kind: "assistant", text: summary, hasBinary: false };
+    }
+    return normalizeMessage(it, index);
+}
 export function parseConversation(input) {
+    // Library callers sometimes hand over the object itself, or nothing at all;
+    // a stack trace from inside JSON.parse helps neither.
+    if (typeof input !== "string") {
+        if (input !== null && typeof input === "object") {
+            try {
+                input = JSON.stringify(input);
+            }
+            catch {
+                return rawText("");
+            }
+        }
+        else {
+            input = input === undefined || input === null ? "" : String(input);
+        }
+    }
     let data;
     try {
         data = JSON.parse(input);
@@ -142,7 +237,11 @@ export function parseConversation(input) {
     if (data === null || typeof data !== "object")
         return rawText(input);
     if (Array.isArray(data)) {
-        const looksLikeMessages = data.length === 0 || data.some((m) => m && typeof m === "object" && "role" in m);
+        const looksLikeMessages = data.length === 0 || data.some((m) => m && typeof m === "object" && ("role" in m || "parts" in m));
+        // A bare Gemini `contents` array: role/parts entries.
+        if (data.length > 0 && data.every((m) => m && typeof m === "object" && Array.isArray(m.parts))) {
+            return { sourceFormat: "gemini", messages: data.map((m, i) => geminiMessage(m, i)) };
+        }
         return {
             sourceFormat: "array",
             parseWarning: looksLikeMessages ? undefined : "This is a JSON array, but no element has a `role` field — it does not look like a conversation.",
@@ -150,6 +249,28 @@ export function parseConversation(input) {
         };
     }
     const obj = data;
+    const model = typeof obj.model === "string" && obj.model ? obj.model : undefined;
+    // Gemini generateContent: `contents` of role/parts, the system prompt in `systemInstruction`.
+    if (obj.messages == null && Array.isArray(obj.contents)) {
+        const messages = [];
+        const sys = (obj.systemInstruction ?? obj.system_instruction);
+        if (sys != null) {
+            const m = typeof sys === "string" ? { text: sys, hasBinary: false } : geminiMessage(sys, -1);
+            messages.push({ index: -1, role: "system", kind: "system", text: m.text, hasBinary: m.hasBinary });
+        }
+        messages.push(...obj.contents.map((c, i) => geminiMessage(c, i)));
+        return { sourceFormat: "gemini", messages, model };
+    }
+    // OpenAI Responses: `input` (a string or a list of items), the system prompt in `instructions`.
+    if (obj.messages == null && (typeof obj.input === "string" || Array.isArray(obj.input))) {
+        const messages = [];
+        if (typeof obj.instructions === "string" && obj.instructions) {
+            messages.push({ index: -1, role: "system", kind: "system", text: obj.instructions, hasBinary: false });
+        }
+        const items = typeof obj.input === "string" ? [obj.input] : obj.input;
+        messages.push(...items.map((it, i) => responsesItem(it, i)));
+        return { sourceFormat: "responses", messages, model };
+    }
     const rawField = obj.messages;
     const rawMessages = Array.isArray(rawField)
         ? rawField
@@ -170,6 +291,5 @@ export function parseConversation(input) {
         : messages.length === 0
             ? "This JSON has no `messages` array (and no `system`) — it does not look like a conversation. Expected {\"messages\":[{\"role\":…,\"content\":…}]}."
             : undefined;
-    const model = typeof obj.model === "string" && obj.model ? obj.model : undefined;
     return { sourceFormat: isAnthropic ? "anthropic" : "openai", parseWarning, messages, model };
 }

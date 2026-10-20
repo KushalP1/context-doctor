@@ -165,7 +165,8 @@ function hash(text: string): string {
 /** Extract all text from a message content value (string or block array). */
 function textOf(content: unknown): string {
   if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return JSON.stringify(content ?? "");
+  if (content == null) return "";
+  if (!Array.isArray(content)) return JSON.stringify(content);
   return content
     .map((b: any) => {
       if (typeof b === "string") return b;
@@ -302,6 +303,13 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
 
   const messages: any[] = Array.isArray(data) ? data : data?.messages;
   if (!Array.isArray(messages)) {
+    if (Array.isArray(data?.contents) || typeof data?.input === "string" || Array.isArray(data?.input)) {
+      // Profiled by analyze/profile_context; rewriting is for message arrays.
+      throw new Error(
+        `optimize rewrites a \`messages\` array (Anthropic or OpenAI chat); this is ${Array.isArray(data?.contents) ? "a Gemini `contents`" : "an OpenAI Responses `input`"} request. ` +
+          "Profile it with analyze (or profile_context); the autopilot proxy slims these requests live."
+      );
+    }
     throw new Error("No `messages` array found in input");
   }
   // Null / non-object entries occur in truncated and hand-edited files; every
@@ -323,7 +331,27 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
     (looksAnthropic ? "claude" : undefined);
   const tok = (text: string): number => estimateTokens(text, model);
 
-  const tokensBefore = messages.reduce((s, m) => s + tok(textOf(m.content)), 0);
+  // Everything the request carries, not just message content: OpenAI keeps a
+  // call's arguments in `tool_calls`, outside `content`. Left out, trimming
+  // them counted as saving nothing, so the proxy (which forwards a rewrite
+  // only when it saves) dropped the trimmed body and sent the original.
+  // The system prompt and tool definitions never change here; they count on
+  // both sides so the totals are the request's, not a subset's.
+  const fixed = Array.isArray(data)
+    ? 0
+    : (data?.system != null ? tok(typeof data.system === "string" ? data.system : textOf(data.system)) : 0) +
+      (data?.tools != null ? tok(JSON.stringify(data.tools)) : 0);
+  const messageTokens = (m: any): number => {
+    let n = tok(textOf(m.content));
+    for (const tc of Array.isArray(m.tool_calls) ? m.tool_calls : []) {
+      const fn = tc?.function;
+      if (!fn) continue;
+      n += tok(`${fn.name ?? ""} ${typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments ?? {})}`);
+    }
+    if (m.function_call) n += tok(`${m.function_call.name ?? ""} ${m.function_call.arguments ?? ""}`);
+    return n;
+  };
+  const tokensBefore = fixed + messages.reduce((s, m) => s + messageTokens(m), 0);
   const applied: AppliedChange[] = [];
 
   // -- strip-base64: replace inline blobs with a placeholder --------------------
@@ -479,8 +507,13 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
   // messages; those are instructions, not history, and are never pruned.
   let lead = 0;
   while (lead < messages.length && (messages[lead]?.role === "system" || messages[lead]?.role === "developer")) lead++;
-  if (opts.strategies.includes("prune-history") && messages.length - lead > opts.keepRecent * 2) {
-    let keepFrom = messages.length - opts.keepRecent;
+  // The kept tail is at least the last exchange: with keepRecent 0 or 1 the
+  // tail was too short to keep and prune-history silently did nothing, while
+  // the option promised "0 = none" left untouched. The live question is never
+  // pruned away; everything before the last two messages can be.
+  const keepTail = Math.max(2, opts.keepRecent);
+  if (opts.strategies.includes("prune-history") && messages.length - lead > keepTail * 2) {
+    let keepFrom = messages.length - keepTail;
     // Never let the kept tail START with a tool result: its matching tool_use
     // would be pruned away and both the Anthropic and OpenAI APIs reject
     // conversations with orphaned tool results. Advance past any leading tool
@@ -496,7 +529,7 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
       dropOrphanedToolResults(messages.slice(keepFrom));
 
       const pruned = messages.slice(lead, keepFrom);
-      const prunedTokens = pruned.reduce((s, m) => s + tok(textOf(m.content)), 0);
+      const prunedTokens = pruned.reduce((s, m) => s + messageTokens(m), 0);
       // Digest: first ~200 chars of each pruned turn — enough for a host LLM to
       // write a faithful summary, small enough not to defeat the pruning.
       prunedDigest = pruned
@@ -518,6 +551,6 @@ export function optimizeConversation(input: string, options: OptimizeOptions = {
     }
   }
 
-  const tokensAfter = messages.reduce((s, m) => s + tok(textOf(m.content)), 0);
+  const tokensAfter = fixed + messages.reduce((s, m) => s + messageTokens(m), 0);
   return { conversation: data, tokensBefore, tokensAfter, applied, prunedDigest };
 }
