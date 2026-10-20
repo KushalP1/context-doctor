@@ -82,3 +82,23 @@ test("~/.claude without settings.json means the hook is not registered, not that
     assert.match(r.out, /✗ Every-prompt hook\s+not registered/);
     assert.ok(!/Claude Code not detected/.test(r.out));
 });
+test("Devin is reported for what it is: hooks from ~/.claude run in its CLI, with no transcript to measure", async () => {
+    const { devinCheck } = await import("../doctor.js");
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const home = mkdtempSync(join(tmpdir(), "cd-devin-"));
+    const none = devinCheck(home);
+    if (!/not detected/.test(none.detail))
+        return; // a real Devin on PATH or in /Applications: the sandbox cannot hide it
+    assert.equal(none.status, "skip");
+    mkdirSync(join(home, ".config", "devin"), { recursive: true });
+    writeFileSync(join(home, ".config", "devin", "config.json"), "{}");
+    const cli = devinCheck(home);
+    assert.equal(cli.status, "skip");
+    assert.match(cli.detail, /Devin CLI runs the hooks in ~\/\.claude\/settings\.json .*no transcript path/);
+    writeFileSync(join(home, ".config", "devin", "config.json"), JSON.stringify({ read_config_from: { claude: false } }));
+    assert.match(devinCheck(home).detail, /read_config_from\.claude off/);
+    mkdirSync(join(home, ".devin"));
+    assert.match(devinCheck(home).detail, /Devin Desktop found \(~[\\/]\.devin\)/);
+});

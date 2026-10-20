@@ -178,6 +178,42 @@ function modelSwitchCheck(settings: Record<string, any>, plugin: boolean): Check
   return { label, status: "warn", detail: "not registered: model switches re-write the whole context into the new model's cache unannounced; run context-doctor install" };
 }
 
+/**
+ * Devin (Cognition): the Devin CLI, and Devin Desktop (formerly Windsurf).
+ * Checked against docs.devin.ai (2026-10-20): the CLI runs hooks from
+ * ~/.claude/settings.json in Claude Code's format while its
+ * `read_config_from.claude` is on (the default), with session_id and
+ * prompt_id but no transcript_path in the input; the desktop app's Cascade
+ * hooks (~/.codeium/windsurf/hooks.json) pass a transcript only to
+ * post_cascade_response_with_transcript. So in Devin our hook runs (CLI) or
+ * does not (Desktop) and has no transcript to measure either way: say that,
+ * rather than nothing or a false "ok".
+ */
+export function devinCheck(home = homedir()): Check {
+  const label = "Devin";
+  const app = [join("/Applications", "Devin.app"), join(home, "Applications", "Devin.app"), join(home, "Library", "Application Support", "Devin"), join(home, ".devin")].find((p) => existsSync(p));
+  const cliConfig = join(home, ".config", "devin", "config.json");
+  const cli = binOnPath("devin") || existsSync(join(home, ".local", "bin", "devin")) || existsSync(cliConfig);
+  if (!app && !cli) return { label, status: "skip", detail: "not detected (Devin CLI or Devin Desktop)" };
+  const parts: string[] = [];
+  if (cli) {
+    let readsClaude = true;
+    try {
+      const config = JSON.parse(readFileSync(cliConfig, "utf8"));
+      if (config?.read_config_from?.claude === false) readsClaude = false;
+    } catch {
+      /* no config: the default, which reads ~/.claude */
+    }
+    parts.push(
+      readsClaude
+        ? "Devin CLI runs the hooks in ~/.claude/settings.json (read_config_from.claude, on by default), so the every-prompt hook runs there too, but Devin gives hooks no transcript path, so it stays silent"
+        : "Devin CLI found with read_config_from.claude off: it runs none of the hooks in ~/.claude/settings.json"
+    );
+  }
+  if (app) parts.push(`Devin Desktop found (${app.replace(home, "~")}): its Cascade hooks pass a transcript to one event only, after a response, too late to steer it`);
+  return { label, status: "skip", detail: `${parts.join("; ")}. Not supported yet; the MCP tools work in any MCP client` };
+}
+
 /** Claude Code's disableAllHooks: when true, no hook of anyone's runs. */
 function hooksDisabled(layers: Array<Record<string, any>>): boolean {
   return layers.reduce<boolean>((off, s) => (typeof s.disableAllHooks === "boolean" ? s.disableAllHooks : off), false);
@@ -384,6 +420,8 @@ export async function runDoctor(): Promise<void> {
   } else {
     checks.push({ label: "Gemini CLI", status: "skip", detail: "not detected" });
   }
+
+  checks.push(devinCheck());
 
   // Cursor: its agent gets the guidance through native hooks (the Claude
   // Code hook it also runs cannot add context there). Whether the text then
