@@ -112,3 +112,27 @@ test("small requests and OpenAI requests get advice, not breakpoints", () => {
   assert.equal(oa.provider, "openai");
   assert.match(oa.notes.join(" "), /prompt_cache_key/);
 });
+
+test("a Gemini request gets Gemini caching advice, not an Anthropic plan of ~0 tokens", async () => {
+  const { planCache, renderCachePlan } = await import("../cacheplan.js");
+  const doc = "Section of the shared handbook about deployment, rollbacks and on-call rotations. ".repeat(400);
+  const req = { model: "gemini-3.6-flash", systemInstruction: { parts: [{ text: "Answer from the handbook." }] }, contents: [{ role: "user", parts: [{ text: doc }, { text: "How do rollbacks work?" }] }] };
+  const { plan } = planCache(req, 10);
+  assert.equal(plan.provider, "gemini");
+  assert.ok(plan.totalTokens > 4000, String(plan.totalTokens));
+  assert.equal(plan.plan.length, 0);
+  const out = renderCachePlan(plan);
+  assert.match(out, /^CACHE PLAN[\s\S]*Gemini request for gemini-3\.6-flash/);
+  assert.match(out, /implicitly/);
+  assert.match(out, /cachedContent/);
+  assert.doesNotMatch(out, /cache_control/);
+});
+
+test("planCache().apply() returns a planned copy and leaves the caller's request untouched", async () => {
+  const { planCache } = await import("../cacheplan.js");
+  const req = { model: "claude-sonnet-5", system: "You are a careful assistant. ".repeat(300), messages: [{ role: "user", content: "hi ".repeat(800) }] };
+  const before = JSON.stringify(req);
+  const planned = planCache(req, 10).apply();
+  assert.equal(JSON.stringify(req), before, "caller's object unchanged");
+  assert.notEqual(JSON.stringify(planned), before, "the copy carries the breakpoints");
+});

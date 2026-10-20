@@ -897,7 +897,9 @@ async function main() {
         console.log(args.json ? JSON.stringify(result.plan, null, 2) : renderCachePlan(result.plan));
         if (args.out) {
             writeFileSync(args.out, JSON.stringify(result.apply(), null, 2));
-            console.error(`context-doctor: request with the planned breakpoints written to ${args.out}`);
+            console.error(result.plan.plan.length
+                ? `context-doctor: request with the planned breakpoints written to ${args.out}`
+                : `context-doctor: nothing to place; the request was written unchanged to ${args.out}`);
         }
         return;
     }

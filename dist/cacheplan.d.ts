@@ -40,7 +40,7 @@ export interface Breakpoint {
     why: string;
 }
 export interface CachePlan {
-    provider: "anthropic" | "openai" | "unknown";
+    provider: "anthropic" | "openai" | "gemini" | "unknown";
     model?: string;
     totalTokens: number;
     minCacheable: number;

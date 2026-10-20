@@ -45,7 +45,7 @@ export interface Breakpoint {
 }
 
 export interface CachePlan {
-  provider: "anthropic" | "openai" | "unknown";
+  provider: "anthropic" | "openai" | "gemini" | "unknown";
   model?: string;
   totalTokens: number;
   minCacheable: number;
@@ -192,10 +192,51 @@ export interface CachePlanOptions {
   explicit?: boolean;
 }
 
+/** Gemini text in a request: the text of every part (attachments as a nominal size). */
+function geminiTokens(req: Record<string, any>, model?: string): number {
+  const parts: unknown[] = [];
+  const sys = req.systemInstruction ?? req.system_instruction;
+  if (typeof sys === "string") parts.push({ text: sys });
+  else if (Array.isArray(sys?.parts)) parts.push(...sys.parts);
+  for (const c of Array.isArray(req.contents) ? req.contents : []) if (Array.isArray(c?.parts)) parts.push(...c.parts);
+  let n = req.tools ? estimateTokens(JSON.stringify(req.tools), model) : 0;
+  for (const p of parts as Array<Record<string, any>>) {
+    if (typeof p?.text === "string") n += estimateTokens(p.text, model);
+    else if (p?.inlineData || p?.fileData) n += 258; // nominal: a small image on Gemini 2.x; tiling and Gemini 3's media_resolution change it
+    else n += estimateTokens(JSON.stringify(p ?? ""), model);
+  }
+  return n;
+}
+
+/** Smallest prefix Gemini caches implicitly (Gemini API caching docs, Oct 2026: 4,096 for Gemini 3; Vertex lists up to 6,144 for some). */
+const GEMINI_CACHE_MINIMUM = 4096;
+
 export function planCache(request: unknown, calls = 10, modelOverride?: string, opts: CachePlanOptions = {}): { plan: CachePlan; apply: () => Record<string, any> } {
-  const req = (typeof request === "string" ? JSON.parse(request) : request) as Record<string, any>;
+  // A copy: apply() places breakpoints on the request it returns, and the
+  // caller's own object (the library takes one) must come back as it was.
+  const req = (typeof request === "string" ? JSON.parse(request) : structuredClone(request)) as Record<string, any>;
+  if (!req || typeof req !== "object" || Array.isArray(req)) throw new Error("expected a request object ({model, messages, …})");
   const model = modelOverride ?? (typeof req.model === "string" ? req.model : undefined);
   const notes: string[] = [];
+  // Gemini: `contents`, or a gemini model. Read as Anthropic it was ~0 tokens
+  // with breakpoints Gemini has no field for.
+  if (Array.isArray(req.contents) || /gemini/i.test(model ?? "")) {
+    const total = geminiTokens(req, model);
+    notes.push(
+      `Gemini caches implicitly (on by default from Gemini 2.5): a request whose prefix matches an earlier one and is at least ~${formatTokens(GEMINI_CACHE_MINIMUM)} tokens (Gemini 3 on the Gemini API; Vertex lists up to 6,144 for some models) bills that prefix at the cached rate, about 10% of input. There are no markers to place.`,
+      "What you control is order: keep systemInstruction, tools and shared documents first and byte-identical between calls, and put the per-call question last.",
+      "For a guaranteed discount on a large prefix reused for a while, create an explicit cache (cachedContents.create; default TTL 60 minutes, storage billed per hour) and pass its name as `cachedContent` in each request."
+    );
+    if (typeof req.cachedContent === "string" || typeof req.cached_content === "string") {
+      notes.push("This request already uses an explicit cache (cachedContent): its cached part bills at the cached rate.");
+    } else if (total < GEMINI_CACHE_MINIMUM) {
+      notes.push(`The whole request is ~${formatTokens(total)} tokens, under the implicit-caching minimum: caching cannot help until it grows.`);
+    }
+    return {
+      plan: { provider: "gemini", model, totalTokens: total, minCacheable: GEMINI_CACHE_MINIMUM, existing: [], plan: [], cachedTokens: 0, calls, notes },
+      apply: () => req,
+    };
+  }
   const isOpenAI = Array.isArray(req.input) || (Array.isArray(req.messages) && req.messages.some((m: any) => m?.role === "system" || m?.role === "developer" || m?.role === "tool"));
   if (isOpenAI || /gpt|^o\d/i.test(model ?? "")) {
     const text = JSON.stringify(req.tools ?? "") + JSON.stringify(req.messages ?? req.input ?? "");
@@ -311,8 +352,8 @@ export function planCache(request: unknown, calls = 10, modelOverride?: string, 
 
 export function renderCachePlan(p: CachePlan): string {
   const out = ["CACHE PLAN", "═".repeat(56)];
-  out.push(`${p.provider === "openai" ? "OpenAI" : "Anthropic"} request${p.model ? ` for ${p.model}` : ""}: ~${formatTokens(p.totalTokens)} tokens.`);
-  if (p.provider === "openai") {
+  out.push(`${p.provider === "openai" ? "OpenAI" : p.provider === "gemini" ? "Gemini" : "Anthropic"} request${p.model ? ` for ${p.model}` : ""}: ~${formatTokens(p.totalTokens)} tokens.`);
+  if (p.provider === "openai" || p.provider === "gemini") {
     out.push("", ...p.notes.map((n) => `• ${n}`));
     return out.join("\n");
   }
