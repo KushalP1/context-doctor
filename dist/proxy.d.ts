@@ -55,7 +55,15 @@ export interface ProxyOptions extends OptimizeOptions {
      * CONTEXT_DOCTOR_CACHE_KEY=0 or 1 overrides.
      */
     promptCacheKey?: boolean;
+    /**
+     * Largest request body accepted, in bytes (default 100 MB). The body is
+     * held in memory to be read as JSON; past this a request gets 413 rather
+     * than taking the proxy (and every agent behind it) down.
+     */
+    maxBodyBytes?: number;
 }
+/** Default request body cap: far above any real request (a 1M-token context is ~4 MB of JSON, images aside). */
+export declare const DEFAULT_MAX_BODY_BYTES: number;
 /** Reported by /health so `autopilot status` can tell an outdated service from a current one. */
 export declare const PROXY_VERSION = "0.34.0";
 /**

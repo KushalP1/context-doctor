@@ -21,6 +21,8 @@ import { formatUsd, inputCostUsd, pricingFor } from "./pricing.js";
 import { recordLedger } from "./ledger.js";
 import { minCacheableTokens } from "./cacheplan.js";
 import { withPromptCacheKey } from "./cachekey.js";
+/** Default request body cap: far above any real request (a 1M-token context is ~4 MB of JSON, images aside). */
+export const DEFAULT_MAX_BODY_BYTES = 100 * 1024 * 1024;
 /** Reported by /health so `autopilot status` can tell an outdated service from a current one. */
 export const PROXY_VERSION = "0.34.0";
 /** Connection-level headers that must not be forwarded. */
@@ -270,9 +272,30 @@ export function startProxy(opts = {}) {
                 res.end(JSON.stringify({ error: `context-doctor proxy: unsupported path ${url} (supported: /v1/messages, /v1/chat/completions, /v1/responses)` }));
                 return;
             }
+            const maxBody = opts.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+            const tooLarge = () => {
+                res.statusCode = 413;
+                res.setHeader("content-type", "application/json");
+                res.setHeader("connection", "close");
+                res.end(JSON.stringify({ error: `context-doctor proxy: request body over ${Math.round(maxBody / 1024 / 1024)} MB; not forwarded` }));
+            };
+            if (Number(req.headers["content-length"] ?? 0) > maxBody) {
+                tooLarge();
+                req.resume(); // drain, so the client reads the answer instead of a reset
+                return;
+            }
             const chunks = [];
-            for await (const chunk of req)
-                chunks.push(chunk);
+            let received = 0;
+            for await (const chunk of req) {
+                received += chunk.length;
+                // Past the cap, keep reading (and dropping) so the 413 reaches the client.
+                if (received <= maxBody)
+                    chunks.push(chunk);
+            }
+            if (received > maxBody) {
+                tooLarge();
+                return;
+            }
             // Keep the original bytes: only conversation JSON is ever rewritten, and
             // anything else (a multipart file upload) must reach upstream byte for
             // byte. Decoding everything as UTF-8 corrupted binary bodies.
@@ -470,10 +493,13 @@ export function startProxy(opts = {}) {
                     note += `; prompt_cache_key ${keyed.key.slice(0, 11)}…`;
                 }
             }
-            const headers = {};
+            // Repeated request headers arrive as arrays; each value is forwarded.
+            const headers = new Headers();
             for (const [key, value] of Object.entries(req.headers)) {
-                if (!SKIP_REQUEST_HEADERS.has(key.toLowerCase()) && typeof value === "string")
-                    headers[key] = value;
+                if (SKIP_REQUEST_HEADERS.has(key.toLowerCase()) || value === undefined)
+                    continue;
+                for (const v of Array.isArray(value) ? value : [value])
+                    headers.append(key, v);
             }
             const upstreamStart = Date.now();
             const send = (payload) => fetch(upstreamBase + url, {
@@ -507,10 +533,20 @@ export function startProxy(opts = {}) {
             console.error(`[context-doctor] ${req.method} ${url} → ${upstream.status} in ${Date.now() - upstreamStart}ms | ${note}` +
                 (stats.tokensSaved > 0 ? ` | session total: ${formatTokens(stats.tokensSaved)} tokens ≈ ${formatUsd(stats.estUsdSaved)} saved` : ""));
             res.statusCode = upstream.status;
+            // setHeader per value kept only the last of a repeated header: two
+            // Set-Cookie lines from upstream reached the client as one. Values are
+            // gathered per name and set once, Set-Cookie as its separate lines.
+            const outHeaders = new Map();
             upstream.headers.forEach((value, key) => {
-                if (!SKIP_RESPONSE_HEADERS.has(key))
-                    res.setHeader(key, value);
+                if (SKIP_RESPONSE_HEADERS.has(key) || key === "set-cookie")
+                    return;
+                outHeaders.set(key, [...(outHeaders.get(key) ?? []), value]);
             });
+            const cookies = typeof upstream.headers.getSetCookie === "function" ? upstream.headers.getSetCookie() : [];
+            if (cookies.length > 0 && !SKIP_RESPONSE_HEADERS.has("set-cookie"))
+                outHeaders.set("set-cookie", cookies);
+            for (const [key, values] of outHeaders)
+                res.setHeader(key, values.length === 1 ? values[0] : values);
             if (upstream.body) {
                 // Pipe through chunk-by-chunk so SSE streaming works unchanged, while
                 // accumulating a bounded copy to read exact usage after the fact.
