@@ -323,8 +323,9 @@ function startsWithArray(path) {
  * rest of this parser understands, or return null for lines that carry no
  * context (reasoning is encrypted, world_state is bookkeeping).
  *
- *   response_item/message                  → user or assistant text
- *   response_item/function_call | custom_tool_call → assistant tool_use
+ *   response_item/message                  → user or assistant text; developer (and
+ *                                            system) messages as role "system"
+ *   response_item/function_call | custom_tool_call | local_shell_call → assistant tool_use
  *   response_item/*_call_output            → user tool_result
  *   event_msg/token_count                  → the API's own usage figures
  *   turn_context                           → model
@@ -367,10 +368,24 @@ function fromCodexLine(entry) {
         : typeof parts === "string" ? parts : "";
     switch (payload.type) {
         case "message": {
+            // Developer messages (sandbox and approval rules, AGENTS.md, skills) are
+            // in every request Codex sends; dropping them undercounted the context.
+            if (payload.role === "developer" || payload.role === "system") {
+                return { type: "user", timestamp, message: { role: "system", content: text(payload.content) } };
+            }
             const role = payload.role === "assistant" ? "assistant" : payload.role === "user" ? "user" : null;
             if (!role)
                 return null;
             return { type: role, timestamp, message: { role, content: text(payload.content) } };
+        }
+        case "local_shell_call": {
+            // Codex's built-in shell (older models): the command is in `action`.
+            const id = payload.call_id ?? payload.id;
+            return {
+                type: "assistant",
+                timestamp,
+                message: { role: "assistant", content: [{ type: "tool_use", id, name: "local_shell", input: payload.action ?? {} }] },
+            };
         }
         case "function_call":
         case "custom_tool_call":
@@ -392,7 +407,8 @@ function fromCodexLine(entry) {
             };
         }
         case "function_call_output":
-        case "custom_tool_call_output": {
+        case "custom_tool_call_output":
+        case "local_shell_call_output": {
             return {
                 type: "user",
                 timestamp,

@@ -124,3 +124,28 @@ test("install wires Codex when ~/.codex exists and uninstall removes only ours",
   assert.deepEqual(left.map((h) => h.hooks[0].command), ["their-own-hook"], "only ours is removed");
   assert.ok(!existsSync(join(home, ".codex", "skills", "context-doctor")));
 });
+
+test("developer messages and local_shell_call are part of the parsed Codex context", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ctxdoc-codex-dev-"));
+  const path = join(dir, "rollout-2026-10-20T10-00-00-dev.jsonl");
+  writeFileSync(
+    path,
+    [
+      line("session_meta", { session_id: "dev", cwd: "/w" }),
+      line("response_item", { type: "message", role: "developer", content: [{ type: "input_text", text: "<permissions instructions>sandbox: workspace-write</permissions instructions>" }] }),
+      line("response_item", { type: "message", role: "user", content: [{ type: "input_text", text: "list the files" }] }),
+      line("response_item", { type: "local_shell_call", call_id: "ls1", status: "completed", action: { type: "exec", command: ["bash", "-lc", "ls"] } }),
+      line("response_item", { type: "function_call_output", call_id: "ls1", output: "a.ts\nb.ts" }),
+      line("response_item", { type: "message", role: "assistant", content: [{ type: "output_text", text: "Two files." }] }),
+    ].join("\n") + "\n"
+  );
+  const parsed = parseSessionFile(path);
+  const messages = JSON.parse(parsed.conversationJson).messages as Array<{ role: string; content: any }>;
+  assert.deepEqual(messages.map((m) => m.role), ["system", "user", "assistant", "user", "assistant"]);
+  assert.match(String(messages[0].content), /sandbox: workspace-write/);
+  const call = messages[2].content[0];
+  assert.equal(call.type, "tool_use");
+  assert.equal(call.name, "local_shell");
+  assert.deepEqual(call.input.command, ["bash", "-lc", "ls"]);
+  assert.equal(messages[3].content[0].tool_use_id, "ls1");
+});
