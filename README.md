@@ -12,7 +12,7 @@ npx context-doctor savings     # what your recent sessions cost, and what each f
 
 <img src="https://raw.githubusercontent.com/KushalP1/context-doctor/main/assets/savings.svg" alt="npx context-doctor savings: input billed, what /compact at cold resumes, autopilot and an earlier auto-compact window would have saved" width="640">
 
-> **Which context-doctor is this?** Several projects share the name. This one is [`context-doctor` on npm](https://www.npmjs.com/package/context-doctor) and `io.github.KushalP1/context-doctor` in the [official MCP Registry](https://registry.modelcontextprotocol.io). Built and maintained by [gAI Ventures](https://gai.ventures).
+> **Which context-doctor is this?** Several projects share the name. This one is [`context-doctor` on npm](https://www.npmjs.com/package/context-doctor) and `io.github.KushalP1/context-doctor` in the official MCP Registry ([see the entry](https://registry.modelcontextprotocol.io/v0/servers/io.github.KushalP1%2Fcontext-doctor/versions/latest)). The registry is a service, not a list in a GitHub repo: the `modelcontextprotocol/servers` repository holds only reference servers and points to the registry for the rest. Built and maintained by [gAI Ventures](https://gai.ventures).
 
 ## Quick start
 
