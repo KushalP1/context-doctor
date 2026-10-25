@@ -17,7 +17,8 @@ import { ledgerPath, readLedger } from "./ledger.js";
 import { loadConfig } from "./config.js";
 import { codexRouting } from "./codexroute.js";
 import { CURSOR_HOOK_EVENTS } from "./install.js";
-import { binOnPath, claudeCodeInstallsFromEnv, claudeInstalledCopies, codexMcpEntry, geminiCliPresent, geminiSettingsPath, isEmptyStub, isOurPluginKey, launcherNamesMissingPackage } from "./install.js";
+import { binOnPath, claudeCodeInstallsFromEnv, claudeInstalledCopies, codexMcpEntry, copilotPresent, geminiCliPresent, geminiSettingsPath, isEmptyStub, isOurPluginKey, launcherNamesMissingPackage } from "./install.js";
+import { COPILOT_HOOK_EVENT, copilotHookFilePath, copilotMcpConfigPath, copilotSettingsPath, isOurCopilotEntry } from "./copilot.js";
 import { describeDesktopUsage, desktopUsage } from "./desktopusage.js";
 import { withInvocation } from "./invocation.js";
 import { describeInstalls, modelSwitchReadiness, PRE_MODEL_SWITCH_SINCE } from "./modelswitch.js";
@@ -212,6 +213,47 @@ export function devinCheck(home = homedir()): Check {
   }
   if (app) parts.push(`Devin Desktop found (${app.replace(home, "~")}): its Cascade hooks pass a transcript to one event only, after a response, too late to steer it`);
   return { label, status: "skip", detail: `${parts.join("; ")}. Not supported yet; the MCP tools work in any MCP client` };
+}
+
+/** "~/..." for a path under the home directory. */
+function tilde(p: string): string {
+  const home = homedir();
+  return p.startsWith(home) ? "~" + p.slice(home.length) : p;
+}
+
+/**
+ * The Copilot session-start hook: registered, its command resolves, hooks
+ * not switched off, and when it last ran (from the ledger, when there is one).
+ * What it does not do is said too: no size checks, since Copilot passes a
+ * transcript only to hooks that cannot add context.
+ */
+function copilotHookCheck(mcp: Check, missingHook: (label: string, app: Check) => Check): Check {
+  const label = "Copilot hook";
+  const path = copilotHookFilePath();
+  let config: Record<string, any> | undefined;
+  try {
+    config = readConfig(path, ["version"]);
+  } catch (e) {
+    return { label, status: "fail", detail: `${tilde(path)} is not valid JSON (${(e as Error).message}); Copilot skips it` };
+  }
+  const entry = ((config?.hooks?.[COPILOT_HOOK_EVENT] ?? []) as unknown[]).find(isOurCopilotEntry) as { command?: string } | undefined;
+  if (!entry) return missingHook(label, mcp);
+  const missing = hookBinaryMissing(String(entry.command ?? ""));
+  if (missing) return { label, status: "fail", detail: `registered, but ${missing} no longer exists — re-run: context-doctor install` };
+  let settingsOff = false;
+  try {
+    settingsOff = JSON.parse(readFileSync(copilotSettingsPath(), "utf8"))?.disableAllHooks === true;
+  } catch { /* no settings file: hooks on */ }
+  if (config?.disableAllHooks === true || settingsOff) {
+    return { label, status: "fail", detail: `registered, but disableAllHooks is true in ${tilde(settingsOff ? copilotSettingsPath() : path)}, so Copilot runs no hooks` };
+  }
+  const last = readLedger().filter((e) => e.ev === "session_rules" && e.app === "copilot").pop();
+  const ran = last ? ` Last ran ${new Date(last.ts).toISOString().slice(0, 16).replace("T", " ")}.` : "";
+  return {
+    label,
+    status: "ok",
+    detail: `sessionStart in ${tilde(path)}: each new Copilot session gets the standing context rules.${ran} No size checks there: Copilot gives a transcript only to hooks that cannot add context`,
+  };
 }
 
 /** Claude Code's disableAllHooks: when true, no hook of anyone's runs. */
@@ -422,6 +464,25 @@ export async function runDoctor(): Promise<void> {
   }
 
   checks.push(devinCheck());
+
+  // GitHub Copilot (CLI, app, VS Code): MCP in ~/.copilot/mcp-config.json,
+  // the sessionStart hook in a hook file of our own.
+  if (copilotPresent()) {
+    const mcpPath = copilotMcpConfigPath();
+    let copilotMcp: Check;
+    try {
+      copilotMcp = readConfig(mcpPath) === undefined
+        ? { label: "Copilot MCP", status: "skip", detail: NOT_INSTALLED }
+        : checkMcpEntry("Copilot MCP", mcpPath);
+    } catch (e) {
+      copilotMcp = { label: "Copilot MCP", status: "fail", detail: `${tilde(mcpPath)} is not valid JSON (${(e as Error).message})` };
+    }
+    if (copilotMcp.status === "ok") copilotMcp.detail += ` in ${tilde(mcpPath)} (Copilot CLI, the Copilot app and VS Code's Copilot sessions)`;
+    checks.push(copilotMcp);
+    checks.push(copilotHookCheck(copilotMcp, missingHook));
+  } else {
+    checks.push({ label: "GitHub Copilot", status: "skip", detail: "not detected (Copilot CLI, the GitHub Copilot app, or VS Code)" });
+  }
 
   // Cursor: its agent gets the guidance through native hooks (the Claude
   // Code hook it also runs cannot add context there). Whether the text then

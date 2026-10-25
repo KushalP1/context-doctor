@@ -137,6 +137,14 @@ export declare function codexMcpEntry(toml: string): {
     command?: string;
     args: string[];
 } | undefined;
+/** Copilot is here: its home exists, its CLI is on PATH, or VS Code (which ships Copilot) is installed. */
+export declare function copilotPresent(): boolean;
+/**
+ * The hook entry. `command` is the cross-platform field both harnesses read
+ * (Copilot copies it to bash and powershell). PowerShell runs a quoted path
+ * only after `&`, so a quoted global binary gets its own powershell line.
+ */
+export declare function copilotHookEntry(): Record<string, unknown>;
 /** Outcome of an install run, so the CLI can set a truthful exit code. */
 export interface InstallResult {
     /** Detected targets that could not be configured, with the reason. */

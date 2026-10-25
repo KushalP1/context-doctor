@@ -13,14 +13,18 @@ import { join } from "node:path";
 
 /** Environment for a child process whose home is `home` on every platform. */
 export function sandboxEnv(home: string): NodeJS.ProcessEnv {
-  return { ...process.env, HOME: home, USERPROFILE: home, APPDATA: join(home, "AppData", "Roaming") };
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, APPDATA: join(home, "AppData", "Roaming") };
+  // GitHub Copilot's home follows COPILOT_HOME when it is set, wherever HOME is.
+  delete env.COPILOT_HOME;
+  return env;
 }
 
 /** Run `fn` with the current process's home redirected, restoring afterwards. */
 export async function withSandboxHome<T>(home: string, fn: () => T | Promise<T>): Promise<T> {
-  const keys = ["HOME", "USERPROFILE", "APPDATA"] as const;
+  const keys = ["HOME", "USERPROFILE", "APPDATA", "COPILOT_HOME"] as const;
   const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
   Object.assign(process.env, sandboxEnv(home));
+  delete process.env.COPILOT_HOME;
   try {
     return await fn();
   } finally {

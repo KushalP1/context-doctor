@@ -9,6 +9,7 @@
  *   optimize — an optimization was applied  {ev: "optimize", src: "cli"|"mcp", saved, model?}
  *   proxy    — proxy savings checkpoint      {ev: "proxy", saved, usd?, requests?}
  *   rollup   — totals folded in on rotation   {ev: "rollup", ...carried sums}
+ *   session_rules — a Copilot session start got the standing rules {ev: "session_rules", app}
  *
  * The ledger is capped, and everything it feeds is a LIFETIME total. Simply
  * dropping old lines made those totals go backwards — measured: 1,692,000
@@ -17,7 +18,7 @@
  */
 export interface LedgerEntry {
     ts: number;
-    ev?: "check" | "optimize" | "proxy" | "rollup" | "cold_resume" | "precompact";
+    ev?: "check" | "optimize" | "proxy" | "rollup" | "cold_resume" | "precompact" | "session_rules";
     sid?: string;
     tok?: number;
     warn?: boolean;
@@ -28,6 +29,8 @@ export interface LedgerEntry {
     model?: string;
     /** The Cursor version that ran the hook (its input's cursor_version), for `doctor`. */
     cv?: string;
+    /** session_rules only: the app whose session start got the standing rules ("copilot"). */
+    app?: string;
     /** rollup only: sums carried forward from entries rotation removed. */
     carried?: CarriedTotals;
 }

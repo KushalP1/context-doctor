@@ -18,10 +18,10 @@ const files = readdirSync("dist/test")
   .map((f) => `dist/test/${f}`)
   .sort();
 
-const result = spawnSync(process.execPath, ["--test", ...files], {
-  stdio: "inherit",
-  // HOME for POSIX, USERPROFILE for Windows (os.homedir() reads that there).
-  env: { ...process.env, CONTEXT_DOCTOR_NO_CALIBRATION: "1", HOME: home, USERPROFILE: home },
-});
+// HOME for POSIX, USERPROFILE for Windows (os.homedir() reads that there).
+const env = { ...process.env, CONTEXT_DOCTOR_NO_CALIBRATION: "1", HOME: home, USERPROFILE: home };
+// GitHub Copilot's home follows COPILOT_HOME wherever HOME is: never the real one.
+delete env.COPILOT_HOME;
+const result = spawnSync(process.execPath, ["--test", ...files], { stdio: "inherit", env });
 rmSync(home, { recursive: true, force: true });
 process.exit(result.status ?? 1);

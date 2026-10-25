@@ -12,6 +12,7 @@ import { delimiter, dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { selfCommand, withInvocation } from "./invocation.js";
 import { claudeCodeInstalls, describeInstalls, modelSwitchReadiness, PRE_MODEL_SWITCH_SINCE } from "./modelswitch.js";
+import { COPILOT_HOOK_EVENT, copilotHome, copilotHookFilePath, copilotMcpConfigPath, isOurCopilotEntry, vsCodePresent } from "./copilot.js";
 function claudeDesktopConfigPath() {
     switch (platform()) {
         case "darwin": return join(homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
@@ -701,6 +702,104 @@ function uninstallCodex() {
     }
     removeSkill(join(dir, "skills", "context-doctor"), "Codex skill");
 }
+// -- GitHub Copilot: the Copilot CLI, the GitHub Copilot app, and VS Code's
+// agent sessions (see copilot.ts for what was verified and where). Two files:
+// the MCP server in ~/.copilot/mcp-config.json, and a hook file of our own,
+// ~/.copilot/hooks/context-doctor.json, whose sessionStart adds the standing
+// context rules to each new session. No size check: no Copilot hook that can
+// add context is given a transcript to measure.
+/** Copilot is here: its home exists, its CLI is on PATH, or VS Code (which ships Copilot) is installed. */
+export function copilotPresent() {
+    return existsSync(copilotHome()) || binOnPath("copilot") !== null || vsCodePresent();
+}
+/** The MCP entry in Copilot's portable format. */
+function copilotMcpEntry(entry) {
+    return { type: "local", command: entry.command, args: entry.args, tools: ["*"] };
+}
+/**
+ * The hook entry. `command` is the cross-platform field both harnesses read
+ * (Copilot copies it to bash and powershell). PowerShell runs a quoted path
+ * only after `&`, so a quoted global binary gets its own powershell line.
+ */
+export function copilotHookEntry() {
+    const command = cliCommand("hook copilot");
+    return { type: "command", command, ...(command.startsWith('"') ? { powershell: `& ${command}` } : {}), timeoutSec: 10 };
+}
+function installCopilot(entry, failures) {
+    if (!copilotPresent())
+        return;
+    try {
+        const path = copilotMcpConfigPath();
+        const config = readJson(path);
+        config.mcpServers = config.mcpServers ?? {};
+        const want = copilotMcpEntry(entry);
+        if (JSON.stringify(config.mcpServers["context-doctor"]) !== JSON.stringify(want)) {
+            config.mcpServers["context-doctor"] = want;
+            writeJsonWithBackup(path, config);
+        }
+        console.log(`✓ GitHub Copilot: MCP server added (${path})`);
+    }
+    catch (e) {
+        console.error(`✗ GitHub Copilot MCP: ${e.message}`);
+        failures.push("GitHub Copilot MCP");
+    }
+    try {
+        const path = copilotHookFilePath();
+        // The file is ours, so it is never backed up; entries someone added to it are kept.
+        const config = readJson(path);
+        config.version = config.version ?? 1;
+        config.hooks = config.hooks ?? {};
+        const entries = Array.isArray(config.hooks[COPILOT_HOOK_EVENT]) ? config.hooks[COPILOT_HOOK_EVENT] : [];
+        const want = copilotHookEntry();
+        const ours = entries.filter(isOurCopilotEntry);
+        if (!(ours.length === 1 && JSON.stringify(ours[0]) === JSON.stringify(want))) {
+            config.hooks[COPILOT_HOOK_EVENT] = [...entries.filter((e) => !isOurCopilotEntry(e)), want];
+            mkdirSync(dirname(path), { recursive: true });
+            writeFileSync(path, JSON.stringify(config, null, 2));
+        }
+        console.log(`✓ GitHub Copilot session-start hook installed (${path}): each new session gets the standing context rules`);
+    }
+    catch (e) {
+        console.error(`✗ GitHub Copilot hook: ${e.message}`);
+        failures.push("GitHub Copilot hook");
+    }
+}
+function uninstallCopilot() {
+    const mcp = copilotMcpConfigPath();
+    if (existsSync(mcp)) {
+        const config = readJson(mcp);
+        if (config.mcpServers?.["context-doctor"]) {
+            delete config.mcpServers["context-doctor"];
+            writeUninstalled(mcp, config);
+            done("✓ GitHub Copilot: MCP server removed");
+        }
+    }
+    const hookFile = copilotHookFilePath();
+    if (existsSync(hookFile)) {
+        const config = readJson(hookFile);
+        const entries = Array.isArray(config.hooks?.[COPILOT_HOOK_EVENT]) ? config.hooks[COPILOT_HOOK_EVENT] : undefined;
+        const kept = entries?.filter((e) => !isOurCopilotEntry(e));
+        if (entries && kept && kept.length !== entries.length) {
+            if (kept.length > 0)
+                config.hooks[COPILOT_HOOK_EVENT] = kept;
+            else
+                delete config.hooks[COPILOT_HOOK_EVENT];
+            if (isEmptyStub(config, ["version"]))
+                rmSync(hookFile);
+            else
+                writeFileSync(hookFile, JSON.stringify(config, null, 2));
+            done("✓ GitHub Copilot session-start hook removed");
+        }
+    }
+    // The folders install may have made, only once nothing is left in them.
+    for (const dir of [dirname(hookFile), copilotHome()]) {
+        try {
+            if (existsSync(dir) && readdirSync(dir).length === 0)
+                rmSync(dir, { recursive: true });
+        }
+        catch { /* not ours to force */ }
+    }
+}
 /**
  * Install into every detected app.
  *
@@ -714,8 +813,8 @@ function uninstallCodex() {
 export function runInstall(options = {}) {
     const entry = serverEntry();
     const found = targets().filter((t) => t.detect());
-    if (found.length === 0 && !existsSync(codexDir())) {
-        console.log("No supported AI apps detected (Claude Desktop, Claude Code, Cursor, Codex, Gemini CLI).");
+    if (found.length === 0 && !existsSync(codexDir()) && !copilotPresent()) {
+        console.log("No supported AI apps detected (Claude Desktop, Claude Code, Cursor, Codex, Gemini CLI, GitHub Copilot).");
         console.log("Manual setup — add to your app's MCP config:");
         console.log(JSON.stringify({ mcpServers: { "context-doctor": entry } }, null, 2));
         return { failures: [] };
@@ -807,6 +906,7 @@ export function runInstall(options = {}) {
         failures.push("Cursor hook");
     }
     installCodex(entry, failures);
+    installCopilot(entry, failures);
     if (geminiCliPresent()) {
         try {
             const hook = installHookInto(geminiSettingsPath(), join(homedir(), ".gemini"), "BeforeAgent");
@@ -1002,6 +1102,7 @@ function configPaths() {
         join(codexDir(), "config.toml"),
         join(codexDir(), "hooks.json"),
         geminiSettingsPath(),
+        copilotMcpConfigPath(),
     ].filter((p, i, all) => all.indexOf(p) === i);
 }
 /** "~/..." for a path under the home directory. */
@@ -1069,6 +1170,7 @@ export async function runUninstall() {
     uninstallHook(attempt);
     attempt("Claude Code status line", () => uninstallStatusLine());
     attempt("Codex", () => uninstallCodex());
+    attempt("GitHub Copilot", () => uninstallCopilot());
     // Remove our bookkeeping files too — uninstall means gone. The hook's
     // per-session state is a directory, one small file per session.
     for (const file of OUR_CLAUDE_FILES) {

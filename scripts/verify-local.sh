@@ -58,11 +58,12 @@ run "cli: ci vs HEAD~5" node dist/cli.js ci --base HEAD~5
 run "cli: diff two profiles" env HOME=$(sb) bash -c "node dist/cli.js analyze examples/sample-conversation.json --json > /tmp/a.json && node dist/cli.js diff /tmp/a.json /tmp/a.json"
 
 echo "== 6. install/uninstall round trip in a throwaway HOME"
-H=$(sb); mkdir -p $H/.claude $H/.cursor $H/.codex $H/.gemini $H/Library/Application\ Support/Claude; echo '{}' > $H/.gemini/settings.json
-run "install (all apps)" env HOME=$H USERPROFILE=$H node dist/cli.js install
-run "doctor after install" bash -c "HOME=$H node dist/cli.js doctor | grep -q 'All good'"
-run "uninstall" env HOME=$H node dist/cli.js uninstall
-run "nothing of ours left" bash -c "! grep -rl 'context-doctor' $H/.claude/settings.json $H/.cursor/mcp.json $H/.codex/config.toml $H/.gemini/settings.json 2>/dev/null | grep -q ."
+H=$(sb); mkdir -p $H/.claude $H/.cursor $H/.codex $H/.gemini $H/.copilot $H/Library/Application\ Support/Claude; echo '{}' > $H/.gemini/settings.json
+# COPILOT_HOME would point Copilot's files outside the throwaway HOME: unset it.
+run "install (all apps)" env -u COPILOT_HOME HOME=$H USERPROFILE=$H node dist/cli.js install
+run "doctor after install" bash -c "env -u COPILOT_HOME HOME=$H node dist/cli.js doctor | grep -q 'All good'"
+run "uninstall" env -u COPILOT_HOME HOME=$H node dist/cli.js uninstall
+run "nothing of ours left" bash -c "! grep -rl 'context-doctor' $H/.claude/settings.json $H/.cursor/mcp.json $H/.codex/config.toml $H/.gemini/settings.json $H/.copilot 2>/dev/null | grep -q ."
 
 echo "== 7. GitHub Action steps (simulated runner)"
 G=$(sb); cd $G && git init -q && printf '# P\n\nRules.\n' > CLAUDE.md && git add -A && git -c user.email=t@t -c user.name=t commit -qm base && B=$(git rev-parse HEAD) && python3 -c "print('Long reference. '*900)" >> CLAUDE.md

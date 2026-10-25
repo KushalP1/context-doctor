@@ -60,11 +60,12 @@ const HELP = `context-doctor — profile and optimize LLM context windows
 
 Start here:
   context-doctor install [--statusline]         Wire everything it finds: the MCP server (Claude
-                                                Desktop, Claude Code, Cursor, Codex, Gemini CLI),
-                                                the skill (Claude Code, Codex), the every-prompt
-                                                hook (Claude Code, Codex, Gemini CLI's BeforeAgent,
-                                                Cursor's postToolUse) and Claude Code's PreCompact
-                                                hook, which tells each compaction what to keep
+                                                Desktop, Claude Code, Cursor, Codex, Gemini CLI,
+                                                GitHub Copilot), the skill (Claude Code, Codex), the
+                                                every-prompt hook (Claude Code, Codex, Gemini CLI's
+                                                BeforeAgent, Cursor's postToolUse), Claude Code's
+                                                PreCompact hook, which tells each compaction what to
+                                                keep, and Copilot's sessionStart (the standing rules)
   context-doctor savings [--days n] [--share [--copy]]
                                                 What your recent Claude Code sessions cost, and what
                                                 /compact at cold resumes, autopilot and an earlier
@@ -155,7 +156,8 @@ Integrations:
                                                 (chat, agent, batch; no argument lists them)
 
 Internal (Claude Code and MCP clients run these for you):
-  context-doctor hook                           The every-prompt and PreCompact hook (installed by
+  context-doctor hook [copilot]                 The every-prompt and PreCompact hook; \`hook copilot\`
+                                                is GitHub Copilot's sessionStart (installed by
                                                 \`install\`; reads hook JSON on stdin)
   context-doctor statusline                     Claude Code status bar line: live context size, cache
                                                 share, cost (wired by \`install --statusline\`; reads
@@ -565,7 +567,9 @@ async function main(): Promise<void> {
   }
 
   if (args.command === "hook") {
-    void runHook();
+    // `hook copilot` is GitHub Copilot's sessionStart; a bare `hook` serves the rest.
+    if (args.file !== undefined && args.file !== "copilot") usageError(`hook takes no argument, or \`copilot\` (GitHub Copilot's session-start hook); got "${args.file}".`);
+    void runHook(args.file === "copilot" ? "copilot" : undefined);
     return;
   }
 

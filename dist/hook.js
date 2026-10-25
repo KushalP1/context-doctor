@@ -14,8 +14,9 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { recordLedger, statePath } from "./ledger.js";
+import { dirname, join } from "node:path";
+import { ledgerPath, recordLedger, statePath } from "./ledger.js";
+import { copilotSessionStartOutput } from "./copilot.js";
 import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
 import { parseSessionFile } from "./session.js";
@@ -164,9 +165,23 @@ export function hookInput(raw) {
         delete out.workspace_roots;
     return out;
 }
-export async function runHook() {
+export async function runHook(app) {
     // A hook must never break the user's prompt: any failure exits silently.
     try {
+        // GitHub Copilot (`hook copilot`, its sessionStart): the standing rules,
+        // nothing else. No Copilot hook that can add context gets a transcript,
+        // and Copilot never routes through autopilot, so there is no self-heal.
+        if (app === "copilot") {
+            const out = copilotSessionStartOutput(JSON.parse(await readStdin()));
+            if (out) {
+                process.stdout.write(out + "\n");
+                // Evidence for `doctor`, only where the ledger's folder already is:
+                // creating ~/.claude would make install and doctor see Claude Code.
+                if (existsSync(dirname(ledgerPath())))
+                    recordLedger({ ev: "session_rules", app: "copilot" });
+            }
+            return;
+        }
         // Autopilot self-heal: this prompt's request is about to go to the proxy,
         // so if the proxy died, start it now. One existsSync when autopilot is
         // off; a ~1ms localhost health check when it is on and healthy.

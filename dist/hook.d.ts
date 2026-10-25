@@ -29,4 +29,4 @@ export interface HookInput {
  * DeprecationWarning into the user's session (and will throw on a later one).
  */
 export declare function hookInput(raw: unknown): HookInput;
-export declare function runHook(): Promise<void>;
+export declare function runHook(app?: "copilot"): Promise<void>;
