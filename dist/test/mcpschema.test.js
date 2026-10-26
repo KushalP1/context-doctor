@@ -35,9 +35,9 @@ test("a real server is sized by listing its tools; a dead one reports an error i
 test("an unused server is flagged at full size, or at its names when tool search defers it", () => {
     const configs = [{ name: "big", scope: "user" }, { name: "used", scope: "user" }];
     const sizes = [{ name: "big", tools: 40, schemaTokens: 9000, nameTokens: 400 }, { name: "used", tools: 3, schemaTokens: 900, nameTokens: 30 }];
-    const full = mcpFindings({ configs, sizes, usage: { calls: new Map([["used", 5]]), sessions: 10, toolSearchSessions: 0 } });
+    const full = mcpFindings({ configs, sizes, usage: { calls: new Map([["used", 5]]), names: new Map([["mcp__used__run", 5]]), resources: new Map(), sessions: 10, toolSearchSessions: 0 } });
     assert.equal(full.length, 1);
     assert.match(full[0].message, /"big".*~9.0k tokens/);
-    const deferred = mcpFindings({ configs, sizes, usage: { calls: new Map(), sessions: 10, toolSearchSessions: 9 } });
+    const deferred = mcpFindings({ configs, sizes, usage: { calls: new Map(), names: new Map(), resources: new Map(), sessions: 10, toolSearchSessions: 9 } });
     assert.match(deferred[0].message, /~400 tokens to every request even deferred/);
 });

@@ -35,8 +35,10 @@ export declare const MIN_SESSIONS = 3;
 export interface ProjectUse {
     cwd: string;
     sessions: number;
-    /** MCP calls by server, as tool names spell it. */
-    mcpCalls: Map<string, number>;
+    /** MCP uses by full name: tools (mcp__server__tool) and prompts run as slash commands. */
+    mcpNames: Map<string, number>;
+    /** MCP resource-tool uses by their `server` input. */
+    mcpResources: Map<string, number>;
     /** Skill uses by name (the part after a plugin's "plugin:" prefix too). */
     skillUses: Map<string, number>;
 }

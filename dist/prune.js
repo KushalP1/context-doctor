@@ -33,7 +33,7 @@ import { dirname, join, resolve } from "node:path";
 import { statePath } from "./ledger.js";
 import { forEachLine, listSessions } from "./session.js";
 import { subagentDir } from "./subagents.js";
-import { claudeMcpConfigs, toolPrefixName } from "./mcpschema.js";
+import { claudeMcpConfigs, countMcpRow, serverUses } from "./mcpschema.js";
 import { estimateTokens, formatTokens } from "./tokens.js";
 import { formatUsd } from "./pricing.js";
 const DAY = 86_400_000;
@@ -55,7 +55,8 @@ export function projectUsage(days = 30, paths, now = Date.now()) {
     const out = new Map();
     for (const path of files) {
         let cwd;
-        const calls = new Map();
+        const names = new Map();
+        const resources = new Map();
         const skills = new Map();
         let active = false;
         const scan = (file) => forEachLine(file, (line) => {
@@ -67,7 +68,7 @@ export function projectUsage(days = 30, paths, now = Date.now()) {
                 }
                 catch { /* not a row */ }
             }
-            const tool = line.includes('"tool_use"') && (line.includes('"name":"mcp__') || line.includes('"name":"Skill"'));
+            const tool = line.includes('"tool_use"') && (line.includes('"name":"mcp__') || line.includes('"name":"Skill"') || line.includes("McpResource"));
             const slash = line.includes("<command-name>/");
             if (!tool && !slash) {
                 if (!active && line.includes('"timestamp"')) {
@@ -89,22 +90,20 @@ export function projectUsage(days = 30, paths, now = Date.now()) {
             if (Date.parse(e?.timestamp) < since)
                 return;
             active = true;
+            // Tools, prompts run as /mcp__server__prompt, and resource reads by server.
+            countMcpRow(e, names, resources);
             const content = e?.message?.content;
             if (slash) {
                 const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((b) => b?.text ?? "").join("\n") : "";
                 for (const m of text.matchAll(/<command-name>\/([\w:.-]+)<\/command-name>/g))
-                    bump(skills, m[1]);
+                    if (!m[1].startsWith("mcp__"))
+                        bump(skills, m[1]);
             }
             if (!Array.isArray(content))
                 return;
             for (const b of content) {
-                if (b?.type !== "tool_use" || typeof b.name !== "string")
-                    continue;
-                if (b.name === "Skill" && typeof b.input?.skill === "string")
+                if (b?.type === "tool_use" && b.name === "Skill" && typeof b.input?.skill === "string")
                     bump(skills, b.input.skill);
-                const server = /^mcp__(.+?)__./.exec(b.name)?.[1];
-                if (server)
-                    calls.set(server, (calls.get(server) ?? 0) + 1);
             }
         });
         try {
@@ -123,10 +122,12 @@ export function projectUsage(days = 30, paths, now = Date.now()) {
         if (!cwd || !active)
             continue;
         const key = canonical(cwd);
-        const p = out.get(key) ?? { cwd: key, sessions: 0, mcpCalls: new Map(), skillUses: new Map() };
+        const p = out.get(key) ?? { cwd: key, sessions: 0, mcpNames: new Map(), mcpResources: new Map(), skillUses: new Map() };
         p.sessions++;
-        for (const [k, n] of calls)
-            p.mcpCalls.set(k, (p.mcpCalls.get(k) ?? 0) + n);
+        for (const [k, n] of names)
+            p.mcpNames.set(k, (p.mcpNames.get(k) ?? 0) + n);
+        for (const [k, n] of resources)
+            p.mcpResources.set(k, (p.mcpResources.get(k) ?? 0) + n);
         for (const [k, n] of skills)
             p.skillUses.set(k, (p.skillUses.get(k) ?? 0) + n);
         out.set(key, p);
@@ -183,19 +184,63 @@ function readObject(path) {
     return v;
 }
 const list = (v) => (Array.isArray(v) ? v : typeof v === "string" ? [v] : []);
-/** What a settings file already switches off. */
-function offIn(settings) {
+/**
+ * What this project already has off, from every file Claude Code reads for
+ * it: the user's and the project's settings (shared and local), and the
+ * `/mcp` toggles in ~/.claude.json. A project `.mcp.json` server is off too
+ * when an `enabledMcpjsonServers` list exists and leaves it out (and
+ * `enableAllProjectMcpServers` is not on): Claude Code does not start it.
+ */
+function offFor(cwd, home) {
     const off = new Set();
-    for (const n of list(settings.disabledMcpjsonServers))
-        if (typeof n === "string")
-            off.add(`mcp:${n}`);
-    for (const d of list(settings.deniedMcpServers))
-        if (typeof d?.serverName === "string")
-            off.add(`mcp:${d.serverName}`);
-    for (const [k, v] of Object.entries(settings.skillOverrides ?? {}))
-        if (v === "off")
-            off.add(`skill:${k}`);
-    return off;
+    let allow;
+    let all = false;
+    const read = (path) => {
+        try {
+            return readObject(path);
+        }
+        catch {
+            return {};
+        }
+    };
+    for (const settings of [read(join(home, ".claude", "settings.json")), read(join(cwd, ".claude", "settings.json")), read(localSettingsPath(cwd))]) {
+        for (const n of list(settings.disabledMcpjsonServers))
+            if (typeof n === "string")
+                off.add(`mcp:${n}`);
+        for (const d of list(settings.deniedMcpServers))
+            if (typeof d?.serverName === "string")
+                off.add(`mcp:${d.serverName}`);
+        for (const [k, v] of Object.entries(settings.skillOverrides && typeof settings.skillOverrides === "object" ? settings.skillOverrides : {}))
+            if (v === "off")
+                off.add(`skill:${k}`);
+        if (Array.isArray(settings.enabledMcpjsonServers) || typeof settings.enabledMcpjsonServers === "string") {
+            allow ??= new Set();
+            for (const n of list(settings.enabledMcpjsonServers))
+                if (typeof n === "string")
+                    allow.add(n);
+        }
+        if (settings.enableAllProjectMcpServers === true)
+            all = true;
+    }
+    const project = read(join(home, ".claude.json")).projects;
+    for (const key of new Set([cwd, resolve(cwd)])) {
+        const entry = project && typeof project === "object" ? project[key] : undefined;
+        for (const n of list(entry?.disabledMcpServers))
+            if (typeof n === "string")
+                off.add(`mcp:${n}`);
+        for (const n of list(entry?.disabledMcpjsonServers))
+            if (typeof n === "string")
+                off.add(`mcp:${n}`);
+        if (Array.isArray(entry?.enabledMcpjsonServers)) {
+            allow ??= new Set();
+            for (const n of entry.enabledMcpjsonServers)
+                if (typeof n === "string")
+                    allow.add(n);
+        }
+        if (entry?.enableAllProjectMcpServers === true)
+            all = true;
+    }
+    return { off, mcpjsonAllowlist: all ? undefined : allow };
 }
 /** context-doctor's own server: its standing rules work with no calls at all. */
 const OURS = /^context-doctor$/;
@@ -205,19 +250,17 @@ export function planPrune(days = 30, opts = {}) {
     const cwds = opts.cwds ?? [...usage.keys()];
     const plans = [];
     for (const cwd of cwds) {
-        const use = usage.get(canonical(cwd)) ?? { cwd: canonical(cwd), sessions: 0, mcpCalls: new Map(), skillUses: new Map() };
-        let settings = {};
-        try {
-            settings = readObject(localSettingsPath(cwd));
-        }
-        catch { /* unreadable: nothing counts as off */ }
-        const off = offIn(settings);
+        const use = usage.get(canonical(cwd)) ?? { cwd: canonical(cwd), sessions: 0, mcpNames: new Map(), mcpResources: new Map(), skillUses: new Map() };
+        const { off, mcpjsonAllowlist } = offFor(cwd, home);
         const plan = { cwd: use.cwd, sessions: use.sessions, unused: [], used: [], thin: use.sessions < (opts.minSessions ?? MIN_SESSIONS), alreadyOff: [] };
-        for (const s of claudeMcpConfigs(cwd, home)) {
+        const configs = claudeMcpConfigs(cwd, home);
+        const usesBy = serverUses(configs.map((c) => c.name), { names: use.mcpNames, resources: use.mcpResources });
+        for (const s of configs) {
             if (OURS.test(s.name))
                 continue;
-            const uses = use.mcpCalls.get(toolPrefixName(s.name)) ?? 0;
-            if (off.has(`mcp:${s.name}`)) {
+            const uses = usesBy.get(s.name) ?? 0;
+            const notEnabled = s.scope === ".mcp.json" && mcpjsonAllowlist !== undefined && !mcpjsonAllowlist.has(s.name);
+            if (off.has(`mcp:${s.name}`) || notEnabled) {
                 plan.alreadyOff.push(s.name);
                 continue;
             }
@@ -369,7 +412,7 @@ export function renderPrune(r, current, opts = {}) {
         for (const u of p.used)
             out.push(`  used    ${u.kind === "mcp" ? "server" : "skill "} ${u.name} (${u.uses})`);
         for (const n of p.alreadyOff)
-            out.push(`  off     ${n} (already switched off here)`);
+            out.push(`  off     ${n} (already off here)`);
         if (!p.thin) {
             for (const u of p.unused) {
                 const cost = u.tokens !== undefined ? ` ~${formatTokens(u.tokens)} tokens a request${opts.usdPerKPerMonth ? `, ~${formatUsd((u.tokens / 1000) * opts.usdPerKPerMonth)}/month` : ""}` : "";

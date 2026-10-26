@@ -21,7 +21,7 @@ import { forEachLine, listSessions, replyCounter } from "./session.js";
 import { estimateTokens, formatTokens, providerFor, realModel } from "./tokens.js";
 import { cacheWriteSplit, formatUsd, pricingFor, writeMultiplier as ttlWriteMultiplier } from "./pricing.js";
 import { isGeminiChat, readGeminiMessages } from "./gemini.js";
-import { claudeMcpConfigs, mcpUsage, measureServer, toolPrefixName } from "./mcpschema.js";
+import { claudeMcpConfigs, mcpUsage, measureServer, otherServerUses, serverUses } from "./mcpschema.js";
 const TTL_MS = 3_600_000;
 const CLAUDE = "claude-opus-5"; // Claude's tokenizer ratios; the model only picks the provider here.
 function readText(path) {
@@ -439,9 +439,10 @@ export async function measureMcpSizes(r) {
 export function mcpFindings(m, baseline) {
     const out = [];
     const deferred = m.usage.sessions > 0 && m.usage.toolSearchSessions / m.usage.sessions >= 0.5;
+    const uses = serverUses(m.configs.map((c) => c.name), m.usage);
     for (const c of m.configs) {
         const size = m.sizes?.find((s) => s.name === c.name);
-        const calls = m.usage.calls.get(toolPrefixName(c.name)) ?? 0;
+        const calls = uses.get(c.name) ?? 0;
         const tokens = size?.schemaTokens === undefined ? undefined : deferred ? size.nameTokens : size.schemaTokens;
         if (calls > 0 || tokens === undefined || tokens < 200)
             continue;
@@ -515,17 +516,17 @@ export function mcpDisplayName(server) {
 }
 function renderMcp(r) {
     const { configs, usage, sizes } = r.mcp;
-    if (configs.length === 0 && usage.calls.size === 0)
+    if (configs.length === 0 && usage.names.size === 0)
         return [];
     const out = ["", "MCP servers", "─".repeat(56)];
     const deferred = usage.sessions > 0 && usage.toolSearchSessions / usage.sessions >= 0.5;
     out.push(deferred
         ? `Tool search was used in ${usage.toolSearchSessions} of ${usage.sessions} sessions: Claude Code defers MCP definitions, so a server costs about its tool names until the model looks one up.`
         : `Tool search was used in ${usage.toolSearchSessions} of ${usage.sessions} sessions: MCP definitions mostly load in full, on every request.`);
-    const configured = new Set(configs.map((c) => toolPrefixName(c.name)));
+    const uses = serverUses(configs.map((c) => c.name), usage);
     for (const c of configs) {
         const s = sizes?.find((x) => x.name === c.name);
-        const calls = usage.calls.get(toolPrefixName(c.name)) ?? 0;
+        const calls = uses.get(c.name) ?? 0;
         const size = !sizes
             ? "size: run with --mcp"
             : s?.error
@@ -533,7 +534,7 @@ function renderMcp(r) {
                 : `${s.tools} tools, ~${formatTokens(s.schemaTokens)} tokens of definitions (names ~${formatTokens(s.nameTokens)})`;
         out.push(`  ${c.name.padEnd(22)} ${c.scope.padEnd(9)} ${String(calls).padStart(6)} calls  ${size}`);
     }
-    const app = [...usage.calls.entries()].filter(([n]) => !configured.has(n)).sort((a, b) => b[1] - a[1]);
+    const app = [...otherServerUses(configs.map((c) => c.name), usage).entries()].sort((a, b) => b[1] - a[1]);
     if (app.length) {
         out.push(`  Provided by the app or connectors (not in your config; toggle them in the app):`);
         for (const [n, calls] of app.slice(0, 10))

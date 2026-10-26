@@ -35,12 +35,36 @@ export interface McpServerSize {
     error?: string;
 }
 export interface McpUsage {
-    /** Calls per server name (as it appears in tool names), main chain and subagents. */
+    /**
+     * Calls per server as a first guess from the tool name alone (up to the
+     * first "__"): right for app-provided servers, wrong for a configured name
+     * with characters Claude Code turns into "_" ("linear (work)" is
+     * mcp__linear__work___…). Configured servers go through serverUses().
+     */
     calls: Map<string, number>;
+    /** Uses per full name: tools (mcp__server__tool) and prompts run as /mcp__server__prompt. */
+    names: Map<string, number>;
+    /** Resource reads and listings (ReadMcpResourceTool and its kin) per `server` input. */
+    resources: Map<string, number>;
     sessions: number;
     /** Sessions in which the model used ToolSearch, i.e. MCP definitions were deferred. */
     toolSearchSessions: number;
 }
+/** The MCP resource tools (current names and their pre-rename spellings, as the 2.1.308 binary maps them): their `server` input names the server. */
+export declare const MCP_RESOURCE_TOOLS: RegExp;
+/** A prompt run as a slash command: `<command-name>/mcp__server__prompt</command-name>`. */
+export declare const MCP_PROMPT_COMMAND: RegExp;
+/**
+ * Uses of each configured server: every tool or prompt name counted under the
+ * LONGEST configured prefix `mcp__<toolPrefixName(name)>__` it starts with (so
+ * "linear" does not take "linear (work)"'s calls), plus resource-tool calls
+ * whose `server` input is the server's name.
+ */
+export declare function serverUses(configNames: string[], usage: Pick<McpUsage, "names" | "resources">): Map<string, number>;
+/** Names no configured prefix claims: the app's own servers and connectors, by the first-guess parse. */
+export declare function otherServerUses(configNames: string[], usage: Pick<McpUsage, "names">): Map<string, number>;
+/** Count one row's MCP uses into `names` and `resources`: tool calls, resource-tool calls, prompts run as slash commands. */
+export declare function countMcpRow(e: any, names: Map<string, number>, resources: Map<string, number>): void;
 /** Claude Code's spelling of a server name inside tool names. */
 export declare function toolPrefixName(server: string): string;
 /** MCP servers Claude Code starts in `cwd`, with their launch configs. */

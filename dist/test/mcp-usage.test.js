@@ -39,3 +39,21 @@ test("subagent calls count, a fork's copied calls count once, and each call is d
     const sizes = [{ name: "slack", tools: 12, schemaTokens: 5000, nameTokens: 120 }];
     assert.deepEqual(mcpFindings({ configs, sizes, usage: u }), []);
 });
+test("overhead attributes a call to the longest configured prefix, and counts prompts and resource reads", async () => {
+    const { serverUses, otherServerUses } = await import("../mcpschema.js");
+    const dir = mkdtempSync(join(tmpdir(), "cd-mcp-names-"));
+    const now = Date.now();
+    const rows = [
+        call("t1", "mcp__linear__work___list_issues", now - DAY),
+        call("t2", "mcp__linear__get", now - DAY),
+        call("t3", "mcp__claude-in-chrome__computer", now - DAY),
+        JSON.stringify({ type: "user", uuid: "row-p", timestamp: iso(now - DAY), message: { role: "user", content: "<command-name>/mcp__docs__summarize</command-name>" } }),
+        JSON.stringify({ type: "assistant", uuid: "row-r", timestamp: iso(now - DAY), message: { role: "assistant", content: [{ type: "tool_use", id: "t4", name: "ReadMcpResourceTool", input: { server: "kb", uri: "kb://a" } }] } }),
+    ];
+    const p = join(dir, "s.jsonl");
+    writeFileSync(p, rows.join("\n") + "\n");
+    const u = mcpUsage(30, [p]);
+    const configured = ["linear", "linear (work)", "docs", "kb"];
+    assert.deepEqual(Object.fromEntries(serverUses(configured, u)), { linear: 1, "linear (work)": 1, docs: 1, kb: 1 });
+    assert.deepEqual([...otherServerUses(configured, u).keys()], ["claude-in-chrome"]);
+});

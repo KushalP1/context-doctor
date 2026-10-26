@@ -55,7 +55,7 @@ test("the plan: what each project used, what it did not, and how each would be s
   const usage = projectUsage(30, paths);
   const use = usage.get(canonical(cwd))!;
   assert.equal(use.sessions, 3);
-  assert.equal(use.mcpCalls.get("github"), 3);
+  assert.equal(use.mcpNames.get("mcp__github__list_prs"), 3);
   assert.equal(use.skillUses.get("pdf-tools"), 1, "a subagent's use counts");
   const plan = planPrune(30, { home, usage, cwds: [cwd] }).plans[0];
   assert.equal(plan.thin, false);
@@ -113,4 +113,32 @@ test("CLI: plan, --write in the project's folder, --undo", () => {
   const u = run(["--undo"]);
   assert.match(u.stdout, /Removed 3 entries/);
   assert.deepEqual(JSON.parse(readFileSync(localSettingsPath(cwd), "utf8")), {});
+});
+
+test("a server's uses are found however it is used: a name with spaces beside a shorter one, prompts, resources; an unapproved .mcp.json server is already off", () => {
+  const home = mkdtempSync(join(tmpdir(), "cd-prune-names-"));
+  const cwd = join(home, "w");
+  mkdirSync(join(cwd, ".claude"), { recursive: true });
+  writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { linear: { command: "a" }, "linear (work)": { command: "b" }, docs: { command: "c" }, kb: { command: "d" }, idle: { command: "e" } } }));
+  writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { figma: { command: "f" }, approved: { command: "g" } } }));
+  writeFileSync(join(cwd, ".claude", "settings.local.json"), JSON.stringify({ enabledMcpjsonServers: ["approved"] }));
+  const now = new Date().toISOString();
+  const row = (content: unknown, type = "assistant") => JSON.stringify({ type, cwd, timestamp: now, message: { role: type, content } });
+  const paths: string[] = [];
+  for (let i = 0; i < 3; i++) {
+    const dir = claudeProjectDir(cwd, home);
+    mkdirSync(dir, { recursive: true });
+    const p = join(dir, `s${i}.jsonl`);
+    writeFileSync(p, [
+      // "linear (work)" is mcp__linear__work___…: it must not count for "linear".
+      row([{ type: "tool_use", id: `a${i}`, name: "mcp__linear__work___list_issues", input: {} }]),
+      row("<command-name>/mcp__docs__summarize</command-name>", "user"),
+      row([{ type: "tool_use", id: `r${i}`, name: "ReadMcpResourceTool", input: { server: "kb", uri: "kb://x" } }]),
+    ].join("\n") + "\n");
+    paths.push(p);
+  }
+  const plan = planPrune(30, { home, usage: projectUsage(30, paths), cwds: [cwd] }).plans[0];
+  assert.deepEqual(plan.used.map((u) => `${u.name}:${u.uses}`).sort(), ["docs:3", "kb:3", "linear (work):3"]);
+  assert.deepEqual(plan.unused.map((u) => u.name).sort(), ["approved", "idle", "linear"]);
+  assert.deepEqual(plan.alreadyOff, ["figma"], "not in enabledMcpjsonServers: Claude Code does not start it");
 });

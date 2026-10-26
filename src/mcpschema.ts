@@ -49,11 +49,73 @@ export interface McpServerSize {
 }
 
 export interface McpUsage {
-  /** Calls per server name (as it appears in tool names), main chain and subagents. */
+  /**
+   * Calls per server as a first guess from the tool name alone (up to the
+   * first "__"): right for app-provided servers, wrong for a configured name
+   * with characters Claude Code turns into "_" ("linear (work)" is
+   * mcp__linear__work___…). Configured servers go through serverUses().
+   */
   calls: Map<string, number>;
+  /** Uses per full name: tools (mcp__server__tool) and prompts run as /mcp__server__prompt. */
+  names: Map<string, number>;
+  /** Resource reads and listings (ReadMcpResourceTool and its kin) per `server` input. */
+  resources: Map<string, number>;
   sessions: number;
   /** Sessions in which the model used ToolSearch, i.e. MCP definitions were deferred. */
   toolSearchSessions: number;
+}
+
+/** The MCP resource tools (current names and their pre-rename spellings, as the 2.1.308 binary maps them): their `server` input names the server. */
+export const MCP_RESOURCE_TOOLS = /^(ListMcpResources|ReadMcpResource|ReadMcpResourceDir)(Tool)?$/;
+
+/** A prompt run as a slash command: `<command-name>/mcp__server__prompt</command-name>`. */
+export const MCP_PROMPT_COMMAND = /<command-name>\/(mcp__[\w-]+?__[^<\s]+)<\/command-name>/g;
+
+/**
+ * Uses of each configured server: every tool or prompt name counted under the
+ * LONGEST configured prefix `mcp__<toolPrefixName(name)>__` it starts with (so
+ * "linear" does not take "linear (work)"'s calls), plus resource-tool calls
+ * whose `server` input is the server's name.
+ */
+export function serverUses(configNames: string[], usage: Pick<McpUsage, "names" | "resources">): Map<string, number> {
+  const prefixes = configNames.map((name) => ({ name, prefix: `mcp__${toolPrefixName(name)}__` })).sort((a, b) => b.prefix.length - a.prefix.length);
+  const out = new Map<string, number>(configNames.map((n) => [n, 0]));
+  for (const [full, n] of usage.names) {
+    const hit = prefixes.find((p) => full.startsWith(p.prefix));
+    if (hit) out.set(hit.name, (out.get(hit.name) ?? 0) + n);
+  }
+  for (const [server, n] of usage.resources) {
+    const hit = configNames.find((c) => c === server) ?? configNames.find((c) => toolPrefixName(c) === toolPrefixName(server));
+    if (hit) out.set(hit, (out.get(hit) ?? 0) + n);
+  }
+  return out;
+}
+
+/** Names no configured prefix claims: the app's own servers and connectors, by the first-guess parse. */
+export function otherServerUses(configNames: string[], usage: Pick<McpUsage, "names">): Map<string, number> {
+  const prefixes = configNames.map((name) => `mcp__${toolPrefixName(name)}__`);
+  const out = new Map<string, number>();
+  for (const [full, n] of usage.names) {
+    if (prefixes.some((p) => full.startsWith(p))) continue;
+    const server = /^mcp__(.+?)__./.exec(full)?.[1];
+    if (server) out.set(server, (out.get(server) ?? 0) + n);
+  }
+  return out;
+}
+
+/** Count one row's MCP uses into `names` and `resources`: tool calls, resource-tool calls, prompts run as slash commands. */
+export function countMcpRow(e: any, names: Map<string, number>, resources: Map<string, number>): void {
+  const content = e?.message?.content;
+  const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((b: any) => (typeof b?.text === "string" ? b.text : "")).join("\n") : "";
+  if (e?.type === "user" && text.includes("<command-name>/mcp__")) {
+    for (const m of text.matchAll(MCP_PROMPT_COMMAND)) names.set(m[1], (names.get(m[1]) ?? 0) + 1);
+  }
+  if (!Array.isArray(content)) return;
+  for (const b of content) {
+    if (b?.type !== "tool_use" || typeof b.name !== "string") continue;
+    if (b.name.startsWith("mcp__")) names.set(b.name, (names.get(b.name) ?? 0) + 1);
+    else if (MCP_RESOURCE_TOOLS.test(b.name) && typeof b.input?.server === "string") resources.set(b.input.server, (resources.get(b.input.server) ?? 0) + 1);
+  }
 }
 
 /** Claude Code's spelling of a server name inside tool names. */
@@ -103,34 +165,29 @@ export function claudeMcpConfigs(cwd = process.cwd(), home = homedir()): McpServ
 export function mcpUsage(days = 30, paths?: string[], onProgress?: (done: number, total: number) => void): McpUsage {
   const since = Date.now() - days * 86_400_000;
   const files = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
-  const calls = new Map<string, number>();
+  const names = new Map<string, number>();
+  const resources = new Map<string, number>();
   const counted = new Set<string>();
   let toolSearchSessions = 0;
   for (const [index, path] of files.entries()) {
     onProgress?.(index, files.length);
     let searched = false;
     const scan = (file: string): void => forEachLine(file, (line) => {
-      if (!line.includes('"tool_use"') || (!line.includes('"name":"mcp__') && !line.includes('"name":"ToolSearch"'))) return;
+      const tool = line.includes('"tool_use"') && (line.includes('"name":"mcp__') || line.includes('"name":"ToolSearch"') || line.includes('McpResource'));
+      if (!tool && !line.includes("<command-name>/mcp__")) return;
       let e: any;
       try { e = JSON.parse(line); } catch { return; }
       const content = e?.message?.content;
-      if (!Array.isArray(content)) return;
       // Whether a session defers MCP definitions is a property of the
       // session, so ToolSearch counts whenever it was used; calls are dated.
-      const before = Date.parse(e?.timestamp) < since;
-      for (const b of content) {
-        if (b?.type !== "tool_use" || typeof b.name !== "string") continue;
-        if (b.name === "ToolSearch") { searched = true; continue; }
-        if (before) continue;
-        const server = /^mcp__(.+?)__./.exec(b.name)?.[1];
-        if (!server) continue;
-        if (typeof b.id === "string" && typeof e.uuid === "string") {
-          const key = `${e.uuid}\0${b.id}`;
-          if (counted.has(key)) continue;
-          counted.add(key);
-        }
-        calls.set(server, (calls.get(server) ?? 0) + 1);
+      if (Array.isArray(content) && content.some((b: any) => b?.type === "tool_use" && b.name === "ToolSearch")) searched = true;
+      if (Date.parse(e?.timestamp) < since) return;
+      // A fork's copied rows (same uuid) were counted in the parent.
+      if (typeof e.uuid === "string") {
+        if (counted.has(e.uuid)) return;
+        counted.add(e.uuid);
       }
+      countMcpRow(e, names, resources);
     });
     scan(path);
     let agents: string[] = [];
@@ -140,7 +197,12 @@ export function mcpUsage(days = 30, paths?: string[], onProgress?: (done: number
     }
     if (searched) toolSearchSessions++;
   }
-  return { calls, sessions: files.length, toolSearchSessions };
+  const calls = new Map<string, number>();
+  for (const [full, n] of names) {
+    const server = /^mcp__(.+?)__./.exec(full)?.[1];
+    if (server) calls.set(server, (calls.get(server) ?? 0) + n);
+  }
+  return { calls, names, resources, sessions: files.length, toolSearchSessions };
 }
 
 /** Connect to one server the way a client does and size its tool list. */

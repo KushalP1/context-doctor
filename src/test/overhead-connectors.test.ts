@@ -22,7 +22,7 @@ test("the overhead report lists connectors by that name", () => {
     findings: [],
     mcp: {
       configs: [],
-      usage: { calls: new Map([["1a59c906-04da-521d-bda7-7f71b9f9e01c", 11], ["claude-in-chrome", 30]]), sessions: 4, toolSearchSessions: 4 },
+      usage: { calls: new Map([["1a59c906-04da-521d-bda7-7f71b9f9e01c", 11], ["claude-in-chrome", 30]]), names: new Map([["mcp__1a59c906-04da-521d-bda7-7f71b9f9e01c__read", 11], ["mcp__claude-in-chrome__computer", 30]]), resources: new Map(), sessions: 4, toolSearchSessions: 4 },
     },
   };
   const text = renderOverhead(report, "/home/x");
