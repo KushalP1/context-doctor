@@ -40,3 +40,5 @@ export * from "./compactquality.js";
 export * from "./precompact.js";
 export * from "./cachemisses.js";
 export * from "./modelswitch.js";
+export * from "./ab.js";
+export * from "./abtasks.js";

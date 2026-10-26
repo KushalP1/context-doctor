@@ -23,6 +23,7 @@ import { startProxy } from "./proxy.js";
 import { runInstall, runUninstall } from "./install.js";
 import { listSessions, parseSessionFile, pickCurrentSession } from "./session.js";
 import { runHook } from "./hook.js";
+import { abCommand } from "./ab.js";
 import { buildImpactReport } from "./impact.js";
 import { measureTokenizer, renderTokenizer } from "./tokenizer-measure.js";
 import { autopilotOff, autopilotOn, autopilotPauseResult, autopilotPaths, autopilotStatus, DEFAULT_AUTOPILOT_PORT } from "./autopilot.js";
@@ -110,6 +111,13 @@ Measure:
   context-doctor experiment --task "<t>"         Run one task twice from the same commit, in a fresh
                                                 session and forked from an --existing one; compare
                                                 bill, cache, time, and whether --check passed
+  context-doctor ab [--lever rules|autoclear|pack|compact|all] [--tasks a,b] [--repeat n] [--yes]
+                                                Does a lever cost quality? 8 small coding tasks, each
+                                                run with and without it through the Messages API and
+                                                scored by its own test: passes, tokens, cost side by
+                                                side. Bills ANTHROPIC_API_KEY: prints the estimate,
+                                                sends nothing without --yes, stops at --budget usd.
+                                                --list shows the tasks; --model (default claude-opus-5-5)
 
 Fix automatically:
   context-doctor autopilot on|off|pause|resume|status
@@ -274,6 +282,13 @@ interface Args {
   check?: string;
   existing?: string;
   budgetUsd?: number;
+  /** ab: levers and task ids (comma lists, repeatable), runs per arm, turn cap, parallel runs, consent to spend. */
+  levers?: string[];
+  abTasks?: string[];
+  repeat?: number;
+  maxTurns?: number;
+  concurrency?: number;
+  yes?: boolean;
   dryRun: boolean;
   copy?: boolean;
   share?: boolean;
@@ -322,7 +337,7 @@ const COMMANDS = [
   "analyze", "optimize", "proxy", "install", "uninstall", "savings", "compact-window", "autopilot", "mcp",
   "instructions", "session", "cursor", "statusline", "hook", "report", "doctor", "dashboard", "init",
   "experiment", "diff", "accuracy", "overhead", "ci", "cache-plan", "compactions", "cache-misses", "subagents", "tasks",
-  "reads", "pack", "watch", "help", "version",
+  "reads", "pack", "watch", "ab", "help", "version",
 ];
 
 type NumOpts = { min?: number; max?: number; integer?: boolean };
@@ -363,6 +378,12 @@ const FLAGS: FlagSpec[] = [
   { names: ["--check"], value: "text", set: (a, v) => { a.check = v; } },
   { names: ["--existing"], value: "text", set: (a, v) => { a.existing = v; } },
   { names: ["--budget"], value: "number", num: { min: 0 }, set: (a, v) => { a.budgetUsd = v; } },
+  { names: ["--lever"], value: "text", set: (a, v) => { (a.levers ??= []).push(v); } },
+  { names: ["--tasks"], value: "text", set: (a, v) => { (a.abTasks ??= []).push(v); } },
+  { names: ["--repeat"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.repeat = v; } },
+  { names: ["--max-turns"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.maxTurns = v; } },
+  { names: ["--concurrency"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.concurrency = v; } },
+  { names: ["--yes"], set: (a) => { a.yes = true; } },
   { names: ["--dry-run"], set: (a) => { a.dryRun = true; } },
   { names: ["--copy"], set: (a) => { a.copy = true; } },
   { names: ["--share"], set: (a) => { a.share = true; } },
@@ -615,6 +636,14 @@ async function main(): Promise<void> {
 
   if (args.command === "statusline") {
     void runStatusLine();
+    return;
+  }
+
+  if (args.command === "ab") {
+    process.exitCode = await abCommand({
+      levers: args.levers, tasks: args.abTasks, model: args.model, repeat: args.repeat, maxTurns: args.maxTurns,
+      concurrency: args.concurrency, budgetUsd: args.budgetUsd, yes: args.yes === true, json: args.json, out: args.out, list: args.list,
+    });
     return;
   }
 

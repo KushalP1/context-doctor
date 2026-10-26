@@ -150,6 +150,7 @@ The MCP server hands these standing rules, verbatim, to every chat where it is e
 | `context-doctor ci [--base <ref>] [--max-tokens n] [--max-increase n] [--markdown]` | Memory files (CLAUDE.md, AGENTS.md, GEMINI.md, rules, their imports) at HEAD vs a base commit; exit 1 over budget. What the GitHub Action runs ([details](./docs/ci.md)) |
 | `context-doctor init [preset]` | Write a `.contextdoctorrc` from a preset (`chat`, `agent`, `batch`) — a budget you can adopt in one command and tune later |
 | `context-doctor experiment --task "…"` | Run one task twice from the same commit, in a fresh session and forked from an `--existing` one, same model and tools; compare bill, cache split, wall clock, and whether `--check` passed. The only command here that spends money, so it caps spend per arm and refuses a dirty tree ([details](./docs/experiment.md)) |
+| `context-doctor ab [--lever …] [--yes]` | Does a lever cost quality? Eight small coding tasks, each a tiny repository with its own test, run with and without the standing rules, autopilot's clearing, `pack_context` or the PreCompact instructions through the Messages API; pass counts, tokens and cost side by side. Bills `ANTHROPIC_API_KEY`: prints the estimate, sends nothing without `--yes`, stops at `--budget` ([details](./docs/ab.md)) |
 | `context-doctor statusline` | Claude Code status bar: live context vs window, cache share, cost. Wired by `install --statusline`; never overwrites a statusLine you already have ([details](./docs/editor-and-statusline.md)) |
 | `context-doctor hook` | The every-prompt hook (Claude Code, Codex, Gemini CLI, Cursor) and Claude Code's compaction hook, registered by `install`; `hook copilot` is GitHub Copilot's session-start hook; you never run these yourself. Warning threshold tunable via `CONTEXT_DOCTOR_WARN_TOKENS` (default 80000) |
 | `context-doctor --version` | Print the installed version. `--help` lists every flag |
@@ -178,6 +179,7 @@ Every release: [docs/whats-new.md](./docs/whats-new.md).
 - [Token counts](./docs/tokenizer.md): why counts are "~", how the Claude ratios were measured, exact counts
 - [Performance](./docs/performance.md): what context-doctor itself costs
 - [Experiment](./docs/experiment.md): does a smaller context actually help? Measure it
+- [A/B suite](./docs/ab.md): does a lever cost quality? Eight small coding tasks, each run with and without it and scored by its own test
 - [What's new](./docs/whats-new.md), [Roadmap](./ROADMAP.md), [Python package](./python/README.md)
 
 ## Contributing
