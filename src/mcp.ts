@@ -578,15 +578,32 @@ if (argv.includes("--http")) {
         return;
       }
       const deny = (status: number, code: number, message: string) => {
-        res.statusCode = status;
-        res.setHeader("content-type", "application/json");
-        if (status === 413 || status === 408) res.setHeader("connection", "close");
-        res.end(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }));
-        // Stop reading an oversized or stalled upload, but only after the
-        // client has had time to read the answer: a reset discards what the
-        // client has not read yet, so destroying the socket at once (or after
-        // 1 s on a busy machine: the full test suite under load) loses the 413.
-        if (status === 413 || status === 408) setTimeout(() => req.destroy(), 5000).unref();
+        const send = () => {
+          if (res.writableEnded) return;
+          res.statusCode = status;
+          res.setHeader("content-type", "application/json");
+          if (status === 413 || status === 408) res.setHeader("connection", "close");
+          res.end(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }));
+          // Stop reading an oversized or stalled upload, but only after the
+          // client has had a moment to read the answer: destroying the socket at
+          // once resets it, and the client never sees the 413.
+          if (status === 413 || status === 408) setTimeout(() => req.destroy(), 1000).unref();
+        };
+        // A chunked upload found over the cap mid-stream: drain (discard) the
+        // rest until the client stops sending, at most 5 s, then answer.
+        // Answering and closing while it still sends leaves unread bytes on
+        // the socket, the kernel answers them with a reset, and a client that
+        // gets the reset before it reads the 413 never sees it (flaky under
+        // the full test suite's load).
+        if (status === 413 && req.headers["content-length"] === undefined && !req.complete) {
+          req.resume();
+          const timer = setTimeout(send, 5000);
+          timer.unref();
+          req.once("end", () => { clearTimeout(timer); send(); });
+          req.once("error", () => { clearTimeout(timer); send(); });
+          return;
+        }
+        send();
       };
       const refused = refusal(guard, req.headers);
       if (refused) return deny(403, -32000, `Forbidden: ${refused}.`);

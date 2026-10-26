@@ -296,7 +296,7 @@ export interface CompactWindowLine {
   isCurrent: boolean;
 }
 
-export function renderSavings(r: SavingsReport, autopilotOn = false, cw?: CompactWindowLine, missLines?: string[]): string {
+export function renderSavings(r: SavingsReport, autopilotOn = false, cw?: CompactWindowLine, missLines?: string[], limitLines?: string[]): string {
   const lines: string[] = [];
   if (r.sessions.length === 0) {
     lines.push(`No Claude Code sessions with 10+ requests in the last ${r.days} days to replay.`);
@@ -338,6 +338,11 @@ export function renderSavings(r: SavingsReport, autopilotOn = false, cw?: Compac
     lines.push(`   ${cw.compactionsPerWeek.toFixed(1)} compactions a week instead of ${cw.nowPerWeek.toFixed(1)}. Each keeps a summary, not the`);
     lines.push("   full history. Compare sizes: context-doctor compact-window");
     if (!cw.isCurrent) lines.push(`   Set it with: context-doctor compact-window ${Math.round(cw.window / 1000)}k`);
+  }
+  if (limitLines?.length) {
+    // Only when a fit on the user's own limit readings is good enough (limits.ts).
+    lines.push("");
+    lines.push(...limitLines);
   }
   if (missLines?.length) {
     // Not a lever of ours: money the cache lost on its own, said once, with where to look.

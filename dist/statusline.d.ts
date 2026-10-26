@@ -5,6 +5,10 @@
  * its first line of stdout. That is "context health where the work happens"
  * without an editor extension: the number that matters, visible while typing.
  *
+ * It also keeps the limit ledger: when Claude Code passes `rate_limits`
+ * (Pro and Max), each new 5-hour and weekly reading is appended to
+ * ~/.claude/.context-doctor-limits.jsonl for `context-doctor limits`.
+ *
  * It has to be fast and silent. Fast: the status payload on stdin carries the
  * live context size in recent versions; when it does not, only the tail of the
  * transcript is read (last 256KB, ~1ms on a 20MB file). Silent: any failure
@@ -14,6 +18,8 @@
 /** The parts of Claude Code's status payload this reads. All optional. */
 interface StatusInput {
     transcript_path?: string;
+    /** Pro/Max (or a gateway's spend limit), after the first reply: each window's used_percentage and resets_at. */
+    rate_limits?: unknown;
     model?: {
         id?: string;
         display_name?: string;

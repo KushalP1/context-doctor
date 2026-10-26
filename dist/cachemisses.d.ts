@@ -85,4 +85,4 @@ export declare function cacheMisses(days?: number, paths?: string[], onProgress?
 export declare function cacheMissesSignificant(r: CacheMissReport): boolean;
 /** The one line `savings` adds when the misses are significant. */
 export declare function cacheMissesLine(r: CacheMissReport): string[];
-export declare function renderCacheMisses(r: CacheMissReport): string;
+export declare function renderCacheMisses(r: CacheMissReport, limitLines?: string[]): string;

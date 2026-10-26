@@ -280,7 +280,7 @@ export function parseWindow(raw) {
 }
 const usd = (n) => (Math.abs(n) >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
 const k = (n) => `${Math.round(n / 1000)}k`;
-export function renderCompactWindows(r, current) {
+export function renderCompactWindows(r, current, limitLines) {
     const lines = [];
     lines.push("Auto-compact window: compact earlier, automatically (Claude Code's own setting)");
     // Counted and said exactly as `savings` says it, so the two screens agree.
@@ -298,6 +298,11 @@ export function renderCompactWindows(r, current) {
         lines.push(`  ${k(e.window).padStart(6)}   ${usd(e.withWindowUsd).padStart(10)}   ${(usd(e.savedUsd) + ` (${Math.round(e.savedPct * 100)}%)`).padEnd(16)} ${String(e.compactions).padStart(4)} (${((e.compactions / r.days) * 7).toFixed(1)}/week)${mark}`);
     }
     lines.push(`  as now   ${usd(r.estimates[0]?.baselineUsd ?? 0).padStart(10)}                    ${String(r.actualCompactions).padStart(4)} (${((r.actualCompactions / r.days) * 7).toFixed(1)}/week${r.idleCompactions ? `; ${r.idleCompactions} while idle` : ""})`);
+    const inLimitLines = limitLines?.(r.estimates) ?? [];
+    if (inLimitLines.length) {
+        lines.push("");
+        lines.push(...inLimitLines);
+    }
     lines.push("");
     lines.push("\"as now\" is what you were billed (transcript usage at list price, as in");
     lines.push("`context-doctor savings`); each window saves the replay's share of it.");

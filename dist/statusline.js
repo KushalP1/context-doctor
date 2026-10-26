@@ -5,6 +5,10 @@
  * its first line of stdout. That is "context health where the work happens"
  * without an editor extension: the number that matters, visible while typing.
  *
+ * It also keeps the limit ledger: when Claude Code passes `rate_limits`
+ * (Pro and Max), each new 5-hour and weekly reading is appended to
+ * ~/.claude/.context-doctor-limits.jsonl for `context-doctor limits`.
+ *
  * It has to be fast and silent. Fast: the status payload on stdin carries the
  * live context size in recent versions; when it does not, only the tail of the
  * transcript is read (last 256KB, ~1ms on a 20MB file). Silent: any failure
@@ -14,6 +18,7 @@
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { contextWindowFor, formatTokens } from "./tokens.js";
 import { formatUsd } from "./pricing.js";
+import { recordLimits } from "./limits.js";
 /** Newest assistant usage from the END of a transcript, without reading the file. */
 export function tailUsage(path, tailBytes = 256 * 1024) {
     try {
@@ -109,6 +114,10 @@ export async function runStatusLine() {
         const line = renderStatusLine(input);
         if (line)
             console.log(line);
+        // After the line is out: the limit readings `context-doctor limits` fits
+        // (only when Claude Code sends them; a few bytes, only on a change).
+        if (process.env.CONTEXT_DOCTOR_NO_LIMITS_LOG !== "1")
+            recordLimits(input?.rate_limits);
     }
     catch {
         /* silent by design */

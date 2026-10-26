@@ -35,6 +35,7 @@ Pick where you work. Each takes about a minute and is fully reversible.
 - `overhead`: what every request re-reads before your message (system prompt, tools, MCP servers, CLAUDE.md, rules, memory), each file priced per month.
 - `tasks`, `reads`, `subagents`, `compactions`: cost per commit; files read into session after session; whether each subagent was cheaper than the same steps in the parent; whether sessions work worse after compacting.
 - `cache-misses`: requests that re-wrote the prompt cache while it should still have been warm, priced, by model and context size, with the cause where the transcript shows one.
+- `limits`: your plan's 5-hour and weekly windows (Claude Pro/Max, recorded by the status line) and Codex's, the pace and when each runs out, and what 1M tokens of each kind cost in % of the limit, fitted on your own readings with the error shown.
 - `cache-plan <request.json>`: where an Anthropic API request should carry `cache_control`, and what it saves over N calls.
 - `session`, `watch`, `analyze`, `report`, `dashboard`: token breakdown and wasted-context findings for any session, conversation file or agent trace.
 
@@ -147,6 +148,7 @@ Rules 1-4 end exactly at character 512, the part ChatGPT's guide says must stand
 | `context-doctor subagents [--days n]` | Which subagents paid for themselves: each one's bill vs the same steps run in the parent session |
 | `context-doctor compactions [--days n]` | Do sessions work worse right after compacting? Re-reads, tool errors and your corrections, before vs after each compaction |
 | `context-doctor cache-misses [--days n]` | Requests that re-wrote the prompt cache within its lifetime (no compaction between, previous context over 20k, over 60% of it written again): priced above the cache-read rate, by model and context size, with the cause where visible and the model versions that miss less; `--json` per model |
+| `context-doctor limits [--days n]` | Your plan's limits in their own unit: each window's %, pace and run-out time (Claude's 5-hour and weekly windows from the status line's readings, Codex's from its rollouts), and % of the limit per 1M tokens of input, cache read, cache write and output, fitted on your readings with the fit's error; too-thin data is said to be thin, never quoted |
 | `context-doctor cache-plan <request.json> [--calls n] [--out file] [--explicit]` | Where an Anthropic API request should carry `cache_control` (top-level automatic caching for the moving end, unless `--explicit`), and what it saves over n calls; `--out` writes it applied |
 | `context-doctor accuracy` | How much of what you are billed for is visible in your transcript (the fixed harness baseline, per-turn injected content), plus a tokenizer check: real chars/token per model from the API's own counts, next to the ratio the estimator uses |
 | `context-doctor report` | Machine-wide impact report (proxy savings persist across restarts): exact proxy savings, hook activity, how often the cold-resume `/compact` offer was followed by a compaction, recoverable waste in recent sessions |

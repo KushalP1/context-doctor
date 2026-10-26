@@ -71,4 +71,4 @@ export interface SetWindowResult {
 export declare function setCompactWindow(window: number | undefined, home?: string): SetWindowResult;
 /** "400k" / "400000" / "0.4m" -> 400000. Undefined when unparseable. */
 export declare function parseWindow(raw: string): number | undefined;
-export declare function renderCompactWindows(r: CompactWindowReport, current?: number): string;
+export declare function renderCompactWindows(r: CompactWindowReport, current?: number, limitLines?: (estimates: WindowEstimate[]) => string[]): string;

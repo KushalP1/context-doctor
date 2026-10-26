@@ -56,6 +56,7 @@ import { cacheMisses, cacheMissesLine, cacheMissesSignificant, renderCacheMisses
 import { renderPayback, subagentPayback } from "./subagentpay.js";
 import { compactionQuality, renderCompactionQuality } from "./compactquality.js";
 import { isHandoffId, listHandoffs, readHandoff, renderHandoffList, stripControls } from "./handoff.js";
+import { claudeLimitFit, limitSavingsLines, limitsReport, renderLimits } from "./limits.js";
 const HELP = `context-doctor — profile and optimize LLM context windows
 
 Start here:
@@ -95,6 +96,11 @@ Measure:
                                                 cost, and whether a CLAUDE.md summary or pack pays
   context-doctor compactions [--days n]         Do sessions work worse right after compacting? Re-reads,
                                                 tool errors and your corrections, before vs after
+  context-doctor limits [--days n]              Your plan's limits in their own unit: the 5-hour and
+                                                weekly windows (Claude Pro/Max, via the status line)
+                                                and Codex's, the pace, when each runs out, and what
+                                                1M tokens of each kind cost in %, fitted on your own
+                                                readings with the fit's error
   context-doctor cache-misses [--days n]        Requests that re-wrote the prompt cache while it was
                                                 still warm: priced, by model and context size, with
                                                 the cause where the transcript shows one
@@ -203,7 +209,7 @@ Options:
   --limit <n>             (accuracy, session --list, reads, tasks, subagents) How many to sample
                           or list
   --days <n>              (savings, compact-window, overhead, reads, tasks, subagents, compactions,
-                          cache-misses)
+                          cache-misses, limits)
                           Days of history to read (default 30; compactions 60)
   -q, --query <text>      (pack) The question to rank chunks against
   --max-tokens <n>        (pack) Token budget (default 4000); (ci) fail over this many tokens
@@ -273,7 +279,7 @@ function usageError(message) {
 const COMMANDS = [
     "analyze", "optimize", "proxy", "install", "uninstall", "savings", "compact-window", "autopilot", "mcp",
     "instructions", "session", "cursor", "statusline", "hook", "report", "doctor", "dashboard", "init",
-    "experiment", "diff", "accuracy", "overhead", "ci", "cache-plan", "compactions", "cache-misses", "subagents", "tasks",
+    "experiment", "diff", "accuracy", "overhead", "ci", "cache-plan", "compactions", "cache-misses", "limits", "subagents", "tasks",
     "reads", "pack", "watch", "ab", "handoff", "help", "version",
 ];
 /** --strategy takes one of the optimizer's ids; a typo used to run nothing and report success. */
@@ -771,9 +777,16 @@ async function main() {
         const misses = cacheMisses(args.days ?? 30, undefined, checking.tick);
         checking.clear();
         const on = existsSync(autopilotPaths().config);
+        // Savings in the plan's own unit, only when a fit on the user's limit readings is good enough.
+        const limitFit = claudeLimitFit(limitsReport(args.days ?? 30, { claudeOnly: true }));
+        const limitLines = limitSavingsLines(limitFit, [
+            ["1. Compact when you come back", Math.max(0, report.coldResumeNetUsd)],
+            ["2. Autopilot", report.reachableUsd],
+            ...(cwLine ? [["3. Compact earlier", Math.max(0, cwLine.savedUsd)]] : []),
+        ], report.days);
         if (args.json) {
             const { largest: _largest, ...missSummary } = misses;
-            console.log(JSON.stringify({ ...report, cacheMisses: missSummary }, null, 2));
+            console.log(JSON.stringify({ ...report, cacheMisses: missSummary, limitFit: limitFit ?? null }, null, 2));
         }
         else if (args.share) {
             const text = renderShare(report);
@@ -782,7 +795,7 @@ async function main() {
                 console.log(copyToClipboard(text) ? "\n(copied to the clipboard)" : "\n(no clipboard tool found; copy the lines above)");
         }
         else {
-            console.log(renderSavings(report, on, cwLine, cacheMissesSignificant(misses) ? cacheMissesLine(misses) : undefined));
+            console.log(renderSavings(report, on, cwLine, cacheMissesSignificant(misses) ? cacheMissesLine(misses) : undefined, limitLines));
             if (!args.command)
                 console.log(`\nAll commands: ${selfCommand("--help")}`);
         }
@@ -836,7 +849,8 @@ async function main() {
         const replaying = progressLine("Replaying your sessions at each window");
         const cw = estimateCompactWindows(windows.sort((a, b) => a - b), args.days ?? 30, undefined, reread, replaying.tick);
         replaying.clear();
-        console.log(renderCompactWindows(cw, current));
+        const limitFit = claudeLimitFit(limitsReport(cw.days, { claudeOnly: true }));
+        console.log(renderCompactWindows(cw, current, (estimates) => limitSavingsLines(limitFit, estimates.map((e) => [`${Math.round(e.window / 1000)}k window`, Math.max(0, e.savedUsd)]), cw.days)));
         return;
     }
     if (args.command === "autopilot") {
@@ -956,7 +970,15 @@ async function main() {
         const reading = progressLine("Reading your Claude Code transcripts");
         const report = cacheMisses(args.days ?? 30, undefined, reading.tick);
         reading.clear();
-        console.log(args.json ? JSON.stringify(report, null, 2) : renderCacheMisses(report));
+        const limitLines = limitSavingsLines(claudeLimitFit(limitsReport(report.days, { claudeOnly: true })), [["Misses above cache-read price", report.extraUsd]], report.days);
+        console.log(args.json ? JSON.stringify(report, null, 2) : renderCacheMisses(report, limitLines));
+        return;
+    }
+    if (args.command === "limits") {
+        const reading = progressLine("Reading your limits and usage");
+        const report = limitsReport(args.days ?? 30);
+        reading.clear();
+        console.log(args.json ? JSON.stringify(report, null, 2) : renderLimits(report));
         return;
     }
     if (args.command === "compactions") {

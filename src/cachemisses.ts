@@ -355,7 +355,7 @@ export function cacheMissesLine(r: CacheMissReport): string[] {
   ];
 }
 
-export function renderCacheMisses(r: CacheMissReport): string {
+export function renderCacheMisses(r: CacheMissReport, limitLines?: string[]): string {
   const out = ["CACHE MISSES WITHIN THE CACHE LIFETIME", "═".repeat(60)];
   if (r.eligible === 0) {
     out.push(`No Claude Code requests in the last ${r.days} days that could have read a warm cache (consecutive, within the cache lifetime, over 20k tokens).`);
@@ -367,6 +367,7 @@ export function renderCacheMisses(r: CacheMissReport): string {
     `${r.misses} of ${r.eligible.toLocaleString("en-US")} warm requests (${pct(r.misses / r.eligible)}) re-wrote the cache instead of reading it:`,
     `~${formatTokens(r.missWriteTokens)} tokens written again, ${money(r.extraUsd)} above cache-read price${share}.` +
       (r.unpricedMisses ? ` ${r.unpricedMisses} on unpriced models not included.` : ""),
+    ...(limitLines?.length ? ["", ...limitLines] : []),
     "",
     `  ${"model".padEnd(24)} ${"misses".padStart(14)} ${"rate".padStart(7)} ${"cost".padStart(9)}`
   );
