@@ -60,6 +60,7 @@ import { isHandoffId, listHandoffs, readHandoff, renderHandoffList, stripControl
 import { claudeLimitFit, limitSavingsLines, limitsReport, renderLimits } from "./limits.js";
 import { currentTranscript, findSession, recall, renderRecall } from "./recall.js";
 import { measureSubagentCosts, renderCostMedians, saveSubagentCosts } from "./fanout.js";
+import { applyPrune, canonical, planPrune, renderPrune, undoPrune } from "./prune.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -147,6 +148,13 @@ Fix automatically:
 
 Fix on request:
   context-doctor optimize <file|->  [options]   Apply safe fixes, print slimmed conversation
+  context-doctor overhead prune [--days n] [--write] [--undo]
+                                                MCP servers and skills each project has not used in
+                                                n days (default 30), from its transcripts; --write
+                                                switches them off for this folder's project in its
+                                                .claude/settings.local.json (backup kept), --undo
+                                                takes exactly those entries out. Never the app's
+                                                connectors, plugins, or context-doctor itself
   context-doctor overhead split <file> [--min-tokens n] [--write]
                                                 Move a memory file's big sections to a reference
                                                 file, leaving pointers (plan first; --write backs up)
@@ -327,6 +335,7 @@ interface Args {
   config?: string;
   query?: string;
   session?: string;
+  undo?: boolean;
   maxTokens?: number;
   chunkTokens?: number;
   ids?: string[];
@@ -423,6 +432,7 @@ const FLAGS: FlagSpec[] = [
   { names: ["--chunk-tokens"], value: "number", num: { min: 50, integer: true }, set: (a, v) => { a.chunkTokens = v; } },
   { names: ["--mcp"], set: (a) => { a.mcp = true; } },
   { names: ["--write"], set: (a) => { a.write = true; } },
+  { names: ["--undo"], set: (a) => { a.undo = true; } },
   { names: ["--calls"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.calls = v; } },
   { names: ["--explicit"], set: (a) => { a.explicit = true; } },
   { names: ["--semantic"], set: (a) => { a.semantic = a.semantic || true; } },
@@ -1165,6 +1175,44 @@ async function main(): Promise<void> {
     }
     console.log(args.json ? JSON.stringify(report, null, 2) : args.markdown ? renderCiMarkdown(report, { model: args.model, requestsPerDay: args.requestsPerDay }) : renderCiText(report));
     if (report.breaches.length) process.exitCode = 1;
+    return;
+  }
+
+  if (args.command === "overhead" && args.positionals?.[0] === "prune") {
+    const cwd = canonical(process.cwd());
+    if (args.undo) {
+      const r = undoPrune(cwd);
+      console.log(r
+        ? `Removed ${r.removed.length} entr${r.removed.length === 1 ? "y" : "ies"} prune had added to ${r.file.replace(homedir(), "~")}${r.removed.length ? `: ${r.removed.join(", ")}` : ""}.`
+        : "Nothing to undo: prune has not written to this folder's project.");
+      return;
+    }
+    const reading = progressLine("Reading which servers and skills each project used");
+    const plan = planPrune(args.days ?? 30);
+    reading.clear();
+    // This folder's project is planned even with no sessions in the period (it then has too few to judge).
+    if (!plan.plans.some((p) => p.cwd === cwd)) plan.plans.push(...planPrune(args.days ?? 30, { cwds: [cwd], usage: new Map() }).plans);
+    const usdPerK = measureBaselines(args.days ?? 30).find((b) => b.agent === "Claude Code")?.usdPerKPerMonth;
+    if (args.json) {
+      console.log(JSON.stringify(plan, null, 2));
+    } else {
+      console.log(withInvocation(renderPrune(plan, cwd, { usdPerKPerMonth: usdPerK })));
+    }
+    if (args.write) {
+      const here = plan.plans.find((p) => p.cwd === cwd);
+      if (!here || here.thin || here.unused.length === 0) {
+        console.log("\nNothing written: nothing unused to switch off in this folder's project.");
+        return;
+      }
+      try {
+        const r = applyPrune(here);
+        const n = r.added.disabledMcpjsonServers.length + r.added.deniedMcpServers.length + r.added.skillOverrides.length;
+        console.log(`\nWritten: ${n} entr${n === 1 ? "y" : "ies"} in ${r.file.replace(homedir(), "~")}${r.backup ? ` (its original kept as ${r.backup.replace(homedir(), "~")})` : ""}. New sessions here start without them. Undo: ${selfCommand("overhead prune --undo")}`);
+      } catch (e) {
+        console.error(`Not written: ${(e as Error).message}`);
+        process.exitCode = 1;
+      }
+    }
     return;
   }
 

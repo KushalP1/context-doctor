@@ -1,0 +1,366 @@
+/**
+ * `context-doctor overhead prune`: MCP servers and skills a project has not
+ * used in N days, switched off for that project only.
+ *
+ * Every MCP server's tool definitions (or, with tool search, their names)
+ * and every skill's name and description ride in each request of every
+ * session, used or not ("33k tokens before reading the prompt"). The
+ * transcripts say what each project actually calls: MCP tools are
+ * `mcp__<server>__<tool>`, skills are the `Skill` tool (`{skill}`) or a
+ * typed `/<name>`. The plan lists, per project with enough sessions, the
+ * configured servers and installed skills with no use in the period; with
+ * `--write` they are switched off for the current folder's project, in its
+ * own `.claude/settings.local.json` (a backup kept, each entry recorded so
+ * `--undo` takes exactly those out again):
+ *
+ *  - a server from the project's `.mcp.json`: `disabledMcpjsonServers`;
+ *  - a server from ~/.claude.json (user or local scope): `deniedMcpServers`
+ *    `{serverName}` (settings-reference: entries from every settings file
+ *    merge; it shows as blocked in /mcp until the entry is removed);
+ *  - a personal or project skill: `skillOverrides` `"off"` (Claude Code
+ *    2.1.129+; older versions ignore the key).
+ *
+ * Never touched: anything the app provides (claude.ai connectors, the
+ * desktop app's own servers, plugin servers and skills), which no config
+ * file here lists, and context-doctor's own server, whose standing rules
+ * work without a single call. Verified against the settings reference and
+ * the 2.1.308 binary (disabledMcpjsonServers, deniedMcpServers merged from
+ * every settings file, skillOverrides).
+ */
+
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { statePath } from "./ledger.js";
+import { forEachLine, listSessions } from "./session.js";
+import { subagentDir } from "./subagents.js";
+import { claudeMcpConfigs, toolPrefixName, type McpServerConfig } from "./mcpschema.js";
+import { estimateTokens, formatTokens } from "./tokens.js";
+import { formatUsd } from "./pricing.js";
+
+const DAY = 86_400_000;
+
+/** A folder as one spelling: /var and /private/var (macOS) or a symlinked checkout are the same project. */
+export function canonical(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+}
+/** Fewer sessions than this in the period say too little about what a project uses. */
+export const MIN_SESSIONS = 3;
+
+export interface ProjectUse {
+  cwd: string;
+  sessions: number;
+  /** MCP calls by server, as tool names spell it. */
+  mcpCalls: Map<string, number>;
+  /** Skill uses by name (the part after a plugin's "plugin:" prefix too). */
+  skillUses: Map<string, number>;
+}
+
+/** What each project (by the `cwd` its sessions record) used in the last `days`, subagents included. */
+export function projectUsage(days = 30, paths?: string[], now = Date.now()): Map<string, ProjectUse> {
+  const since = now - days * DAY;
+  const files = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
+  const out = new Map<string, ProjectUse>();
+  for (const path of files) {
+    let cwd: string | undefined;
+    const calls = new Map<string, number>();
+    const skills = new Map<string, number>();
+    let active = false;
+    const scan = (file: string) => forEachLine(file, (line) => {
+      if (!cwd && line.includes('"cwd"')) {
+        try { const e = JSON.parse(line); if (typeof e?.cwd === "string") cwd = e.cwd; } catch { /* not a row */ }
+      }
+      const tool = line.includes('"tool_use"') && (line.includes('"name":"mcp__') || line.includes('"name":"Skill"'));
+      const slash = line.includes("<command-name>/");
+      if (!tool && !slash) {
+        if (!active && line.includes('"timestamp"')) {
+          try { if (Date.parse(JSON.parse(line)?.timestamp) >= since) active = true; } catch { /* skip */ }
+        }
+        return;
+      }
+      let e: any;
+      try { e = JSON.parse(line); } catch { return; }
+      if (Date.parse(e?.timestamp) < since) return;
+      active = true;
+      const content = e?.message?.content;
+      if (slash) {
+        const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((b: any) => b?.text ?? "").join("\n") : "";
+        for (const m of text.matchAll(/<command-name>\/([\w:.-]+)<\/command-name>/g)) bump(skills, m[1]);
+      }
+      if (!Array.isArray(content)) return;
+      for (const b of content) {
+        if (b?.type !== "tool_use" || typeof b.name !== "string") continue;
+        if (b.name === "Skill" && typeof b.input?.skill === "string") bump(skills, b.input.skill);
+        const server = /^mcp__(.+?)__./.exec(b.name)?.[1];
+        if (server) calls.set(server, (calls.get(server) ?? 0) + 1);
+      }
+    });
+    try {
+      scan(path);
+      let agents: string[] = [];
+      try { agents = readdirSync(subagentDir(path)).filter((f) => f.endsWith(".jsonl")); } catch { /* none */ }
+      for (const a of agents) scan(join(subagentDir(path), a));
+    } catch {
+      continue;
+    }
+    if (!cwd || !active) continue;
+    const key = canonical(cwd);
+    const p = out.get(key) ?? { cwd: key, sessions: 0, mcpCalls: new Map(), skillUses: new Map() };
+    p.sessions++;
+    for (const [k, n] of calls) p.mcpCalls.set(k, (p.mcpCalls.get(k) ?? 0) + n);
+    for (const [k, n] of skills) p.skillUses.set(k, (p.skillUses.get(k) ?? 0) + n);
+    out.set(key, p);
+  }
+  return out;
+}
+
+function bump(m: Map<string, number>, name: string): void {
+  // "plugin:skill" counts for both spellings: the plugin's own and the bare name.
+  m.set(name, (m.get(name) ?? 0) + 1);
+  const bare = name.includes(":") ? name.slice(name.lastIndexOf(":") + 1) : undefined;
+  if (bare) m.set(bare, (m.get(bare) ?? 0) + 1);
+}
+
+export interface SkillInfo {
+  name: string;
+  scope: "personal" | "project";
+  /** Tokens of its listing (name and description) in every request. */
+  tokens: number;
+}
+
+/** Skills Claude Code lists in `cwd`: ~/.claude/skills and <cwd>/.claude/skills (not plugins'). */
+export function installedSkills(cwd: string, home = homedir()): SkillInfo[] {
+  const out: SkillInfo[] = [];
+  const dirs: Array<[string, SkillInfo["scope"]]> = [[join(home, ".claude", "skills"), "personal"], [join(cwd, ".claude", "skills"), "project"]];
+  for (const [dir, scope] of dirs) {
+    let names: string[];
+    try { names = readdirSync(dir); } catch { continue; }
+    for (const folder of names) {
+      let md: string;
+      try { md = readFileSync(join(dir, folder, "SKILL.md"), "utf8"); } catch { continue; }
+      const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(md)?.[1] ?? "";
+      const name = /^name:\s*(.+)$/m.exec(front)?.[1]?.trim().replace(/^["']|["']$/g, "") || folder;
+      const description = /^description:\s*(.+)$/m.exec(front)?.[1]?.trim() ?? "";
+      if (out.some((s) => s.name === name)) continue;
+      out.push({ name, scope, tokens: estimateTokens(`${name}: ${description}`, "claude") });
+    }
+  }
+  return out;
+}
+
+export interface PruneItem {
+  kind: "mcp" | "skill";
+  name: string;
+  scope: McpServerConfig["scope"] | SkillInfo["scope"];
+  /** The settings entry that switches it off for this project. */
+  entry: "disabledMcpjsonServers" | "deniedMcpServers" | "skillOverrides";
+  tokens?: number;
+}
+
+export interface ProjectPlan {
+  cwd: string;
+  sessions: number;
+  unused: PruneItem[];
+  /** Configured or installed, and used: name and uses. */
+  used: Array<{ kind: "mcp" | "skill"; name: string; uses: number }>;
+  /** Too few sessions to judge. */
+  thin: boolean;
+  /** Already switched off here by an earlier prune (or by hand). */
+  alreadyOff: string[];
+}
+
+export interface PrunePlan {
+  days: number;
+  plans: ProjectPlan[];
+}
+
+/** The project's own settings file, where prune writes. */
+export function localSettingsPath(cwd: string): string {
+  return join(cwd, ".claude", "settings.local.json");
+}
+
+function readObject(path: string): Record<string, any> {
+  if (!existsSync(path)) return {};
+  const v = JSON.parse(readFileSync(path, "utf8"));
+  if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error(`${path} is not a JSON object`);
+  return v;
+}
+
+const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : typeof v === "string" ? [v] : []);
+
+/** What a settings file already switches off. */
+function offIn(settings: Record<string, any>): Set<string> {
+  const off = new Set<string>();
+  for (const n of list(settings.disabledMcpjsonServers)) if (typeof n === "string") off.add(`mcp:${n}`);
+  for (const d of list(settings.deniedMcpServers)) if (typeof (d as any)?.serverName === "string") off.add(`mcp:${(d as any).serverName}`);
+  for (const [k, v] of Object.entries(settings.skillOverrides ?? {})) if (v === "off") off.add(`skill:${k}`);
+  return off;
+}
+
+/** context-doctor's own server: its standing rules work with no calls at all. */
+const OURS = /^context-doctor$/;
+
+export function planPrune(days = 30, opts: { home?: string; usage?: Map<string, ProjectUse>; cwds?: string[]; minSessions?: number } = {}): PrunePlan {
+  const home = opts.home ?? homedir();
+  const usage = opts.usage ?? projectUsage(days);
+  const cwds = opts.cwds ?? [...usage.keys()];
+  const plans: ProjectPlan[] = [];
+  for (const cwd of cwds) {
+    const use = usage.get(canonical(cwd)) ?? { cwd: canonical(cwd), sessions: 0, mcpCalls: new Map(), skillUses: new Map() };
+    let settings: Record<string, any> = {};
+    try { settings = readObject(localSettingsPath(cwd)); } catch { /* unreadable: nothing counts as off */ }
+    const off = offIn(settings);
+    const plan: ProjectPlan = { cwd: use.cwd, sessions: use.sessions, unused: [], used: [], thin: use.sessions < (opts.minSessions ?? MIN_SESSIONS), alreadyOff: [] };
+    for (const s of claudeMcpConfigs(cwd, home)) {
+      if (OURS.test(s.name)) continue;
+      const uses = use.mcpCalls.get(toolPrefixName(s.name)) ?? 0;
+      if (off.has(`mcp:${s.name}`)) { plan.alreadyOff.push(s.name); continue; }
+      if (uses > 0) plan.used.push({ kind: "mcp", name: s.name, uses });
+      else plan.unused.push({ kind: "mcp", name: s.name, scope: s.scope, entry: s.scope === ".mcp.json" ? "disabledMcpjsonServers" : "deniedMcpServers" });
+    }
+    for (const k of installedSkills(cwd, home)) {
+      if (OURS.test(k.name)) continue;
+      const uses = use.skillUses.get(k.name) ?? 0;
+      if (off.has(`skill:${k.name}`)) { plan.alreadyOff.push(k.name); continue; }
+      if (uses > 0) plan.used.push({ kind: "skill", name: k.name, uses });
+      else plan.unused.push({ kind: "skill", name: k.name, scope: k.scope, entry: "skillOverrides", tokens: k.tokens });
+    }
+    plans.push(plan);
+  }
+  plans.sort((a, b) => b.sessions - a.sessions);
+  return { days, plans };
+}
+
+/** Where `--write` records what it added, for `--undo`. */
+export function pruneRecordPath(): string {
+  return join(dirname(statePath()), ".context-doctor-pruned.json");
+}
+
+interface Added { disabledMcpjsonServers: string[]; deniedMcpServers: string[]; skillOverrides: string[] }
+
+function readRecord(): Record<string, { file: string; at: number; added: Added }> {
+  try {
+    const v = JSON.parse(readFileSync(pruneRecordPath(), "utf8"));
+    return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Switch the plan's unused servers and skills off in the project's
+ * `.claude/settings.local.json`. The file's original is kept once as
+ * `.context-doctor.backup`; every entry added is recorded for `--undo`.
+ */
+export function applyPrune(plan: ProjectPlan): { file: string; backup?: string; added: Added } {
+  const file = localSettingsPath(plan.cwd);
+  const settings = readObject(file);
+  const added: Added = { disabledMcpjsonServers: [], deniedMcpServers: [], skillOverrides: [] };
+  for (const item of plan.unused) {
+    if (item.entry === "disabledMcpjsonServers") {
+      // Always an array: a single name as a string made Claude Code ignore the file before 2.1.299.
+      const cur = list(settings.disabledMcpjsonServers).filter((x) => typeof x === "string") as string[];
+      if (!cur.includes(item.name)) { settings.disabledMcpjsonServers = [...cur, item.name]; added.disabledMcpjsonServers.push(item.name); }
+    } else if (item.entry === "deniedMcpServers") {
+      const cur = list(settings.deniedMcpServers);
+      if (!cur.some((d) => (d as any)?.serverName === item.name)) { settings.deniedMcpServers = [...cur, { serverName: item.name }]; added.deniedMcpServers.push(item.name); }
+    } else {
+      const cur = settings.skillOverrides && typeof settings.skillOverrides === "object" && !Array.isArray(settings.skillOverrides) ? settings.skillOverrides : {};
+      // A choice the user already made for this skill ("on", "name-only") stands.
+      if (cur[item.name] === undefined) { settings.skillOverrides = { ...cur, [item.name]: "off" }; added.skillOverrides.push(item.name); }
+    }
+  }
+  const any = added.disabledMcpjsonServers.length + added.deniedMcpServers.length + added.skillOverrides.length > 0;
+  if (!any) return { file, added };
+  mkdirSync(dirname(file), { recursive: true });
+  let backup: string | undefined;
+  if (existsSync(file) && !existsSync(file + ".context-doctor.backup")) {
+    copyFileSync(file, file + ".context-doctor.backup");
+    backup = file + ".context-doctor.backup";
+  }
+  writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
+  const record = readRecord();
+  const prev = record[plan.cwd]?.added ?? { disabledMcpjsonServers: [], deniedMcpServers: [], skillOverrides: [] };
+  record[plan.cwd] = {
+    file,
+    at: Date.now(),
+    added: {
+      disabledMcpjsonServers: [...new Set([...prev.disabledMcpjsonServers, ...added.disabledMcpjsonServers])],
+      deniedMcpServers: [...new Set([...prev.deniedMcpServers, ...added.deniedMcpServers])],
+      skillOverrides: [...new Set([...prev.skillOverrides, ...added.skillOverrides])],
+    },
+  };
+  mkdirSync(dirname(pruneRecordPath()), { recursive: true });
+  writeFileSync(pruneRecordPath(), JSON.stringify(record, null, 2));
+  return { file, backup, added };
+}
+
+/** Take out exactly what `--write` added for this project (entries changed since by hand stay). */
+export function undoPrune(cwd: string): { file: string; removed: string[] } | undefined {
+  const key = canonical(cwd);
+  const record = readRecord();
+  const r = record[key];
+  if (!r) return undefined;
+  const file = localSettingsPath(key);
+  const removed: string[] = [];
+  if (existsSync(file)) {
+    const settings = readObject(file);
+    const keepNames = (v: unknown, drop: string[]) => list(v).filter((x) => !(typeof x === "string" && drop.includes(x) && removed.push(x)));
+    if (r.added.disabledMcpjsonServers.length) {
+      settings.disabledMcpjsonServers = keepNames(settings.disabledMcpjsonServers, r.added.disabledMcpjsonServers);
+      if (!(settings.disabledMcpjsonServers as unknown[]).length) delete settings.disabledMcpjsonServers;
+    }
+    if (r.added.deniedMcpServers.length) {
+      settings.deniedMcpServers = list(settings.deniedMcpServers).filter((d) => !(r.added.deniedMcpServers.includes((d as any)?.serverName) && removed.push((d as any).serverName)));
+      if (!(settings.deniedMcpServers as unknown[]).length) delete settings.deniedMcpServers;
+    }
+    if (r.added.skillOverrides.length && settings.skillOverrides && typeof settings.skillOverrides === "object") {
+      for (const n of r.added.skillOverrides) if (settings.skillOverrides[n] === "off") { delete settings.skillOverrides[n]; removed.push(n); }
+      if (!Object.keys(settings.skillOverrides).length) delete settings.skillOverrides;
+    }
+    writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
+  }
+  delete record[key];
+  writeFileSync(pruneRecordPath(), JSON.stringify(record, null, 2));
+  return { file, removed };
+}
+
+const tilde = (p: string, home = homedir()) => (p.startsWith(home) ? "~" + p.slice(home.length) : p);
+
+export function renderPrune(r: PrunePlan, current: string, opts: { usdPerKPerMonth?: number; home?: string } = {}): string {
+  const out = ["UNUSED MCP SERVERS AND SKILLS, BY PROJECT", "═".repeat(60), `Last ${r.days} days of Claude Code sessions (subagents included).`];
+  const here = r.plans.find((p) => p.cwd === canonical(current));
+  const shown = r.plans.filter((p) => p.unused.length || p.used.length || p.alreadyOff.length || p === here);
+  if (!shown.length) {
+    out.push("", "No project here has MCP servers or skills of its own configured (context-doctor's own, the app's connectors and plugins are left out).");
+    return out.join("\n");
+  }
+  for (const p of shown.slice(0, 15)) {
+    out.push("", `${tilde(p.cwd, opts.home)}${p.cwd === canonical(current) ? "  (this folder)" : ""}: ${p.sessions} session${p.sessions === 1 ? "" : "s"}`);
+    if (p.thin) out.push(`  Too few sessions to judge (under ${MIN_SESSIONS}); nothing proposed.`);
+    for (const u of p.used) out.push(`  used    ${u.kind === "mcp" ? "server" : "skill "} ${u.name} (${u.uses})`);
+    for (const n of p.alreadyOff) out.push(`  off     ${n} (already switched off here)`);
+    if (!p.thin) {
+      for (const u of p.unused) {
+        const cost = u.tokens !== undefined ? ` ~${formatTokens(u.tokens)} tokens a request${opts.usdPerKPerMonth ? `, ~${formatUsd((u.tokens / 1000) * opts.usdPerKPerMonth)}/month` : ""}` : "";
+        out.push(`  unused  ${u.kind === "mcp" ? "server" : "skill "} ${u.name} (${u.scope}): ${u.entry}${cost}`);
+      }
+    }
+  }
+  const mine = here && !here.thin ? here.unused.length : 0;
+  out.push(
+    "",
+    mine
+      ? `Switch off the ${mine} unused here, for this project only: context-doctor overhead prune --write`
+      : "Nothing to switch off in this folder's project.",
+    "It writes .claude/settings.local.json (a backup kept, every entry recorded);",
+    "--undo takes exactly those entries out again. For another project, run it there.",
+    "A server's size: context-doctor overhead --mcp. Never touched: the app's connectors,",
+    "plugin servers and skills, and context-doctor's own server."
+  );
+  return out.join("\n");
+}
