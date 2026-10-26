@@ -28,6 +28,7 @@ import { formatUsd, pricingFor } from "./pricing.js";
 import { checkBudget, loadConfig } from "./config.js";
 import { modelSwitchMessage } from "./modelswitch.js";
 import { compactFacts, compactInstructions } from "./precompact.js";
+import { fanoutMessage, subagentCosts, type FanoutState } from "./fanout.js";
 
 /** Default nudge threshold; a project budget or env var can lower/raise it. */
 const DEFAULT_WARN_TOKENS = 80_000;
@@ -74,6 +75,7 @@ interface SessionState {
   b: number; // transcript bytes at last full parse
   cr?: number; // last reply timestamp of the idle period already advised on (cold resume)
   rv?: ResumeVerdict; // Claude Code's SessionStart verdict on the resumed cache
+  fo?: FanoutState; // subagent launches this session and what was said about them (fanout.ts)
 }
 
 /**
@@ -216,6 +218,20 @@ export async function runHook(app?: "copilot"): Promise<void> {
     if (input.hook_event_name === "PreModelSwitch") {
       const message = modelSwitchMessage(input);
       if (message) process.stdout.write(JSON.stringify({ systemMessage: message }) + "\n");
+      return;
+    }
+    // Before a subagent starts (PreToolUse on the Agent tool): its price at
+    // the user's own median, to the user, and once to the model. Never a
+    // permission decision, never exit 2: the subagent always starts.
+    if (input.hook_event_name === "PreToolUse") {
+      const sid = input.session_id ?? input.transcript_path ?? "unknown";
+      const prev = readSessionState(sid);
+      const r = fanoutMessage(input as Parameters<typeof fanoutMessage>[0], subagentCosts(), prev.fo ?? { spawns: [], shown: [] });
+      writeSessionState(sid, { ...prev, fo: r.state });
+      const out: Record<string, unknown> = {};
+      if (r.systemMessage) out.systemMessage = r.systemMessage;
+      if (r.additionalContext) out.hookSpecificOutput = { hookEventName: "PreToolUse", additionalContext: r.additionalContext };
+      if (Object.keys(out).length) process.stdout.write(JSON.stringify(out) + "\n");
       return;
     }
     // A resumed session: Claude Code says whether its cache expired and what

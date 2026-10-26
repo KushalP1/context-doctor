@@ -22,6 +22,7 @@ import { COPILOT_HOOK_EVENT, copilotHookFilePath, copilotLegacyConfigPath, copil
 import { describeDesktopUsage, desktopUsage } from "./desktopusage.js";
 import { withInvocation } from "./invocation.js";
 import { describeInstalls, modelSwitchReadiness, PRE_MODEL_SWITCH_SINCE } from "./modelswitch.js";
+import { describeCosts, subagentCostsPath, type SubagentCosts } from "./fanout.js";
 
 function claudeDesktopConfigPath(): string {
   switch (platform()) {
@@ -149,6 +150,24 @@ function pluginEnabled(layers: Array<Record<string, any>>): boolean {
     }
   }
   return [...state.values()].some(Boolean);
+}
+
+/**
+ * The subagent price (PreToolUse on the Agent tool, fanout.ts): registered
+ * with a matcher that names the tool by both its names, and what the medians
+ * it quotes come from.
+ */
+function fanoutCheck(settings: Record<string, any>, plugin: boolean): Check {
+  const label = "Subagent price";
+  const entries: Array<{ matcher?: string; hooks?: Array<{ command?: string }> }> = Array.isArray(settings.hooks?.PreToolUse) ? settings.hooks.PreToolUse : [];
+  const ours = entries.find((e) => /context-doctor|cli\.js"?\s+hook/.test(e.hooks?.[0]?.command ?? ""));
+  let costs: SubagentCosts | undefined;
+  try { costs = JSON.parse(readFileSync(subagentCostsPath(), "utf8")); } catch { /* not measured yet */ }
+  const basis = costs?.all ? `; quotes your medians (${describeCosts(costs)})` : "; quotes your medians once you have run a few subagents";
+  if (ours && !/\bAgent\b/.test(ours.matcher ?? "")) return { label, status: "warn", detail: `PreToolUse entry without the Agent matcher (${JSON.stringify(ours.matcher ?? "")}): it runs before every tool; re-run context-doctor install` };
+  if (ours) return { label, status: "ok", detail: `PreToolUse on the Agent tool: before a subagent starts, its price at your median and the Sonnet option; never blocks${basis}` };
+  if (plugin) return { label, status: "ok", detail: `PreToolUse: provided by the context-doctor plugin${basis}` };
+  return { label, status: "warn", detail: "not registered: subagents start with no price shown; run context-doctor install" };
 }
 
 /**
@@ -377,6 +396,7 @@ export async function runDoctor(): Promise<void> {
       } else if (!ours && plugin) {
         checks.push({ label: "Every-prompt hook", status: "ok", detail: "provided by the context-doctor plugin" });
         checks.push({ label: "Compaction hook", status: "ok", detail: "PreCompact: provided by the context-doctor plugin" });
+        checks.push(fanoutCheck(settings, plugin));
       } else if (!ours) {
         checks.push(missingHook("Every-prompt hook", claudeMcp));
       } else {
@@ -396,6 +416,7 @@ export async function runDoctor(): Promise<void> {
             ? { label: "Compaction hook", status: "ok", detail: "PreCompact: each compaction's summary keeps the session's files, open tasks, your instructions and failing commands" }
             : { label: "Compaction hook", status: "warn", detail: "not registered: compactions use generic instructions; run context-doctor install" }
         );
+        checks.push(fanoutCheck(settings, plugin));
       }
       checks.push(modelSwitchCheck(settings, plugin));
     } catch (e) {

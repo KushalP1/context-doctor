@@ -12,6 +12,7 @@ import { delimiter, dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { selfCommand, withInvocation } from "./invocation.js";
 import { claudeCodeInstalls, describeInstalls, modelSwitchReadiness, PRE_MODEL_SWITCH_SINCE } from "./modelswitch.js";
+import { FANOUT_MATCHER } from "./fanout.js";
 import { COPILOT_HOOK_EVENT, copilotHome, copilotHookFilePath, copilotMcpConfigPath, isOurCopilotEntry, vsCodePresent } from "./copilot.js";
 function claudeDesktopConfigPath() {
     switch (platform()) {
@@ -137,7 +138,7 @@ export function claudeInstalledCopies(home = homedir()) {
     catch { /* unreadable: not ours to judge here */ }
     try {
         const hooks = readJson(join(home, ".claude", "settings.json")).hooks ?? {};
-        if (["UserPromptSubmit", "PreCompact", "SessionStart", "PreModelSwitch"].some((ev) => (hooks[ev] ?? []).some?.(isOurHookEntry)))
+        if (["UserPromptSubmit", "PreCompact", "SessionStart", "PreModelSwitch", "PreToolUse"].some((ev) => (hooks[ev] ?? []).some?.(isOurHookEntry)))
             found.push("hooks in ~/.claude/settings.json");
     }
     catch { /* unreadable */ }
@@ -313,6 +314,10 @@ function installHook() {
     if (path) {
         installHookInto(settings, join(homedir(), ".claude"), "PreCompact");
         installHookInto(settings, join(homedir(), ".claude"), "SessionStart");
+        // Before a subagent starts: its price. PreToolUse is in every Claude Code
+        // with hooks (2.1.62's event list has it), so no version guard is needed,
+        // and a timeout never blocks the call. "Task" is the tool's name before 2.1.63.
+        installHookInto(settings, join(homedir(), ".claude"), "PreToolUse", { matcher: FANOUT_MATCHER, timeout: 10 });
     }
     return path;
 }
@@ -322,25 +327,29 @@ function installHook() {
  * ({hooks:{UserPromptSubmit:[{hooks:[{type:"command",command}]}]}}), so one
  * writer serves both; only the path differs.
  */
-function installHookInto(settingsPath, gateDir, event = "UserPromptSubmit") {
+function installHookInto(settingsPath, gateDir, event = "UserPromptSubmit", opts = {}) {
     if (!existsSync(gateDir))
         return null; // that app is not on this machine
     const settings = readJson(settingsPath);
     settings.hooks = settings.hooks ?? {};
     const entries = settings.hooks[event] ?? [];
     const want = hookCommand();
+    const entry = () => ({
+        ...(opts.matcher ? { matcher: opts.matcher } : {}),
+        hooks: [{ type: "command", command: want, ...(opts.timeout ? { timeout: opts.timeout } : {}) }],
+    });
     // Re-running install must REPAIR a stale entry, not skip it. Earlier versions
     // wrote a version-pinned node binary; if we only checked "is it present?" an
     // upgrade would leave that broken command in place forever.
     const ours = entries.filter(isOurHookEntry);
     const current = ours[0]?.hooks?.[0]?.command;
     if (ours.length === 0) {
-        entries.push({ hooks: [{ type: "command", command: want }] });
+        entries.push(entry());
     }
-    else if (current !== want) {
+    else if (current !== want || (ours[0]?.matcher ?? undefined) !== opts.matcher) {
         // Replace every entry of ours with exactly one correct entry.
         const others = entries.filter((e) => !isOurHookEntry(e));
-        others.push({ hooks: [{ type: "command", command: want }] });
+        others.push(entry());
         settings.hooks[event] = others;
         writeJsonWithBackup(settingsPath, settings);
         return settingsPath;
@@ -359,6 +368,7 @@ function uninstallHook(attempt) {
     attempt("Claude Code compaction hook", () => uninstallHookFrom(claude, "Claude Code compaction hook", "PreCompact"));
     attempt("Claude Code session-start hook", () => uninstallHookFrom(claude, "Claude Code session-start hook", "SessionStart"));
     attempt("Claude Code model-switch warning", () => uninstallHookFrom(claude, "Claude Code model-switch warning", "PreModelSwitch"));
+    attempt("Claude Code subagent price", () => uninstallHookFrom(claude, "Claude Code subagent price", "PreToolUse"));
     attempt("Codex every-prompt hook", () => uninstallHookFrom(join(homedir(), ".codex", "hooks.json"), "Codex every-prompt hook"));
     attempt("Gemini CLI every-prompt hook", () => uninstallHookFrom(geminiSettingsPath(), "Gemini CLI every-prompt hook", "BeforeAgent"));
     attempt("Cursor hooks", () => uninstallCursorHook());
@@ -1188,6 +1198,8 @@ const OUR_CLAUDE_FILES = [
     ".context-doctor-autopilot-paused",
     ".context-doctor-proxy.log",
     ".context-doctor-proxy-restart",
+    ".context-doctor-limits.jsonl",
+    ".context-doctor-subagent-costs.json",
 ];
 export async function runUninstall() {
     changes = 0;

@@ -70,7 +70,7 @@ function blockTokens(content: unknown): number {
 }
 
 /** A subagent's bill (usage priced as the cache bills it), steps, startup context, start time and the tool output it read. */
-function scanSubagent(path: string): { costUsd: number; readTokens: number; task: string; steps: number; startup: number; start: number; model?: string; writeMult: number } {
+export function scanSubagent(path: string): { costUsd: number; readTokens: number; task: string; steps: number; startup: number; start: number; model?: string; writeMult: number } {
   let costUsd = 0, readTokens = 0, task = "", model: string | undefined;
   let steps = 0, startup = 0, start = Infinity, writes5m = 0, writes1h = 0;
   const sighting = replyCounter();

@@ -45,5 +45,16 @@ export interface PaybackReport {
     sessions: number;
     subagents: SubagentPayback[];
 }
+/** A subagent's bill (usage priced as the cache bills it), steps, startup context, start time and the tool output it read. */
+export declare function scanSubagent(path: string): {
+    costUsd: number;
+    readTokens: number;
+    task: string;
+    steps: number;
+    startup: number;
+    start: number;
+    model?: string;
+    writeMult: number;
+};
 export declare function subagentPayback(days?: number, paths?: string[], onProgress?: (done: number, total: number) => void): PaybackReport;
 export declare function renderPayback(r: PaybackReport, top?: number): string;

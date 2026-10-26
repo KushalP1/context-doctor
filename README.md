@@ -47,6 +47,7 @@ Pick where you work. Each takes about a minute and is fully reversible.
 
 **Remove waste automatically**
 - A model-switch warning (`PreModelSwitch`, Claude Code 2.1.251+) shows what a `/model` switch costs before it happens: the whole context re-written into the new model's cache.
+- A subagent price (`PreToolUse` on the Agent tool) shows what a subagent costs before it starts, at your own median for that type (the author's: $3.99 for general-purpose, $1.43 for Explore, 422 runs in 30 days), with the Sonnet price where it would run on Opus or Fable, and a total when launches bunch up. It never blocks.
 - A compaction hook (`PreCompact`) tells each Claude Code compaction what the session cannot lose (files changed, open tasks, your instructions, failing tests), so compacting saves tokens without losing the thread.
 - An every-prompt hook (Claude Code, Codex, Gemini CLI; Cursor after each tool call) tells the model its real context size and the largest waste, and offers `/compact` when you return to a big session after the cache expired.
 - `compact-window`: sets Claude Code's own auto-compact window, measured on your history first. Works in the desktop app too.

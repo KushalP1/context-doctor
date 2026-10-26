@@ -59,6 +59,7 @@ import { compactionQuality, renderCompactionQuality } from "./compactquality.js"
 import { isHandoffId, listHandoffs, readHandoff, renderHandoffList, stripControls } from "./handoff.js";
 import { claudeLimitFit, limitSavingsLines, limitsReport, renderLimits } from "./limits.js";
 import { currentTranscript, findSession, recall, renderRecall } from "./recall.js";
+import { measureSubagentCosts, renderCostMedians, saveSubagentCosts } from "./fanout.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -1111,7 +1112,10 @@ async function main(): Promise<void> {
     const reading = progressLine("Reading your sessions' subagents");
     const report = subagentPayback(args.days ?? 30, undefined, reading.tick);
     reading.clear();
-    console.log(args.json ? JSON.stringify(report, null, 2) : renderPayback(report, args.limit ?? 8));
+    // The medians the subagent price (PreToolUse) quotes, refreshed here.
+    const costs = measureSubagentCosts(args.days ?? 30);
+    if (costs.n > 0) saveSubagentCosts(costs);
+    console.log(args.json ? JSON.stringify({ ...report, medians: costs }, null, 2) : [renderPayback(report, args.limit ?? 8), ...renderCostMedians(costs)].join("\n"));
     return;
   }
 

@@ -27,6 +27,7 @@ import { formatUsd, pricingFor } from "./pricing.js";
 import { checkBudget, loadConfig } from "./config.js";
 import { modelSwitchMessage } from "./modelswitch.js";
 import { compactFacts, compactInstructions } from "./precompact.js";
+import { fanoutMessage, subagentCosts } from "./fanout.js";
 /** Default nudge threshold; a project budget or env var can lower/raise it. */
 const DEFAULT_WARN_TOKENS = 80_000;
 /**
@@ -209,6 +210,23 @@ export async function runHook(app) {
             const message = modelSwitchMessage(input);
             if (message)
                 process.stdout.write(JSON.stringify({ systemMessage: message }) + "\n");
+            return;
+        }
+        // Before a subagent starts (PreToolUse on the Agent tool): its price at
+        // the user's own median, to the user, and once to the model. Never a
+        // permission decision, never exit 2: the subagent always starts.
+        if (input.hook_event_name === "PreToolUse") {
+            const sid = input.session_id ?? input.transcript_path ?? "unknown";
+            const prev = readSessionState(sid);
+            const r = fanoutMessage(input, subagentCosts(), prev.fo ?? { spawns: [], shown: [] });
+            writeSessionState(sid, { ...prev, fo: r.state });
+            const out = {};
+            if (r.systemMessage)
+                out.systemMessage = r.systemMessage;
+            if (r.additionalContext)
+                out.hookSpecificOutput = { hookEventName: "PreToolUse", additionalContext: r.additionalContext };
+            if (Object.keys(out).length)
+                process.stdout.write(JSON.stringify(out) + "\n");
             return;
         }
         // A resumed session: Claude Code says whether its cache expired and what
