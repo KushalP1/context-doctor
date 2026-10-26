@@ -16,6 +16,7 @@
  *   context_best_practices — curated checklist for a given provider/use case
  *   pack_context      — only the chunks of big files a question needs, within a token budget
  *   save_handoff      — store a handoff brief the next chat starts from (a chat's history cannot be cut)
+ *   recall            — search this session's own transcript (compacted turns, cleared output); stdio only
  * Prompts: context_checkup, handoff, ask_file. Resources (stdio): handoff://latest, handoff://<id>.
  */
 
@@ -36,6 +37,7 @@ import { compactOutline, compactProfile, compactSketch, resultMode, type Compact
 import { HANDOFF_LIMITS, handoffDir, listHandoffs, maskSecrets, readHandoff, renderMath, saveHandoff, tildify, tildifyAll, validateHandoff } from "./handoff.js";
 import { sourcesFromOpenAiFiles } from "./fileparams.js";
 import { makeGuard, readJsonBody, refusal } from "./httpguard.js";
+import { currentTranscript, recall, renderRecall } from "./recall.js";
 
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"] as const;
 
@@ -99,7 +101,7 @@ function createServer({ http = false, storeHandoffs = !http }: { http?: boolean;
 
   server.tool(
   "profile_context",
-  "Profile a conversation's context: token breakdown, largest blocks, findings (duplicates, oversized pastes or tool results, base64, long history). Pass `conversation` (JSON or text) or, in a chat app, a `sketch` (~120 tokens). Call it when the user asks about tokens, cost, speed or limits, and once past ~30 turns or 3+ large pastes. Act on the top finding.",
+  "Profile a conversation's context: token breakdown, largest blocks, wasted context. Pass `conversation` (JSON or text) or, in a chat app, a `sketch` (~120 tokens). Call it when the user asks about tokens, cost, speed or limits, and once past ~30 turns or 3+ large pastes. Act on the top finding.",
   {
     conversation: z.string().optional().describe("Conversation JSON or text. In a chat app pass `sketch` instead."),
     sketch: z.object({
@@ -108,7 +110,7 @@ function createServer({ http = false, storeHandoffs = !http }: { http?: boolean;
       blocks: z.array(z.object({
         turn: z.number().int().positive().max(100_000),
         kind: z.enum(["paste", "code", "tool_result", "image", "base64", "text"]),
-        label: z.string().describe("Short name, e.g. 'the nginx config'"),
+        label: z.string().describe("Short name"),
         // Upper bounds are checked in the handler (SKETCH_MAX): each schema
         // keyword rides in every request's tool definitions.
         approx_tokens: z.number().positive().optional(),
@@ -119,7 +121,7 @@ function createServer({ http = false, storeHandoffs = !http }: { http?: boolean;
         stale: z.boolean().optional().describe("Acted on, no longer needed"),
       })).max(500).describe("Only blocks over ~500 tokens, repeated, or images."),
     }).optional().describe("For chat apps. One size hint per block: lines for code, words for prose, chars or tokens for logs and tool output."),
-    model: z.string().optional().describe("Model for window math, e.g. claude-sonnet-5"),
+    model: z.string().optional().describe("e.g. claude-sonnet-5"),
   },
   // Pure: reads its input and returns text. Clients (Codex, ChatGPT) may skip approval for read-only tools.
   { title: "Profile context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -157,11 +159,11 @@ function createServer({ http = false, storeHandoffs = !http }: { http?: boolean;
 
 server.tool(
   "optimize_context",
-  "Rewrite a conversation to reclaim tokens with deterministic strategies (dedupe, trim stale tool results, strip base64; prune-history is lossy). Returns the slimmed JSON and a savings summary. Use after profile_context finds waste the user wants fixed. Add prune-history only with the user's consent, then write the summary the result asks for.",
+  "Rewrite a conversation to reclaim tokens (dedupe, trim stale tool results, strip base64; prune-history is lossy). Returns slimmed JSON and the savings. Use after profile_context finds waste the user wants fixed; prune-history only with the user's consent, then write the summary the result asks for.",
   {
     conversation: z.string().describe("Conversation JSON (OpenAI, Anthropic, or a message array)"),
     strategies: z.array(z.enum(STRATEGY_IDS)).optional()
-      .describe("Default: dedupe, trim-tool-results, strip-base64. trim-tool-calls: big inline file writes; prune-history: old turns, lossy."),
+      .describe("Default: dedupe, trim-tool-results, strip-base64"),
     keep_recent: z.number().int().nonnegative().optional().describe("Tail messages left untouched (default 6; prune-history keeps ≥2)"),
     max_tool_result_tokens: z.number().int().positive().optional().describe("Budget per trimmed tool result (default 300)"),
   },
@@ -260,7 +262,7 @@ server.tool(
   server.registerTool(
     "pack_context",
     {
-      description: "Read only the parts of large files a question needs: chunks files or folders along their structure, ranks chunks against `query` and returns the best that fit `max_tokens`, with ids and line ranges. No query: an outline; pick with `ids`. Use instead of reading a big doc, log or folder whole when not editing it. Text, code, PDF, Word, PowerPoint, ODT.",
+      description: "Read only the parts of large files a question needs: the chunks that best match `query` within `max_tokens`, with ids and line ranges. No query: an outline; pick with `ids`. Use instead of reading a big doc, log or folder whole when not editing it. Text, code, PDF, Word, PowerPoint, ODT.",
       inputSchema: packInput,
       // Reads files, never writes. Clients (Codex, ChatGPT) may skip approval for read-only tools.
       annotations: { title: "Pack context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -487,9 +489,32 @@ server.tool(
     );
   }
 
+  // Recall reads this session's transcript from disk: a local server only
+  // (over HTTP anyone holding the URL could read it).
+  if (fileAccess) {
+    server.registerTool(
+      "recall",
+      {
+        description: "Search this session's transcript on disk (compacted turns, cleared tool output) for `query`: best excerpts with time and position. Use before asking the user again.",
+        inputSchema: { query: z.string(), max_tokens: z.number().optional() },
+        annotations: { title: "Recall", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      },
+      async ({ query, max_tokens }) => {
+        const session = currentTranscript();
+        if (!session) {
+          return { isError: true, content: [{ type: "text" as const, text: "No transcript of this session on disk (Claude Code and Codex keep one; chat apps do not)." }] };
+        }
+        // Bounds checked here, not in the schema: each schema keyword rides in every request.
+        const budget = Math.min(20_000, Math.max(200, Math.floor(Number(max_tokens) || 2000)));
+        const r = recall(session.path, query, { budget, how: session.how });
+        return { content: [{ type: "text" as const, text: renderRecall(r) }] };
+      }
+    );
+  }
+
   server.tool(
     "context_best_practices",
-    "Curated context-management checklist, optionally for one provider. Call it when the user asks how to keep context lean or structure prompts for caching.",
+    "Checklist for keeping context lean and prompts cacheable, optionally per provider.",
     {
       provider: z.enum(["general", "anthropic", "openai"]).optional().describe("Default: general"),
     },

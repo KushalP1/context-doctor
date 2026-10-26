@@ -16,6 +16,7 @@
  *   context_best_practices — curated checklist for a given provider/use case
  *   pack_context      — only the chunks of big files a question needs, within a token budget
  *   save_handoff      — store a handoff brief the next chat starts from (a chat's history cannot be cut)
+ *   recall            — search this session's own transcript (compacted turns, cleared output); stdio only
  * Prompts: context_checkup, handoff, ask_file. Resources (stdio): handoff://latest, handoff://<id>.
  */
 export {};

@@ -93,9 +93,14 @@ function lastIndex(items, pred) {
             return i;
     return -1;
 }
-export function clearedNote(tokens) {
+export function clearedNote(tokens, recall = false) {
     // Not "run it again": a cleared Bash result may come from a command with
     // side effects (a push, a delete), and repeating that would be wrong.
+    // Claude Code keeps the original output in its transcript on disk, where
+    // recall finds it; other clients may keep no transcript, so they are not
+    // pointed there.
+    if (recall)
+        return `[context-doctor: old tool output cleared to keep context lean (~${tokens} tokens). The call above shows what ran; the full output is in the session transcript (the recall tool, or npx context-doctor recall "<words>"). Repeat the call only if it is read-only, otherwise ask the user.]`;
     return `[context-doctor: old tool output cleared to keep context lean (~${tokens} tokens). The call above shows what ran; repeat it only if it is read-only, otherwise ask the user.]`;
 }
 function resultTokens(content, model) {
@@ -324,8 +329,12 @@ export class AutoClearer {
      * OpenAI Responses request. Never throws; anything unrecognised is left alone.
      * `account` names the credential the request carries (the proxy passes a
      * salted hash), for accounts whose API rejects edited history.
+     * `recallHint`: the client keeps a transcript recall can search (Claude
+     * Code); the cleared note then says where the full output still is. It
+     * must be the same on every request of a conversation (the note is part of
+     * the cached prefix), which a client's User-Agent is.
      */
-    apply(body, now = Date.now(), modelHint, account) {
+    apply(body, now = Date.now(), modelHint, account, opts = {}) {
         const none = (reason, cold = false) => ({ changed: false, newlyCleared: 0, tokensRemoved: 0, cold, reason, firstChanged: -1, newIds: [], appliedIds: [] });
         try {
             const view = viewOf(body);
@@ -403,7 +412,7 @@ export class AutoClearer {
                 const sk = scoped(key, r.id);
                 if (!this.cleared.has(sk) || !eligibleIds.has(r.id))
                     continue;
-                const note = clearedNote(this.cleared.get(sk));
+                const note = clearedNote(this.cleared.get(sk), opts.recallHint === true);
                 if (r.content === note)
                     continue;
                 removed += Math.max(0, r.tokens - estimateTokens(note, model));

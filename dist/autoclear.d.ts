@@ -130,7 +130,7 @@ interface View {
     seenUpTo: number;
     ttlMs: number;
 }
-export declare function clearedNote(tokens: number): string;
+export declare function clearedNote(tokens: number, recall?: boolean): string;
 /** GPT-5.6 or later (gpt-5.6-sol, gpt-6.1-sol...): the models that take prompt_cache_options. */
 export declare function openAICacheOptionsModel(model: unknown): boolean;
 /**
@@ -161,8 +161,14 @@ export declare class AutoClearer {
      * OpenAI Responses request. Never throws; anything unrecognised is left alone.
      * `account` names the credential the request carries (the proxy passes a
      * salted hash), for accounts whose API rejects edited history.
+     * `recallHint`: the client keeps a transcript recall can search (Claude
+     * Code); the cleared note then says where the full output still is. It
+     * must be the same on every request of a conversation (the note is part of
+     * the cached prefix), which a client's User-Agent is.
      */
-    apply(body: Record<string, unknown>, now?: number, modelHint?: string, account?: string): AutoClearResult;
+    apply(body: Record<string, unknown>, now?: number, modelHint?: string, account?: string, opts?: {
+        recallHint?: boolean;
+    }): AutoClearResult;
     /**
      * Warm cache: clearing rewrites everything after the first cleared result
      * at the write rate (1.25x instead of 0.1x: 1.15x extra, once), and saves

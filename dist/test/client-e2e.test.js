@@ -24,10 +24,11 @@ const conversation = JSON.stringify({
         ...Array.from({ length: 10 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", content: `turn ${i}` })),
     ],
 });
-async function exercise(client) {
+async function exercise(client, local = true) {
     assert.ok((client.getInstructions() ?? "").length > 100, "standing instructions must reach the client — that is what makes plain chat work");
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map((t) => t.name).sort(), ["context_best_practices", "optimize_context", "pack_context", "profile_context", "save_handoff"]);
+    // recall reads this session's transcript from disk: the local (stdio) server only.
+    assert.deepEqual(tools.map((t) => t.name).sort(), ["context_best_practices", "optimize_context", "pack_context", "profile_context", ...(local ? ["recall"] : []), "save_handoff"]);
     const profile = await client.callTool({ name: "profile_context", arguments: { conversation, model: "claude-sonnet-5" } });
     const profileText = profile.content.map((c) => c.text ?? "").join("\n");
     assert.match(profileText, /CONTEXT DOCTOR — profile/);
@@ -68,7 +69,7 @@ test("streamable HTTP: the transport remote connectors use", async () => {
         const client = new Client({ name: "e2e-http", version: "1" }, { capabilities: {} });
         await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`)));
         try {
-            await exercise(client);
+            await exercise(client, false);
         }
         finally {
             await client.close();

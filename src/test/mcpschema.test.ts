@@ -31,7 +31,7 @@ test("configs come from user and project scope in ~/.claude.json and from .mcp.j
 
 test("a real server is sized by listing its tools; a dead one reports an error instead of hanging", async () => {
   const ok = await measureServer({ name: "context-doctor", scope: "user", command: process.execPath, args: ["dist/mcp.js"] });
-  assert.equal(ok.tools, 5);
+  assert.equal(ok.tools, 6);
   assert.ok(ok.schemaTokens! > ok.nameTokens! && ok.nameTokens! > 10);
   const dead = await measureServer({ name: "dead", scope: "user", command: process.execPath, args: ["-e", "setTimeout(()=>{}, 60000)"] }, 1500);
   assert.match(dead.error!, /no answer/);

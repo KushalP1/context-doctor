@@ -58,6 +58,7 @@ import { renderPayback, subagentPayback } from "./subagentpay.js";
 import { compactionQuality, renderCompactionQuality } from "./compactquality.js";
 import { isHandoffId, listHandoffs, readHandoff, renderHandoffList, stripControls } from "./handoff.js";
 import { claudeLimitFit, limitSavingsLines, limitsReport, renderLimits } from "./limits.js";
+import { currentTranscript, findSession, recall, renderRecall } from "./recall.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -160,6 +161,12 @@ Fix on request:
                                                 Where an Anthropic request should carry cache_control,
                                                 what it saves over n calls; --out writes it applied
                                                 (top-level automatic caching unless --explicit)
+  context-doctor recall "<query>" [--session <id|path>] [--max-tokens n]
+                                                Search this session's own transcript on disk (turns
+                                                before a compaction, tool output cleared from the
+                                                context) and print the best excerpts with their time
+                                                and position; secrets masked. Default session: this
+                                                one (CLAUDE_CODE_SESSION_ID, else this folder's newest)
   context-doctor handoff [list|show <id>|latest] [--copy]
                                                 Handoffs saved from chat apps (the \`handoff\` prompt or
                                                 save_handoff): list them, print one, or --copy it to
@@ -214,7 +221,9 @@ Options:
                           cache-misses, limits)
                           Days of history to read (default 30; compactions 60)
   -q, --query <text>      (pack) The question to rank chunks against
-  --max-tokens <n>        (pack) Token budget (default 4000); (ci) fail over this many tokens
+  --max-tokens <n>        (pack) Token budget (default 4000); (recall) default 2000; (ci) fail over
+                          this many tokens
+  --session <id|path>     (recall) Search this session instead of the current one
   --chunk-tokens <n>      (pack) Largest chunk, in tokens (default 400)
   --ids <a#2,b#5>         (pack) Return these chunks by id
   --include-secrets       (pack) Also pack .env, .npmrc, private keys and other credential files,
@@ -316,6 +325,7 @@ interface Args {
   failOverBudget: boolean;
   config?: string;
   query?: string;
+  session?: string;
   maxTokens?: number;
   chunkTokens?: number;
   ids?: string[];
@@ -348,7 +358,7 @@ const COMMANDS = [
   "analyze", "optimize", "proxy", "install", "uninstall", "savings", "compact-window", "autopilot", "mcp",
   "instructions", "session", "cursor", "statusline", "hook", "report", "doctor", "dashboard", "init",
   "experiment", "diff", "accuracy", "overhead", "ci", "cache-plan", "compactions", "cache-misses", "limits", "subagents", "tasks",
-  "reads", "pack", "watch", "ab", "handoff", "help", "version",
+  "reads", "pack", "watch", "ab", "handoff", "recall", "help", "version",
 ];
 
 type NumOpts = { min?: number; max?: number; integer?: boolean };
@@ -422,6 +432,7 @@ const FLAGS: FlagSpec[] = [
   { names: ["--max-increase"], value: "number", num: { min: 0, integer: true }, set: (a, v) => { a.maxIncrease = v; } },
   { names: ["--requests-per-day"], value: "number", num: { min: 1 }, set: (a, v) => { a.requestsPerDay = v; } },
   { names: ["--min-tokens"], value: "number", num: { min: 50, integer: true }, set: (a, v) => { a.minTokens = v; } },
+  { names: ["--session"], value: "text", set: (a, v) => { a.session = v; } },
   { names: ["--ids"], value: "text", set: (a, v: string) => { a.ids = v.split(",").map((x) => x.trim()).filter(Boolean); } },
   { names: ["--upstream-anthropic"], value: "text", set: (a, v) => { a.upstreamAnthropic = v; } },
   { names: ["--upstream-openai"], value: "text", set: (a, v) => { a.upstreamOpenai = v; } },
@@ -1062,6 +1073,22 @@ async function main(): Promise<void> {
     reading.clear();
     const limitLines = limitSavingsLines(claudeLimitFit(limitsReport(report.days, { claudeOnly: true })), [["Misses above cache-read price", report.extraUsd]], report.days);
     console.log(args.json ? JSON.stringify(report, null, 2) : renderCacheMisses(report, limitLines));
+    return;
+  }
+
+  if (args.command === "recall") {
+    const query = (args.positionals ?? []).join(" ").trim() || args.query;
+    if (!query) usageError('Usage: context-doctor recall "<query>" [--session <id|path>] [--max-tokens n]');
+    const session = args.session ? (() => { const p = findSession(args.session!); return p ? { path: p, how: `session ${args.session}` } : undefined; })() : currentTranscript();
+    if (!session) {
+      console.error(args.session
+        ? `No session "${args.session}": pass a Claude Code session id, a Codex rollout id, or a transcript path.`
+        : "No transcript for this folder: run it inside a Claude Code or Codex session, or name one with --session <id|path>.");
+      process.exitCode = 1;
+      return;
+    }
+    const r = recall(session.path, query!, { budget: args.maxTokens ?? 2000, how: session.how });
+    console.log(args.json ? JSON.stringify(r, null, 2) : renderRecall(r));
     return;
   }
 

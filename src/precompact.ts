@@ -99,11 +99,12 @@ export function compactInstructions(f: CompactFacts): string {
   list("The user's own instructions and corrections (keep their substance, they still apply)", f.directives);
   list("Commands still failing at this point (keep the command and the error)", f.failing);
   if (!sections.length) return "";
-  let out = [
-    "context-doctor, from this session's transcript: the summary must carry the following, so the work continues without re-reading files, re-asking the user, or repeating a failed approach.",
-    ...sections,
-    "Keep exact identifiers (paths, function names, commands, versions, IDs, URLs). Leave out raw tool output already acted on; one line on what it showed is enough.",
-  ].join("\n\n");
-  if (out.length > MAX_CHARS) out = out.slice(0, MAX_CHARS - 1) + "…";
+  const head = "context-doctor, from this session's transcript: the summary must carry the following, so the work continues without re-reading files, re-asking the user, or repeating a failed approach.";
+  const tail = "Keep exact identifiers (paths, function names, commands, versions, IDs, URLs). Leave out raw tool output already acted on; one line on what it showed is enough: the full transcript stays on disk, and the recall tool (or `npx context-doctor recall \"<words>\"`) finds it after compacting.";
+  // Over the cap the lists are cut, never the closing line (it says where the rest still is).
+  let body = sections.join("\n\n");
+  const room = MAX_CHARS - head.length - tail.length - 4;
+  if (body.length > room) body = body.slice(0, room - 1) + "…";
+  const out = [head, body, tail].join("\n\n");
   return out;
 }

@@ -41,6 +41,7 @@ Pick where you work. Each takes about a minute and is fully reversible.
 
 **Keep waste out of the context** ([pack and overhead](./docs/pack-and-overhead.md))
 - `pack` (and the `pack_context` MCP tool): only the chunks of a big document, PDF, log or codebase that a question needs, within a token budget, instead of the whole thing.
+- `recall` (and the `recall` MCP tool): the few lines of this session's own transcript a question needs, including turns a compaction summarised away and tool output autopilot cleared, with their time and position; secrets masked.
 - `overhead split`: turns a heavy CLAUDE.md or memory file into a lean one plus a reference file the agent opens when needed, word for word, nothing lost.
 - `ci` and the GitHub Action: review memory-file growth like any other cost.
 
@@ -143,6 +144,7 @@ Rules 1-4 end exactly at character 512, the part ChatGPT's guide says must stand
 | `context-doctor overhead [--days n] [--mcp]` | What every request re-reads before your message: measured first-request size (Claude Code, Codex and Gemini CLI sessions), each memory file (CLAUDE.md and imports, rules, auto memory, AGENTS.md, Cursor rules, GEMINI.md) priced per month, MCP calls per server; `--mcp` sizes each configured server's tool definitions and flags unused ones |
 | `context-doctor overhead split <file> [--min-tokens n] [--write]` | Move a memory file's big or code-heavy sections word for word to `<name>.reference.md`, leaving pointers; indexes stay. A plan until `--write`, which backs up first |
 | `context-doctor pack <files\|dirs\|-> -q "…"` | Only the chunks of big documents, logs or code a question needs, ranked and fit to `--max-tokens` (default 4000). No query: an outline; `--ids a#2,b#5` picks chunks from it. `--semantic` also ranks by meaning with a local Ollama model. Offline, no key |
+| `context-doctor recall "<query>" [--session <id\|path>]` | Search this session's own transcript on disk (Claude Code or Codex; turns before a compaction and tool output cleared from the context included) and print the best excerpts with time and position, secrets masked. Never another project's session unless named with `--session`. Also the `recall` MCP tool |
 | `context-doctor tasks [--days n]` | Cost per commit, per project: each session priced from its recorded usage against the commits it made |
 | `context-doctor reads [--days n] [--limit n]` | Files read into session after session: reads, tokens, cost, and whether a CLAUDE.md summary or `pack` pays |
 | `context-doctor subagents [--days n]` | Which subagents paid for themselves: each one's bill vs the same steps run in the parent session |

@@ -183,9 +183,13 @@ function lastIndex<T>(items: T[], pred: (x: T) => boolean): number {
   return -1;
 }
 
-export function clearedNote(tokens: number): string {
+export function clearedNote(tokens: number, recall = false): string {
   // Not "run it again": a cleared Bash result may come from a command with
   // side effects (a push, a delete), and repeating that would be wrong.
+  // Claude Code keeps the original output in its transcript on disk, where
+  // recall finds it; other clients may keep no transcript, so they are not
+  // pointed there.
+  if (recall) return `[context-doctor: old tool output cleared to keep context lean (~${tokens} tokens). The call above shows what ran; the full output is in the session transcript (the recall tool, or npx context-doctor recall "<words>"). Repeat the call only if it is read-only, otherwise ask the user.]`;
   return `[context-doctor: old tool output cleared to keep context lean (~${tokens} tokens). The call above shows what ran; repeat it only if it is read-only, otherwise ask the user.]`;
 }
 
@@ -409,8 +413,12 @@ export class AutoClearer {
    * OpenAI Responses request. Never throws; anything unrecognised is left alone.
    * `account` names the credential the request carries (the proxy passes a
    * salted hash), for accounts whose API rejects edited history.
+   * `recallHint`: the client keeps a transcript recall can search (Claude
+   * Code); the cleared note then says where the full output still is. It
+   * must be the same on every request of a conversation (the note is part of
+   * the cached prefix), which a client's User-Agent is.
    */
-  apply(body: Record<string, unknown>, now = Date.now(), modelHint?: string, account?: string): AutoClearResult {
+  apply(body: Record<string, unknown>, now = Date.now(), modelHint?: string, account?: string, opts: { recallHint?: boolean } = {}): AutoClearResult {
     const none = (reason: string, cold = false): AutoClearResult => ({ changed: false, newlyCleared: 0, tokensRemoved: 0, cold, reason, firstChanged: -1, newIds: [], appliedIds: [] });
     try {
       const view = viewOf(body);
@@ -484,7 +492,7 @@ export class AutoClearer {
       for (const r of results) {
         const sk = scoped(key, r.id);
         if (!this.cleared.has(sk) || !eligibleIds.has(r.id)) continue;
-        const note = clearedNote(this.cleared.get(sk)!);
+        const note = clearedNote(this.cleared.get(sk)!, opts.recallHint === true);
         if (r.content === note) continue;
         removed += Math.max(0, r.tokens - estimateTokens(note, model));
         r.set(note);

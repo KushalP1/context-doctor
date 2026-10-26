@@ -326,7 +326,8 @@ export function startProxy(opts = {}) {
                         try {
                             const parsed = JSON.parse(body);
                             const urlModel = gemini ? geminiModelFromUrl(url) : undefined;
-                            const r = clearer.apply(parsed, Date.now(), urlModel, account);
+                            // Claude Code (User-Agent claude-cli/…) keeps a transcript recall can search.
+                            const r = clearer.apply(parsed, Date.now(), urlModel, account, { recallHint: /^claude-cli\//.test(String(req.headers["user-agent"] ?? "")) });
                             ap.requests++;
                             ap.lastReason = r.reason;
                             if (r.newlyCleared > 0) {

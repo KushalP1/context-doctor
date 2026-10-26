@@ -224,6 +224,16 @@ test("proxy autopilot: a request after an idle gap (cold) goes out lighter; stat
   assert.equal(h.autopilot, true);
 });
 
+test("proxy autopilot: Claude Code (claude-cli User-Agent) gets a note that points at recall; other clients do not", async () => {
+  received = [];
+  const post = (ua?: string) => fetch(`${base}/v1/messages`, { method: "POST", headers: { "content-type": "application/json", "x-api-key": "k", ...(ua ? { "user-agent": ua } : {}) }, body: JSON.stringify(conversation(12)) });
+  await post("claude-cli/2.1.308 (external, cli)");
+  await post();
+  const note = (b: any) => b.messages[2].content[0].content as string;
+  assert.match(note(received[0]), /^\[context-doctor: old tool output cleared.*recall/);
+  assert.ok(note(received[1]).startsWith("[context-doctor") && !/recall/.test(note(received[1])));
+});
+
 test("proxy autopilot: OpenAI Chat Completions requests are lightened too", async () => {
   received = [];
   const openaiUp = http.createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { received.push(JSON.parse(b)); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ usage: { prompt_tokens: 10, completion_tokens: 1 } })); }); });
