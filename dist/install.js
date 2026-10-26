@@ -725,31 +725,91 @@ export function copilotHookEntry() {
     const command = cliCommand("hook copilot");
     return { type: "command", command, ...(command.startsWith('"') ? { powershell: `& ${command}` } : {}), timeoutSec: 10 };
 }
+/** A JSON value that is an object (not an array, null or a scalar). */
+export function isPlainObject(v) {
+    return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+/**
+ * readJson, refusing anything but an object: `[1]` or `"x"` read fine as
+ * JSON, and fields set on them vanish when the file is written back, so
+ * install reported ✓ over a file it had left as it was.
+ */
+export function readJsonObject(path) {
+    const config = readJson(path);
+    if (!isPlainObject(config))
+        throw new Error(`${path} is not a JSON object; fix or remove it, then re-run. Nothing was changed.`);
+    return config;
+}
+/**
+ * Folders install created in Copilot's home, recorded in a marker there so
+ * uninstall removes only those (a ~/.copilot that was already there, even
+ * empty, is the user's): "" for the home itself, "hooks" for its hooks folder.
+ */
+const COPILOT_MARKER = ".context-doctor-created.json";
+function copilotCreated() {
+    try {
+        const raw = JSON.parse(readFileSync(join(copilotHome(), COPILOT_MARKER), "utf8"));
+        return Array.isArray(raw?.created) ? raw.created.filter((d) => d === "" || d === "hooks") : [];
+    }
+    catch {
+        return [];
+    }
+}
 function installCopilot(entry, failures) {
     if (!copilotPresent())
         return;
+    const home = copilotHome();
+    const created = ["", "hooks"].filter((d) => !existsSync(join(home, d)));
+    const remember = () => {
+        const made = created.filter((d) => existsSync(join(home, d)));
+        if (made.length === 0)
+            return;
+        const all = [...new Set([...copilotCreated(), ...made])];
+        writeFileSync(join(home, COPILOT_MARKER), JSON.stringify({ created: all }) + "\n");
+    };
+    let mcpOk = false;
     try {
         const path = copilotMcpConfigPath();
-        const config = readJson(path);
+        const config = readJsonObject(path);
+        if (config.mcpServers !== undefined && !isPlainObject(config.mcpServers)) {
+            throw new Error(`"mcpServers" in ${path} is not an object; fix it, then re-run. Nothing was changed.`);
+        }
         config.mcpServers = config.mcpServers ?? {};
         const want = copilotMcpEntry(entry);
         if (JSON.stringify(config.mcpServers["context-doctor"]) !== JSON.stringify(want)) {
             config.mcpServers["context-doctor"] = want;
             writeJsonWithBackup(path, config);
         }
+        mcpOk = true;
         console.log(`✓ GitHub Copilot: MCP server added (${path})`);
     }
     catch (e) {
         console.error(`✗ GitHub Copilot MCP: ${e.message}`);
         failures.push("GitHub Copilot MCP");
     }
+    // The hook's rules name the MCP tools: without the server they would
+    // point the model at tools that are not there, so no hook without it.
+    if (!mcpOk) {
+        console.log("– GitHub Copilot session-start hook not written: its rules name the MCP tools, which could not be added. Fix the file above and re-run install.");
+        remember();
+        return;
+    }
     try {
         const path = copilotHookFilePath();
         // The file is ours, so it is never backed up; entries someone added to it are kept.
-        const config = readJson(path);
-        config.version = config.version ?? 1;
+        const config = readJsonObject(path);
+        if (config.version !== undefined && config.version !== 1) {
+            throw new Error(`${path} says "version": ${JSON.stringify(config.version)}; Copilot loads hooks only from version 1 files. Set it to 1 or delete the file, then re-run.`);
+        }
+        if (config.hooks !== undefined && !isPlainObject(config.hooks))
+            throw new Error(`"hooks" in ${path} is not an object; fix it or delete the file, then re-run. Nothing was changed.`);
+        const current = config.hooks?.[COPILOT_HOOK_EVENT];
+        if (current !== undefined && !Array.isArray(current)) {
+            throw new Error(`"hooks.${COPILOT_HOOK_EVENT}" in ${path} is not a list; fix it or delete the file, then re-run. Nothing was changed.`);
+        }
+        config.version = 1;
         config.hooks = config.hooks ?? {};
-        const entries = Array.isArray(config.hooks[COPILOT_HOOK_EVENT]) ? config.hooks[COPILOT_HOOK_EVENT] : [];
+        const entries = current ?? [];
         const want = copilotHookEntry();
         const ours = entries.filter(isOurCopilotEntry);
         if (!(ours.length === 1 && JSON.stringify(ours[0]) === JSON.stringify(want))) {
@@ -757,47 +817,53 @@ function installCopilot(entry, failures) {
             mkdirSync(dirname(path), { recursive: true });
             writeFileSync(path, JSON.stringify(config, null, 2));
         }
-        console.log(`✓ GitHub Copilot session-start hook installed (${path}): each new session gets the standing context rules`);
+        console.log(`✓ GitHub Copilot session-start hook installed (${path}): each new or resumed session gets the standing context rules`);
     }
     catch (e) {
         console.error(`✗ GitHub Copilot hook: ${e.message}`);
         failures.push("GitHub Copilot hook");
     }
+    remember();
 }
-function uninstallCopilot() {
+function uninstallCopilotMcp() {
     const mcp = copilotMcpConfigPath();
-    if (existsSync(mcp)) {
-        const config = readJson(mcp);
-        if (config.mcpServers?.["context-doctor"]) {
-            delete config.mcpServers["context-doctor"];
-            writeUninstalled(mcp, config);
-            done("✓ GitHub Copilot: MCP server removed");
-        }
+    if (!existsSync(mcp))
+        return;
+    const config = readJson(mcp);
+    if (isPlainObject(config) && isPlainObject(config.mcpServers) && config.mcpServers["context-doctor"]) {
+        delete config.mcpServers["context-doctor"];
+        writeUninstalled(mcp, config);
+        done("✓ GitHub Copilot: MCP server removed");
     }
+}
+function uninstallCopilotHook() {
     const hookFile = copilotHookFilePath();
-    if (existsSync(hookFile)) {
-        const config = readJson(hookFile);
-        const entries = Array.isArray(config.hooks?.[COPILOT_HOOK_EVENT]) ? config.hooks[COPILOT_HOOK_EVENT] : undefined;
-        const kept = entries?.filter((e) => !isOurCopilotEntry(e));
-        if (entries && kept && kept.length !== entries.length) {
-            if (kept.length > 0)
-                config.hooks[COPILOT_HOOK_EVENT] = kept;
-            else
-                delete config.hooks[COPILOT_HOOK_EVENT];
-            if (isEmptyStub(config, ["version"]))
-                rmSync(hookFile);
-            else
-                writeFileSync(hookFile, JSON.stringify(config, null, 2));
-            done("✓ GitHub Copilot session-start hook removed");
-        }
+    if (!existsSync(hookFile))
+        return;
+    const config = readJson(hookFile);
+    const entries = isPlainObject(config) && isPlainObject(config.hooks) && Array.isArray(config.hooks[COPILOT_HOOK_EVENT]) ? config.hooks[COPILOT_HOOK_EVENT] : undefined;
+    const kept = entries?.filter((e) => !isOurCopilotEntry(e));
+    if (entries && kept && kept.length !== entries.length) {
+        if (kept.length > 0)
+            config.hooks[COPILOT_HOOK_EVENT] = kept;
+        else
+            delete config.hooks[COPILOT_HOOK_EVENT];
+        if (isEmptyStub(config, ["version"]))
+            rmSync(hookFile);
+        else
+            writeFileSync(hookFile, JSON.stringify(config, null, 2));
+        done("✓ GitHub Copilot session-start hook removed");
     }
-    // The folders install may have made, only once nothing is left in them.
-    for (const dir of [dirname(hookFile), copilotHome()]) {
-        try {
-            if (existsSync(dir) && readdirSync(dir).length === 0)
-                rmSync(dir, { recursive: true });
-        }
-        catch { /* not ours to force */ }
+}
+/** The folders install created (from its marker), once nothing is left in them. */
+function uninstallCopilotFolders() {
+    const home = copilotHome();
+    const created = copilotCreated();
+    rmSync(join(home, COPILOT_MARKER), { force: true });
+    for (const d of ["hooks", ""].filter((x) => created.includes(x))) {
+        const dir = join(home, d);
+        if (existsSync(dir) && readdirSync(dir).length === 0)
+            rmSync(dir, { recursive: true });
     }
 }
 /**
@@ -837,7 +903,9 @@ export function runInstall(options = {}) {
         if (viaPlugin && target.name === "Claude Code")
             continue;
         try {
-            const config = readJson(target.configPath);
+            const config = readJsonObject(target.configPath);
+            if (config.mcpServers !== undefined && !isPlainObject(config.mcpServers))
+                throw new Error(`"mcpServers" in ${target.configPath} is not an object; fix it, then re-run. Nothing was changed.`);
             config.mcpServers = config.mcpServers ?? {};
             // Always overwrite: re-running install is how a stale entry gets repaired.
             config.mcpServers["context-doctor"] = entry;
@@ -1170,7 +1238,10 @@ export async function runUninstall() {
     uninstallHook(attempt);
     attempt("Claude Code status line", () => uninstallStatusLine());
     attempt("Codex", () => uninstallCodex());
-    attempt("GitHub Copilot", () => uninstallCopilot());
+    // One step per file: a malformed mcp-config.json must not keep the hook file installed.
+    attempt(`GitHub Copilot MCP server (${tilde(copilotMcpConfigPath())})`, () => uninstallCopilotMcp());
+    attempt(`GitHub Copilot hook (${tilde(copilotHookFilePath())})`, () => uninstallCopilotHook());
+    attempt("GitHub Copilot folders", () => uninstallCopilotFolders());
     // Remove our bookkeeping files too — uninstall means gone. The hook's
     // per-session state is a directory, one small file per session.
     for (const file of OUR_CLAUDE_FILES) {

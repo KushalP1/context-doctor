@@ -144,8 +144,13 @@ test("the Copilot hook adds the standing rules at a new session's start, in both
     // VS Code's Local harness: snake_case with the event name, plus a transcript path it never needs.
     const local = await run(home, ["hook", "copilot"], JSON.stringify({ hook_event_name: "SessionStart", session_id: "s2", timestamp: "2026-10-25T10:00:00.000Z", source: "new", transcript_path: join(home, "t.jsonl") }));
     assert.equal(JSON.parse(local.out).hookSpecificOutput.additionalContext, out.additionalContext);
-    // A resumed session already holds them; other events get nothing.
-    assert.equal((await run(home, ["hook", "copilot"], JSON.stringify({ sessionId: "s1", source: "resume" }))).out, "");
+    // A resumed session gets them again: Copilot keeps sessionStart context in memory only, not across a resume.
+    assert.equal(JSON.parse((await run(home, ["hook", "copilot"], JSON.stringify({ sessionId: "s1", source: "resume" }))).out).additionalContext, out.additionalContext);
+    // Input that does not parse is still a session start: empty, a BOM, cut short.
+    for (const stdin of ["", "\uFEFF" + JSON.stringify({ sessionId: "s4", source: "new" }), '{"sessionId": "s5", "sou']) {
+        assert.equal(JSON.parse((await run(home, ["hook", "copilot"], stdin)).out).additionalContext, out.additionalContext, JSON.stringify(stdin));
+    }
+    // Other events get nothing.
     assert.equal((await run(home, ["hook", "copilot"], JSON.stringify({ hook_event_name: "PostToolUse", session_id: "s2" }))).out, "");
     // No ~/.claude: the hook does not create one (install would then see Claude Code).
     assert.equal(existsSync(join(home, ".claude")), false);
@@ -169,4 +174,96 @@ test("copilot helpers: which entries are ours, and what the hook says", () => {
     assert.equal(copilotSessionStartOutput(null) !== undefined, true, "an empty input is a camelCase session start");
     assert.equal(copilotSessionStartOutput({ hook_event_name: "sessionStart" }) !== undefined, true);
     assert.equal(copilotSessionStartOutput({ hook_event_name: "agentStop" }), undefined);
+});
+test("uninstall removes only the Copilot folders install created, and keeps an empty one that was there", async () => {
+    // ~/.copilot was there, empty; install makes hooks/ inside it.
+    const home = mkdtempSync(join(tmpdir(), "ctxdoc-copilot-keep-"));
+    mkdirSync(join(home, ".copilot"));
+    await run(home, ["install"]);
+    assert.ok(existsSync(join(home, ".copilot", ".context-doctor-created.json")));
+    await run(home, ["uninstall"]);
+    assert.deepEqual(readdirSync(join(home, ".copilot")), [], "their empty ~/.copilot is still there, and nothing of ours");
+    // An empty hooks folder of theirs stays too.
+    const home2 = mkdtempSync(join(tmpdir(), "ctxdoc-copilot-keep2-"));
+    mkdirSync(join(home2, ".copilot", "hooks"), { recursive: true });
+    await run(home2, ["install"]);
+    await run(home2, ["uninstall"]);
+    assert.deepEqual(readdirSync(join(home2, ".copilot")), ["hooks"]);
+    assert.deepEqual(readdirSync(join(home2, ".copilot", "hooks")), []);
+    // An empty COPILOT_HOME that was there is kept.
+    const home3 = mkdtempSync(join(tmpdir(), "ctxdoc-copilot-keep3-"));
+    const custom = join(home3, "cp");
+    mkdirSync(custom);
+    await run(home3, ["install"], undefined, { COPILOT_HOME: custom });
+    await run(home3, ["uninstall"], undefined, { COPILOT_HOME: custom });
+    assert.deepEqual(readdirSync(custom), []);
+});
+test("a malformed mcp-config.json: install writes no hook, and uninstall still removes the hook and says what it could not", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ctxdoc-copilot-broken-"));
+    const cp = join(home, ".copilot");
+    mkdirSync(cp, { recursive: true });
+    const mcpPath = join(cp, "mcp-config.json");
+    writeFileSync(mcpPath, "{ broken");
+    const inst = await run(home, ["install"]);
+    assert.equal(inst.code, 1);
+    assert.match(inst.err, /✗ GitHub Copilot MCP: .*mcp-config\.json exists but is not valid JSON/);
+    assert.match(inst.out, /– GitHub Copilot session-start hook not written: its rules name the MCP tools/);
+    assert.equal(existsSync(join(cp, "hooks", "context-doctor.json")), false);
+    assert.equal(readFileSync(mcpPath, "utf8"), "{ broken", "their file untouched");
+    // Installed while the file was good, broken afterwards: uninstall takes the hook out anyway.
+    writeFileSync(mcpPath, "{}");
+    await run(home, ["install"]);
+    assert.ok(existsSync(join(cp, "hooks", "context-doctor.json")));
+    writeFileSync(mcpPath, "{ broken");
+    const un = await run(home, ["uninstall"]);
+    assert.equal(un.code, 1);
+    assert.match(un.out, /GitHub Copilot session-start hook removed/);
+    assert.equal(existsSync(join(cp, "hooks", "context-doctor.json")), false);
+    assert.match(un.err, /Not removed: GitHub Copilot MCP server \(~[\\/]\.copilot[\\/]mcp-config\.json\)/);
+});
+test("install refuses Copilot files of the wrong shape with a clear error, and changes nothing", async () => {
+    const cases = [
+        ["mcp-config.json", "[1]", "mcp", /mcp-config\.json is not a JSON object/],
+        ["mcp-config.json", JSON.stringify({ mcpServers: [] }), "mcp", /"mcpServers" in .* is not an object/],
+        ["hooks/context-doctor.json", JSON.stringify({ version: 1, hooks: [] }), "hook", /"hooks" in .* is not an object/],
+        ["hooks/context-doctor.json", JSON.stringify({ version: 1, hooks: { sessionStart: { command: "./mine.sh" } } }), "hook", /"hooks\.sessionStart" in .* is not a list/],
+        ["hooks/context-doctor.json", JSON.stringify({ version: 2, hooks: {} }), "hook", /says "version": 2; Copilot loads hooks only from version 1 files/],
+    ];
+    for (const [file, content, which, message] of cases) {
+        const home = mkdtempSync(join(tmpdir(), "ctxdoc-copilot-shape-"));
+        const path = join(home, ".copilot", file);
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, content);
+        const r = await run(home, ["install"]);
+        assert.equal(r.code, 1, file + " " + content);
+        assert.match(r.err, which === "mcp" ? /✗ GitHub Copilot MCP: / : /✗ GitHub Copilot hook: /);
+        assert.match(r.err, message);
+        assert.equal(readFileSync(path, "utf8"), content, "left as it was");
+        assert.doesNotMatch(r.out, which === "mcp" ? /✓ GitHub Copilot: MCP server added/ : /✓ GitHub Copilot session-start hook installed/);
+    }
+});
+test("doctor: a hook file Copilot would not load, hooks off in the older config.json, the MCP server gone, a second copy in VS Code", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ctxdoc-copilot-doctor2-"));
+    const cp = join(home, ".copilot");
+    mkdirSync(cp, { recursive: true });
+    await run(home, ["install"]);
+    const hookPath = join(cp, "hooks", "context-doctor.json");
+    const good = readFileSync(hookPath, "utf8");
+    writeFileSync(hookPath, good.replace('"version": 1', '"version": 2'));
+    assert.match((await run(home, ["doctor"])).out, /✗ Copilot hook\s+.*"version": 2, and Copilot loads hooks only from version 1 files/);
+    writeFileSync(hookPath, good);
+    writeFileSync(join(cp, "config.json"), JSON.stringify({ disableAllHooks: true }));
+    assert.match((await run(home, ["doctor"])).out, /✗ Copilot hook\s+registered, but disableAllHooks is true in ~[\\/]\.copilot[\\/]config\.json/);
+    writeFileSync(join(cp, "config.json"), "{}");
+    const mcpPath = join(cp, "mcp-config.json");
+    const mcp = readFileSync(mcpPath, "utf8");
+    writeFileSync(mcpPath, JSON.stringify({ mcpServers: { other: { type: "local", command: "x" } } }));
+    assert.match((await run(home, ["doctor"])).out, /! Copilot hook\s+.*name context-doctor's MCP tools, but the MCP server is not wired/);
+    writeFileSync(mcpPath, mcp);
+    const vsUser = await withSandboxHome(home, () => vsCodeUserDirs()[0]);
+    mkdirSync(vsUser, { recursive: true });
+    writeFileSync(join(vsUser, "mcp.json"), JSON.stringify({ servers: { "ctx-doc": { type: "stdio", command: "npx", args: ["-y", "context-doctor", "mcp"] } } }));
+    const dup = await run(home, ["doctor"]);
+    assert.match(dup.out, /! Copilot MCP\s+VS Code's .*mcp\.json also starts context-doctor \(as "ctx-doc"\); .*can load twice/);
+    assert.match(dup.out, /✓ Copilot hook/);
 });

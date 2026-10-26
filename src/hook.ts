@@ -185,7 +185,13 @@ export async function runHook(app?: "copilot"): Promise<void> {
     // nothing else. No Copilot hook that can add context gets a transcript,
     // and Copilot never routes through autopilot, so there is no self-heal.
     if (app === "copilot") {
-      const out = copilotSessionStartOutput(JSON.parse(await readStdin()));
+      // An input that does not parse (empty, a BOM, cut short) is still a
+      // session start: the rules go in rather than nothing.
+      let input: unknown = {};
+      try {
+        input = JSON.parse((await readStdin()).replace(/^\uFEFF/, ""));
+      } catch { /* not JSON: answer as for an empty input */ }
+      const out = copilotSessionStartOutput(input);
       if (out) {
         process.stdout.write(out + "\n");
         // Evidence for `doctor`, only where the ledger's folder already is:

@@ -22,10 +22,12 @@
  *   harness takes its own.
  * - MCP: `~/.copilot/mcp-config.json` (`$COPILOT_HOME/mcp-config.json`),
  *   `{"mcpServers": {name: {type: "local", command, args, tools: ["*"]}}}`.
- *   Copilot harness sessions read it directly, in VS Code too, where "MCP:
- *   Add Server" > Global writes there; VS Code's user-profile mcp.json is
- *   labelled deprecated and is forwarded into the same sessions, so it is
- *   not written as well.
+ *   Copilot harness sessions read it directly, in VS Code too, according to
+ *   VS Code's MCP docs of 2026-10-21 (no file of the installed VS Code 1.133
+ *   mentions it yet). VS Code's user-profile mcp.json is labelled deprecated
+ *   there and is forwarded into the same sessions, so it is not written as
+ *   well; `doctor` warns when it also starts context-doctor, since the tools
+ *   could then load twice.
  */
 /** Copilot's home: $COPILOT_HOME when set, else ~/.copilot. */
 export declare function copilotHome(): string;
@@ -34,6 +36,8 @@ export declare function copilotMcpConfigPath(): string;
 export declare function copilotHookFilePath(): string;
 /** Inline settings Copilot also reads; `disableAllHooks` there turns every hook off. */
 export declare function copilotSettingsPath(): string;
+/** The older settings file; doctor still honours a disableAllHooks there. */
+export declare function copilotLegacyConfigPath(): string;
 /** VS Code's user folders (stable and Insiders): VS Code ships Copilot built in. */
 export declare function vsCodeUserDirs(): string[];
 export declare function vsCodePresent(): boolean;
@@ -44,9 +48,12 @@ export declare function isOurCopilotEntry(entry: unknown): boolean;
 /** What a new Copilot session is given: the standing rules, tagged as ours. */
 export declare function copilotSessionContext(): string;
 /**
- * The hook's answer to a session start, or undefined to stay silent: for an
- * event other than a session start, and for a resumed session, whose
- * context already holds what its start added.
+ * The hook's answer to a session start, or undefined to stay silent for an
+ * event other than a session start. A resumed session is answered too: the
+ * Copilot runtime keeps sessionStart context in memory and sends it with
+ * each turn, and does not restore it on resume (seen in VS Code's bundled
+ * runtime, 1.0.73 and 1.0.79), so a resumed session has the rules only if
+ * the hook gives them again.
  *
  * Input shapes: the Copilot harness sends camelCase without an event name
  * for camelCase keys ({sessionId, timestamp, cwd, source}); VS Code's Local

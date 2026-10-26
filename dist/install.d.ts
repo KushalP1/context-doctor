@@ -145,6 +145,14 @@ export declare function copilotPresent(): boolean;
  * only after `&`, so a quoted global binary gets its own powershell line.
  */
 export declare function copilotHookEntry(): Record<string, unknown>;
+/** A JSON value that is an object (not an array, null or a scalar). */
+export declare function isPlainObject(v: unknown): v is Record<string, any>;
+/**
+ * readJson, refusing anything but an object: `[1]` or `"x"` read fine as
+ * JSON, and fields set on them vanish when the file is written back, so
+ * install reported ✓ over a file it had left as it was.
+ */
+export declare function readJsonObject(path: string): Record<string, any>;
 /** Outcome of an install run, so the CLI can set a truthful exit code. */
 export interface InstallResult {
     /** Detected targets that could not be configured, with the reason. */

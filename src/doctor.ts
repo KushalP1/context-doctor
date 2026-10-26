@@ -18,7 +18,7 @@ import { loadConfig } from "./config.js";
 import { codexRouting } from "./codexroute.js";
 import { CURSOR_HOOK_EVENTS } from "./install.js";
 import { binOnPath, claudeCodeInstallsFromEnv, claudeInstalledCopies, codexMcpEntry, copilotPresent, geminiCliPresent, geminiSettingsPath, isEmptyStub, isOurPluginKey, launcherNamesMissingPackage } from "./install.js";
-import { COPILOT_HOOK_EVENT, copilotHookFilePath, copilotMcpConfigPath, copilotSettingsPath, isOurCopilotEntry } from "./copilot.js";
+import { COPILOT_HOOK_EVENT, copilotHookFilePath, copilotLegacyConfigPath, copilotMcpConfigPath, copilotSettingsPath, isOurCopilotEntry, vsCodeUserDirs } from "./copilot.js";
 import { describeDesktopUsage, desktopUsage } from "./desktopusage.js";
 import { withInvocation } from "./invocation.js";
 import { describeInstalls, modelSwitchReadiness, PRE_MODEL_SWITCH_SINCE } from "./modelswitch.js";
@@ -236,24 +236,62 @@ function copilotHookCheck(mcp: Check, missingHook: (label: string, app: Check) =
   } catch (e) {
     return { label, status: "fail", detail: `${tilde(path)} is not valid JSON (${(e as Error).message}); Copilot skips it` };
   }
-  const entry = ((config?.hooks?.[COPILOT_HOOK_EVENT] ?? []) as unknown[]).find(isOurCopilotEntry) as { command?: string } | undefined;
+  if (config !== undefined && (typeof config !== "object" || Array.isArray(config))) return { label, status: "fail", detail: `${tilde(path)} is not a JSON object; Copilot skips it — delete it and re-run: context-doctor install` };
+  const entry = ((Array.isArray(config?.hooks?.[COPILOT_HOOK_EVENT]) ? config!.hooks[COPILOT_HOOK_EVENT] : []) as unknown[]).find(isOurCopilotEntry) as { command?: string } | undefined;
   if (!entry) return missingHook(label, mcp);
+  // The runtime loads no hooks at all from a file whose version is not 1.
+  if (config?.version !== 1) return { label, status: "fail", detail: `${tilde(path)} says "version": ${JSON.stringify(config?.version)}, and Copilot loads hooks only from version 1 files: set it to 1` };
   const missing = hookBinaryMissing(String(entry.command ?? ""));
   if (missing) return { label, status: "fail", detail: `registered, but ${missing} no longer exists — re-run: context-doctor install` };
-  let settingsOff = false;
-  try {
-    settingsOff = JSON.parse(readFileSync(copilotSettingsPath(), "utf8"))?.disableAllHooks === true;
-  } catch { /* no settings file: hooks on */ }
-  if (config?.disableAllHooks === true || settingsOff) {
-    return { label, status: "fail", detail: `registered, but disableAllHooks is true in ${tilde(settingsOff ? copilotSettingsPath() : path)}, so Copilot runs no hooks` };
-  }
+  // disableAllHooks in the hook file, settings.json, or the older config.json.
+  const off = [path, copilotSettingsPath(), copilotLegacyConfigPath()].find((p) => {
+    if (p === path) return config?.disableAllHooks === true;
+    try {
+      return JSON.parse(readFileSync(p, "utf8"))?.disableAllHooks === true;
+    } catch {
+      return false; // absent or unreadable: hooks stay on
+    }
+  });
+  if (off) return { label, status: "fail", detail: `registered, but disableAllHooks is true in ${tilde(off)}, so Copilot runs no hooks` };
+  // The rules name the MCP tools: without the server they point at nothing.
+  if (mcp.status !== "ok") return { label, status: "warn", detail: `sessionStart in ${tilde(path)} adds the standing rules, which name context-doctor's MCP tools, but the MCP server is not wired (above): re-run context-doctor install` };
   const last = readLedger().filter((e) => e.ev === "session_rules" && e.app === "copilot").pop();
   const ran = last ? ` Last ran ${new Date(last.ts).toISOString().slice(0, 16).replace("T", " ")}.` : "";
   return {
     label,
     status: "ok",
-    detail: `sessionStart in ${tilde(path)}: each new Copilot session gets the standing context rules.${ran} No size checks there: Copilot gives a transcript only to hooks that cannot add context`,
+    detail: `sessionStart in ${tilde(path)}: each new or resumed Copilot session gets the standing context rules.${ran} No size checks there: Copilot gives a transcript only to hooks that cannot add context`,
   };
+}
+
+/**
+ * VS Code forwards the servers in its own user mcp.json into Copilot
+ * sessions, beside ~/.copilot/mcp-config.json. One that also starts
+ * context-doctor, under any name, can load the tools twice. VS Code's file
+ * may hold comments, so it is searched as text when it does not parse.
+ */
+function vsCodeDuplicateCheck(): Check | undefined {
+  for (const dir of vsCodeUserDirs()) {
+    const path = join(dir, "mcp.json");
+    let raw: string;
+    try {
+      raw = readFileSync(path, "utf8");
+    } catch {
+      continue;
+    }
+    if (!raw.includes("context-doctor")) continue;
+    let names: string[] = [];
+    try {
+      const servers = JSON.parse(raw)?.servers ?? {};
+      names = Object.entries(servers as Record<string, unknown>).filter(([, v]) => JSON.stringify(v).includes("context-doctor")).map(([k]) => k);
+    } catch { /* JSONC: the text search above is the evidence */ }
+    return {
+      label: "Copilot MCP",
+      status: "warn",
+      detail: `VS Code's ${tilde(path)} also starts context-doctor${names.length ? ` (as ${names.map((n) => `"${n}"`).join(", ")})` : ""}; VS Code forwards it into Copilot sessions beside ${tilde(copilotMcpConfigPath())}, so the tools can load twice: remove one`,
+    };
+  }
+  return undefined;
 }
 
 /** Claude Code's disableAllHooks: when true, no hook of anyone's runs. */
@@ -479,6 +517,8 @@ export async function runDoctor(): Promise<void> {
     }
     if (copilotMcp.status === "ok") copilotMcp.detail += ` in ${tilde(mcpPath)} (Copilot CLI, the Copilot app and VS Code's Copilot sessions)`;
     checks.push(copilotMcp);
+    const duplicate = copilotMcp.status === "ok" ? vsCodeDuplicateCheck() : undefined;
+    if (duplicate) checks.push(duplicate);
     checks.push(copilotHookCheck(copilotMcp, missingHook));
   } else {
     checks.push({ label: "GitHub Copilot", status: "skip", detail: "not detected (Copilot CLI, the GitHub Copilot app, or VS Code)" });
