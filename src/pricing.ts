@@ -36,6 +36,9 @@ function claude(families: string, major: number, minor?: number): RegExp {
     : new RegExp(`claude-(?:${families})-${major}[-.]${minor}(?!\\d)`, "i");
 }
 
+/** The Claude family fallbacks: a price for ids the table does not know by version yet. */
+const CLAUDE_FAMILY = [/claude.*fable|claude.*mythos/i, /claude.*opus/i, /claude.*sonnet/i, /claude.*haiku/i];
+
 const PRICING: Array<[pattern: RegExp, pricing: ModelPricing]> = [
   // Specific Claude versions first: the family rows below are only a
   // fallback for ids this table does not know yet.
@@ -58,11 +61,17 @@ const PRICING: Array<[pattern: RegExp, pricing: ModelPricing]> = [
   [claude("haiku", 4, 5), rate(1, 5, 0.1)],
   [/claude-3-5-haiku/i, rate(0.8, 4, 0.08)],
   [/claude-3-haiku/i, rate(0.25, 1.25, 0.03)],
-  // Sonnet 4.6, 4.5, 4 and the 3.x Sonnets are all $3 / $15 / $0.30: the family row.
-  [/claude.*fable|claude.*mythos/i, rate(10, 50, 1)],
-  [/claude.*opus/i, rate(5, 25, 0.5)],
-  [/claude.*sonnet/i, rate(3, 15, 0.3)],
-  [/claude.*haiku/i, rate(1, 5, 0.1)],
+  // Sonnet 4.6, 4.5, 4 and the 3.x Sonnets are all $3 / $15 / $0.30, the
+  // family row's price; rows of their own so a spending cap can tell a known
+  // version from a guess (exactClaudePricingFor).
+  [claude("sonnet", 4, 6), rate(3, 15, 0.3)],
+  [claude("sonnet", 4, 5), rate(3, 15, 0.3)],
+  [claude("sonnet", 4), rate(3, 15, 0.3)],
+  [/claude-3-[57]-sonnet/i, rate(3, 15, 0.3)],
+  [CLAUDE_FAMILY[0], rate(10, 50, 1)],
+  [CLAUDE_FAMILY[1], rate(5, 25, 0.5)],
+  [CLAUDE_FAMILY[2], rate(3, 15, 0.3)],
+  [CLAUDE_FAMILY[3], rate(1, 5, 0.1)],
   [/gpt-5.*(mini|nano)/i, { inputPerM: 0.25, outputPerM: 2, cacheReadPerM: 0.025 }],
   [/gpt-5/i, { inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 }],
   [/gpt-4o-mini/i, { inputPerM: 0.15, outputPerM: 0.6, cacheReadPerM: 0.075 }],
@@ -85,6 +94,21 @@ export function pricingFor(model?: string): ModelPricing | undefined {
   if (!model) return undefined;
   for (const [pattern, pricing] of PRICING) {
     if (pattern.test(model)) return pricing;
+  }
+  return undefined;
+}
+
+/**
+ * A Claude model's price from a row for its own version, not a family
+ * fallback: what a command that caps spending needs (`ab --budget`). An id
+ * the table only knows by family (a new release, a typo like
+ * claude-opus-9) gets undefined.
+ */
+export function exactClaudePricingFor(model?: string): ModelPricing | undefined {
+  if (!model || !/claude/i.test(model)) return undefined;
+  for (const [pattern, pricing] of PRICING) {
+    if (!pattern.test(model)) continue;
+    return CLAUDE_FAMILY.includes(pattern) ? undefined : pricing;
   }
   return undefined;
 }

@@ -19,6 +19,13 @@ export interface ModelPricing {
 export declare const CACHE_WRITE_5M = 1.25;
 export declare const CACHE_WRITE_1H = 2;
 export declare function pricingFor(model?: string): ModelPricing | undefined;
+/**
+ * A Claude model's price from a row for its own version, not a family
+ * fallback: what a command that caps spending needs (`ab --budget`). An id
+ * the table only knows by family (a new release, a typo like
+ * claude-opus-9) gets undefined.
+ */
+export declare function exactClaudePricingFor(model?: string): ModelPricing | undefined;
 export declare function inputCostUsd(tokens: number, pricing: ModelPricing): number;
 /** `usage` as the API returns it and Claude Code records it on each reply. */
 export interface RecordedUsage {

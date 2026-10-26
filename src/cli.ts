@@ -114,9 +114,9 @@ Measure:
   context-doctor ab [--lever rules|autoclear|pack|compact|all] [--tasks a,b] [--repeat n] [--yes]
                                                 Does a lever cost quality? 8 small coding tasks, each
                                                 run with and without it through the Messages API and
-                                                scored by its own test: passes, tokens, cost side by
+                                                scored by a hidden check: passes, tokens, cost side by
                                                 side. Bills ANTHROPIC_API_KEY: prints the estimate,
-                                                sends nothing without --yes, stops at --budget usd.
+                                                sends nothing without --yes, never passes --budget usd.
                                                 --list shows the tasks; --model (default claude-opus-5-5)
 
 Fix automatically:

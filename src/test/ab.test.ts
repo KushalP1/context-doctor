@@ -1,26 +1,32 @@
 /**
  * The A/B quality harness (`context-doctor ab`), verified without a key:
- * every task is a real task (its check fails as given and passes with the
- * reference fix), and the whole harness runs end to end, through the CLI,
- * against a local mock of the Messages API whose scripted model solves each
- * task the same way every time. The mock's request log shows what each arm
- * sent; the harness's own check, not the model's word, decides pass.
+ * every task is a real task (its hidden check fails as given and passes
+ * with the reference fix; the smoke test the agent can run gives no
+ * answers; the big-file tasks keep their facts in the big file), and the
+ * whole harness runs end to end, through the CLI, against a local mock of
+ * the Messages API whose scripted model solves each task the same way every
+ * time. The mock's request log shows what each arm sent; the harness's
+ * hidden check, not the model's word, decides pass. The agent's code runs
+ * without the API key, cannot outlive its run, and cannot write through a
+ * link; the budget is never passed, a refused key stops the suite, and a
+ * body cut short is retried.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sandboxEnv } from "./sandbox.js";
 import { AB_TASKS, type AbTask } from "../abtasks.js";
-import { AB_API_VERSION, armsFor, estimateAb, renderAb, runAbSuite, anthropicProvider, type AbResult } from "../ab.js";
+import { AB_API_VERSION, abVerify, anthropicProvider, armsFor, estimateAb, renderAb, runAbSuite, type AbResult } from "../ab.js";
 import { pricingFor } from "../pricing.js";
 import { SERVER_INSTRUCTIONS } from "../rules.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
+const windows = process.platform === "win32";
 
 type Body = Record<string, any>;
 interface Logged { headers: Record<string, string | string[] | undefined>; body: Body }
@@ -28,18 +34,31 @@ interface Logged { headers: Record<string, string | string[] | undefined>; body:
 const textOf = (content: unknown): string =>
   typeof content === "string" ? content : Array.isArray(content) ? content.map((b) => (typeof b?.text === "string" ? b.text : typeof b?.content === "string" ? b.content : "")).join("\n") : "";
 
+interface MockOptions {
+  /** Files the scripted model writes instead of the fix, for one arm and task. */
+  write?: (body: Body, task: AbTask) => Record<string, string> | undefined;
+  /** run_check calls before the model stops (default 1). */
+  checks?: number;
+  /** Output tokens reported per response (default: the reply's size). */
+  usageOut?: number;
+  /** Responses cut short (the socket closed mid-body) before answering normally. */
+  cutFirst?: number;
+  /** Delay before each answer, ms. */
+  delayMs?: number;
+}
+
 /**
  * The scripted model: read the files the fix touches (and the big file, by
- * pack_context when offered), write the reference fix, run the check, stop.
- * Stateless: the step is the number of assistant turns in the history, so a
- * compacted session starts over from its summary. `sabotage` makes it write
- * the fixture back instead of the fix, for one arm and task.
+ * pack_context when offered), write the reference fix, run the smoke test,
+ * stop. Stateless: the step is the number of assistant turns in the
+ * history, so a compacted session starts over from its summary, which
+ * restates the request as a model's summary would.
  */
-function scriptedReply(body: Body, ids: { n: number }, sabotage?: (body: Body, task: AbTask) => boolean): Body {
+function scriptedReply(body: Body, ids: { n: number }, opts: MockOptions): Body {
   const text = (t: string) => ({ type: "text", text: t });
   const use = (name: string, input: Record<string, unknown>) => ({ type: "tool_use", id: `toolu_${String(++ids.n).padStart(4, "0")}`, name, input });
-  if (body.tool_choice?.type === "none") return { content: [text("Summary: read the files, wrote the fix; next, write it again if needed and run the check.")], stop_reason: "end_turn" };
   const task = AB_TASKS.find((t) => textOf(body.messages[0].content).includes(t.prompt));
+  if (body.tool_choice?.type === "none") return { content: [text(`Summary. The request: ${task?.prompt ?? "unknown"} I read the files and wrote the fix; next, check it.`)], stop_reason: "end_turn" };
   if (!task) return { content: [text("Which task is this?")], stop_reason: "end_turn" };
   const step = body.messages.filter((m: Body) => m.role === "assistant").length;
   const tools: string[] = body.tools.map((t: Body) => t.name);
@@ -49,16 +68,18 @@ function scriptedReply(body: Body, ids: { n: number }, sabotage?: (body: Body, t
     return { content: [text("Reading the code first."), ...calls], stop_reason: "tool_use" };
   }
   if (step === 1) {
-    const files = sabotage?.(body, task) ? Object.fromEntries(Object.keys(task.solution).map((p) => [p, task.files[p] ?? ""])) : task.solution;
+    const files = opts.write?.(body, task) ?? task.solution;
     return { content: Object.entries(files).map(([path, content]) => use("write_file", { path, content })), stop_reason: "tool_use" };
   }
   if (step === 2) return { content: [use("run_check", {}), use("write_file", { path: "test.mjs", content: "console.log('ok')" })], stop_reason: "tool_use" };
+  if (step < 2 + (opts.checks ?? 1)) return { content: [use("run_check", {})], stop_reason: "tool_use" };
   return { content: [text(`Fixed ${Object.keys(task.solution).join(", ")}.`)], stop_reason: "end_turn" };
 }
 
-async function mockMessagesApi(sabotage?: (body: Body, task: AbTask) => boolean): Promise<{ url: string; requests: Logged[]; close: () => Promise<void> }> {
+async function mockMessagesApi(opts: MockOptions = {}): Promise<{ url: string; requests: Logged[]; close: () => Promise<void> }> {
   const requests: Logged[] = [];
   const ids = { n: 0 };
+  let cut = 0;
   const server: Server = createServer((req, res) => {
     let raw = "";
     req.on("data", (c) => (raw += c));
@@ -73,14 +94,21 @@ async function mockMessagesApi(sabotage?: (body: Body, task: AbTask) => boolean)
         res.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } }));
         return;
       }
-      const reply = scriptedReply(body, ids, sabotage);
-      const usage = { input_tokens: Math.ceil(JSON.stringify(body.messages).length / 4) + 600, output_tokens: Math.ceil(JSON.stringify(reply.content).length / 4), cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
-      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ id: `msg_${requests.length}`, type: "message", role: "assistant", model: body.model, ...reply, usage }));
+      if (cut < (opts.cutFirst ?? 0)) {
+        cut++;
+        res.writeHead(200, { "content-type": "application/json", "content-length": "5000" });
+        res.write('{"id":"msg_cut","content":[');
+        setTimeout(() => res.socket?.destroy(), 20);
+        return;
+      }
+      const reply = scriptedReply(body, ids, opts);
+      const usage = { input_tokens: Math.ceil(JSON.stringify(body.messages).length / 4) + 600, output_tokens: opts.usageOut ?? Math.ceil(JSON.stringify(reply.content).length / 4), cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+      setTimeout(() => res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ id: `msg_${requests.length}`, type: "message", role: "assistant", model: body.model, ...reply, usage })), opts.delayMs ?? 0);
     });
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const port = (server.address() as { port: number }).port;
-  return { url: `http://127.0.0.1:${port}`, requests, close: () => new Promise((r) => server.close(() => r())) };
+  return { url: `http://127.0.0.1:${port}`, requests, close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(() => r()); }) };
 }
 
 function cli(args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number; out: string; err: string }> {
@@ -89,35 +117,54 @@ function cli(args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number; ou
   });
 }
 
-test("every task fails as given and passes with its reference fix", () => {
+const leftovers = (dir: string) => readdirSync(dir).filter((n) => n.startsWith("ctxdoc-ab-"));
+
+test("every task: the hidden check fails as given and passes with the fix; the smoke test passes with the fix and gives no answers", async () => {
   assert.ok(AB_TASKS.length >= 6 && AB_TASKS.length <= 10);
   assert.equal(new Set(AB_TASKS.map((t) => t.id)).size, AB_TASKS.length);
   for (const task of AB_TASKS) {
-    assert.ok(task.files["test.mjs"], `${task.id} has a check`);
-    assert.ok(!("test.mjs" in task.solution), `${task.id}'s fix leaves the check alone`);
-    if (task.bigFile) assert.ok(task.files[task.bigFile], `${task.id}'s big file is in the fixture`);
-    for (const [label, files, want] of [["fixture", task.files, false], ["fix", { ...task.files, ...task.solution }, true]] as const) {
-      const dir = mkdtempSync(join(tmpdir(), "ctxdoc-abtask-"));
-      for (const [p, text] of Object.entries(files)) {
-        mkdirSync(dirname(join(dir, p)), { recursive: true });
-        writeFileSync(join(dir, p), text);
-      }
-      const r = spawnSync(process.execPath, ["test.mjs"], { cwd: dir, encoding: "utf8", timeout: 30_000 });
-      rmSync(dir, { recursive: true, force: true });
-      assert.equal(r.status === 0, want, `${task.id}: the ${label} should ${want ? "pass" : "fail"} its check\n${r.stderr}`);
+    assert.ok(task.files["test.mjs"], `${task.id} has a smoke test`);
+    assert.doesNotMatch(task.files["test.mjs"], /assert|deepEqual|\.equal\(/, `${task.id}'s smoke test asserts no results`);
+    assert.ok(!("test.mjs" in task.solution), `${task.id}'s fix leaves the smoke test alone`);
+    assert.equal(await abVerify(task), false, `${task.id}: the fixture should fail the hidden check`);
+    assert.equal(await abVerify(task, { ...task.files, ...task.solution }), true, `${task.id}: the fix should pass the hidden check`);
+    const dir = mkdtempSync(join(tmpdir(), "ctxdoc-absmoke-"));
+    for (const [p, text] of Object.entries({ ...task.files, ...task.solution })) {
+      mkdirSync(dirname(join(dir, p)), { recursive: true });
+      writeFileSync(join(dir, p), text);
+    }
+    const r = spawnSync(process.execPath, ["test.mjs"], { cwd: dir, encoding: "utf8", timeout: 30_000 });
+    rmSync(dir, { recursive: true, force: true });
+    assert.equal(r.status, 0, `${task.id}: the smoke test passes with the fix\n${r.stderr}`);
+  }
+});
+
+test("the big-file tasks keep the facts their fix needs in the big file only", () => {
+  const facts: Record<string, string[]> = {
+    "retry-backoff": ["baseDelayMs", "4 attempts in all"],
+    "ini-parser": ["SyntaxError", "dotted name", "Version 1 of the format also allowed"],
+    "ttl-cache": ["least recently used", "reading does not extend", "sliding expiry"],
+  };
+  for (const [id, needles] of Object.entries(facts)) {
+    const task = AB_TASKS.find((t) => t.id === id)!;
+    for (const needle of needles) {
+      assert.ok(task.files[task.bigFile!].includes(needle), `${id}: "${needle}" is in ${task.bigFile}`);
+      assert.ok(!task.prompt.includes(needle), `${id}: "${needle}" is not in the request`);
+      for (const [path, text] of Object.entries(task.files)) if (path !== task.bigFile) assert.ok(!text.includes(needle), `${id}: "${needle}" is not in ${path}`);
     }
   }
 });
 
-test("end to end through the CLI against a local mock Messages API: every arm, each lever acting, the check deciding", async () => {
+test("end to end through the CLI against a local mock Messages API: every arm, each lever acting, the hidden check deciding", async () => {
   const api = await mockMessagesApi();
   const home = mkdtempSync(join(tmpdir(), "ctxdoc-ab-e2e-"));
+  const tmp = mkdtempSync(join(tmpdir(), "ctxdoc-ab-tmp-"));
   const out = join(home, "ab.json");
   try {
-    const env = { ...sandboxEnv(home), ANTHROPIC_API_KEY: "test-key", ANTHROPIC_BASE_URL: api.url };
+    const env = { ...sandboxEnv(home), ANTHROPIC_API_KEY: "test-key", ANTHROPIC_BASE_URL: api.url, TMPDIR: tmp, TEMP: tmp, TMP: tmp };
     const r = await cli(["ab", "--yes", "--tasks", "range-inclusive,ini-parser,retry-backoff", "--out", out], env);
     assert.equal(r.code, 0, r.err);
-    const result = JSON.parse(readFileSync(out, "utf8")) as AbResult & { summary: Record<string, { passed: number; runs: number }> };
+    const result = JSON.parse(readFileSync(out, "utf8")) as AbResult & { summary: Record<string, { passed: number; completed: number }> };
     assert.deepEqual(result.arms, ["none", "rules", "autoclear", "pack", "compact-generic", "compact"]);
     assert.equal(result.runs.length, 3 * 6);
     for (const run of result.runs) {
@@ -125,7 +172,8 @@ test("end to end through the CLI against a local mock Messages API: every arm, e
       assert.equal(run.stop, "end_turn");
       assert.ok(run.requests >= 4 && run.inputTokens > 0 && run.outputTokens > 0 && run.costUsd > 0);
     }
-    for (const arm of result.arms) assert.deepEqual(result.summary[arm].passed, 3);
+    for (const arm of result.arms) assert.equal(result.summary[arm].passed, 3);
+    assert.deepEqual(leftovers(tmp), [], "no run folder left behind");
     const runOf = (task: string, arm: string) => result.runs.find((x) => x.task === task && x.arm === arm)!;
     // Autopilot cleared the production log the agent had read, and only in its own arm.
     assert.ok(runOf("retry-backoff", "autoclear").leverUses > 0, "autopilot changed requests");
@@ -135,8 +183,9 @@ test("end to end through the CLI against a local mock Messages API: every arm, e
     assert.ok(cleared.length > 0 && cleared.every((q) => !q.body.system.includes("Context hygiene") && !q.body.tools.some((t: Body) => t.name === "pack_context")));
     // pack_context answered the spec question instead of a whole-file read.
     assert.equal(runOf("ini-parser", "pack").leverUses, 1);
-    assert.match(textOf(api.requests.find((q) => q.body.messages.some((m: Body) => Array.isArray(m.content) && m.content.some((b: Body) => b.type === "tool_result" && String(b.content).startsWith("PACKED"))))?.body.messages.at(-1).content), /Parsing rules/);
-    // Each compact arm compacted once; only ours carried the hook's facts.
+    const packed = api.requests.find((q) => q.body.messages.some((m: Body) => Array.isArray(m.content) && m.content.some((b: Body) => b.type === "tool_result" && String(b.content).startsWith("PACKED"))));
+    assert.match(JSON.stringify(packed?.body.messages), /Parsing rules/);
+    // Each compact arm compacted once; only ours carried the hook's facts; both went on from the summary alone.
     assert.equal(runOf("range-inclusive", "compact").leverUses, 1);
     assert.equal(runOf("range-inclusive", "compact-generic").leverUses, 1);
     const summaries = api.requests.filter((q) => q.body.tool_choice?.type === "none");
@@ -144,6 +193,9 @@ test("end to end through the CLI against a local mock Messages API: every arm, e
     const withFacts = summaries.filter((q) => textOf(q.body.messages.at(-1).content).includes("context-doctor, from this session's transcript"));
     assert.equal(withFacts.length, 3, "one per task: the compact arm's");
     for (const q of withFacts) assert.match(textOf(q.body.messages.at(-1).content), /Files changed in this session[\s\S]*src\//);
+    const afterCompaction = api.requests.filter((q) => textOf(q.body.messages[0].content).startsWith("This session was compacted"));
+    assert.ok(afterCompaction.length >= 3 * 2 * 3);
+    for (const q of afterCompaction) assert.doesNotMatch(textOf(q.body.messages[0].content), /Repository files:/, "the request is not repeated after a compaction");
     // What went on the wire: the version header, the key, the rules only in their arm, no sampling parameters.
     for (const q of api.requests) {
       assert.equal(q.headers["anthropic-version"], AB_API_VERSION);
@@ -153,39 +205,55 @@ test("end to end through the CLI against a local mock Messages API: every arm, e
       assert.equal("temperature" in q.body, false);
     }
     assert.equal(api.requests.filter((q) => q.body.system.includes(SERVER_INSTRUCTIONS)).length, result.runs.filter((x) => x.arm === "rules").reduce((n, x) => n + x.requests, 0));
-    // The agent's write to test.mjs was refused, so the check that decided is the shipped one.
-    assert.ok(api.requests.some((q) => JSON.stringify(q.body.messages).includes("test.mjs is the check and cannot be changed")));
+    // The agent's write to the smoke test was refused, and the smoke test it runs gives no answers.
+    assert.ok(api.requests.some((q) => JSON.stringify(q.body.messages).includes("test.mjs is the smoke test and cannot be changed")));
+    assert.ok(api.requests.some((q) => JSON.stringify(q.body.messages).includes("This test does not check results")));
     // The table.
     assert.match(r.out, /rules: the standing context rules/);
-    assert.match(r.out, /passed\s+3\/3\s+3\/3/);
-    assert.match(r.out, /Same pass count with and without autoclear\./);
+    assert.match(r.out, /passed\s+3\/3 completed\s+3\/3 completed/);
+    assert.match(r.out, /Same pass count with and without autoclear \(3\/3\)\./);
     assert.match(r.out, /requests autopilot changed: [1-9]/);
     assert.match(r.err, /\[18\/18\]/, "progress on stderr");
   } finally {
     await api.close();
     rmSync(home, { recursive: true, force: true });
+    rmSync(tmp, { recursive: true, force: true });
   }
 });
 
-test("a lever that breaks a task shows up as a failed run, decided by the check", async () => {
+test("a lever that breaks a task shows up as a failed run, decided by the hidden check", async () => {
   // The scripted model writes the fixture back instead of the fix when the rules are in its prompt.
-  const api = await mockMessagesApi((body, task) => task.id === "csv-quotes" && String(body.system).includes("Context hygiene"));
+  const api = await mockMessagesApi({ write: (body, task) => (task.id === "csv-quotes" && String(body.system).includes("Context hygiene") ? { "src/csv.js": task.files["src/csv.js"] } : undefined) });
   try {
     const result = await runAbSuite({ provider: anthropicProvider({ apiKey: "test-key", baseUrl: api.url, retries: 0 }), tasks: AB_TASKS.filter((t) => t.id === "csv-quotes" || t.id === "money-format"), levers: ["rules"], concurrency: 2 });
     const csv = result.runs.filter((r) => r.task === "csv-quotes");
     assert.equal(csv.find((r) => r.arm === "none")!.pass, true);
     const broken = csv.find((r) => r.arm === "rules")!;
-    assert.equal(broken.pass, false, "the model said it fixed it; the check says otherwise");
+    assert.equal(broken.pass, false, "the model said it fixed it, and the smoke test passed; the hidden check says otherwise");
     assert.equal(broken.stop, "end_turn");
     const text = renderAb(result);
     assert.match(text, /csv-quotes\s+PASS.*FAIL/);
-    assert.match(text, /1 fewer pass with rules: read those runs/);
+    assert.match(text, /1 fewer pass with rules \(1\/2 vs 2\/2\): read those runs/);
   } finally {
     await api.close();
   }
 });
 
-test("without a key it refuses after printing the estimate; without --yes it sends nothing", async () => {
+test("runs stopped by the API, the budget or a cap are counted apart, not as failures", () => {
+  const run = (arm: "none" | "rules", task: string, pass: boolean, stop: string) => ({ task, arm, rep: 1, pass, stop, requests: 1, inputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 1, costUsd: 0.01, wallMs: 1, leverUses: 0, leverTokens: 0 });
+  const result: AbResult = {
+    model: "claude-opus-5-5", provider: "test", tasks: ["a", "b", "c"], levers: ["rules"], arms: ["none", "rules"], repeat: 1, spentUsd: 0.06,
+    runs: [run("none", "a", true, "end_turn"), run("rules", "a", true, "end_turn"), run("none", "b", true, "end_turn"), run("rules", "b", false, "error"), run("none", "c", true, "end_turn"), run("rules", "c", false, "budget")],
+  };
+  const text = renderAb(result);
+  assert.match(text, /passed\s+3\/3 completed\s+1\/1 completed/);
+  assert.match(text, /stopped early\s+0\s+2/);
+  assert.match(text, /Same pass rate with and without rules over the completed runs \(1\/1 vs 3\/3\)/);
+  assert.doesNotMatch(text, /fewer pass/);
+  assert.match(text, /b\s+PASS.*ERROR/);
+});
+
+test("gates: no key refuses after the estimate; no --yes sends nothing; a bad --out, an unknown lever or a model without its own price stop before spending", async () => {
   const api = await mockMessagesApi();
   const home = mkdtempSync(join(tmpdir(), "ctxdoc-ab-gate-"));
   try {
@@ -195,39 +263,181 @@ test("without a key it refuses after printing the estimate; without --yes it sen
     assert.equal(noKey.code, 1);
     assert.match(noKey.out, /Estimated cost: ~\$[\d.]+ with prompt caching, up to ~\$[\d.]+ if nothing caches/);
     assert.match(noKey.err, /ANTHROPIC_API_KEY, which is not set\. Nothing was sent\./);
-    const noYes = await cli(["ab", "--lever", "pack", "--tasks", "ini-parser"], { ...base, ANTHROPIC_API_KEY: "test-key" });
+    const keyed = { ...base, ANTHROPIC_API_KEY: "test-key" };
+    const noYes = await cli(["ab", "--lever", "pack", "--tasks", "ini-parser"], keyed);
     assert.equal(noYes.code, 0);
     assert.match(noYes.out, /1 task x 2 arms \(none, pack\) x 1 = 2 runs on claude-opus-5-5/);
     assert.match(noYes.out, /Nothing was sent\. Run again with --yes to spend up to \$\d/);
-    assert.equal(api.requests.length, 0, "not one request without consent");
-    const bad = await cli(["ab", "--lever", "magic"], base);
+    const folder = await cli(["ab", "--yes", "--out", home], keyed);
+    assert.equal(folder.code, 1);
+    assert.match(folder.err, /--out .* is a folder\. Nothing was sent\./);
+    const nowhere = await cli(["ab", "--yes", "--out", join(home, "missing", "ab.json")], keyed);
+    assert.equal(nowhere.code, 1);
+    assert.match(nowhere.err, /cannot be written/);
+    const guess = await cli(["ab", "--yes", "--model", "claude-opus-9"], keyed);
+    assert.equal(guess.code, 1);
+    assert.match(guess.err, /No price is known for claude-opus-9 itself/);
+    const bad = await cli(["ab", "--lever", "magic"], keyed);
     assert.equal(bad.code, 1);
     assert.match(bad.err, /Unknown lever "magic"/);
-    const list = await cli(["ab", "--list"], base);
-    assert.match(list.out, /ini-parser\s+.*big file: docs\/FORMAT\.md/);
+    assert.equal(api.requests.length, 0, "not one request");
+    assert.match((await cli(["ab", "--list"], base)).out, /ini-parser\s+.*big file: docs\/FORMAT\.md/);
   } finally {
     await api.close();
     rmSync(home, { recursive: true, force: true });
   }
 });
 
-test("the budget stops new requests, and a wrong key fails every run with exit 1", async () => {
-  const api = await mockMessagesApi();
-  const home = mkdtempSync(join(tmpdir(), "ctxdoc-ab-budget-"));
+test("the budget is never passed, however many runs are in flight", async () => {
+  // Every answer bills a full max_tokens of output, the worst case each request reserves.
+  const api = await mockMessagesApi({ usageOut: 16000 });
   try {
-    const env = { ...sandboxEnv(home), ANTHROPIC_API_KEY: "test-key", ANTHROPIC_BASE_URL: api.url };
-    const capped = await cli(["ab", "--yes", "--json", "--lever", "rules", "--tasks", "range-inclusive,slugify", "--budget", "0.0001", "--concurrency", "1"], env);
-    assert.equal(capped.code, 0, capped.err);
-    const result = JSON.parse(capped.out) as AbResult;
-    assert.equal(api.requests.length, 1, "the first request spends past the cap; nothing after it is sent");
-    assert.ok(result.runs.every((r) => r.stop === "budget"));
-    assert.match(capped.err, /Requests stop once \$0\.0001 is spent/);
-    const wrongKey = await cli(["ab", "--yes", "--lever", "rules", "--tasks", "range-inclusive"], { ...env, ANTHROPIC_API_KEY: "nope" });
-    assert.equal(wrongKey.code, 1);
-    assert.match(wrongKey.err, /HTTP 401: invalid x-api-key/);
+    const budgetUsd = 1;
+    const result = await runAbSuite({ provider: anthropicProvider({ apiKey: "test-key", baseUrl: api.url, retries: 0 }), tasks: AB_TASKS.slice(0, 4), levers: ["rules"], concurrency: 4, budgetUsd });
+    assert.ok(result.spentUsd <= budgetUsd, `spent ${result.spentUsd} of ${budgetUsd}`);
+    assert.ok(api.requests.length >= 1 && api.requests.length <= 3, `${api.requests.length} requests`);
+    assert.ok(result.runs.some((r) => r.stop === "budget"));
+    const none = await runAbSuite({ provider: anthropicProvider({ apiKey: "test-key", baseUrl: api.url }), tasks: AB_TASKS.slice(0, 1), levers: ["rules"], budgetUsd: 0.0001 });
+    assert.ok(none.runs.every((r) => r.stop === "budget" && r.requests === 0), "a budget below one request's worst case sends nothing");
+  } finally {
+    await api.close();
+  }
+});
+
+test("a refused key stops the suite with exit 1; a body cut short is retried", async () => {
+  const api = await mockMessagesApi();
+  const home = mkdtempSync(join(tmpdir(), "ctxdoc-ab-key-"));
+  try {
+    const env = { ...sandboxEnv(home), ANTHROPIC_API_KEY: "nope", ANTHROPIC_BASE_URL: api.url };
+    const r = await cli(["ab", "--yes", "--lever", "rules,pack", "--tasks", "range-inclusive,slugify", "--concurrency", "1"], env);
+    assert.equal(r.code, 1);
+    assert.match(r.err, /Stopped: the API refused the key \(HTTP 401: invalid x-api-key\)/);
+    assert.equal(api.requests.length, 1, "the first refusal stops every later run");
   } finally {
     await api.close();
     rmSync(home, { recursive: true, force: true });
+  }
+  const flaky = await mockMessagesApi({ cutFirst: 2 });
+  try {
+    const result = await runAbSuite({ provider: anthropicProvider({ apiKey: "test-key", baseUrl: flaky.url, retries: 3 }), tasks: AB_TASKS.slice(0, 1), levers: ["rules"], concurrency: 1 });
+    assert.ok(result.runs.every((r) => r.pass && r.stop === "end_turn"), JSON.stringify(result.runs.map((r) => r.error)));
+  } finally {
+    await flaky.close();
+  }
+});
+
+test("the compaction request counts against --max-turns", async () => {
+  const api = await mockMessagesApi();
+  try {
+    const result = await runAbSuite({ provider: anthropicProvider({ apiKey: "test-key", baseUrl: api.url }), tasks: AB_TASKS.slice(0, 1), levers: ["compact"], maxTurns: 2, compactAfter: 2 });
+    for (const run of result.runs) {
+      assert.equal(run.requests, 2);
+      assert.equal(run.stop, "turns");
+      assert.equal(run.leverUses, 0, "no compaction past the cap");
+    }
+    assert.equal(api.requests.filter((q) => q.body.tool_choice?.type === "none").length, 0);
+  } finally {
+    await api.close();
+  }
+});
+
+/** A fix for range-inclusive with `code` run first, as the module loads (in the smoke test and the hidden check). */
+function hostileRange(code: string): Record<string, string> {
+  const task = AB_TASKS.find((t) => t.id === "range-inclusive")!;
+  return { "src/range.js": ['import fs from "node:fs";', 'import os from "node:os";', 'import { spawn } from "node:child_process";', code, task.solution["src/range.js"]].join("\n") };
+}
+
+test("the agent's code runs without the API key or the real home, and cannot outlive its run", { skip: windows && "process groups and /proc or lsof are POSIX" }, async () => {
+  const spy = mkdtempSync(join(tmpdir(), "ctxdoc-ab-spy-"));
+  const leak = join(spy, "leak.json");
+  const orphan = join(spy, "orphan.txt");
+  const late = `setTimeout(() => require("fs").writeFileSync(${JSON.stringify(orphan)}, "alive"), 4000)`;
+  const code = [
+    `fs.writeFileSync(${JSON.stringify(leak)}, JSON.stringify({ key: process.env.ANTHROPIC_API_KEY ?? null, base: process.env.ANTHROPIC_BASE_URL ?? null, home: os.homedir() }));`,
+    `spawn(process.execPath, ["-e", ${JSON.stringify(late)}], { detached: true, stdio: "ignore" }).unref();`,
+  ].join("\n");
+  const api = await mockMessagesApi({ write: (_b, task) => (task.id === "range-inclusive" ? hostileRange(code) : undefined) });
+  const saved = process.env.ANTHROPIC_API_KEY;
+  process.env.ANTHROPIC_API_KEY = "sk-ant-should-not-leak";
+  try {
+    const result = await runAbSuite({ provider: anthropicProvider({ apiKey: "test-key", baseUrl: api.url }), tasks: AB_TASKS.slice(0, 1), levers: ["rules"], concurrency: 1 });
+    assert.ok(result.runs.every((r) => r.pass), "the fix still works");
+    const seen = JSON.parse(readFileSync(leak, "utf8"));
+    assert.equal(seen.key, null, "no API key in the agent's environment");
+    assert.equal(seen.base, null);
+    assert.match(seen.home, /ctxdoc-ab-range-inclusive-/, "a throwaway home");
+    await new Promise((r) => setTimeout(r, 5000));
+    assert.equal(existsSync(orphan), false, "the detached child was killed with the run");
+  } finally {
+    if (saved === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = saved;
+    await api.close();
+    rmSync(spy, { recursive: true, force: true });
+  }
+});
+
+test("the smoke test is restored without writing through a link, and a locked or looping repository is still cleaned up", { skip: windows && "symlinks and chmod differ on Windows" }, async () => {
+  const spy = mkdtempSync(join(tmpdir(), "ctxdoc-ab-victim-"));
+  const victim = join(spy, "victim.txt");
+  writeFileSync(victim, "victim");
+  const tmp = mkdtempSync(join(tmpdir(), "ctxdoc-ab-tmp-"));
+  const saved = process.env.TMPDIR;
+  process.env.TMPDIR = tmp;
+  try {
+    for (const code of [
+      `try { fs.rmSync("test.mjs", { force: true }); fs.symlinkSync(${JSON.stringify(victim)}, "test.mjs"); } catch {}`,
+      'try { fs.rmSync("test.mjs", { force: true }); fs.mkdirSync("test.mjs"); } catch {}',
+      'try { fs.chmodSync("test.mjs", 0o444); fs.chmodSync(".", 0o555); fs.chmodSync("..", 0o555); } catch {}',
+    ]) {
+      const api = await mockMessagesApi({ checks: 2, write: (_b, task) => (task.id === "range-inclusive" ? hostileRange(code) : undefined) });
+      try {
+        const result = await runAbSuite({ provider: anthropicProvider({ apiKey: "test-key", baseUrl: api.url }), tasks: AB_TASKS.slice(0, 1), levers: ["rules"], concurrency: 1 });
+        assert.ok(result.runs.every((r) => r.stop === "end_turn"), code);
+        // The second smoke run found the planted thing at test.mjs and ran the real smoke test again.
+        const second = api.requests.filter((q) => JSON.stringify(q.body.messages).includes("This test does not check results"));
+        assert.ok(second.length > 0, code);
+      } finally {
+        await api.close();
+      }
+      assert.equal(readFileSync(victim, "utf8"), "victim", "never written through the link");
+      assert.deepEqual(leftovers(tmp), [], `no run folder left behind: ${code}`);
+    }
+    // A check that never ends is killed at the time limit and fails.
+    const api = await mockMessagesApi({ write: (_b, task) => (task.id === "range-inclusive" ? hostileRange("while (true) {}") : undefined) });
+    try {
+      const started = Date.now();
+      const result = await runAbSuite({ provider: anthropicProvider({ apiKey: "test-key", baseUrl: api.url }), tasks: AB_TASKS.slice(0, 1), levers: ["rules"], concurrency: 2, checkTimeoutMs: 800 });
+      assert.ok(result.runs.every((r) => !r.pass && r.stop === "end_turn"));
+      assert.ok(Date.now() - started < 20_000);
+      assert.ok(api.requests.some((q) => JSON.stringify(q.body.messages).includes("killed after 0.8 s")));
+    } finally {
+      await api.close();
+    }
+    assert.deepEqual(leftovers(tmp), []);
+  } finally {
+    if (saved === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = saved;
+    rmSync(tmp, { recursive: true, force: true });
+    rmSync(spy, { recursive: true, force: true });
+  }
+});
+
+test("Ctrl-C mid-suite removes every run folder and exits 130", { skip: windows && "no SIGINT to a child on Windows" }, async () => {
+  const api = await mockMessagesApi({ delayMs: 400 });
+  const home = mkdtempSync(join(tmpdir(), "ctxdoc-ab-int-"));
+  const tmp = mkdtempSync(join(tmpdir(), "ctxdoc-ab-tmp-"));
+  try {
+    const child = spawn(process.execPath, [cliPath, "ab", "--yes", "--lever", "rules"], { env: { ...sandboxEnv(home), ANTHROPIC_API_KEY: "test-key", ANTHROPIC_BASE_URL: api.url, TMPDIR: tmp }, stdio: "ignore" });
+    const exited = new Promise<number | null>((r) => child.on("exit", (code) => r(code)));
+    while (api.requests.length < 2) await new Promise((r) => setTimeout(r, 50));
+    assert.ok(leftovers(tmp).length > 0, "runs are in flight");
+    child.kill("SIGINT");
+    assert.equal(await exited, 130);
+    assert.deepEqual(leftovers(tmp), []);
+  } finally {
+    await api.close();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(tmp, { recursive: true, force: true });
   }
 });
 

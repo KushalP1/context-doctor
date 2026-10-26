@@ -1,31 +1,70 @@
 /**
  * The A/B suite's tasks (`context-doctor ab`): small, self-contained coding
- * tasks, each a tiny repository, a request, and a deterministic check
- * (`node test.mjs`, exit 0 = pass). Every file is generated here: no
- * network, no dependencies, nothing from anyone's real sessions.
+ * tasks, each a tiny repository, a request, a visible smoke test and a
+ * hidden check. Every file is generated here: no network, no dependencies,
+ * nothing from anyone's real sessions.
  *
- * Three of them carry a big file on purpose, because that is where the
- * levers act: a long format spec only one section of which matters
- * (pack_context), a production log the agent reads and then no longer needs
- * (autopilot's clearing), a design doc (both). The others are ordinary
- * small fixes, where a lever should change nothing.
+ * The agent can run the smoke test (`node test.mjs`), which shows that the
+ * code loads and runs and gives no expected values. The verdict is `verify`,
+ * which the harness runs from outside the repository after the agent stops:
+ * the agent can neither read nor run it, so the answers come from the
+ * request and the repository's own files, not from a failing assertion.
+ *
+ * Three tasks keep the facts their solution needs only in a big file: a long
+ * format spec (one section of which matters, with an older version's rules
+ * as a decoy), a production log with the retry policy in the middle, a
+ * design doc. That is where the levers act (pack_context, autopilot's
+ * clearing, compaction). The other five are small fixes whose facts are in
+ * the request: there a lever should change nothing.
  *
  * `solution` is the reference fix. The agent never sees it: the test suite
- * checks that every fixture fails its check and passes with the solution,
+ * checks that every fixture fails `verify` and passes it with the solution,
  * and the local mock API writes it to play a model that solves the task.
  */
 
 export interface AbTask {
   id: string;
   title: string;
-  /** The repository: relative path -> content. `test.mjs` is the check and is read-only to the agent. */
+  /** The repository: relative path -> content. `test.mjs` is the smoke test and is read-only to the agent. */
   files: Record<string, string>;
   /** What the agent is asked to do. */
   prompt: string;
+  /**
+   * The hidden check, an ES module body run with the repository as its
+   * working directory after a prelude (abVerifyScript) that provides `A`
+   * (assert functions captured before any repository code loads) and
+   * `load(path)` (import a repository file). Passing = it ran to the end.
+   */
+  verify: string;
   /** The reference fix: files to write over the fixture. */
   solution: Record<string, string>;
-  /** A big file the task needs only part of (read whole, or packed). */
+  /** A big file holding facts the solution needs. */
   bigFile?: string;
+}
+
+/**
+ * The hidden check as a script: the prelude, the task's body, and a last
+ * line printing `ab-verify-ok <nonce>`, which the harness requires along
+ * with exit 0 (an exit code alone could be set by the code under test).
+ */
+export function abVerifyScript(task: AbTask): string {
+  return [
+    'import assert from "node:assert/strict";',
+    'import { readFileSync } from "node:fs";',
+    'import { pathToFileURL } from "node:url";',
+    "// Captured before the code under test loads, so it cannot swap them.",
+    "const A = { equal: assert.equal, deepEqual: assert.deepEqual, ok: assert.ok, throws: assert.throws, rejects: assert.rejects, match: assert.match, doesNotMatch: assert.doesNotMatch };",
+    "const write = process.stdout.write.bind(process.stdout);",
+    "const read = (p) => readFileSync(p, \"utf8\");",
+    "const load = (p) => import(pathToFileURL(p).href);",
+    task.verify,
+    'write("ab-verify-ok " + process.argv[2] + "\\n");',
+  ].join("\n") + "\n";
+}
+
+/** A smoke test: the module loads and the call runs; no expected values. */
+function smoke(importLine: string, ...body: string[]): string {
+  return lines(importLine, ...body, 'console.log("smoke ok: the code loads and runs. This test does not check results.");');
 }
 
 /** Deterministic filler prose: the same words on every machine and run. */
@@ -63,22 +102,21 @@ const range: AbTask = {
       "  return out;",
       "}",
     ),
-    "test.mjs": lines(
-      'import assert from "node:assert/strict";',
-      'import { range } from "./src/range.js";',
-      "assert.deepEqual(range(1, 5), [1, 2, 3, 4, 5]);",
-      "assert.deepEqual(range(0, 10, 5), [0, 5, 10]);",
-      "assert.deepEqual(range(0, 9, 4), [0, 4, 8]);",
-      "assert.deepEqual(range(5, 1, -2), [5, 3, 1]);",
-      "assert.deepEqual(range(3, 3), [3]);",
-      "assert.deepEqual(range(4, 1), []);",
-      "assert.throws(() => range(1, 2, 0), RangeError);",
-      'console.log("ok");',
-    ),
+    "test.mjs": smoke('import { range } from "./src/range.js";', "range(0, 1);"),
   },
   prompt:
     "range(start, end, step) in src/range.js must include `end` when the steps land on it (range(1, 5) is [1, 2, 3, 4, 5]), " +
     "count down when step is negative (range(5, 1, -2) is [5, 3, 1]), return [] when the steps never reach end, and throw a RangeError for step 0. Fix it.",
+  verify: lines(
+    'const { range } = await load("src/range.js");',
+    "A.deepEqual(range(1, 5), [1, 2, 3, 4, 5]);",
+    "A.deepEqual(range(0, 10, 5), [0, 5, 10]);",
+    "A.deepEqual(range(0, 9, 4), [0, 4, 8]);",
+    "A.deepEqual(range(5, 1, -2), [5, 3, 1]);",
+    "A.deepEqual(range(3, 3), [3]);",
+    "A.deepEqual(range(4, 1), []);",
+    "A.throws(() => range(1, 2, 0), RangeError);",
+  ),
   solution: {
     "src/range.js": lines(
       "// range(start, end, step): the numbers from start to end, end included when a step lands on it.",
@@ -111,20 +149,19 @@ const slugify: AbTask = {
       "5. An empty result is `untitled`.",
     ),
     "src/slug.js": lines("export function slugify(title) {", '  throw new Error("not implemented");', "}"),
-    "test.mjs": lines(
-      'import assert from "node:assert/strict";',
-      'import { slugify } from "./src/slug.js";',
-      'assert.equal(slugify("Hello, World!"), "hello-world");',
-      'assert.equal(slugify("  Crème Brûlée -- Recipe  "), "creme-brulee-recipe");',
-      'assert.equal(slugify("a___b...c"), "a-b-c");',
-      'assert.equal(slugify("The quick brown fox jumps over the lazy dog"), "the-quick-brown-fox-jumps-over");',
-      'assert.equal(slugify("x".repeat(40)), "x".repeat(32));',
-      'assert.equal(slugify("!!!"), "untitled");',
-      'assert.equal(slugify("Ünïcödé 2026"), "unicode-2026");',
-      'console.log("ok");',
-    ),
+    "test.mjs": smoke('import { slugify } from "./src/slug.js";', 'if (typeof slugify("A b") !== "string") throw new Error("slugify must return a string");'),
   },
   prompt: "Implement slugify in src/slug.js following the rules in README.md.",
+  verify: lines(
+    'const { slugify } = await load("src/slug.js");',
+    'A.equal(slugify("Hello, World!"), "hello-world");',
+    'A.equal(slugify("  Crème Brûlée -- Recipe  "), "creme-brulee-recipe");',
+    'A.equal(slugify("a___b...c"), "a-b-c");',
+    'A.equal(slugify("The quick brown fox jumps over the lazy dog"), "the-quick-brown-fox-jumps-over");',
+    'A.equal(slugify("x".repeat(40)), "x".repeat(32));',
+    'A.equal(slugify("!!!"), "untitled");',
+    'A.equal(slugify("Ünïcödé 2026"), "unicode-2026");',
+  ),
   solution: {
     "src/slug.js": lines(
       "export function slugify(title) {",
@@ -165,7 +202,7 @@ const formatDoc = [
   "",
   "## 5. Versioning",
   "",
-  filler(15, 20),
+  "Version 1 of the format also allowed `:` in place of `=`, and a comment after a value (`port = 80 ; web port`). Version 2, which this document specifies, allows neither (see section 7). " + filler(15, 20),
   "",
   "## 6. Examples from the field",
   "",
@@ -200,37 +237,39 @@ const ini: AbTask = {
   files: {
     "docs/FORMAT.md": formatDoc,
     "src/ini.js": lines("// parseIni(text): parse a KEYFILE document (see docs/FORMAT.md).", "export function parseIni(text) {", '  throw new Error("not implemented");', "}"),
-    "test.mjs": lines(
-      'import assert from "node:assert/strict";',
-      'import { parseIni } from "./src/ini.js";',
-      "const doc = [",
-      '  "; deployment settings",',
-      '  "name = web",',
-      '  "",',
-      '  "[server]",',
-      '  "port = 8080",',
-      '  "host = example.org ",',
-      '  "debug = false",',
-      '  "  # an indented comment",',
-      '  "url = http://x/?a=b",',
-      '  "[ db.primary ]",',
-      '  "user = \\"  admin \\"",',
-      '  "retries = -3",',
-      '  "ratio = 1.5",',
-      '  "[server]",',
-      '  "port = 9090",',
-      "].join(\"\\n\");",
-      "assert.deepEqual(parseIni(doc), {",
-      '  name: "web",',
-      '  server: { port: 9090, host: "example.org", debug: false, url: "http://x/?a=b" },',
-      '  db: { primary: { user: "  admin ", retries: -3, ratio: "1.5" } },',
-      "});",
-      'assert.deepEqual(parseIni("[a]\\nflag = true\\nq = \\"42\\""), { a: { flag: true, q: "42" } });',
-      'assert.throws(() => parseIni("[a]\\nok = 1\\nnot a pair"), (e) => e instanceof SyntaxError && /line 3/.test(e.message));',
-      'console.log("ok");',
-    ),
+    "test.mjs": smoke('import { parseIni } from "./src/ini.js";', 'const r = parseIni("a = 1");', 'if (!r || typeof r !== "object") throw new Error("parseIni must return an object");'),
   },
-  prompt: "Implement parseIni in src/ini.js. The format is specified in docs/FORMAT.md (a long document; the rules are in one section of it).",
+  prompt: "Implement parseIni in src/ini.js for the KEYFILE format specified in docs/FORMAT.md.",
+  verify: lines(
+    'const { parseIni } = await load("src/ini.js");',
+    "const doc = [",
+    '  "; deployment settings",',
+    '  "name = web",',
+    '  "",',
+    '  "[server]",',
+    '  "port = 8080",',
+    '  "host = example.org ",',
+    '  "debug = false",',
+    '  "  # an indented comment",',
+    '  "url = http://x/?a=b",',
+    '  "[ db.primary ]",',
+    '  "user = \\"  admin \\"",',
+    '  "retries = -3",',
+    '  "ratio = 1.5",',
+    '  "[server]",',
+    '  "port = 9090",',
+    "].join(\"\\n\");",
+    "A.deepEqual(parseIni(doc), {",
+    '  name: "web",',
+    '  server: { port: 9090, host: "example.org", debug: false, url: "http://x/?a=b" },',
+    '  db: { primary: { user: "  admin ", retries: -3, ratio: "1.5" } },',
+    "});",
+    'A.deepEqual(parseIni("[a]\\nflag = true\\nq = \\"42\\""), { a: { flag: true, q: "42" } });',
+    'A.throws(() => parseIni("[a]\\nok = 1\\nnot a pair"), (e) => e instanceof SyntaxError && /line 3/.test(e.message));',
+    "// Version 1 habits are not version 2: no comment after a value, no `:`.",
+    'A.deepEqual(parseIni("note = a ; b"), { note: "a ; b" });',
+    'A.throws(() => parseIni("k: v"), (e) => e instanceof SyntaxError && /line 1/.test(e.message));',
+  ),
   solution: {
     "src/ini.js": lines(
       "// parseIni(text): parse a KEYFILE document (see docs/FORMAT.md, section 7).",
@@ -272,6 +311,9 @@ function appLog(): string {
   const routes = ["/api/orders", "/api/users", "/api/cart", "/health", "/api/search", "/api/invoices"];
   for (let i = 0; i < 300; i++) {
     const r = routes[(i * 7) % routes.length];
+    if (i === 150) {
+      out.push(`${at()} INFO  config    service restarted; retry policy: retries=3 means 3 retries after the first attempt (4 attempts in all); the first retry waits baseDelayMs (an option, default 100) and each later one twice as long: 100, 200, 400 ms`);
+    }
     if (i % 37 === 11) {
       const id = 4000 + i;
       out.push(`${at()} WARN  payments  request ${id} to billing failed (503), retrying: attempt=1 delayMs=NaN`);
@@ -291,8 +333,7 @@ const retry: AbTask = {
   files: {
     "logs/app.log": appLog(),
     "src/retry.js": lines(
-      "// withRetry(fn, options): call fn until it succeeds, waiting longer after each failure.",
-      "// options: retries (failures to retry after, default 3), baseDelayMs (default 100), sleep (ms => Promise).",
+      "// withRetry(fn, options): call fn until it succeeds, backing off between attempts. options.sleep(ms) is for tests.",
       "export async function withRetry(fn, options = {}) {",
       "  const retries = options.retries ?? 3;",
       "  const sleep = options.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));",
@@ -306,27 +347,29 @@ const retry: AbTask = {
       "  }",
       "}",
     ),
-    "test.mjs": lines(
-      'import assert from "node:assert/strict";',
-      'import { withRetry } from "./src/retry.js";',
-      "const waits = [];",
-      "let calls = 0;",
-      'const failing = async () => { calls++; throw new Error("503"); };',
-      "await assert.rejects(withRetry(failing, { sleep: async (ms) => { waits.push(ms); } }));",
-      "assert.equal(calls, 4, \"retries: 3 means 3 retries after the first try\");",
-      "assert.deepEqual(waits, [100, 200, 400]);",
-      "waits.length = 0; calls = 0;",
-      'const flaky = async (n) => { calls++; if (n < 3) throw new Error("503"); return "done"; };',
-      'assert.equal(await withRetry(flaky, { baseDelayMs: 50, sleep: async (ms) => { waits.push(ms); } }), "done");',
-      "assert.deepEqual(waits, [50, 100]);",
-      'console.log("ok");',
-    ),
+    "test.mjs": smoke('import { withRetry } from "./src/retry.js";', 'if ((await withRetry(async () => 7, { sleep: async () => {} })) !== 7) throw new Error("withRetry must return what fn returns");'),
   },
-  prompt: "The production log in logs/app.log shows the billing retries misbehaving. Find the cause in src/retry.js (the helper every service uses) and fix it.",
+  prompt: "Billing retries misbehave in production; the service's log is logs/app.log. Fix src/retry.js (the helper every service uses) so it follows the retry policy the service logs.",
+  verify: lines(
+    'const { withRetry } = await load("src/retry.js");',
+    "const waits = [];",
+    "let calls = 0;",
+    'const failing = async () => { calls++; throw new Error("503"); };',
+    "await A.rejects(withRetry(failing, { sleep: async (ms) => { waits.push(ms); } }));",
+    "A.equal(calls, 4, \"retries: 3 means 3 retries after the first try\");",
+    "A.deepEqual(waits, [100, 200, 400]);",
+    "waits.length = 0; calls = 0;",
+    'const flaky = async (n) => { calls++; if (n < 3) throw new Error("503"); return "done"; };',
+    'A.equal(await withRetry(flaky, { baseDelayMs: 50, sleep: async (ms) => { waits.push(ms); } }), "done");',
+    "A.deepEqual(waits, [50, 100]);",
+    "waits.length = 0; calls = 0;",
+    "await A.rejects(withRetry(failing, { retries: 1, baseDelayMs: 10, sleep: async (ms) => { waits.push(ms); } }));",
+    "A.equal(calls, 2); A.deepEqual(waits, [10]);",
+  ),
   solution: {
     "src/retry.js": lines(
-      "// withRetry(fn, options): call fn until it succeeds, waiting longer after each failure.",
-      "// options: retries (failures to retry after, default 3), baseDelayMs (default 100), sleep (ms => Promise).",
+      "// withRetry(fn, options): call fn until it succeeds, backing off between attempts. options.sleep(ms) is for tests.",
+      "// Policy: `retries` retries after the first attempt (default 3); waits baseDelayMs (default 100), doubling.",
       "export async function withRetry(fn, options = {}) {",
       "  const retries = options.retries ?? 3;",
       "  const base = options.baseDelayMs ?? 100;",
@@ -351,18 +394,17 @@ const csv: AbTask = {
   title: "Handle quoted fields in a parser",
   files: {
     "src/csv.js": lines("// parseCsvLine(line): the fields of one CSV line (RFC 4180 quoting).", "export function parseCsvLine(line) {", '  return line.split(",");', "}"),
-    "test.mjs": lines(
-      'import assert from "node:assert/strict";',
-      'import { parseCsvLine } from "./src/csv.js";',
-      'assert.deepEqual(parseCsvLine("a,b,c"), ["a", "b", "c"]);',
-      'assert.deepEqual(parseCsvLine("\\"x, y\\",z"), ["x, y", "z"]);',
-      'assert.deepEqual(parseCsvLine("\\"say \\"\\"hi\\"\\"\\",2"), ["say \\"hi\\"", "2"]);',
-      'assert.deepEqual(parseCsvLine("a,,c,"), ["a", "", "c", ""]);',
-      'assert.deepEqual(parseCsvLine("\\"\\""), [""]);',
-      'console.log("ok");',
-    ),
+    "test.mjs": smoke('import { parseCsvLine } from "./src/csv.js";', 'if (!Array.isArray(parseCsvLine("a,b"))) throw new Error("parseCsvLine must return an array");'),
   },
   prompt: "parseCsvLine in src/csv.js splits on every comma, which breaks quoted fields. Make it follow RFC 4180 quoting: fields in double quotes may contain commas, and a doubled quote inside them is one quote.",
+  verify: lines(
+    'const { parseCsvLine } = await load("src/csv.js");',
+    'A.deepEqual(parseCsvLine("a,b,c"), ["a", "b", "c"]);',
+    'A.deepEqual(parseCsvLine("\\"x, y\\",z"), ["x, y", "z"]);',
+    'A.deepEqual(parseCsvLine("\\"say \\"\\"hi\\"\\"\\",2"), ["say \\"hi\\"", "2"]);',
+    'A.deepEqual(parseCsvLine("a,,c,"), ["a", "", "c", ""]);',
+    'A.deepEqual(parseCsvLine("\\"\\""), [""]);',
+  ),
   solution: {
     "src/csv.js": lines(
       "// parseCsvLine(line): the fields of one CSV line (RFC 4180 quoting).",
@@ -401,24 +443,22 @@ const rename: AbTask = {
     ),
     "src/api.js": lines('import { getUser } from "./users.js";', "export function handle(id) {", "  const user = getUser(id);", "  return user ? { status: 200, body: user } : { status: 404 };", "}"),
     "src/report.js": lines('import { getUser } from "./users.js";', "export function names(ids) {", "  return ids.map((id) => getUser(id)?.name ?? \"?\").join(\", \");", "}"),
-    "test.mjs": lines(
-      'import assert from "node:assert/strict";',
-      'import { readFileSync } from "node:fs";',
-      'import * as users from "./src/users.js";',
-      'import { handle } from "./src/api.js";',
-      'import { names } from "./src/report.js";',
-      'assert.equal(typeof users.fetchUser, "function");',
-      'assert.equal(users.fetchUser(1).name, "Ada");',
-      'assert.equal(users.getUser(2).name, "Lin", "getUser stays, as a deprecated alias");',
-      "assert.deepEqual(handle(1), { status: 200, body: { id: 1, name: \"Ada\" } });",
-      'assert.equal(names([1, 2, 3]), "Ada, Lin, ?");',
-      'for (const f of ["src/api.js", "src/report.js"]) assert.ok(!/getUser/.test(readFileSync(f, "utf8")), f + " still calls getUser");',
-      'assert.match(readFileSync("src/users.js", "utf8"), /@deprecated/);',
-      'console.log("ok");',
-    ),
+    "test.mjs": smoke('import "./src/users.js";', 'await import("./src/api.js");', 'await import("./src/report.js");'),
   },
   prompt:
     "Rename getUser to fetchUser in src/users.js and update every caller in src/. Keep getUser exported as an alias that calls fetchUser, marked with a JSDoc @deprecated tag, so outside code keeps working.",
+  verify: lines(
+    'const users = await load("src/users.js");',
+    'const { handle } = await load("src/api.js");',
+    'const { names } = await load("src/report.js");',
+    'A.equal(typeof users.fetchUser, "function");',
+    'A.equal(users.fetchUser(1).name, "Ada");',
+    'A.equal(users.getUser(2).name, "Lin", "getUser stays, as a deprecated alias");',
+    "A.deepEqual(handle(1), { status: 200, body: { id: 1, name: \"Ada\" } });",
+    'A.equal(names([1, 2, 3]), "Ada, Lin, ?");',
+    'for (const f of ["src/api.js", "src/report.js"]) A.ok(!/getUser/.test(read(f)), f + " still calls getUser");',
+    'A.match(read("src/users.js"), /@deprecated/);',
+  ),
   solution: {
     "src/users.js": lines(
       "const USERS = new Map([[1, { id: 1, name: \"Ada\" }], [2, { id: 2, name: \"Lin\" }]]);",
@@ -446,7 +486,7 @@ const designDoc = [
   "",
   "## Alternatives considered",
   "",
-  filler(22, 30),
+  "A sliding expiry, where every read extends an entry's lifetime, was considered and rejected: entries that are read often would never expire. " + filler(22, 30),
   "",
   "## Decision: TtlCache",
   "",
@@ -470,27 +510,26 @@ const ttl: AbTask = {
   files: {
     "docs/DESIGN.md": designDoc,
     "src/cache.js": lines("// TtlCache: see docs/DESIGN.md.", "export class TtlCache {", "  constructor(options) {", '    throw new Error("not implemented");', "  }", "}"),
-    "test.mjs": lines(
-      'import assert from "node:assert/strict";',
-      'import { TtlCache } from "./src/cache.js";',
-      "let t = 0;",
-      "const c = new TtlCache({ max: 2, ttlMs: 100, now: () => t });",
-      'c.set("a", 1); c.set("b", 2);',
-      'assert.equal(c.get("a"), 1);',
-      'c.set("c", 3);',
-      'assert.equal(c.get("b"), undefined, "b was least recently used");',
-      'assert.equal(c.get("a"), 1); assert.equal(c.get("c"), 3);',
-      "assert.equal(c.size, 2);",
-      "t = 99; assert.equal(c.get(\"a\"), 1, \"reading does not extend\");",
-      't = 100; assert.equal(c.get("a"), undefined, "expired at ttlMs");',
-      "assert.equal(c.size, 0);",
-      't = 200; c.set("x", 1); t = 250; c.set("y", 2); t = 301; c.set("z", 3);',
-      'assert.equal(c.get("x"), undefined); assert.equal(c.get("y"), 2); assert.equal(c.get("z"), 3);',
-      'assert.equal(c.delete("y"), true); assert.equal(c.delete("y"), false); assert.equal(c.size, 1);',
-      'console.log("ok");',
-    ),
+    "test.mjs": smoke('import { TtlCache } from "./src/cache.js";', 'const c = new TtlCache({ max: 1, ttlMs: 10 });', 'c.set("k", 1);', "c.get(\"k\");"),
   },
   prompt: "Implement TtlCache in src/cache.js as decided in docs/DESIGN.md.",
+  verify: lines(
+    'const { TtlCache } = await load("src/cache.js");',
+    "let t = 0;",
+    "const c = new TtlCache({ max: 2, ttlMs: 100, now: () => t });",
+    'c.set("a", 1); c.set("b", 2);',
+    'A.equal(c.get("a"), 1);',
+    'c.set("c", 3);',
+    'A.equal(c.get("b"), undefined, "b was least recently used");',
+    'A.equal(c.get("a"), 1); A.equal(c.get("c"), 3);',
+    "A.equal(c.size, 2);",
+    "t = 99; A.equal(c.get(\"a\"), 1, \"reading does not extend\");",
+    't = 100; A.equal(c.get("a"), undefined, "expired at ttlMs");',
+    "A.equal(c.size, 0);",
+    't = 200; c.set("x", 1); t = 250; c.set("y", 2); t = 301; c.set("z", 3);',
+    'A.equal(c.get("x"), undefined); A.equal(c.get("y"), 2); A.equal(c.get("z"), 3);',
+    'A.equal(c.delete("y"), true); A.equal(c.delete("y"), false); A.equal(c.size, 1);',
+  ),
   solution: {
     "src/cache.js": lines(
       "// TtlCache: see docs/DESIGN.md.",
@@ -545,21 +584,20 @@ const money: AbTask = {
       "  return symbol + (cents / 100).toFixed(2);",
       "}",
     ),
-    "test.mjs": lines(
-      'import assert from "node:assert/strict";',
-      'import { formatMoney } from "./src/money.js";',
-      'assert.equal(formatMoney(123456, "USD"), "$1,234.56");',
-      'assert.equal(formatMoney(5, "USD"), "$0.05");',
-      'assert.equal(formatMoney(-100, "USD"), "-$1.00");',
-      'assert.equal(formatMoney(123456789, "EUR"), "€1.234.567,89");',
-      'assert.equal(formatMoney(1235, "JPY"), "¥1,235", "JPY amounts are whole yen: 1235 means ¥1,235");',
-      'assert.equal(formatMoney(0, "EUR"), "€0,00");',
-      'assert.throws(() => formatMoney(1, "XYZ"), /XYZ/);',
-      'console.log("ok");',
-    ),
+    "test.mjs": smoke('import { formatMoney } from "./src/money.js";', 'if (typeof formatMoney(100, "USD") !== "string") throw new Error("formatMoney must return a string");'),
   },
   prompt:
     "formatMoney in src/money.js gets thousands separators, negatives and the yen wrong. USD: $1,234.56 and -$1.00. EUR: €1.234,56 (dots group thousands, comma before cents). JPY has no minor unit, so the amount is whole yen: formatMoney(1235, \"JPY\") is ¥1,235. An unknown currency throws an error naming it. Fix it.",
+  verify: lines(
+    'const { formatMoney } = await load("src/money.js");',
+    'A.equal(formatMoney(123456, "USD"), "$1,234.56");',
+    'A.equal(formatMoney(5, "USD"), "$0.05");',
+    'A.equal(formatMoney(-100, "USD"), "-$1.00");',
+    'A.equal(formatMoney(123456789, "EUR"), "€1.234.567,89");',
+    'A.equal(formatMoney(1235, "JPY"), "¥1,235", "JPY amounts are whole yen: 1235 means ¥1,235");',
+    'A.equal(formatMoney(0, "EUR"), "€0,00");',
+    'A.throws(() => formatMoney(1, "XYZ"), /XYZ/);',
+  ),
   solution: {
     "src/money.js": lines(
       "// formatMoney(cents, currency): USD $1,234.56, EUR €1.234,56, JPY ¥1,235 (no minor unit).",
