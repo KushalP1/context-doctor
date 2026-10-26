@@ -131,13 +131,14 @@ interface View {
     ttlMs: number;
 }
 export declare function clearedNote(tokens: number): string;
+/** GPT-5.6 or later (gpt-5.6-sol, gpt-6.1-sol...): the models that take prompt_cache_options. */
+export declare function openAICacheOptionsModel(model: unknown): boolean;
 /**
  * How long the provider may keep this prompt cached, taking the LONGER
  * possibility when unsure: calling a warm cache cold would pay a rewrite,
  * calling a cold one warm only delays a free clearing.
  *  - Anthropic: the request's own cache_control, "1h" or the 5-minute default.
- *  - OpenAI: caches live up to an hour (in-memory retention), or 24 hours when
- *    the request sets prompt_cache_retention "24h".
+ *  - OpenAI: see openAITtlMs (24 hours unless the request says otherwise).
  */
 export declare function requestTtlMs(body: Record<string, unknown>): number;
 export declare function viewOf(body: Record<string, unknown>): View | undefined;

@@ -114,13 +114,47 @@ function resultTokens(content, model) {
     }
     return n;
 }
+/** GPT-5.6 or later (gpt-5.6-sol, gpt-6.1-sol...): the models that take prompt_cache_options. */
+export function openAICacheOptionsModel(model) {
+    const m = /gpt-(\d+)(?:\.(\d+))?/i.exec(typeof model === "string" ? model : "");
+    if (!m)
+        return false;
+    const major = Number(m[1]), minor = Number(m[2] ?? 0);
+    return major > 5 || (major === 5 && minor >= 6);
+}
+/**
+ * How long OpenAI may keep this request's prompt cached, the longest it
+ * plausibly could. From OpenAI's prompt caching guide (read 2026-10-26):
+ *  - GPT-5.6 and later set the lifetime with `prompt_cache_options.ttl`
+ *    ("30m", the default, or "12h") and per breakpoint with
+ *    `prompt_cache_breakpoint.ttl`; both are minimums ("OpenAI may retain
+ *    entries longer than the requested minimum"; "12h" "does not set a
+ *    deletion deadline"). Measured on the author's Codex history (gpt-5.6-sol,
+ *    no ttl set): requests after 48- and 83-minute gaps read 100% from cache.
+ *  - Earlier models use `prompt_cache_retention`: "in_memory" lasts "up to one
+ *    hour", "24h" up to 24 hours, and organizations without Zero Data
+ *    Retention default to "24h".
+ *  - Any entry: "a maximum retention period of 24 hours".
+ * So 24 hours, unless the request asks an earlier model for "in_memory" (one
+ * hour), or uses explicit mode with no breakpoint, which caches nothing.
+ * Through 0.37 this was one hour unless "24h": a GPT-5.6 cache still warm at
+ * 83 minutes was called cold, and clearing it paid a rewrite.
+ */
+function openAITtlMs(body) {
+    const options = body.prompt_cache_options;
+    const history = JSON.stringify(body.input ?? body.messages ?? "");
+    if (options && typeof options === "object" && options.mode === "explicit" && !history.includes('"prompt_cache_breakpoint"'))
+        return 0;
+    if (!openAICacheOptionsModel(body.model) && !options && body.prompt_cache_retention === "in_memory" && !history.includes('"prompt_cache_breakpoint"'))
+        return HOUR;
+    return 24 * HOUR;
+}
 /**
  * How long the provider may keep this prompt cached, taking the LONGER
  * possibility when unsure: calling a warm cache cold would pay a rewrite,
  * calling a cold one warm only delays a free clearing.
  *  - Anthropic: the request's own cache_control, "1h" or the 5-minute default.
- *  - OpenAI: caches live up to an hour (in-memory retention), or 24 hours when
- *    the request sets prompt_cache_retention "24h".
+ *  - OpenAI: see openAITtlMs (24 hours unless the request says otherwise).
  */
 export function requestTtlMs(body) {
     // Gemini: implicit caching's lifetime is not published, explicit caches default to an hour.
@@ -128,7 +162,7 @@ export function requestTtlMs(body) {
         return HOUR;
     const openai = Array.isArray(body.input) || (Array.isArray(body.messages) && isOpenAIChat(body.messages));
     if (openai)
-        return body.prompt_cache_retention === "24h" ? 24 * HOUR : HOUR;
+        return openAITtlMs(body);
     // Automatic caching puts cache_control at the top level of the request; a
     // 1-hour cache marked there was read as the 5-minute default, so autopilot
     // could clear into a cache that was still warm.

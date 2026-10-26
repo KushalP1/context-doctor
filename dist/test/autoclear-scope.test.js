@@ -25,15 +25,15 @@ function chat(first, n, tag) {
 test("a new warm conversation reusing call ids gets none of another conversation's clearings", () => {
     const c = new AutoClearer({ unseenIsWarm: true });
     const HOUR = 3_600_000;
-    // A: seen, then cold two hours later, so its old results are cleared.
+    // A: seen, then cold a day later (an OpenAI cache can live 24 hours), so its old results are cleared.
     c.apply(chat("conversation A", 1, "a"), 0);
     const a = chat("conversation A", 8, "a");
-    const ra = c.apply(a, 2 * HOUR + 1);
+    const ra = c.apply(a, 25 * HOUR + 1);
     assert.ok(ra.newlyCleared > 0, ra.reason);
     assert.ok(ra.newIds.includes("call_0"));
     // B: brand new (unseen = warm), same call ids, different content.
     const b = chat("conversation B", 8, "b");
-    const rb = c.apply(b, 2 * HOUR + 2_000);
+    const rb = c.apply(b, 25 * HOUR + 2_000);
     assert.equal(rb.changed, false, rb.reason);
     assert.equal(rb.tokensRemoved, 0);
     assert.ok(b.messages.filter((m) => m.role === "tool").every((m) => !CLEARED.test(m.content)));
@@ -45,7 +45,7 @@ test("state persists per conversation; an old global-format state file is ignore
     const HOUR = 3_600_000;
     const c = new AutoClearer({ statePath });
     c.apply(chat("conversation A", 1, "a"), 0);
-    const r = c.apply(chat("conversation A", 8, "a"), 2 * HOUR);
+    const r = c.apply(chat("conversation A", 8, "a"), 25 * HOUR);
     assert.ok(r.newlyCleared > 0);
     c.flush();
     const saved = JSON.parse(readFileSync(statePath, "utf8"));
@@ -54,14 +54,14 @@ test("state persists per conversation; an old global-format state file is ignore
     // Restarted: A's clearings still apply to A (warm, 10 s later), not to B.
     const again = new AutoClearer({ statePath, unseenIsWarm: true });
     const a2 = chat("conversation A", 9, "a");
-    const ra = again.apply(a2, 2 * HOUR + 10_000);
+    const ra = again.apply(a2, 25 * HOUR + 10_000);
     assert.ok(ra.changed && ra.appliedIds.includes("call_0"), ra.reason);
     const b = chat("conversation B", 9, "b");
-    assert.equal(again.apply(b, 2 * HOUR + 11_000).changed, false);
+    assert.equal(again.apply(b, 25 * HOUR + 11_000).changed, false);
     // forget() with a conversation drops that conversation's clearing only.
     again.forget(["call_0"], ra.conversation);
     const a3 = chat("conversation A", 9, "a");
-    const r3 = again.apply(a3, 2 * HOUR + 12_000);
+    const r3 = again.apply(a3, 25 * HOUR + 12_000);
     assert.ok(!r3.appliedIds.includes("call_0"));
     // 0.34's format: global ids. Loaded without error; nothing is applied from it.
     const old = join(dir, "old.json");

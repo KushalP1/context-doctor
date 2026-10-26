@@ -10,6 +10,15 @@
 /** Anthropic cache writes, relative to the input price: 5-minute TTL and 1-hour TTL. */
 export const CACHE_WRITE_5M = 1.25;
 export const CACHE_WRITE_1H = 2;
+/**
+ * OpenAI cache writes on GPT-5.6 and later, relative to input: 1.25x for the
+ * default 30-minute lifetime (the same rate as Anthropic's 5-minute writes,
+ * so they share that slot below) and 2.5x for 12 hours. "Total write rates,
+ * not surcharges"; earlier models charge no writes (prompt caching guide,
+ * read 2026-10-26).
+ */
+export const CACHE_WRITE_OPENAI_30M = 1.25;
+export const CACHE_WRITE_OPENAI_12H = 2.5;
 const rate = (inputPerM, outputPerM, cacheReadPerM) => ({ inputPerM, outputPerM, cacheReadPerM });
 /**
  * One Claude version, whatever wraps the id: a date (-20251101, @20251101),
@@ -119,10 +128,11 @@ export function cacheWriteSplit(usage) {
     const total = count(usage?.cache_creation_input_tokens);
     const split = usage?.cache_creation;
     if (!split || typeof split !== "object")
-        return { fiveMinute: total, oneHour: 0 };
-    const all = total || count(split.ephemeral_5m_input_tokens) + count(split.ephemeral_1h_input_tokens);
+        return { fiveMinute: total, oneHour: 0, twelveHour: 0 };
+    const all = total || count(split.ephemeral_5m_input_tokens) + count(split.ephemeral_1h_input_tokens) + count(split.ttl_12h_input_tokens);
     const oneHour = Math.min(all, count(split.ephemeral_1h_input_tokens));
-    return { fiveMinute: all - oneHour, oneHour };
+    const twelveHour = Math.min(all - oneHour, count(split.ttl_12h_input_tokens));
+    return { fiveMinute: all - oneHour - twelveHour, oneHour, twelveHour };
 }
 /**
  * The write price, relative to input, of a mix of 5-minute and 1-hour
@@ -131,9 +141,9 @@ export function cacheWriteSplit(usage) {
  * that is the TTL its harness would have written at; 1.25x when nothing was
  * written to learn from.
  */
-export function writeMultiplier(fiveMinute, oneHour) {
-    const total = fiveMinute + oneHour;
-    return total > 0 ? (fiveMinute * CACHE_WRITE_5M + oneHour * CACHE_WRITE_1H) / total : CACHE_WRITE_5M;
+export function writeMultiplier(fiveMinute, oneHour, twelveHour = 0) {
+    const total = fiveMinute + oneHour + twelveHour;
+    return total > 0 ? (fiveMinute * CACHE_WRITE_5M + oneHour * CACHE_WRITE_1H + twelveHour * CACHE_WRITE_OPENAI_12H) / total : CACHE_WRITE_5M;
 }
 /**
  * What one recorded request cost: uncached input, cache writes priced by
@@ -141,14 +151,41 @@ export function writeMultiplier(fiveMinute, oneHour) {
  * report agrees with the others and with the bill.
  */
 export function usageCost(usage, pricing) {
-    const { fiveMinute, oneHour } = cacheWriteSplit(usage);
+    const { fiveMinute, oneHour, twelveHour } = cacheWriteSplit(usage);
     const perM = (tokens, usd) => (tokens * usd) / 1_000_000;
     const inputUsd = perM(count(usage?.input_tokens), pricing.inputPerM);
-    const writeUsd = perM(fiveMinute * CACHE_WRITE_5M + oneHour * CACHE_WRITE_1H, pricing.inputPerM);
+    const writeUsd = perM(fiveMinute * CACHE_WRITE_5M + oneHour * CACHE_WRITE_1H + twelveHour * CACHE_WRITE_OPENAI_12H, pricing.inputPerM);
     const readUsd = perM(count(usage?.cache_read_input_tokens), pricing.cacheReadPerM);
     const outputUsd = perM(count(usage?.output_tokens), pricing.outputPerM);
     const promptUsd = inputUsd + writeUsd + readUsd;
     return { inputUsd, writeUsd, readUsd, outputUsd, promptUsd, totalUsd: promptUsd + outputUsd };
+}
+/**
+ * OpenAI usage, in any of its shapes, as RecordedUsage: Responses
+ * (`input_tokens`, `input_tokens_details.cached_tokens`, `cache_write_tokens`
+ * and its `cache_write_tokens_details.ttl_30m_tokens` / `ttl_12h_tokens`),
+ * Chat Completions (`prompt_tokens`, `prompt_tokens_details`,
+ * `completion_tokens`) and Codex rollouts (`cached_input_tokens`,
+ * `cache_write_input_tokens`). OpenAI's input count holds every input token
+ * once, each billed at the uncached, cached or write rate, so the uncached
+ * part is what is left after reads AND writes. Writes without a split are
+ * 30-minute writes, the default lifetime.
+ */
+export function openAIUsage(raw) {
+    const u = raw ?? {};
+    const details = u.input_tokens_details ?? u.prompt_tokens_details ?? {};
+    const input = count(u.input_tokens ?? u.prompt_tokens);
+    const cached = count(details.cached_tokens ?? u.cached_input_tokens);
+    const writes = count(details.cache_write_tokens ?? u.cache_write_input_tokens);
+    const split = details.cache_write_tokens_details ?? {};
+    const twelveHour = Math.min(writes, count(split.ttl_12h_tokens));
+    return {
+        input_tokens: Math.max(0, input - cached - writes),
+        cache_read_input_tokens: cached,
+        cache_creation_input_tokens: writes,
+        cache_creation: { ephemeral_5m_input_tokens: writes - twelveHour, ephemeral_1h_input_tokens: 0, ttl_12h_input_tokens: twelveHour },
+        output_tokens: count(u.output_tokens ?? u.completion_tokens),
+    };
 }
 /**
  * Rough time-to-first-token impact of input size. Prompt processing on major

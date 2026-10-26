@@ -111,6 +111,8 @@ export interface ProxyStats {
     upstreamCacheWriteTokens: number;
     /** OpenAI's cached_tokens: the part of upstreamInputTokens its responses say was read from cache. */
     openaiCachedTokens: number;
+    /** OpenAI's cache_write_tokens (GPT-5.6+): input billed at the write rate (1.25x for 30 minutes, 2.5x for 12 hours). */
+    openaiCacheWriteTokens: number;
     /** OpenAI requests sent with a conversation prompt_cache_key the proxy added (cachekey.ts). */
     cacheKeysAdded: number;
     autopilot?: {

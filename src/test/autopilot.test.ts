@@ -138,13 +138,51 @@ test("GPT: Codex code mode's custom_tool_call `exec` cells are cleared like shel
   assert.equal(input.filter((x) => x.type === "custom_tool_call_output").at(-1).output, big);
 });
 
-test("GPT: cache lifetime is taken as the longest OpenAI may keep it (1h, or 24h when asked)", () => {
-  assert.equal(requestTtlMs(openaiChat(1)), 3_600_000);
-  assert.equal(requestTtlMs(openaiResponses(1)), 3_600_000);
-  assert.equal(requestTtlMs(openaiResponses(1, { prompt_cache_retention: "24h" })), 24 * 3_600_000);
+test("GPT: cache lifetime is taken as the longest OpenAI may keep it (24h unless the request says less)", () => {
+  // OpenAI's prompt caching guide (2026-10-26): older models default to 24h
+  // for organizations without Zero Data Retention; GPT-5.6+ lifetimes are
+  // minimums; nothing is kept past 24h.
+  assert.equal(requestTtlMs(openaiChat(1)), 24 * HOUR);
+  assert.equal(requestTtlMs(openaiResponses(1)), 24 * HOUR);
+  assert.equal(requestTtlMs(openaiResponses(1, { prompt_cache_retention: "24h" })), 24 * HOUR);
+  assert.equal(requestTtlMs(openaiResponses(1, { prompt_cache_retention: "in_memory" })), HOUR, "in_memory: up to one hour");
   const c = new AutoClearer();
   c.apply(openaiChat(2), 0);
   assert.equal(c.apply(openaiChat(12), 30 * 60_000).newlyCleared, 0, "30 minutes later an OpenAI cache may still be warm: wait");
+});
+
+test("GPT-5.6+: prompt_cache_options ttl 30m and 12h are minimums, so both count as up to 24h", () => {
+  const body = (ttl: string) => ({ ...openaiResponses(1), model: "gpt-5.6-sol", prompt_cache_options: { ttl } });
+  assert.equal(requestTtlMs(body("30m")), 24 * HOUR);
+  assert.equal(requestTtlMs(body("12h")), 24 * HOUR);
+  // in_memory does not apply to GPT-5.6+ (its own setting is prompt_cache_options).
+  assert.equal(requestTtlMs({ ...openaiResponses(1), model: "gpt-5.6-terra", prompt_cache_retention: "in_memory" }), 24 * HOUR);
+  // A breakpoint with its own ttl can outlive an in_memory request default.
+  const bp = openaiResponses(1, { prompt_cache_retention: "in_memory" });
+  (bp.input[0] as any).content = [{ type: "input_text", text: "fix the build", prompt_cache_breakpoint: { mode: "explicit", ttl: "12h" } }];
+  assert.equal(requestTtlMs(bp), 24 * HOUR);
+});
+
+test("GPT-5.6+: explicit mode without a breakpoint caches nothing, so every request is cold", () => {
+  const body = { ...openaiResponses(12), model: "gpt-5.6-sol", prompt_cache_options: { mode: "explicit" } };
+  assert.equal(requestTtlMs(body), 0);
+  const withBreakpoint = { ...openaiResponses(1), model: "gpt-5.6-sol", prompt_cache_options: { mode: "explicit", ttl: "30m" } };
+  (withBreakpoint.input[0] as any).content = [{ type: "input_text", text: "x", prompt_cache_breakpoint: { mode: "explicit" } }];
+  assert.equal(requestTtlMs(withBreakpoint), 24 * HOUR);
+});
+
+test("GPT: a 30m, 12h or 24h cache idle for 2 hours is not cleared; after 25 hours it is", () => {
+  for (const extra of [{ model: "gpt-5.6-sol", prompt_cache_options: { ttl: "30m" } }, { model: "gpt-5.6-sol", prompt_cache_options: { ttl: "12h" } }, { prompt_cache_retention: "24h" }]) {
+    const warm = new AutoClearer();
+    warm.apply(openaiResponses(2, extra), 0);
+    assert.equal(warm.apply(openaiResponses(12, extra), 2 * HOUR).newlyCleared, 0, JSON.stringify(extra));
+    const cold = new AutoClearer();
+    cold.apply(openaiResponses(2, extra), 0);
+    assert.equal(cold.apply(openaiResponses(12, extra), 25 * HOUR).newlyCleared, 9, JSON.stringify(extra));
+  }
+  const mem = new AutoClearer();
+  mem.apply(openaiResponses(2, { model: "gpt-5.4", prompt_cache_retention: "in_memory" }), 0);
+  assert.equal(mem.apply(openaiResponses(12, { model: "gpt-5.4", prompt_cache_retention: "in_memory" }), 2 * HOUR).newlyCleared, 9, "in_memory on an earlier model: gone after an hour");
 });
 
 // Proxy in autopilot mode against a fake upstream that records what it received.
@@ -160,10 +198,10 @@ await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
 const dir = mkdtempSync(join(tmpdir(), "cd-apx-"));
 const pauseFile = join(dir, "paused");
 /** A state file saying this conversation was last sent two hours ago: the proxy treats one it has no record of as warm. */
-function idleState(name: string, body: Record<string, unknown>): string {
+function idleState(name: string, body: Record<string, unknown>, idle = 2 * HOUR): string {
   const statePath = join(dir, name);
   const seed = new AutoClearer({ statePath });
-  seed.apply(body, Date.now() - 2 * HOUR);
+  seed.apply(body, Date.now() - idle);
   seed.flush();
   return statePath;
 }
@@ -190,7 +228,7 @@ test("proxy autopilot: OpenAI Chat Completions requests are lightened too", asyn
   received = [];
   const openaiUp = http.createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { received.push(JSON.parse(b)); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ usage: { prompt_tokens: 10, completion_tokens: 1 } })); }); });
   await new Promise<void>((r) => openaiUp.listen(0, "127.0.0.1", r));
-  const p2 = startProxy({ port: 0, openaiUpstream: `http://127.0.0.1:${(openaiUp.address() as AddressInfo).port}`, autopilot: true, autopilotStatePath: idleState("openai.json", openaiChat(1)) });
+  const p2 = startProxy({ port: 0, openaiUpstream: `http://127.0.0.1:${(openaiUp.address() as AddressInfo).port}`, autopilot: true, autopilotStatePath: idleState("openai.json", openaiChat(1), 25 * HOUR) });
   await new Promise<void>((r) => p2.once("listening", r));
   try {
     await fetch(`http://127.0.0.1:${(p2.address() as AddressInfo).port}/v1/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer k" }, body: JSON.stringify(openaiChat(12)) });

@@ -205,6 +205,7 @@ export function startProxy(opts = {}) {
         upstreamCacheReadTokens: 0,
         upstreamCacheWriteTokens: 0,
         openaiCachedTokens: 0,
+        openaiCacheWriteTokens: 0,
         cacheKeysAdded: 0,
         autopilot: opts.autopilot
             ? { enabled: true, paused: false, requests: 0, changedRequests: 0, batches: 0, coldBatches: 0, resultsCleared: 0, tokensRemoved: 0, lastReason: "" }
@@ -580,6 +581,7 @@ export function startProxy(opts = {}) {
                     stats.upstreamCacheReadTokens += lastNum(/"cache_read_input_tokens"\s*:\s*(\d+)/g);
                     stats.upstreamCacheWriteTokens += lastNum(/"cache_creation_input_tokens"\s*:\s*(\d+)/g);
                     stats.openaiCachedTokens += lastNum(/"cached_tokens"\s*:\s*(\d+)/g);
+                    stats.openaiCacheWriteTokens += lastNum(/"cache_write_tokens"\s*:\s*(\d+)/g);
                 }
             }
             res.end();

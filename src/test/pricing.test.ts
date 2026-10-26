@@ -64,7 +64,7 @@ test("usageCost prices recorded usage with cache writes by TTL", () => {
 
   // Without the split (older transcripts) writes are 5-minute writes.
   const { cache_creation: _, ...noSplit } = usage;
-  assert.deepEqual(cacheWriteSplit(noSplit), { fiveMinute: 10_000, oneHour: 0 });
+  assert.deepEqual(cacheWriteSplit(noSplit), { fiveMinute: 10_000, oneHour: 0, twelveHour: 0 });
   assert.ok(Math.abs(usageCost(noSplit, opus55).writeUsd - (10_000 * 1.25 * 4) / 1e6) < 1e-12);
   // Garbage counts as nothing, never NaN.
   assert.equal(usageCost({ input_tokens: "abc", cache_read_input_tokens: -5, cache_creation: null }, opus55).totalUsd, 0);
@@ -75,4 +75,25 @@ test("writeMultiplier: a session's mix of 5-minute and 1-hour writes, 1.25x when
   assert.equal(writeMultiplier(100, 0), 1.25);
   assert.equal(writeMultiplier(0, 100), 2);
   assert.equal(writeMultiplier(1, 3), (1.25 + 3 * 2) / 4);
+});
+
+test("OpenAI usage: writes are taken out of the uncached input and priced 1.25x (30 min) or 2.5x (12 h)", async () => {
+  const { openAIUsage, usageCost, CACHE_WRITE_OPENAI_12H } = await import("../pricing.js");
+  assert.equal(CACHE_WRITE_OPENAI_12H, 2.5);
+  // Responses API on GPT-5.6+: 10k input = 2k uncached + 5k read + 3k written (1k of them for 12h).
+  const u = openAIUsage({ input_tokens: 10_000, output_tokens: 100, input_tokens_details: { cached_tokens: 5_000, cache_write_tokens: 3_000, cache_write_tokens_details: { ttl_30m_tokens: 2_000, ttl_12h_tokens: 1_000 } } });
+  assert.equal(u.input_tokens, 2_000);
+  assert.equal(u.cache_read_input_tokens, 5_000);
+  assert.equal(u.cache_creation_input_tokens, 3_000);
+  const price = { inputPerM: 1, outputPerM: 10, cacheReadPerM: 0.1 };
+  const c = usageCost(u, price);
+  assert.ok(Math.abs(c.writeUsd - (2_000 * 1.25 + 1_000 * 2.5) / 1e6) < 1e-12, String(c.writeUsd));
+  assert.ok(Math.abs(c.inputUsd - 2_000 / 1e6) < 1e-12);
+  // Chat Completions and Codex rollouts.
+  assert.deepEqual(
+    [openAIUsage({ prompt_tokens: 900, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 600 } }).input_tokens, openAIUsage({ input_tokens: 900, cached_input_tokens: 600, cache_write_input_tokens: 200, output_tokens: 1 }).input_tokens],
+    [300, 100]
+  );
+  // A write count with no split: the default 30-minute lifetime.
+  assert.ok(Math.abs(usageCost(openAIUsage({ input_tokens: 1_000, input_tokens_details: { cache_write_tokens: 1_000 } }), price).writeUsd - 1_250 / 1e6) < 1e-12);
 });

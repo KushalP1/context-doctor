@@ -165,6 +165,8 @@ export interface ProxyStats {
   upstreamCacheWriteTokens: number;
   /** OpenAI's cached_tokens: the part of upstreamInputTokens its responses say was read from cache. */
   openaiCachedTokens: number;
+  /** OpenAI's cache_write_tokens (GPT-5.6+): input billed at the write rate (1.25x for 30 minutes, 2.5x for 12 hours). */
+  openaiCacheWriteTokens: number;
   /** OpenAI requests sent with a conversation prompt_cache_key the proxy added (cachekey.ts). */
   cacheKeysAdded: number;
   autopilot?: {
@@ -304,6 +306,7 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
     upstreamCacheReadTokens: 0,
     upstreamCacheWriteTokens: 0,
     openaiCachedTokens: 0,
+    openaiCacheWriteTokens: 0,
     cacheKeysAdded: 0,
     autopilot: opts.autopilot
       ? { enabled: true, paused: false, requests: 0, changedRequests: 0, batches: 0, coldBatches: 0, resultsCleared: 0, tokensRemoved: 0, lastReason: "" }
@@ -662,6 +665,7 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
           stats.upstreamCacheReadTokens += lastNum(/"cache_read_input_tokens"\s*:\s*(\d+)/g);
           stats.upstreamCacheWriteTokens += lastNum(/"cache_creation_input_tokens"\s*:\s*(\d+)/g);
           stats.openaiCachedTokens += lastNum(/"cached_tokens"\s*:\s*(\d+)/g);
+          stats.openaiCacheWriteTokens += lastNum(/"cache_write_tokens"\s*:\s*(\d+)/g);
         }
       }
       res.end();

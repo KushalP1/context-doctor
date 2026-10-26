@@ -583,9 +583,10 @@ if (argv.includes("--http")) {
         if (status === 413 || status === 408) res.setHeader("connection", "close");
         res.end(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }));
         // Stop reading an oversized or stalled upload, but only after the
-        // client has had a moment to read the answer: destroying the socket at
-        // once resets it, and the client never sees the 413.
-        if (status === 413 || status === 408) setTimeout(() => req.destroy(), 1000).unref();
+        // client has had time to read the answer: a reset discards what the
+        // client has not read yet, so destroying the socket at once (or after
+        // 1 s on a busy machine: the full test suite under load) loses the 413.
+        if (status === 413 || status === 408) setTimeout(() => req.destroy(), 5000).unref();
       };
       const refused = refusal(guard, req.headers);
       if (refused) return deny(403, -32000, `Forbidden: ${refused}.`);

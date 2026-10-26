@@ -10,6 +10,7 @@
  */
 
 import { realModel } from "./tokens.js";
+import { openAIUsage } from "./pricing.js";
 import { readdirSync, readFileSync, statSync, existsSync, openSync, readSync, closeSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { homedir } from "node:os";
@@ -400,23 +401,15 @@ function fromCodexLine(entry: Record<string, any>): Record<string, any> | null {
   if (entry.type === "event_msg" && payload.type === "token_count") {
     const last = payload.info?.last_token_usage;
     if (!last || !(last.input_tokens > 0)) return null;
-    // Codex's input_tokens already includes the cached portion, so it maps to
-    // Anthropic's (input + cache_read) with cached carried separately.
-    const cached = last.cached_input_tokens ?? 0;
+    // Codex's input_tokens holds the cached portion and the cache writes
+    // too (each input token is billed once, at one of the three rates), so
+    // it maps to Anthropic's input + cache_read + cache_creation. Through
+    // 0.37 the writes were counted twice, as uncached input and as writes.
     return {
       type: "assistant",
       timestamp,
       codexUsageOnly: true,
-      message: {
-        role: "assistant",
-        content: [],
-        usage: {
-          input_tokens: Math.max(0, last.input_tokens - cached),
-          cache_read_input_tokens: cached,
-          cache_creation_input_tokens: last.cache_write_input_tokens ?? 0,
-          output_tokens: last.output_tokens ?? 0,
-        },
-      },
+      message: { role: "assistant", content: [], usage: openAIUsage(last) },
     };
   }
 
