@@ -74,15 +74,102 @@ export interface CacheMissReport {
     recommendations: string[];
     /** The costliest misses. */
     largest: CacheMiss[];
+    /** The same requests by the Claude Code version that sent them (oldest first). */
+    byVersion: VersionStats[];
+    /** Step changes from one version to the next that the numbers support. */
+    regressions: Regression[];
+}
+/** One Claude Code version's requests (the `version` every transcript line carries). */
+export interface VersionStats {
+    version: string;
+    /** Main-chain requests, and the transcripts they came from. */
+    requests: number;
+    sessions: number;
+    /** First requests of new sessions: the fixed overhead (system prompt, tools, memory), median. */
+    firstRequests: number;
+    firstMedian?: number;
+    /** Cache-write tokens per request, mean. */
+    writesPerRequest: number;
+    /** Share of cache writes at the 1-hour TTL (Claude Code's main thread writes almost all at 1 h). */
+    oneHourShare?: number;
+    /** Warm requests and misses, by the definition above. */
+    eligible: number;
+    misses: number;
+    missRate: number;
+    /** The same per model (a version's rate mostly follows the models it ran). */
+    byModel: Array<{
+        model: string;
+        eligible: number;
+        misses: number;
+    }>;
+    /** First and last time the version was seen. */
+    from: string;
+    to: string;
+}
+export interface Regression {
+    metric: "1-hour cache share" | "first request" | "miss rate";
+    from: string;
+    to: string;
+    before: number;
+    after: number;
+    /** In words, with the numbers. */
+    text: string;
 }
 /** Misses in one transcript; `since` drops requests before it. */
+/** What `onRequest` is told about each main-chain request in the period. */
+export interface RequestInfo {
+    at: number;
+    /** The Claude Code version on the transcript line, when recorded. */
+    version?: string;
+    write: number;
+    oneHour: number;
+    fiveMinute: number;
+    /** The session's first request, minus its first user message: the fixed overhead. Only on that request. */
+    first?: number;
+}
 export declare function missesInTranscript(path: string, since?: number, add?: (eligible: {
     model: string;
     contextTokens: number;
-}, miss?: CacheMiss) => void, onRequest?: (writeUsd: number) => void): void;
+    version?: string;
+}, miss?: CacheMiss) => void, onRequest?: (writeUsd: number, info: RequestInfo) => void, 
+/** Shared by every transcript of one report: a fork's copied rows (same uuids) have no first request of their own. */
+runRows?: Set<string>): void;
 export declare function cacheMisses(days?: number, paths?: string[], onProgress?: (done: number, total: number) => void): CacheMissReport;
+interface VersionAcc {
+    requests: number;
+    sessions: Set<string>;
+    firsts: number[];
+    writes: number;
+    oneHour: number;
+    fiveMinute: number;
+    eligible: number;
+    misses: number;
+    /** Warm requests and misses per model: miss rates differ by model far more than by version. */
+    byModel: Map<string, {
+        eligible: number;
+        misses: number;
+    }>;
+    from: number;
+    to: number;
+}
+/**
+ * Per version, oldest first, and the step changes between consecutive
+ * versions with enough data (thin versions are skipped over, so a change
+ * is credited to the first well-measured version after it):
+ *  - the 1-hour share of cache writes moving by 30+ points (the TTL
+ *    regressions users report after upgrades: 1 h to 5 min);
+ *  - the median first request (fixed overhead) moving by 15% and 3k tokens;
+ *  - one model's miss rate doubling (or halving), beyond chance at 99%,
+ *    5+ misses, 100+ warm requests on each version.
+ * Cache writes per request are shown, not flagged (they follow the work).
+ */
+export declare function versionReport(versions: Map<string, VersionAcc>): {
+    byVersion: VersionStats[];
+    regressions: Regression[];
+};
 /** Worth a line in `savings`: enough misses, and enough money, to act on. */
 export declare function cacheMissesSignificant(r: CacheMissReport): boolean;
 /** The one line `savings` adds when the misses are significant. */
 export declare function cacheMissesLine(r: CacheMissReport): string[];
 export declare function renderCacheMisses(r: CacheMissReport, limitLines?: string[]): string;
+export {};

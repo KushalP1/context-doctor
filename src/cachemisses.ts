@@ -27,8 +27,9 @@
  */
 
 import { forEachLine, listSessions } from "./session.js";
-import { formatTokens, realModel } from "./tokens.js";
+import { estimateTokens, formatTokens, realModel } from "./tokens.js";
 import { CACHE_WRITE_1H, CACHE_WRITE_5M, pricingFor } from "./pricing.js";
+import { compareVersions } from "./modelswitch.js";
 
 /** Dollars as a person reads them: "$1,925", "$12.26", "$0". */
 function money(n: number): string {
@@ -95,6 +96,44 @@ export interface CacheMissReport {
   recommendations: string[];
   /** The costliest misses. */
   largest: CacheMiss[];
+  /** The same requests by the Claude Code version that sent them (oldest first). */
+  byVersion: VersionStats[];
+  /** Step changes from one version to the next that the numbers support. */
+  regressions: Regression[];
+}
+
+/** One Claude Code version's requests (the `version` every transcript line carries). */
+export interface VersionStats {
+  version: string;
+  /** Main-chain requests, and the transcripts they came from. */
+  requests: number;
+  sessions: number;
+  /** First requests of new sessions: the fixed overhead (system prompt, tools, memory), median. */
+  firstRequests: number;
+  firstMedian?: number;
+  /** Cache-write tokens per request, mean. */
+  writesPerRequest: number;
+  /** Share of cache writes at the 1-hour TTL (Claude Code's main thread writes almost all at 1 h). */
+  oneHourShare?: number;
+  /** Warm requests and misses, by the definition above. */
+  eligible: number;
+  misses: number;
+  missRate: number;
+  /** The same per model (a version's rate mostly follows the models it ran). */
+  byModel: Array<{ model: string; eligible: number; misses: number }>;
+  /** First and last time the version was seen. */
+  from: string;
+  to: string;
+}
+
+export interface Regression {
+  metric: "1-hour cache share" | "first request" | "miss rate";
+  from: string;
+  to: string;
+  before: number;
+  after: number;
+  /** In words, with the numbers. */
+  text: string;
 }
 
 const SIZE_BUCKETS: Array<[string, number]> = [["<100k", 100_000], ["100-300k", 300_000], ["300-600k", 600_000], ["600k+", Infinity]];
@@ -110,11 +149,25 @@ interface Prev {
 }
 
 /** Misses in one transcript; `since` drops requests before it. */
+/** What `onRequest` is told about each main-chain request in the period. */
+export interface RequestInfo {
+  at: number;
+  /** The Claude Code version on the transcript line, when recorded. */
+  version?: string;
+  write: number;
+  oneHour: number;
+  fiveMinute: number;
+  /** The session's first request, minus its first user message: the fixed overhead. Only on that request. */
+  first?: number;
+}
+
 export function missesInTranscript(
   path: string,
   since = 0,
-  add: (eligible: { model: string; contextTokens: number }, miss?: CacheMiss) => void = () => {},
-  onRequest: (writeUsd: number) => void = () => {}
+  add: (eligible: { model: string; contextTokens: number; version?: string }, miss?: CacheMiss) => void = () => {},
+  onRequest: (writeUsd: number, info: RequestInfo) => void = () => {},
+  /** Shared by every transcript of one report: a fork's copied rows (same uuids) have no first request of their own. */
+  runRows?: Set<string>
 ): void {
   let prev: Prev | undefined;
   let lastId: string | undefined;
@@ -122,13 +175,28 @@ export function missesInTranscript(
   let apiError = false;
   let blocks = 0;
   let edited = false;
+  let firstUser: string | undefined;
+  let started = false;
   forEachLine(path, (line) => {
     // Cheap row counting without a parse: Claude Code writes one row per
     // content block, so main-chain rows since the last request are the blocks
     // it added (what the 20-block lookback counts).
     const usage = line.includes('"usage"');
     if (!usage && !line.includes("compact_boundary") && !line.includes("api_error")) {
-      if ((line.includes('"type":"user"') || line.includes('"type":"assistant"')) && !line.includes('"isSidechain":true')) blocks++;
+      if ((line.includes('"type":"user"') || line.includes('"type":"assistant"')) && !line.includes('"isSidechain":true')) {
+        blocks++;
+        // The first thing the user typed: part of the first request, not of the overhead.
+        if (!started && firstUser === undefined && line.includes('"type":"user"') && !line.includes('"isMeta":true')) {
+          try {
+            const e = JSON.parse(line);
+            const c = e?.message?.content;
+            const text = typeof c === "string" ? c : Array.isArray(c) ? c.map((b: any) => (typeof b?.text === "string" ? b.text : "")).join("\n") : "";
+            if (text) firstUser = text;
+          } catch {
+            /* not a row */
+          }
+        }
+      }
       return;
     }
     let e: any;
@@ -166,9 +234,19 @@ export function missesInTranscript(
     const cmText = cm ? JSON.stringify(cm) : "";
     if (cmText.includes("applied") && !/"applied_edits"\s*:\s*\[\s*\]/.test(cmText)) edited = true;
 
+    const version = typeof e.version === "string" && /^\d+\.\d+\.\d+$/.test(e.version) ? e.version : undefined;
+    // A transcript that opens with a parent's copied rows (a fork) has no
+    // first request of its own: the parent's file holds the same uuid.
+    const uuid = typeof e.uuid === "string" ? e.uuid : undefined;
+    const copied = uuid !== undefined && runRows !== undefined && runRows.has(uuid);
+    if (uuid !== undefined) runRows?.add(uuid);
+    const first = !started && !copied ? Math.max(0, total - estimateTokens(firstUser ?? "", model)) : undefined;
+    started = true;
     if (at >= since) {
       const price = pricingFor(model);
-      if (price) onRequest((write * price.inputPerM * (oneHour ? CACHE_WRITE_1H : CACHE_WRITE_5M)) / 1e6);
+      const w1h = Math.min(write, num(u.cache_creation?.ephemeral_1h_input_tokens));
+      const w5m = u.cache_creation ? Math.min(write - w1h, num(u.cache_creation?.ephemeral_5m_input_tokens)) : write - w1h;
+      onRequest(price ? (write * price.inputPerM * (oneHour ? CACHE_WRITE_1H : CACHE_WRITE_5M)) / 1e6 : 0, { at, version, write, oneHour: w1h, fiveMinute: w5m, first });
       if (prev && !compacted && at - prev.at < Math.min(ttl, prev.ttl) && prev.total > MIN_CONTEXT) {
         const isMiss = write > MISS_SHARE * prev.total;
         let miss: CacheMiss | undefined;
@@ -192,7 +270,7 @@ export function missesInTranscript(
             extraUsd: price ? (Math.min(write, prev.total) * (price.inputPerM * (oneHour ? CACHE_WRITE_1H : CACHE_WRITE_5M) - price.cacheReadPerM)) / 1e6 : undefined,
           };
         }
-        add({ model, contextTokens: prev.total }, miss);
+        add({ model, contextTokens: prev.total, version }, miss);
       }
     }
     prev = { at, total, model, ttl };
@@ -293,6 +371,9 @@ export function cacheMisses(days = 30, paths?: string[], onProgress?: (done: num
     }
     map.set(key, s);
   };
+  const versions = new Map<string, VersionAcc>();
+  const versionOf = (v: string) => versions.get(v) ?? versions.set(v, { requests: 0, sessions: new Set(), firsts: [], writes: 0, oneHour: 0, fiveMinute: 0, eligible: 0, misses: 0, byModel: new Map(), from: Infinity, to: 0 }).get(v)!;
+  const runRows = new Set<string>();
   for (const [i, p] of targets.entries()) {
     onProgress?.(i, targets.length);
     try {
@@ -303,15 +384,34 @@ export function cacheMisses(days = 30, paths?: string[], onProgress?: (done: num
           eligible++;
           bump(models, e.model, miss);
           bump(sizes, bucketOf(e.contextTokens), miss);
+          if (e.version) {
+            const v = versionOf(e.version);
+            v.eligible++;
+            if (miss) v.misses++;
+            const m = v.byModel.get(e.model) ?? v.byModel.set(e.model, { eligible: 0, misses: 0 }).get(e.model)!;
+            m.eligible++;
+            if (miss) m.misses++;
+          }
           if (miss) {
             all.push(miss);
             causes[miss.cause]++;
           }
         },
-        (writeUsd) => {
+        (writeUsd, info) => {
           requests++;
           cacheWriteUsd += writeUsd;
-        }
+          if (!info.version) return;
+          const v = versionOf(info.version);
+          v.requests++;
+          v.sessions.add(p);
+          v.writes += info.write;
+          v.oneHour += info.oneHour;
+          v.fiveMinute += info.fiveMinute;
+          v.from = Math.min(v.from, info.at);
+          v.to = Math.max(v.to, info.at);
+          if (info.first !== undefined && info.first > 1000) v.firsts.push(info.first);
+        },
+        runRows
       );
     } catch {
       /* one unreadable transcript must not sink the report */
@@ -336,7 +436,121 @@ export function cacheMisses(days = 30, paths?: string[], onProgress?: (done: num
     causes,
     recommendations: recommend(byModel, bySize),
     largest: [...all].sort((a, b) => (b.extraUsd ?? 0) - (a.extraUsd ?? 0) || b.writeTokens - a.writeTokens).slice(0, 10),
+    ...versionReport(versions),
   };
+}
+
+interface VersionAcc {
+  requests: number;
+  sessions: Set<string>;
+  firsts: number[];
+  writes: number;
+  oneHour: number;
+  fiveMinute: number;
+  eligible: number;
+  misses: number;
+  /** Warm requests and misses per model: miss rates differ by model far more than by version. */
+  byModel: Map<string, { eligible: number; misses: number }>;
+  from: number;
+  to: number;
+}
+
+const median = (xs: number[]): number | undefined => {
+  if (!xs.length) return undefined;
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)];
+};
+
+/** Enough of a version to compare it: requests for rates and shares, new sessions for the first request. */
+const MIN_VERSION_REQUESTS = 200;
+const MIN_VERSION_FIRSTS = 5;
+
+/**
+ * Per version, oldest first, and the step changes between consecutive
+ * versions with enough data (thin versions are skipped over, so a change
+ * is credited to the first well-measured version after it):
+ *  - the 1-hour share of cache writes moving by 30+ points (the TTL
+ *    regressions users report after upgrades: 1 h to 5 min);
+ *  - the median first request (fixed overhead) moving by 15% and 3k tokens;
+ *  - one model's miss rate doubling (or halving), beyond chance at 99%,
+ *    5+ misses, 100+ warm requests on each version.
+ * Cache writes per request are shown, not flagged (they follow the work).
+ */
+export function versionReport(versions: Map<string, VersionAcc>): { byVersion: VersionStats[]; regressions: Regression[] } {
+  const byVersion: VersionStats[] = [...versions.entries()]
+    .sort((a, b) => compareVersions(a[0], b[0]))
+    .map(([version, v]) => ({
+      version,
+      requests: v.requests,
+      sessions: v.sessions.size,
+      firstRequests: v.firsts.length,
+      firstMedian: median(v.firsts),
+      writesPerRequest: v.requests ? v.writes / v.requests : 0,
+      oneHourShare: v.oneHour + v.fiveMinute > 0 ? v.oneHour / (v.oneHour + v.fiveMinute) : undefined,
+      eligible: v.eligible,
+      misses: v.misses,
+      missRate: v.eligible ? v.misses / v.eligible : 0,
+      byModel: [...v.byModel.entries()].map(([model, m]) => ({ model, ...m })),
+      from: Number.isFinite(v.from) ? new Date(v.from).toISOString() : "",
+      to: v.to ? new Date(v.to).toISOString() : "",
+    }));
+  const regressions: Regression[] = [];
+  const step = (metric: Regression["metric"], ok: (v: VersionStats) => boolean, value: (v: VersionStats) => number | undefined, changed: (a: VersionStats, b: VersionStats, x: number, y: number) => boolean, say: (a: VersionStats, b: VersionStats, x: number, y: number) => string) => {
+    let prev: VersionStats | undefined;
+    for (const v of byVersion) {
+      if (!ok(v) || value(v) === undefined) continue;
+      if (prev) {
+        const x = value(prev)!, y = value(v)!;
+        if (changed(prev, v, x, y)) regressions.push({ metric, from: prev.version, to: v.version, before: x, after: y, text: say(prev, v, x, y) });
+      }
+      prev = v;
+    }
+  };
+  const share = (x: number) => `${Math.round(x * 100)}%`;
+  step(
+    "1-hour cache share",
+    (v) => v.requests >= MIN_VERSION_REQUESTS,
+    (v) => v.oneHourShare,
+    (_a, _b, x, y) => Math.abs(y - x) >= 0.3,
+    (a, b, x, y) => `Cache writes at the 1-hour TTL went from ${share(x)} on ${a.version} to ${share(y)} on ${b.version}: ${y < x ? "more of the cache now expires after 5 minutes, so a short pause re-writes it" : "the cache now survives pauses up to an hour"}.`
+  );
+  step(
+    "first request",
+    (v) => v.firstRequests >= MIN_VERSION_FIRSTS,
+    (v) => v.firstMedian,
+    (_a, _b, x, y) => Math.abs(y - x) >= Math.max(3000, 0.15 * x),
+    (a, b, x, y) => `A new session's first request (the fixed overhead) went from ~${formatTokens(x)} on ${a.version} to ~${formatTokens(y)} on ${b.version} (median of ${a.firstRequests} and ${b.firstRequests} sessions; your CLAUDE.md, rules and MCP servers move it too: context-doctor overhead).`
+  );
+  // Miss rates: within one model, version against version, since a version's
+  // overall rate mostly follows the models it ran (Sonnet 5 missed 10x as
+  // often as Opus 5.5 on the author's machine).
+  const models = new Set(byVersion.flatMap((v) => v.byModel.map((m) => m.model)));
+  for (const model of models) {
+    let prev: { v: VersionStats; m: { eligible: number; misses: number } } | undefined;
+    for (const v of byVersion) {
+      const m = v.byModel.find((x) => x.model === model);
+      if (!m || m.eligible < MIN_ELIGIBLE) continue;
+      if (prev) {
+        const a = prev.m, x = a.misses / a.eligible, y = m.misses / m.eligible;
+        if (Math.max(a.misses, m.misses) >= 5 && (y >= 2 * x || x >= 2 * y) && differs({ ...a, rate: x, extraUsd: 0 }, { ...m, rate: y, extraUsd: 0 })) {
+          regressions.push({
+            metric: "miss rate",
+            from: prev.v.version,
+            to: v.version,
+            before: x,
+            after: y,
+            text: `On ${model} the cache missed on ${pct(y)} of warm requests with ${v.version}, against ${pct(x)} with ${prev.v.version} (${m.misses} of ${m.eligible}; ${a.misses} of ${a.eligible}).`,
+          });
+        }
+      }
+      prev = { v, m };
+    }
+  }
+  // Writes per request are in the table, not flagged: they follow the work
+  // (a big file read writes a lot) as much as the version. Measured on the
+  // author's history, 8 of 17 version-to-version "changes" were this alone.
+  regressions.sort((a, b) => compareVersions(a.to, b.to));
+  return { byVersion, regressions };
 }
 
 /** Worth a line in `savings`: enough misses, and enough money, to act on. */
@@ -389,6 +603,20 @@ export function renderCacheMisses(r: CacheMissReport, limitLines?: string[]): st
         "  provider evicting the cache early, would look like this from the client."
       );
     }
+  }
+  const shown = r.byVersion.filter((v) => v.requests >= 50);
+  if (shown.length >= 2) {
+    out.push("", "By Claude Code version (versions with 50+ requests):", `  ${"version".padEnd(9)} ${"requests".padStart(8)} ${"1st req".padStart(8)} ${"writes/req".padStart(10)} ${"1h share".padStart(9)} ${"miss rate".padStart(10)}`);
+    for (const v of shown.slice(-12)) {
+      out.push(`  ${v.version.padEnd(9)} ${String(v.requests).padStart(8)} ${(v.firstMedian !== undefined ? `~${formatTokens(v.firstMedian)}` : "–").padStart(8)} ${`~${formatTokens(v.writesPerRequest)}`.padStart(10)} ${(v.oneHourShare !== undefined ? `${Math.round(v.oneHourShare * 100)}%` : "–").padStart(9)} ${(v.eligible ? pct(v.missRate) : "–").padStart(10)}`);
+    }
+    if (shown.length > 12) out.push(`  (${shown.length - 12} older versions in --json)`);
+  }
+  if (r.regressions.length) {
+    out.push("", "Changes after an upgrade:");
+    for (const g of r.regressions) out.push(`  • ${g.text}`);
+  } else if (shown.length >= 2) {
+    out.push("", "No step change between versions that the numbers support.");
   }
   if (r.recommendations.length) {
     out.push("", "What the data supports:");
