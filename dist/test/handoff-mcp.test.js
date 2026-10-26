@@ -166,6 +166,36 @@ test("elicitation: where the client can show a form, the user confirms the hando
         await client.close();
     }
 });
+test("consent fails closed once a client declares forms: an error, a dismissal or a malformed answer is a no", async () => {
+    const { McpError } = await import("@modelcontextprotocol/sdk/types.js");
+    const home = mkdtempSync(join(tmpdir(), "cd-hfc-"));
+    const answers = [];
+    const client = new Client({ name: "elicit-closed", version: "1" }, { capabilities: { elicitation: { form: {} } } });
+    client.setRequestHandler(ElicitRequestSchema, async () => (answers.shift() ?? (() => ({ action: "cancel" })))());
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: [mcpPath], env: sandboxEnv(home) }));
+    try {
+        const args = { brief: BRIEF, title: "closed", verbatim: [{ label: "cfg", text: "x=1" }] };
+        const cases = [
+            ["client error", () => { throw new McpError(-32603, "UI unavailable"); }, /^Not saved: the consent form failed/],
+            ["dismissed", () => ({ action: "cancel" }), /^Not saved: the user dismissed the prompt/],
+            ["malformed answer", () => ({ action: "accept", content: { include_verbatim: "no" } }), /^Not saved: the consent form failed/],
+        ];
+        for (const [label, answer, why] of cases) {
+            answers.push(answer);
+            const r = await client.callTool({ name: "save_handoff", arguments: args });
+            assert.match(text(r), why, label);
+        }
+        assert.equal(existsSync(handoffDir(home)), false, "nothing was saved");
+        const conversation = JSON.stringify(Array.from({ length: 16 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", content: `turn ${i} `.repeat(200) })));
+        answers.push(() => { throw new McpError(-32603, "UI unavailable"); });
+        const pruned = await client.callTool({ name: "optimize_context", arguments: { conversation, strategies: ["prune-history"], keep_recent: 4 } });
+        assert.match(text(pruned), /prune-history skipped: the consent form failed/);
+        assert.doesNotMatch(text(pruned), /PRUNED TURNS DIGEST/);
+    }
+    finally {
+        await client.close();
+    }
+});
 test("no elicitation declared: nothing is asked, the handoff is saved (consent was the chat's)", async () => {
     const home = mkdtempSync(join(tmpdir(), "cd-hn-"));
     const client = await stdioClient(home);

@@ -59,9 +59,11 @@ type Consent = { asked: false } | { asked: true; ok: boolean; content: Record<st
 
 /**
  * Ask the user through the client's own form (MCP elicitation), when the
- * client declares it. `asked: false` means it does not, or could not show the
- * form: the caller falls back to consent in the chat, as before. No answer in
- * two minutes is a no.
+ * client declares form elicitation. `asked: false` means it does not: the
+ * caller falls back to consent in the chat, as before. Once the client has
+ * declared it, the answer fails closed: a decline, a dismissal, an answer
+ * that does not fit the form, a client error or no answer in two minutes is
+ * a no, never "go ahead".
  */
 async function askConsent(server: McpServer, message: string, properties: Record<string, { type: "boolean"; title: string; default?: boolean }>): Promise<Consent> {
   if (!server.server.getClientCapabilities()?.elicitation?.form) return { asked: false };
@@ -71,7 +73,7 @@ async function askConsent(server: McpServer, message: string, properties: Record
     return { asked: true, ok: false, content: {}, why: r.action === "decline" ? "the user declined" : "the user dismissed the prompt" };
   } catch (e) {
     if (e instanceof McpError && e.code === ErrorCode.RequestTimeout) return { asked: true, ok: false, content: {}, why: "no answer within two minutes" };
-    return { asked: false };
+    return { asked: true, ok: false, content: {}, why: "the consent form failed, so nothing was assumed" };
   }
 }
 
