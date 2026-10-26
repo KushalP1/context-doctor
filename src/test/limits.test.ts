@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import {
-  claudeLimitFit, codexLimitData, fitWindow, inLimit, limitSavingsLines, limitsReport, readClaudeReadings, recordLimits, renderLimits,
+  claudeLimitFit, cleanReadings, codexLimitData, fitWindow, inLimit, limitSavingsLines, limitsReport, readClaudeReadings, recordLimits, renderLimits,
   segmentsOf, windowStatus, type LimitReading, type UsagePoint,
 } from "../limits.js";
 import { sandboxEnv } from "./sandbox.js";
@@ -41,16 +41,38 @@ test("the status line's rate_limits are logged on a change, kept alive every 15 
   assert.equal(readClaudeReadings(0, log).length, 5);
 });
 
-test("the log is byte-capped: past 512 KB it keeps the newest 256 KB", () => {
+test("the log is byte-capped: past 2 MB it keeps the newest 1.5 MB (over a week of the heaviest use)", () => {
   const dir = mkdtempSync(join(tmpdir(), "cd-limits-cap-"));
   const log = join(dir, "limits.jsonl");
   const line = JSON.stringify({ ts: T0, app: "claude", w: "five_hour", pct: 1, reset: 1 }) + "\n";
-  writeFileSync(log, line.repeat(Math.ceil((600 * 1024) / line.length)));
+  writeFileSync(log, line.repeat(Math.ceil((2.1 * 1024 * 1024) / line.length)));
   assert.equal(recordLimits({ five_hour: { used_percentage: 50, resets_at: 2 } }, T0 + MIN, log), 1);
   const size = statSync(log).size;
-  assert.ok(size <= 256 * 1024 + 200, String(size));
+  assert.ok(size <= 1536 * 1024 + 200 && size > 1024 * 1024, String(size));
   const last = readClaudeReadings(0, log).at(-1)!;
   assert.equal(last.pct, 50, "the new reading is kept");
+});
+
+test("a stale reading from a parallel session is never logged; a rise is logged at most once a minute", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cd-limits-stale-"));
+  const log = join(dir, "limits.jsonl");
+  const reset = Math.round((T0 + 4 * HOUR) / 1000);
+  const rl = (pct: number, r = reset) => ({ five_hour: { used_percentage: pct, resets_at: r } });
+  assert.equal(recordLimits(rl(40), T0, log), 1);
+  assert.equal(recordLimits(rl(45), T0 + 20 * MIN, log), 1);
+  assert.equal(recordLimits(rl(40), T0 + 21 * MIN, log), 0, "lower, same window period: another session's older figure");
+  assert.equal(recordLimits(rl(40, reset + 300), T0 + 22 * MIN, log), 0, "a reset five minutes off is the same period");
+  assert.equal(recordLimits(rl(45.5), T0 + 20 * MIN + 30_000, log), 0, "a rise within the minute waits");
+  assert.equal(recordLimits(rl(46), T0 + 23 * MIN, log), 1);
+  assert.equal(recordLimits(rl(2, reset + 5 * 3600), T0 + 4 * HOUR + MIN, log), 1, "a new period starts low");
+  assert.deepEqual(readClaudeReadings(0, log).map((r) => r.pct), [40, 45, 46, 2]);
+  // A log written before 0.38 holds them: read as stale, not as a new period.
+  const old: LimitReading[] = [[0, 40], [20, 45], [21, 40], [31, 46], [33, 40]].map(([m, pct]) => ({ ts: T0 + m * MIN, app: "claude", window: "five_hour", pct, resetsAt: reset * 1000, windowMs: 5 * HOUR }));
+  assert.deepEqual(cleanReadings(old).map((r) => r.pct), [40, 45, 46]);
+  assert.equal(windowStatus(cleanReadings(old), T0 + 34 * MIN)!.pct, 46);
+  const cut = segmentsOf(old, [{ ts: T0 + 10 * MIN, app: "claude", input: 1, read: 1, write: 1, output: 1, usd: 1 }, { ts: T0 + 25 * MIN, app: "claude", input: 1, read: 1, write: 1, output: 1, usd: 1 }], 1);
+  assert.deepEqual(cut.segments.map((g) => g.dpct), [5, 1], "45 to 46, not a fall to the stale 40 and a rise of 6");
+  assert.equal(cut.elsewhere, 0);
 });
 
 test("`context-doctor statusline` records the readings beside its line, in the sandboxed home", () => {
@@ -169,10 +191,45 @@ test("thin or unexplained data is never quoted", () => {
   assert.deepEqual(limitSavingsLines(thin, [["x", 100]], 30), []);
   assert.match(renderLimits({ days: 30, now: T0, claudeLog: "/x", claudeReadings: 5, codexReadings: 0, windows: [], fits: [thin] }), /No limit readings yet|Too thin to quote/);
 
-  // Rises that track nothing recorded here: the usage is noise against them.
-  const noisy = synthetic([1, 0.1, 1.25, 5], 30, 3);
-  const bad = fitWindow(noisy.readings, noisy.usage, 1)!;
-  assert.equal(bad.usable, false, `r2 ${bad.byPrice?.r2}`);
+  // Rises that track nothing recorded here: the rate cannot be pinned down.
+  const random = synthetic([1, 0.1, 1.25, 5], 30);
+  let seed = 11;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  let pct = 0;
+  for (const r of random.readings) r.pct = Math.round((pct += rand() * 3) * 10) / 10;
+  const bad = fitWindow(random.readings, random.usage, 1)!;
+  assert.equal(bad.usable, false, `relSe ${bad.byPrice?.relSe}`);
+});
+
+test("bursts of use elsewhere in a few stretches are left out of the rate, and when they are many the rate is not quoted", () => {
+  const w: [number, number, number, number] = [1, 0.1, 1.25, 5];
+  const few = synthetic(w, 40);
+  // Two stretches gain 3 points each from a web-app session at the same time.
+  for (const [i, r] of few.readings.entries()) if (i >= 10) r.pct += 3 + (i >= 25 ? 3 : 0);
+  const clean = fitWindow(synthetic(w, 40).readings, synthetic(w, 40).usage, 1)!;
+  const fitted = fitWindow(few.readings, few.usage, 1)!;
+  assert.equal(fitted.outliers, 2);
+  assert.ok(Math.abs(fitted.pctPerUsd! - clean.pctPerUsd!) / clean.pctPerUsd! < 0.05, `${fitted.pctPerUsd} vs ${clean.pctPerUsd}`);
+  const many = synthetic(w, 40);
+  let extra = 0;
+  for (const [i, r] of many.readings.entries()) { if (i % 6 === 5) extra += 4; r.pct += extra; }
+  const shared = fitWindow(many.readings, many.usage, 1)!;
+  assert.equal(shared.usable, false);
+  assert.match(shared.why!, /used elsewhere too/);
+});
+
+test("fifty thousand readings take well under the time a report may", () => {
+  const readings: LimitReading[] = [];
+  const usage: UsagePoint[] = [];
+  for (let i = 0; i < 50_000; i++) {
+    const ts = T0 + i * MIN;
+    usage.push({ ts: ts - 1000, app: "codex", input: 1000, read: 9000, write: 0, output: 100, usd: 0.01 });
+    readings.push({ ts, app: "codex", window: "codex:300", pct: Math.floor((i % 300) / 3), resetsAt: T0 + (Math.floor(i / 300) + 1) * 300 * MIN, windowMs: 300 * MIN });
+  }
+  const t = Date.now();
+  const f = fitWindow(readings, usage);
+  assert.ok(f && f.segments > 100);
+  assert.ok(Date.now() - t < 3000, `${Date.now() - t} ms`);
 });
 
 test("a rise with no usage on this machine is counted as usage elsewhere and left out", () => {

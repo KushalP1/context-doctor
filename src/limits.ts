@@ -84,9 +84,18 @@ export function limitsLogPath(): string {
 
 /** An unchanged reading is written again after this long, so the log says the window was still there. */
 const KEEPALIVE_MS = 15 * MIN;
-/** Past this size the log keeps its newest LOG_KEEP_BYTES. */
-const LOG_ROTATE_AT = 512 * 1024;
-const LOG_KEEP_BYTES = 256 * 1024;
+/** A window that moved is written at most once a minute: plenty for stretches of half an hour. */
+const THROTTLE_MS = MIN;
+/**
+ * Past this size the log keeps its newest LOG_KEEP_BYTES. At the throttle a
+ * window writes at most one ~75-byte line a minute: a heavy user (both
+ * windows moving 16 hours a day) writes ~140 KB a day, so 1.5 MB holds over
+ * a week of the heaviest use.
+ */
+const LOG_ROTATE_AT = 2 * 1024 * 1024;
+const LOG_KEEP_BYTES = 1536 * 1024;
+/** Two reset times this close name the same window period (Claude Code rounds; Codex re-reports). */
+const SAME_RESET_MS = 10 * MIN;
 
 interface LogLine {
   ts: number;
@@ -154,7 +163,15 @@ export function recordLimits(rateLimits: unknown, now = Date.now(), path = limit
     }
     const due = fresh.filter((l) => {
       const p = last.get(l.w);
-      return !p || p.pct !== l.pct || p.reset !== l.reset || now - p.ts >= KEEPALIVE_MS || now < p.ts;
+      if (!p || now < p.ts) return true;
+      const sameReset = p.reset !== undefined && l.reset !== undefined ? Math.abs(p.reset - l.reset) * 1000 <= SAME_RESET_MS : p.reset === l.reset;
+      if (!sameReset) return true;
+      // Lower than the last reading of the same window period: another Claude
+      // Code session's status line still holding an older figure. Usage within
+      // a period never goes down, so it is never logged.
+      if (l.pct < p.pct) return false;
+      if (l.pct === p.pct) return now - p.ts >= KEEPALIVE_MS;
+      return now - p.ts >= THROTTLE_MS;
     });
     if (!due.length) return 0;
     if (existsSync(path) && statSync(path).size > LOG_ROTATE_AT) {
@@ -391,13 +408,33 @@ export function windowLabel(window: string, windowMs?: number): string {
   return `Codex ${span}${tags.length ? ` (${tags.join(", ")})` : ""}`;
 }
 
-/** Two readings of one window belong to the same period: the reset did not move, and the % did not fall. */
+/** Two readings of one window belong to the same period: the reset did not move (or, with no reset known, the % did not fall), and the first's reset had not passed. */
 function samePeriod(a: LimitReading, b: LimitReading, resolution: number): boolean {
-  if (a.resetsAt !== undefined && b.resetsAt !== undefined && Math.abs(a.resetsAt - b.resetsAt) > 10 * MIN) return false;
+  if (a.resetsAt !== undefined && b.resetsAt !== undefined) {
+    if (Math.abs(a.resetsAt - b.resetsAt) > SAME_RESET_MS) return false;
+  } else if (b.pct < a.pct - resolution) return false;
   if (a.resetsAt !== undefined && b.ts > a.resetsAt) return false;
-  if (b.pct < a.pct - resolution) return false;
   if (a.windowMs && b.ts - a.ts > a.windowMs) return false;
   return true;
+}
+
+/**
+ * One window's readings, in time order, without the stale ones: a reading
+ * lower than an earlier one of the same period comes from another session
+ * (two Claude Code windows, two Codex sessions) still holding an older
+ * figure. Within a period usage only grows, so it is dropped, never read as
+ * a new period or a fall in the pace. Logs written before 0.38 hold them.
+ */
+export function cleanReadings(readings: LimitReading[]): LimitReading[] {
+  const sorted = [...readings].sort((a, b) => a.ts - b.ts);
+  const out: LimitReading[] = [];
+  let top: LimitReading | undefined;
+  for (const r of sorted) {
+    if (top && r.resetsAt !== undefined && top.resetsAt !== undefined && Math.abs(r.resetsAt - top.resetsAt) <= SAME_RESET_MS && !(top.resetsAt !== undefined && r.ts > top.resetsAt) && r.pct < top.pct) continue;
+    out.push(r);
+    top = !top || !samePeriod(top, r, 0.1) || r.pct >= top.pct ? r : top;
+  }
+  return out;
 }
 
 /** 0.1 when any reading has a fraction (Claude), else 1 (Codex's whole percents). */
@@ -460,14 +497,18 @@ export interface Segment {
 export const TOKEN_TYPES = ["input", "cache read", "cache write", "output"] as const;
 
 /**
- * Cut each period into segments the % rose at least `step` points over (so
- * the readings' rounding is a small part of each), and sum the usage that
- * falls inside each. A rise with no local usage at all is usage elsewhere:
- * counted, kept out of the fit.
+ * Cut each period into stretches of at least `stretchMs` (half an hour on
+ * Claude's 0.1% steps, three hours on Codex's whole percents) and sum the
+ * usage that falls inside each. Cut by time, not by rise: stretches then
+ * differ in how much was used, which is what the fit learns from, and a
+ * quiet stretch says as much as a busy one. A rise with no local usage at
+ * all is usage elsewhere: counted, kept out of the fit; a quiet stretch with
+ * no rise is left out.
  */
-export function segmentsOf(readings: LimitReading[], usage: UsagePoint[], step?: number): { segments: Segment[]; elsewhere: number; elsewherePct: number } {
+export function segmentsOf(readings: LimitReading[], usage: UsagePoint[], stretchMs?: number): { segments: Segment[]; elsewhere: number; elsewherePct: number } {
+  readings = cleanReadings(readings);
   const res = resolutionOf(readings);
-  const minStep = step ?? (res < 1 ? 1 : 3);
+  const cut = stretchMs ?? (res < 1 ? 30 * MIN : 3 * HOUR);
   const segments: Segment[] = [];
   let elsewhere = 0, elsewherePct = 0;
   let u = 0;
@@ -488,7 +529,7 @@ export function segmentsOf(readings: LimitReading[], usage: UsagePoint[], step?:
   let start: LimitReading | undefined;
   const close = (end: LimitReading) => {
     if (!start || end.ts <= start.ts) return;
-    const dpct = end.pct - start.pct;
+    const dpct = Math.max(0, end.pct - start.pct);
     const got = usageIn(start.ts, end.ts);
     if (got.requests === 0) {
       if (dpct > res / 2) {
@@ -496,7 +537,7 @@ export function segmentsOf(readings: LimitReading[], usage: UsagePoint[], step?:
         elsewherePct += dpct;
       }
     } else {
-      segments.push({ from: start.ts, to: end.ts, dpct: Math.max(0, dpct), ...got });
+      segments.push({ from: start.ts, to: end.ts, dpct, ...got });
     }
     start = end;
   };
@@ -512,7 +553,7 @@ export function segmentsOf(readings: LimitReading[], usage: UsagePoint[], step?:
       start = r;
       continue;
     }
-    if (r.pct - start.pct >= minStep) close(r);
+    if (r.ts - start.ts >= cut) close(r);
   }
   if (start && readings.length && readings[readings.length - 1] !== start) close(readings[readings.length - 1]);
   return { segments, elsewhere, elsewherePct };
@@ -572,24 +613,26 @@ export function nnls(rows: number[][], y: number[], usable: number[]): number[] 
 }
 
 export interface FitQuality {
-  /** 1 - SSE / total sum of squares around the mean: share of the variation explained. */
+  /** 1 - SSE / total sum of squares around the mean: share of the variation explained (shown, not a gate). */
   r2: number;
-  /** Leave-one-out prediction error, in points of the limit per segment. */
+  /** Cross-validated prediction error, in points of the limit per stretch. */
   looRmse: number;
-  /** looRmse relative to the mean rise per segment. */
+  /** looRmse relative to the mean rise per stretch. */
   relError: number;
+  /** Price fit only: the coefficient's standard error relative to the coefficient. */
+  relSe?: number;
 }
 
-function quality(y: number[], predictLoo: (i: number) => number, predictAll: (i: number) => number): FitQuality {
+function quality(y: number[], predictHeldOut: (i: number) => number, predictAll: (i: number) => number): FitQuality {
   const n = y.length;
   const mean = y.reduce((s, v) => s + v, 0) / n;
-  let sst = 0, sse = 0, loo = 0;
+  let sst = 0, sse = 0, cv = 0;
   for (let i = 0; i < n; i++) {
     sst += (y[i] - mean) ** 2;
     sse += (y[i] - predictAll(i)) ** 2;
-    loo += (y[i] - predictLoo(i)) ** 2;
+    cv += (y[i] - predictHeldOut(i)) ** 2;
   }
-  const looRmse = Math.sqrt(loo / n);
+  const looRmse = Math.sqrt(cv / n);
   return { r2: sst > 0 ? 1 - sse / sst : 0, looRmse, relError: mean > 0 ? looRmse / mean : Infinity };
 }
 
@@ -615,22 +658,40 @@ export interface LimitFit {
   byPrice?: FitQuality;
   /** The model most of the dollars went to, which the per-1M figures from price are for. */
   mainModel?: string;
+  /** Stretches left out of the price fit for rising far beyond their usage (use elsewhere at the same time), and the excess points. */
+  outliers?: number;
+  outlierPct?: number;
+  /** With an intercept, the slope's standard error relative to it: large when the rises do not follow the usage. */
+  slopeRelSe?: number;
   /** Good enough to put savings in % of this limit. */
   usable: boolean;
   /** Why not, in words, when it is not. */
   why?: string;
 }
 
-/** Enough segments, rise and explained variation to quote a number. */
+/**
+ * When a figure is worth quoting. The gate is on how sure the coefficient
+ * itself is (its standard error, which only shrinks as readings accrue, so
+ * the savings lines do not come and go from one run to the next), not on R²:
+ * stretches of similar size explain little variation even when the
+ * coefficient is exact. Predictions per stretch may miss by up to a typical
+ * rise (the readings' rounding alone is a large part of a small rise).
+ */
 const MIN_SEGMENTS = 8;
-const MIN_R2 = 0.6;
-const MAX_REL_ERROR = 0.5;
+const MAX_REL_SE = 0.15;
+/** The slope with an intercept at least ~3 standard errors above zero. */
+const MAX_SLOPE_REL_SE = 0.3;
+const MAX_REL_ERROR = 1;
+/** Above this share of the rises with no local usage to match, the limit is visibly shared with other use. */
+const MAX_ELSEWHERE = 0.1;
+/** Folds for cross-validating the per-type fit: leave-one-out is quadratic in the stretches. */
+const FOLDS = 10;
 
-export function fitWindow(readings: LimitReading[], usage: UsagePoint[], step?: number): LimitFit | undefined {
+export function fitWindow(readings: LimitReading[], usage: UsagePoint[], stretchMs?: number): LimitFit | undefined {
   if (!readings.length) return undefined;
   const last = readings[readings.length - 1];
   const res = resolutionOf(readings);
-  const { segments, elsewhere, elsewherePct } = segmentsOf(readings, usage, step);
+  const { segments, elsewhere, elsewherePct } = segmentsOf(readings, usage, stretchMs);
   const fit: LimitFit = {
     window: last.window,
     label: windowLabel(last.window, last.windowMs),
@@ -644,50 +705,87 @@ export function fitWindow(readings: LimitReading[], usage: UsagePoint[], step?: 
     usd: segments.reduce((s, g) => s + g.usd, 0),
     usable: false,
   };
+  // Dollars per model inside the stretches: both lists are in time order, one pass.
   const byModel = new Map<string, number>();
-  for (const p of usage) if (p.model && segments.some((g) => p.ts > g.from && p.ts <= g.to)) byModel.set(p.model, (byModel.get(p.model) ?? 0) + p.usd);
+  let g = 0;
+  for (const p of usage) {
+    while (g < segments.length && segments[g].to < p.ts) g++;
+    if (g >= segments.length) break;
+    if (p.model && p.ts > segments[g].from) byModel.set(p.model, (byModel.get(p.model) ?? 0) + p.usd);
+  }
   fit.mainModel = [...byModel.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   if (segments.length < 3) {
     fit.why = `${segments.length} stretch${segments.length === 1 ? "" : "es"} of readings with usage beside ${segments.length === 1 ? "it" : "them"}; a fit needs ${MIN_SEGMENTS}`;
     return fit;
   }
-  const y = segments.map((g) => g.dpct);
-  const rows = segments.map((g) => g.x as number[]);
+  const y = segments.map((s) => s.dpct);
+  const rows = segments.map((s) => s.x as number[]);
   // A token type with under 50k tokens across the segments is not estimated:
   // its coefficient would be noise. (Output is a small share of the tokens
   // and can still carry much of the limit, so a share rule would drop it.)
-  const totals = [0, 1, 2, 3].map((j) => rows.reduce((s, r) => s + r[j], 0));
+  const totals = [0, 1, 2, 3].map((j) => rows.reduce((a, r) => a + r[j], 0));
   const usable = [0, 1, 2, 3].filter((j) => totals[j] >= 0.05);
   if (usable.length) {
     const coef = nnls(rows, y, usable);
-    const predict = (c: number[], i: number) => rows[i].reduce((s, v, j) => s + v * c[j], 0);
-    fit.byType = quality(
-      y,
-      (i) => predict(nnls(rows.filter((_, k) => k !== i), y.filter((_, k) => k !== i), usable), i),
-      (i) => predict(coef, i)
-    );
+    const predict = (c: number[], i: number) => rows[i].reduce((a, v, j) => a + v * c[j], 0);
+    const folds = Math.min(FOLDS, rows.length);
+    const foldCoef = Array.from({ length: folds }, (_, f) => nnls(rows.filter((_, i) => i % folds !== f), y.filter((_, i) => i % folds !== f), usable));
+    fit.byType = quality(y, (i) => predict(foldCoef[i % folds], i), (i) => predict(coef, i));
     fit.perMillion = {};
     usable.forEach((j) => (fit.perMillion![TOKEN_TYPES[j]] = coef[j]));
   }
-  const usd = segments.map((g) => g.usd);
-  if (usd.some((v) => v > 0)) {
-    const k = (ix: number[]) => {
-      let num = 0, den = 0;
-      for (const i of ix) {
-        num += usd[i] * y[i];
-        den += usd[i] * usd[i];
-      }
-      return den > 0 ? Math.max(0, num / den) : 0;
-    };
-    const idx = y.map((_, i) => i);
-    fit.pctPerUsd = k(idx);
-    fit.byPrice = quality(y, (i) => k(idx.filter((j) => j !== i)) * usd[i], (i) => fit.pctPerUsd! * usd[i]);
+  let usd = segments.map((s) => s.usd);
+  let sxy = usd.reduce((a, x, i) => a + x * y[i], 0);
+  let sxx = usd.reduce((a, x) => a + x * x, 0);
+  // A stretch that rose far more than its usage explains carries usage from
+  // elsewhere (the web app, another computer, in the same half hour): one
+  // robust pass drops those (residual over 3x the median absolute residual,
+  // upwards only) and refits, so a burst elsewhere does not inflate the rate.
+  if (sxx > 0 && usd.length >= MIN_SEGMENTS) {
+    const k0 = Math.max(0, sxy / sxx);
+    const resid = y.map((v, i) => v - k0 * usd[i]);
+    const scale = 1.4826 * [...resid].map(Math.abs).sort((a, b) => a - b)[Math.floor(resid.length / 2)];
+    const keep = resid.map((r) => !(scale > 0 && r > 3 * scale));
+    const dropped = keep.filter((x) => !x).length;
+    if (dropped > 0 && dropped <= resid.length / 4) {
+      fit.outliers = dropped;
+      fit.outlierPct = y.reduce((a, v, i) => a + (keep[i] ? 0 : v - k0 * usd[i]), 0);
+      const yk = y.filter((_, i) => keep[i]);
+      usd = usd.filter((_, i) => keep[i]);
+      y.splice(0, y.length, ...yk);
+      sxy = usd.reduce((a, x, i) => a + x * y[i], 0);
+      sxx = usd.reduce((a, x) => a + x * x, 0);
+    }
   }
-  const best = [fit.byType, fit.byPrice].filter(Boolean).sort((a, b) => a!.looRmse - b!.looRmse)[0];
+  if (sxx > 0) {
+    const k = Math.max(0, sxy / sxx);
+    fit.pctPerUsd = k;
+    // Leave-one-out in closed form: the fit without stretch i.
+    const held = (i: number) => {
+      const den = sxx - usd[i] * usd[i];
+      return den > 0 ? Math.max(0, (sxy - usd[i] * y[i]) / den) * usd[i] : k * usd[i];
+    };
+    fit.byPrice = quality(y, held, (i) => k * usd[i]);
+    const sse = y.reduce((a, v, i) => a + (v - k * usd[i]) ** 2, 0);
+    const se = Math.sqrt(sse / Math.max(1, y.length - 1) / sxx);
+    fit.byPrice.relSe = k > 0 ? se / k : Infinity;
+    // Does usage drive the rises at all? Through the origin, any positive
+    // rises against any positive usage give a rate. With an intercept, the
+    // slope is clearly above zero only when busier stretches rise more.
+    const n = y.length;
+    const mx = usd.reduce((a, v) => a + v, 0) / n, my = y.reduce((a, v) => a + v, 0) / n;
+    const cxx = usd.reduce((a, v) => a + (v - mx) ** 2, 0);
+    const b = cxx > 0 ? usd.reduce((a, v, i) => a + (v - mx) * (y[i] - my), 0) / cxx : 0;
+    const sseC = y.reduce((a, v, i) => a + (v - (my + b * (usd[i] - mx))) ** 2, 0);
+    const seB = cxx > 0 && n > 2 ? Math.sqrt(sseC / (n - 2) / cxx) : Infinity;
+    fit.slopeRelSe = b > 0 ? seB / b : Infinity;
+  }
   if (segments.length < MIN_SEGMENTS) fit.why = `${segments.length} stretches of readings with usage beside them; ${MIN_SEGMENTS} make a fit worth quoting`;
-  else if (!best || best.r2 < MIN_R2) fit.why = `the usage recorded here explains ${best ? Math.max(0, Math.round(best.r2 * 100)) : 0}% of the rises (under ${Math.round(MIN_R2 * 100)}%): much of this limit is used elsewhere, or not by tokens`;
-  else if (best.relError > MAX_REL_ERROR) fit.why = `predictions miss by ${Math.round(best.relError * 100)}% of a typical rise`;
-  else if (!fit.byPrice || fit.byPrice.r2 < MIN_R2 || fit.byPrice.relError > MAX_REL_ERROR) fit.why = "the limit does not follow list price closely enough to put dollars in it";
+  else if (!fit.byPrice || !(fit.pctPerUsd! > 0)) fit.why = "no priced usage beside the rises";
+  else if (!(fit.slopeRelSe! <= MAX_SLOPE_REL_SE)) fit.why = "busier stretches do not rise clearly more than quiet ones: the rises do not follow the usage recorded here";
+  else if (fit.byPrice.relSe! > MAX_REL_SE) fit.why = `% per dollar is known only to ±${Math.round(fit.byPrice.relSe! * 100)}% so far (under ±${Math.round(MAX_REL_SE * 100)}% is quoted): more readings narrow it`;
+  else if (fit.totalPct > 0 && (fit.elsewherePct + (fit.outlierPct ?? 0)) / (fit.totalPct + fit.elsewherePct) > MAX_ELSEWHERE) fit.why = `${Math.round(((fit.elsewherePct + (fit.outlierPct ?? 0)) / (fit.totalPct + fit.elsewherePct)) * 100)}% of the rises came with no usage here to match: this limit is used elsewhere too, so dollars saved here would be overstated in it`;
+  else if (fit.byPrice.relError > MAX_REL_ERROR) fit.why = `predictions miss by ${Math.round(fit.byPrice.relError * 100)}% of a typical rise: much of this limit moves with something other than the usage recorded here`;
   else fit.usable = true;
   return fit;
 }
@@ -719,7 +817,13 @@ export interface LimitsOptions {
 
 function byWindow(readings: LimitReading[]): Map<string, LimitReading[]> {
   const m = new Map<string, LimitReading[]>();
-  for (const r of readings) m.set(r.window, [...(m.get(r.window) ?? []), r]);
+  for (const r of readings) {
+    const list = m.get(r.window);
+    if (list) list.push(r);
+    else m.set(r.window, [r]);
+  }
+  // Stale readings from a parallel session out, once, for the status and the fit alike.
+  for (const [k, list] of m) m.set(k, cleanReadings(list));
   return m;
 }
 
@@ -755,8 +859,10 @@ export function claudeLimitFit(r: LimitsReport): LimitFit | undefined {
 
 /**
  * A dollar saving over `days`, in the limit's own unit: for the weekly
- * limit, points of it a week ("≈ 4.1% of your weekly limit a week (±1.2)");
- * for the 5-hour window, how many whole windows the saving amounts to.
+ * limit, points of it a week ("≈ 4.1% of your weekly limit a week (±0.4)");
+ * for the 5-hour window, how many whole windows the saving amounts to. The
+ * ± is the rate's own standard error: a saving sums many stretches, so the
+ * per-stretch miss averages out and the rate's error is what remains.
  */
 export function inLimit(fit: LimitFit, usd: number, days: number): string | undefined {
   if (!fit.usable || fit.pctPerUsd === undefined || !fit.byPrice || !(usd > 0) || !(days > 0)) return undefined;
@@ -764,10 +870,10 @@ export function inLimit(fit: LimitFit, usd: number, days: number): string | unde
   const total = fit.pctPerUsd * usd;
   if (fit.window === "seven_day") {
     const pct = (total * 7) / days;
-    return `≈ ${round(pct)}% of your weekly limit a week (±${round(pct * fit.byPrice.relError)})`;
+    return `≈ ${round(pct)}% of your weekly limit a week (±${round(pct * (fit.byPrice.relSe ?? 0))})`;
   }
   const windows = total / 100;
-  return `≈ ${round(windows)} full 5-hour window${windows >= 0.95 && windows < 1.05 ? "" : "s"} in ${days} days (±${round(windows * fit.byPrice.relError)})`;
+  return `≈ ${round(windows)} full 5-hour window${windows >= 0.95 && windows < 1.05 ? "" : "s"} in ${days} days (±${round(windows * (fit.byPrice.relSe ?? 0))})`;
 }
 
 /**
@@ -779,10 +885,10 @@ export function limitSavingsLines(fit: LimitFit | undefined, items: Array<[label
   if (!fit) return [];
   const rows = items.map(([label, usd]) => [label, inLimit(fit, usd, days)] as const).filter((r): r is readonly [string, string] => Boolean(r[1]));
   if (!rows.length) return [];
-  const err = fit.byPrice ? Math.round(fit.byPrice.relError * 100) : 0;
+  const err = fit.byPrice?.relSe !== undefined ? Math.round(fit.byPrice.relSe * 100) : 0;
   return [
     `In your plan's ${fit.window === "seven_day" ? "weekly limit" : "5-hour window"} (fitted on ${fit.segments} stretches of your`,
-    `readings, list price explains ${Math.round((fit.byPrice?.r2 ?? 0) * 100)}% of the rises, ±${err}% each):`,
+    `readings: % per list-price dollar known to ±${err}%):`,
     ...rows.map(([label, text]) => `  ${label}: ${text}`),
   ];
 }
@@ -849,7 +955,7 @@ export function renderLimits(r: LimitsReport): string {
     }
     if (f.pctPerUsd !== undefined && f.byPrice && (f.usable || f.segments >= MIN_SEGMENTS)) {
       out.push(`  By list price: ${pts(f.pctPerUsd * 10)}% per $10${f.mainModel ? ` (mostly ${f.mainModel})` : ""}`);
-      out.push(`    explains ${Math.round(Math.max(0, f.byPrice.r2) * 100)}% of the rises; predicts each within ±${pts(f.byPrice.looRmse)} points (${Math.round(f.byPrice.relError * 100)}%)`);
+      out.push(`    rate known to ±${Math.round((f.byPrice.relSe ?? 0) * 100)}%; explains ${Math.round(Math.max(0, f.byPrice.r2) * 100)}% of the rises; predicts each within ±${pts(f.byPrice.looRmse)} points (${Math.round(f.byPrice.relError * 100)}%)`);
     }
     out.push(f.usable ? "  Good enough to show savings in this limit (savings, cache-misses, compact-window)." : `  Too thin to quote: ${f.why}.`);
   }

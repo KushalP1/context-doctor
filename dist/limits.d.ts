@@ -104,6 +104,14 @@ export interface WindowStatus {
     plan?: string;
 }
 export declare function windowLabel(window: string, windowMs?: number): string;
+/**
+ * One window's readings, in time order, without the stale ones: a reading
+ * lower than an earlier one of the same period comes from another session
+ * (two Claude Code windows, two Codex sessions) still holding an older
+ * figure. Within a period usage only grows, so it is dropped, never read as
+ * a new period or a fall in the pace. Logs written before 0.38 hold them.
+ */
+export declare function cleanReadings(readings: LimitReading[]): LimitReading[];
 /** 0.1 when any reading has a fraction (Claude), else 1 (Codex's whole percents). */
 export declare function resolutionOf(readings: LimitReading[]): number;
 export declare function windowStatus(readings: LimitReading[], now?: number): WindowStatus | undefined;
@@ -119,12 +127,15 @@ export interface Segment {
 }
 export declare const TOKEN_TYPES: readonly ["input", "cache read", "cache write", "output"];
 /**
- * Cut each period into segments the % rose at least `step` points over (so
- * the readings' rounding is a small part of each), and sum the usage that
- * falls inside each. A rise with no local usage at all is usage elsewhere:
- * counted, kept out of the fit.
+ * Cut each period into stretches of at least `stretchMs` (half an hour on
+ * Claude's 0.1% steps, three hours on Codex's whole percents) and sum the
+ * usage that falls inside each. Cut by time, not by rise: stretches then
+ * differ in how much was used, which is what the fit learns from, and a
+ * quiet stretch says as much as a busy one. A rise with no local usage at
+ * all is usage elsewhere: counted, kept out of the fit; a quiet stretch with
+ * no rise is left out.
  */
-export declare function segmentsOf(readings: LimitReading[], usage: UsagePoint[], step?: number): {
+export declare function segmentsOf(readings: LimitReading[], usage: UsagePoint[], stretchMs?: number): {
     segments: Segment[];
     elsewhere: number;
     elsewherePct: number;
@@ -137,12 +148,14 @@ export declare function segmentsOf(readings: LimitReading[], usage: UsagePoint[]
  */
 export declare function nnls(rows: number[][], y: number[], usable: number[]): number[];
 export interface FitQuality {
-    /** 1 - SSE / total sum of squares around the mean: share of the variation explained. */
+    /** 1 - SSE / total sum of squares around the mean: share of the variation explained (shown, not a gate). */
     r2: number;
-    /** Leave-one-out prediction error, in points of the limit per segment. */
+    /** Cross-validated prediction error, in points of the limit per stretch. */
     looRmse: number;
-    /** looRmse relative to the mean rise per segment. */
+    /** looRmse relative to the mean rise per stretch. */
     relError: number;
+    /** Price fit only: the coefficient's standard error relative to the coefficient. */
+    relSe?: number;
 }
 export interface LimitFit {
     window: string;
@@ -166,12 +179,17 @@ export interface LimitFit {
     byPrice?: FitQuality;
     /** The model most of the dollars went to, which the per-1M figures from price are for. */
     mainModel?: string;
+    /** Stretches left out of the price fit for rising far beyond their usage (use elsewhere at the same time), and the excess points. */
+    outliers?: number;
+    outlierPct?: number;
+    /** With an intercept, the slope's standard error relative to it: large when the rises do not follow the usage. */
+    slopeRelSe?: number;
     /** Good enough to put savings in % of this limit. */
     usable: boolean;
     /** Why not, in words, when it is not. */
     why?: string;
 }
-export declare function fitWindow(readings: LimitReading[], usage: UsagePoint[], step?: number): LimitFit | undefined;
+export declare function fitWindow(readings: LimitReading[], usage: UsagePoint[], stretchMs?: number): LimitFit | undefined;
 export interface LimitsReport {
     days: number;
     now: number;
@@ -196,8 +214,10 @@ export declare function limitsReport(days?: number, opts?: LimitsOptions): Limit
 export declare function claudeLimitFit(r: LimitsReport): LimitFit | undefined;
 /**
  * A dollar saving over `days`, in the limit's own unit: for the weekly
- * limit, points of it a week ("≈ 4.1% of your weekly limit a week (±1.2)");
- * for the 5-hour window, how many whole windows the saving amounts to.
+ * limit, points of it a week ("≈ 4.1% of your weekly limit a week (±0.4)");
+ * for the 5-hour window, how many whole windows the saving amounts to. The
+ * ± is the rate's own standard error: a saving sums many stretches, so the
+ * per-stretch miss averages out and the rate's error is what remains.
  */
 export declare function inLimit(fit: LimitFit, usd: number, days: number): string | undefined;
 /**
