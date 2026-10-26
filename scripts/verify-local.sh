@@ -19,10 +19,11 @@ out=$(npm test 2>&1); echo "$out" | grep -qE "^ℹ fail 0" && ok "npm test: $(ec
 run "committed dist/ matches src/" git diff --exit-code --quiet -- dist
 
 echo "== 2. End-to-end smoke (local mocks, throwaway HOME)"
-run "MCP over stdio (local build)" env HOME=$(sb) node scripts/smoke-mcp.mjs node dist/mcp.js
+# SMOKE_STRICT=1: the local build must have every surface the smoke knows (handoff included).
+run "MCP over stdio (local build)" env HOME=$(sb) SMOKE_STRICT=1 node scripts/smoke-mcp.mjs node dist/mcp.js
 P=$(node -e 'const s=require("net").createServer().listen(0,()=>{console.log(s.address().port);s.close()})')
 H=$(sb); HOME=$H node dist/mcp.js --http --port $P >/dev/null 2>&1 & MP=$!; sleep 1.5
-run "MCP over streamable HTTP" env HOME=$H node scripts/smoke-mcp.mjs --http http://127.0.0.1:$P/mcp
+run "MCP over streamable HTTP" env HOME=$H SMOKE_STRICT=1 node scripts/smoke-mcp.mjs --http http://127.0.0.1:$P/mcp
 kill $MP 2>/dev/null
 run "OpenAI proxy + autopilot" env HOME=$(sb) node scripts/smoke-openai-proxy.mjs
 run "Gemini proxy + autopilot" env HOME=$(sb) node scripts/smoke-gemini-proxy.mjs
@@ -30,8 +31,12 @@ run "Codex (real binary, if installed) through autopilot" env HOME=$(sb) node sc
 
 echo "== 3. Published npm package"
 v=$(npm view context-doctor version); [ "$v" = "$(node -p 'require("./package.json").version')" ] && ok "npm latest = repo version ($v)" || bad "npm $v vs repo $(node -p 'require("./package.json").version')"
-run "npx context-doctor@$v mcp (published)" env HOME=$(sb) node scripts/smoke-mcp.mjs npx -y context-doctor@$v mcp
-run "npx context-doctor@$v --version" bash -c "[ \"\$(npx -y context-doctor@$v --version)\" = \"$v\" ]"
+# From a scratch folder with a scratch npm prefix: run from this repository, or
+# with the package npm-linked globally, npx runs the local build instead of
+# the published one, and this step would test the wrong thing.
+PD=$(sb); PP=$(sb)
+run "npx context-doctor@$v mcp (published)" bash -c "cd $PD && env HOME=$(sb) npm_config_prefix=$PP node $R/scripts/smoke-mcp.mjs npx -y context-doctor@$v mcp"
+run "npx context-doctor@$v --version" bash -c "cd $PD && [ \"\$(env npm_config_prefix=$PP npx -y context-doctor@$v --version)\" = \"$v\" ]"
 
 echo "== 4. Python package"
 for py in /usr/bin/python3 /opt/homebrew/bin/python3.11 /opt/homebrew/bin/python3; do
@@ -44,7 +49,7 @@ run "Python wheel installs and imports from a clean venv" bash -c "cd /tmp && $V
 
 echo "== 5. CLI on real history (read-only)"
 cd "$R/.."
-for cmd in "doctor" "savings --days 7" "cache-misses --days 7" "overhead" "reads --days 7" "tasks --days 7" "session" "compact-window status" "autopilot status" "accuracy --limit 3" "report" "statusline </dev/null" "instructions" "init" "ab --list" "--version"; do
+for cmd in "doctor" "savings --days 7" "cache-misses --days 7" "overhead" "reads --days 7" "tasks --days 7" "session" "compact-window status" "autopilot status" "accuracy --limit 3" "report" "statusline </dev/null" "instructions" "init" "ab --list" "handoff list" "--version"; do
   out=$(eval node $R/dist/cli.js $cmd 2>&1); st=$?
   if [ $st -eq 0 ] && ! echo "$out" | grep -qiE "TypeError|ReferenceError|undefined is not|NaN|Cannot read"; then ok "cli: $cmd"; else bad "cli: $cmd (exit $st)"; echo "$out" | tail -5 | sed 's/^/    /'; fi
 done

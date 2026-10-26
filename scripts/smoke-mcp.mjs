@@ -6,8 +6,14 @@
 //   node scripts/smoke-mcp.mjs npx -y context-doctor mcp
 //   node scripts/smoke-mcp.mjs --http http://127.0.0.1:8808/mcp
 //
-// Exits 1 on the first failed check. Calls write to the ledger of whatever
-// HOME the server runs with, so point HOME at a throwaway directory.
+// Exits 1 on the first failed check. Calls write to the ledger (and
+// save_handoff to ~/.context-doctor/handoffs) of whatever HOME the server runs
+// with, so point HOME at a throwaway directory.
+//
+// The handoff surfaces (prompts handoff and ask_file, save_handoff, the
+// handoff:// resources) are checked when the server has them; SMOKE_STRICT=1
+// requires them (verify-local.sh sets it for the local build, not for the
+// published package, which may predate them).
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -59,6 +65,39 @@ const { prompts } = await client.listPrompts();
 check(prompts.some((p) => p.name === "context_checkup"), "prompt listed", prompts.map((p) => p.name).join(", "));
 const prompt = await client.getPrompt({ name: "context_checkup", arguments: {} });
 check(prompt.messages.length > 0, "prompt renders");
+
+// Handoff: the one real cut in a chat app. Present in builds from 0.37 on.
+const strict = process.env.SMOKE_STRICT === "1";
+const hasHandoff = names.includes("save_handoff");
+const overHttp = args[0] === "--http";
+if (!hasHandoff) {
+  check(!strict, "handoff surfaces", strict ? "missing (SMOKE_STRICT=1)" : "not in this build (skipped)");
+} else {
+  const handoffPrompt = await client.getPrompt({ name: "handoff", arguments: { focus: "the deploy" } });
+  const hp = handoffPrompt.messages[0]?.content?.text ?? "";
+  check(/save_handoff/.test(hp) && /400 tokens/.test(hp) && /the deploy/.test(hp), "handoff prompt renders");
+  const askFile = await client.getPrompt({ name: "ask_file", arguments: { path: "/tmp/big.log", question: "why did it fail?" } });
+  check(/pack_context/.test(askFile.messages[0]?.content?.text ?? ""), "ask_file prompt renders");
+  const brief = "Goal: fix the port.\nDecided: 8080.\nState: config edited, not deployed.\nOpen: deploy, smoke test.\nIds: nginx.conf, PR #12.";
+  const saved = await client.callTool({ name: "save_handoff", arguments: { brief, title: "smoke", verbatim: [{ label: "the config", text: "server { listen 8080; }" }], chat_tokens: 40000, model: "claude-sonnet-5" } });
+  const st = text(saved);
+  if (overHttp) {
+    check(!saved.isError && /not stored/.test(st) && /Saves ~/.test(st), "save_handoff over HTTP (stores nothing)", st.split("\n")[0]);
+    const res = await client.listResources().then(() => "listed", (e) => String(e.message ?? e));
+    check(res !== "listed", "no handoff resources over HTTP", res.slice(0, 60));
+  } else {
+    check(!saved.isError && /^Handoff saved: /.test(st) && /Saves ~/.test(st), "save_handoff", st.split("\n")[0]);
+    const id = st.match(/Handoff saved: (\S+)/)?.[1];
+    const { resources } = await client.listResources();
+    check(resources.some((r) => r.uri === "handoff://latest") && resources.some((r) => r.uri === `handoff://${id}`), "handoff resources listed", resources.map((r) => r.uri).join(", "));
+    const latest = await client.readResource({ uri: "handoff://latest" });
+    check(/# Handoff: smoke/.test(latest.contents[0]?.text ?? "") && /listen 8080/.test(latest.contents[0]?.text ?? ""), "handoff://latest reads the brief and the verbatim block");
+    const traversal = await client.readResource({ uri: "handoff://..%2F..%2Fetc%2Fpasswd" }).then(() => "read", () => "refused");
+    check(traversal === "refused", "a traversal id is refused");
+  }
+  const empty = await client.callTool({ name: "save_handoff", arguments: { brief: " " } });
+  check(empty.isError === true, "an empty handoff is refused", text(empty).slice(0, 60));
+}
 
 const sketch = await client.callTool({
   name: "profile_context",
