@@ -4,7 +4,9 @@
  * "custom instructions" are read on every turn of every chat, which is the
  * closest thing those surfaces have to a UserPromptSubmit hook.
  *
- * Kept short (~185 Claude tokens, ~125 GPT): it rides in every conversation.
+ * Kept short (~190 Claude tokens, ~125 GPT): it rides in every conversation.
+ * The handoff is the one real cut a chat app allows: its history cannot be
+ * edited, so a long chat continues in a new one from a short brief.
  */
 export declare const CHAT_PREFERENCES: string;
 /** Where to paste, per app. Paths are the UI labels, not URLs, so they survive redesigns. */

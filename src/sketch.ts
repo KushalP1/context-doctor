@@ -95,7 +95,10 @@ const IMAGE_TOKENS = 1500;
 
 const LARGE_BLOCK_TOKENS = 2000;
 const LONG_HISTORY_TURNS = 30;
-const HANDOFF_SUMMARY_TOKENS = 300;
+// The handoff brief's target size (save_handoff, the `handoff` prompt).
+const HANDOFF_SUMMARY_TOKENS = 400;
+// Below this, a new chat is not worth the user's trouble.
+const HANDOFF_WORTH_TOKENS = 10_000;
 const RECENT_TURNS_KEPT = 6;
 
 /** Code, tool output and base64 tokenize at the code ratio; pastes and text at the prose ratio. */
@@ -198,7 +201,7 @@ export function profileSketch(sketch: ConversationSketch): SketchProfile {
       severity: totalTokens > 100_000 ? "high" : "warn",
       estSavings: Math.max(0, totalTokens - afterHandoff),
       message: `${turns} turns: every new message re-reads ~${formatTokens(totalTokens)}.`,
-      action: `Offer a handoff: write a ≤${HANDOFF_SUMMARY_TOKENS}-token summary (decisions, current state, open items, key identifiers) for the user to start a new chat with. A fresh chat re-reads ~${formatTokens(afterHandoff)} of conversation instead, plus the app's own system prompt, which every chat carries.`,
+      action: `Offer a handoff once: with the user's agreement, write a ≤${HANDOFF_SUMMARY_TOKENS}-token brief (goal, decisions, current state, open items, key identifiers) and call save_handoff, or the user picks the \`handoff\` prompt. A new chat re-reads ~${formatTokens(afterHandoff)} of conversation instead, plus the app's own system prompt, which every chat carries.`,
     });
   }
 
@@ -246,22 +249,34 @@ export function renderSketchProfile(p: SketchProfile): string {
     return lines.join("\n");
   }
   lines.push("");
-  lines.push(`Findings (recoverable ~${formatTokens(p.totalEstSavings)} tokens):`);
+  // A chat app's history cannot be edited: summarizing a block stops it being
+  // quoted again, but the block is still re-read on every turn. Saying
+  // "recoverable" without that sent models to promise savings that never came.
+  lines.push(`Findings (recoverable ~${formatTokens(p.totalEstSavings)} tokens, but only in a new chat: a chat app's history cannot be edited):`);
   p.findings.forEach((f, i) => {
     const save = f.estSavings > 0 ? ` [~${formatTokens(f.estSavings)}]` : "";
     lines.push(`${i + 1}. ${f.severity.toUpperCase()}${save} ${f.message}`);
     lines.push(`   → ${f.action}`);
   });
   lines.push("");
-  lines.push("Act on #1 in your reply (do it, do not just suggest it), and tell the user in one line what you dropped and roughly what it saves per turn.");
+  lines.push("Act on #1 in your reply (do it, do not just suggest it): work from your summary and refer to blocks by name from now on, which stops this chat growing; tell the user in one line what you summarized. What is already here stays until a new chat.");
+  const handoffOffered = p.findings.some((f) => f.id === "long_history");
+  if (!handoffOffered && p.totalEstSavings >= HANDOFF_WORTH_TOKENS) {
+    lines.push(`To recover the ~${formatTokens(p.totalEstSavings)}: offer a handoff once. With the user's agreement, call save_handoff (a ≤${HANDOFF_SUMMARY_TOKENS}-token brief plus the blocks that must stay exact); a new chat starts from that.`);
+  }
   return lines.join("\n");
 }
 
-/** Profile a sketch, log it to the ledger like a hook check, and render. */
-export function runSketch(sketch: ConversationSketch): string {
+/** Profile a sketch and log it to the ledger like a hook check. */
+export function runSketchProfile(sketch: ConversationSketch): SketchProfile {
   const profile = profileSketch(sketch);
   // No session id: each sketch describes a different chat, and a shared id made
   // the dashboard read "big sketch, then a smaller one" as tokens saved.
   recordLedger({ ev: "check", src: "mcp", tok: profile.totalTokens, warn: profile.findings.some((f) => f.severity !== "info"), model: sketch.model });
-  return renderSketchProfile(profile);
+  return profile;
+}
+
+/** Profile a sketch, log it, and render. */
+export function runSketch(sketch: ConversationSketch): string {
+  return renderSketchProfile(runSketchProfile(sketch));
 }

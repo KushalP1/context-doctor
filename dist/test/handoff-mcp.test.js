@@ -1,0 +1,234 @@
+/**
+ * The handoff surfaces through the official MCP client, the way
+ * Claude Desktop (stdio, prompts in the + menu, attachable resources) and
+ * ChatGPT (a URL, tools only) reach them. Every server runs with a throwaway
+ * home directory.
+ */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { handoffDir } from "../handoff.js";
+import { freePort } from "./freeport.js";
+import { sandboxEnv } from "./sandbox.js";
+const mcpPath = join(dirname(fileURLToPath(import.meta.url)), "..", "mcp.js");
+const BRIEF = "Goal: migrate invoices to v2.\nDecided: keep the old ids.\nState: script written, dry run clean.\nOpen: run it on prod Friday.\nIds: invoices_v2, PR #88.";
+const text = (r) => (r.content ?? []).map((c) => c.text ?? "").join("\n");
+async function stdioClient(home, capabilities = {}) {
+    const client = new Client({ name: "handoff-test", version: "1" }, { capabilities });
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: [mcpPath], env: sandboxEnv(home) }));
+    return client;
+}
+test("prompt: handoff renders the instructions the model acts on", async () => {
+    const client = await stdioClient(mkdtempSync(join(tmpdir(), "cd-hp-")));
+    try {
+        const { prompts } = await client.listPrompts();
+        const handoff = prompts.find((p) => p.name === "handoff");
+        assert.ok(handoff && /new chat/.test(handoff.description ?? ""));
+        assert.equal(handoff.arguments?.find((a) => a.name === "focus")?.required, false);
+        const h = await client.getPrompt({ name: "handoff", arguments: { focus: "the Friday prod run" } });
+        const ht = h.messages[0].content.text;
+        assert.match(ht, /at most 400 tokens/);
+        assert.match(ht, /call save_handoff/);
+        assert.match(ht, /verbatim/);
+        assert.match(ht, /chat_tokens/);
+        assert.match(ht, /The next chat will work on: the Friday prod run/);
+        assert.doesNotMatch(text({ content: [(await client.getPrompt({ name: "handoff", arguments: {} })).messages[0].content] }), /next chat will work on/);
+    }
+    finally {
+        await client.close();
+    }
+});
+test("save_handoff over stdio: stored under the sandboxed home, listed and readable as resources, with the token math", async () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-hs-"));
+    const client = await stdioClient(home);
+    try {
+        const before = await client.readResource({ uri: "handoff://latest" });
+        assert.match(before.contents[0].text, /No handoff saved yet/);
+        const { tools } = await client.listTools();
+        const tool = tools.find((t) => t.name === "save_handoff");
+        assert.equal(tool.annotations?.readOnlyHint, false, "it writes a file, so clients that gate writes may ask");
+        assert.equal(tool.annotations?.destructiveHint, false);
+        const r = await client.callTool({
+            name: "save_handoff",
+            arguments: { brief: BRIEF, title: "Invoices v2", verbatim: [{ label: "the migration", text: "UPDATE invoices SET v=2;" }], chat_tokens: 52_000, model: "claude-sonnet-5" },
+        });
+        const t = text(r);
+        assert.notEqual(r.isError, true, t);
+        assert.match(t, /^Handoff saved: \d{8}-\d{6}-invoices-v2 \(~\d+ tokens: brief ~\d+, 1 verbatim block/);
+        assert.match(t, /~\/\.context-doctor\/handoffs\//);
+        assert.match(t, /Now: ~52k tokens re-read on every turn \(\$/);
+        assert.match(t, /Saves ~5\dk tokens per further turn/);
+        assert.match(t, /attach the resource handoff:\/\/latest/);
+        assert.match(t, /print the brief and the verbatim blocks in one fenced block/);
+        const id = t.match(/Handoff saved: (\S+)/)[1];
+        assert.ok(existsSync(join(handoffDir(home), id, "handoff.md")));
+        const { resources } = await client.listResources();
+        assert.deepEqual(resources.map((x) => x.uri).sort(), [`handoff://${id}`, "handoff://latest"].sort());
+        assert.equal(resources.find((x) => x.uri === `handoff://${id}`)?.title, "Invoices v2");
+        const latest = (await client.readResource({ uri: "handoff://latest" })).contents[0];
+        assert.equal(latest.mimeType, "text/markdown");
+        assert.match(latest.text, /# Handoff: Invoices v2/);
+        assert.match(latest.text, /UPDATE invoices SET v=2;/);
+        assert.equal((await client.readResource({ uri: `handoff://${id}` })).contents[0].text, latest.text);
+        for (const bad of ["handoff://..%2F..%2Fetc%2Fpasswd", "handoff://20990101-000000-none", "handoff://NOPE"]) {
+            await assert.rejects(client.readResource({ uri: bad }), /No saved handoff|not found/i, bad);
+        }
+    }
+    finally {
+        await client.close();
+    }
+});
+test("save_handoff: bad input is refused with the reason and nothing is written", async () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-hb-"));
+    const client = await stdioClient(home);
+    try {
+        const cases = [
+            [{ brief: "   " }, /brief.*empty/],
+            [{ brief: "x".repeat(6001) }, /limit is 6000/],
+            [{ brief: BRIEF, verbatim: Array.from({ length: 21 }, (_, i) => ({ label: `b${i}`, text: "x" })) }, /21 verbatim blocks/],
+            [{ brief: BRIEF, verbatim: [{ label: "huge", text: "y".repeat(20_001) }] }, /"huge"/],
+            [{ brief: BRIEF, chat_tokens: -5 }, /chatTokens/],
+        ];
+        for (const [args, why] of cases) {
+            const r = await client.callTool({ name: "save_handoff", arguments: args });
+            assert.equal(r.isError, true, JSON.stringify(args).slice(0, 80));
+            assert.match(text(r), why);
+        }
+        const wrongType = await client.callTool({ name: "save_handoff", arguments: { brief: 42 } }).catch((e) => ({ isError: true, content: [{ text: String(e) }] }));
+        assert.equal(wrongType.isError, true);
+        assert.equal(existsSync(handoffDir(home)), false, "nothing written");
+    }
+    finally {
+        await client.close();
+    }
+});
+test("save_handoff: secret-looking strings are masked and the result says so", async () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-hsec-"));
+    const client = await stdioClient(home);
+    try {
+        const r = await client.callTool({ name: "save_handoff", arguments: { brief: `${BRIEF}\nDB url key: ${["sk", "ant", "api03", "LEAK".repeat(6)].join("-")}` } });
+        assert.match(text(r), /Masked 1 secret-looking string\(s\) \(an Anthropic key\)/);
+        const id = text(r).match(/Handoff saved: (\S+)/)[1];
+        assert.ok(!readFileSync(join(handoffDir(home), id, "handoff.md"), "utf8").includes("LEAKLEAK"));
+    }
+    finally {
+        await client.close();
+    }
+});
+test("elicitation: where the client can show a form, the user confirms the handoff and the prune; a no is respected", async () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-he-"));
+    const answers = [];
+    const asked = [];
+    const client = new Client({ name: "elicit-test", version: "1" }, { capabilities: { elicitation: {} } });
+    client.setRequestHandler(ElicitRequestSchema, async (req) => {
+        asked.push(req.params.message);
+        return answers.shift() ?? { action: "cancel" };
+    });
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: [mcpPath], env: sandboxEnv(home) }));
+    try {
+        const args = { brief: BRIEF, title: "elicit", verbatim: [{ label: "cfg", text: "port=8080" }] };
+        answers.push({ action: "decline" });
+        const declined = await client.callTool({ name: "save_handoff", arguments: args });
+        assert.match(text(declined), /^Not saved: the user declined/);
+        assert.match(asked[0], /Save a handoff of this chat on this computer/);
+        assert.match(asked[0], /1 verbatim block\(s\): cfg/);
+        assert.equal(existsSync(handoffDir(home)), false);
+        answers.push({ action: "accept", content: { include_verbatim: false } });
+        const noBlocks = await client.callTool({ name: "save_handoff", arguments: args });
+        assert.match(text(noBlocks), /^Handoff saved: .*brief ~\d+\)/);
+        const id = text(noBlocks).match(/Handoff saved: (\S+)/)[1];
+        assert.doesNotMatch(readFileSync(join(handoffDir(home), id, "handoff.md"), "utf8"), /port=8080/);
+        const conversation = JSON.stringify(Array.from({ length: 16 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", content: `turn ${i} `.repeat(200) })));
+        answers.push({ action: "decline" });
+        const pruneNo = await client.callTool({ name: "optimize_context", arguments: { conversation, strategies: ["prune-history"], keep_recent: 4 } });
+        assert.match(text(pruneNo), /prune-history skipped: the user declined/);
+        assert.doesNotMatch(text(pruneNo), /PRUNED TURNS DIGEST/);
+        assert.match(asked[2], /Prune old turns.*all but the last 4 messages/);
+        answers.push({ action: "accept", content: { prune: true } });
+        const pruneYes = await client.callTool({ name: "optimize_context", arguments: { conversation, strategies: ["prune-history"], keep_recent: 4 } });
+        assert.match(text(pruneYes), /PRUNED TURNS DIGEST/);
+    }
+    finally {
+        await client.close();
+    }
+});
+test("no elicitation declared: nothing is asked, the handoff is saved (consent was the chat's)", async () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-hn-"));
+    const client = await stdioClient(home);
+    try {
+        const r = await client.callTool({ name: "save_handoff", arguments: { brief: BRIEF } });
+        assert.match(text(r), /^Handoff saved/);
+        const conversation = JSON.stringify(Array.from({ length: 16 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", content: `turn ${i} `.repeat(200) })));
+        const pruned = await client.callTool({ name: "optimize_context", arguments: { conversation, strategies: ["prune-history"], keep_recent: 4 } });
+        assert.match(text(pruned), /PRUNED TURNS DIGEST/);
+    }
+    finally {
+        await client.close();
+    }
+});
+/** Start `mcp.js --http` with a throwaway home; resolves once it listens. */
+async function httpServer(home, extraArgs = [], env = {}) {
+    const port = await freePort();
+    const child = spawn(process.execPath, [mcpPath, "--http", "--port", String(port), ...extraArgs], { stdio: ["ignore", "ignore", "pipe"], env: { ...sandboxEnv(home), ...env } });
+    await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("HTTP MCP server did not start")), 8000);
+        child.stderr.on("data", (d) => {
+            if (d.toString().includes("streamable HTTP")) {
+                clearTimeout(timer);
+                resolve();
+            }
+        });
+    });
+    let id = 0;
+    const rpc = async (method, params = {}) => {
+        const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+            method: "POST",
+            headers: { "content-type": "application/json", accept: "application/json" },
+            body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }),
+        });
+        return (await res.json());
+    };
+    return { child, rpc };
+}
+test("over HTTP: save_handoff stores nothing and is read-only; no handoff resources are exposed", async () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-hh-"));
+    const { child, rpc } = await httpServer(home);
+    try {
+        const list = await rpc("tools/list");
+        const tool = list.result.tools.find((t) => t.name === "save_handoff");
+        assert.equal(tool.annotations.readOnlyHint, true);
+        const r = await rpc("tools/call", { name: "save_handoff", arguments: { brief: BRIEF, turns: 40, model: "gpt-5" } });
+        const t = r.result.content[0].text;
+        assert.match(t, /not stored: this server runs over HTTP and keeps nothing/);
+        assert.match(t, /print the brief and the verbatim blocks in one fenced block/);
+        assert.match(t, /estimated from the turn count/);
+        assert.equal(existsSync(join(home, ".context-doctor")), false);
+        const res = await rpc("resources/list");
+        assert.ok(res.error, "no resources capability over HTTP");
+    }
+    finally {
+        child.kill();
+    }
+});
+test("over HTTP with --store-handoffs: stored on this machine, annotated as a write, still no resources", async () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-hhs-"));
+    const { child, rpc } = await httpServer(home, ["--store-handoffs"]);
+    try {
+        const list = await rpc("tools/list");
+        assert.equal(list.result.tools.find((t) => t.name === "save_handoff").annotations.readOnlyHint, false);
+        const r = await rpc("tools/call", { name: "save_handoff", arguments: { brief: BRIEF, title: "over http" } });
+        assert.match(r.result.content[0].text, /^Handoff saved: \S+-over-http/);
+        assert.equal(readdirSync(handoffDir(home)).length, 1);
+        assert.ok((await rpc("resources/list")).error);
+    }
+    finally {
+        child.kill();
+    }
+});

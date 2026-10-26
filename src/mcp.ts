@@ -15,10 +15,13 @@
  *   optimize_context  — apply safe strategies, return the slimmed conversation
  *   context_best_practices — curated checklist for a given provider/use case
  *   pack_context      — only the chunks of big files a question needs, within a token budget
+ *   save_handoff      — store a handoff brief the next chat starts from (a chat's history cannot be cut)
+ * Prompts: context_checkup, handoff. Resources (stdio): handoff://latest, handoff://<id>.
  */
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
@@ -26,18 +29,50 @@ import { optimizeConversation } from "./optimize.js";
 import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
 import { recordLedger } from "./ledger.js";
-import { runSketch } from "./sketch.js";
+import { renderSketchProfile, runSketchProfile } from "./sketch.js";
 import { packContextSemantic, readSources, renderPack } from "./pack.js";
 import { SERVER_INSTRUCTIONS } from "./rules.js";
+import { HANDOFF_LIMITS, handoffDir, listHandoffs, readHandoff, renderMath, saveHandoff, tildify, validateHandoff } from "./handoff.js";
 
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"] as const;
+
+type Text = { type: "text"; text: string };
+
+/** Largest size hint a sketch block may carry (a block, not a library). */
+const SKETCH_MAX = { approx_tokens: 10_000_000, approx_lines: 1_000_000, approx_words: 5_000_000, approx_chars: 40_000_000 };
+
+type Consent = { asked: false } | { asked: true; ok: boolean; content: Record<string, unknown>; why?: string };
+
+/**
+ * Ask the user through the client's own form (MCP elicitation), when the
+ * client declares it. `asked: false` means it does not, or could not show the
+ * form: the caller falls back to consent in the chat, as before. No answer in
+ * two minutes is a no.
+ */
+async function askConsent(server: McpServer, message: string, properties: Record<string, { type: "boolean"; title: string; default?: boolean }>): Promise<Consent> {
+  if (!server.server.getClientCapabilities()?.elicitation?.form) return { asked: false };
+  try {
+    const r = await server.server.elicitInput({ mode: "form", message, requestedSchema: { type: "object", properties } }, { timeout: 120_000 });
+    if (r.action === "accept") return { asked: true, ok: true, content: (r.content ?? {}) as Record<string, unknown> };
+    return { asked: true, ok: false, content: {}, why: r.action === "decline" ? "the user declined" : "the user dismissed the prompt" };
+  } catch (e) {
+    if (e instanceof McpError && e.code === ErrorCode.RequestTimeout) return { asked: true, ok: false, content: {}, why: "no answer within two minutes" };
+    return { asked: false };
+  }
+}
 
 /**
  * Build a fully-configured server instance. A factory (not a singleton) so the
  * stateless HTTP mode can hand every request its own server, per the MCP SDK's
  * recommended pattern.
+ *
+ * `http`: the server is reachable over a URL, possibly by anyone holding it
+ * (a tunnel, a shared host). It then reads no files, keeps no handoffs unless
+ * `storeHandoffs` (`--store-handoffs`, for a server on the user's own machine),
+ * and exposes no handoff resources at all.
  */
-function createServer({ fileAccess = true }: { fileAccess?: boolean } = {}): McpServer {
+function createServer({ http = false, storeHandoffs = !http }: { http?: boolean; storeHandoffs?: boolean } = {}): McpServer {
+  const fileAccess = !http;
   const server = new McpServer(
     { name: "context-doctor", version: "0.36.0" },
     // Server instructions are injected by MCP clients (Claude Desktop, Cursor, …)
@@ -48,34 +83,45 @@ function createServer({ fileAccess = true }: { fileAccess?: boolean } = {}): Mcp
 
   server.tool(
   "profile_context",
-  "Profile an LLM conversation or prompt: token breakdown, largest blocks, and findings about wasted context (duplicates, oversized pastes or tool results, base64 blobs, long history). Pass ONE input: `conversation` (full OpenAI/Anthropic JSON or raw text) or `sketch` (chat apps such as Claude Desktop or ChatGPT, where you cannot export the conversation: the turn count plus the few blocks that matter, ~120 tokens). Call it whenever the user asks about token usage, context size, cost, speed or limits, and once on your own when the conversation first passes ~30 turns or 3+ large pastes. Act on the top finding.",
+  "Profile a conversation's context: token breakdown, largest blocks, findings (duplicates, oversized pastes or tool results, base64, long history). Pass `conversation` (JSON or text) or, in a chat app, a `sketch` (~120 tokens). Call it when the user asks about tokens, cost, speed or limits, and once past ~30 turns or 3+ large pastes. Act on the top finding.",
   {
-    conversation: z.string().optional().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array) or raw prompt text. Omit in chat apps and pass `sketch`."),
+    conversation: z.string().optional().describe("Conversation JSON or text. In a chat app pass `sketch` instead."),
     sketch: z.object({
-      turns: z.number().int().nonnegative().max(100_000).describe("User+assistant exchanges so far"),
-      model: z.string().optional().describe("Model this chat runs as, e.g. claude-sonnet-5, gpt-5"),
+      turns: z.number().int().nonnegative().max(100_000).describe("Exchanges so far"),
+      model: z.string().optional().describe("Model this chat runs as"),
       blocks: z.array(z.object({
-        turn: z.number().int().positive().max(100_000).describe("1-based turn the block sits in"),
+        turn: z.number().int().positive().max(100_000),
         kind: z.enum(["paste", "code", "tool_result", "image", "base64", "text"]),
-        label: z.string().describe("Short name you can refer to later, e.g. 'the nginx config'"),
-        approx_tokens: z.number().positive().max(10_000_000).optional(),
-        approx_lines: z.number().positive().max(1_000_000).optional(),
-        approx_words: z.number().positive().max(5_000_000).optional(),
-        approx_chars: z.number().positive().max(40_000_000).optional(),
-        repeated: z.number().int().positive().max(1000).optional().describe("Times this same content appears (2+ = duplicate)"),
-        stale: z.boolean().optional().describe("Already acted on; nothing in it is still needed"),
-      })).max(500).describe("Only the blocks over ~500 tokens, repeated, or images. Plain turns need not be listed."),
-    }).optional().describe("Coarse description of the conversation for chat apps. One size hint per block: lines for code, words for prose, chars (or tokens) for logs and tool output, which vary most per line."),
-    model: z.string().optional().describe("Target model name for context-window math, e.g. claude-sonnet-5 or gpt-4o"),
+        label: z.string().describe("Short name, e.g. 'the nginx config'"),
+        // Upper bounds are checked in the handler (SKETCH_MAX): each schema
+        // keyword rides in every request's tool definitions.
+        approx_tokens: z.number().positive().optional(),
+        approx_lines: z.number().positive().optional(),
+        approx_words: z.number().positive().optional(),
+        approx_chars: z.number().positive().optional(),
+        repeated: z.number().int().positive().max(1000).optional().describe("Times it appears (2+ = duplicate)"),
+        stale: z.boolean().optional().describe("Acted on, no longer needed"),
+      })).max(500).describe("Only blocks over ~500 tokens, repeated, or images."),
+    }).optional().describe("For chat apps. One size hint per block: lines for code, words for prose, chars or tokens for logs and tool output."),
+    model: z.string().optional().describe("Model for window math, e.g. claude-sonnet-5"),
   },
   // Pure: reads its input and returns text. Clients (Codex, ChatGPT) may skip approval for read-only tools.
   { title: "Profile context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async ({ conversation, sketch, model }) => {
     if (sketch) {
+      for (const [i, b] of sketch.blocks.entries()) {
+        for (const [k, max] of Object.entries(SKETCH_MAX)) {
+          const v = (b as Record<string, unknown>)[k];
+          if (typeof v === "number" && v > max) {
+            return { isError: true, content: [{ type: "text" as const, text: `sketch.blocks[${i}].${k} is ${v}; the most that makes sense is ${max}. Give a rough size of the block itself.` }] };
+          }
+        }
+      }
       // Both given: the sketch is used. Say so, or the model reads a sketch
       // profile as the profile of the conversation it passed.
       const both = conversation ? "Note: both `conversation` and `sketch` were passed; profiled the sketch only. Pass one.\n\n" : "";
-      return { content: [{ type: "text", text: both + runSketch({ ...sketch, model: sketch.model ?? model }) }] };
+      const p = runSketchProfile({ ...sketch, model: sketch.model ?? model });
+      return { content: [{ type: "text", text: both + renderSketchProfile(p) }] };
     }
     if (!conversation) {
       return {
@@ -90,17 +136,32 @@ function createServer({ fileAccess = true }: { fileAccess?: boolean } = {}): Mcp
 
 server.tool(
   "optimize_context",
-  "Rewrite a conversation to reclaim tokens with deterministic strategies (dedupe, trim stale tool results, strip base64; prune-history is optional and lossy). Returns the slimmed JSON and a savings summary; no LLM calls. Results over 100k chars are not echoed back (summary and a CLI command instead). Use after profile_context finds waste the user wants fixed. Add prune-history only with the user's consent, then write the replacement summary as the result instructs.",
+  "Rewrite a conversation to reclaim tokens with deterministic strategies (dedupe, trim stale tool results, strip base64; prune-history is lossy). Returns the slimmed JSON and a savings summary. Use after profile_context finds waste the user wants fixed. Add prune-history only with the user's consent, then write the summary the result asks for.",
   {
-    conversation: z.string().describe("Conversation JSON (OpenAI or Anthropic format, or bare message array)"),
+    conversation: z.string().describe("Conversation JSON (OpenAI, Anthropic, or a message array)"),
     strategies: z.array(z.enum(STRATEGY_IDS)).optional()
-      .describe("Default: dedupe, trim-tool-results, strip-base64. Add trim-tool-calls for big inline file writes, prune-history for lossy compaction of old turns."),
-    keep_recent: z.number().int().nonnegative().optional().describe("Messages at the tail to leave untouched (default 6; 0 = none; prune-history keeps at least 2)"),
-    max_tool_result_tokens: z.number().int().positive().optional().describe("Token budget for trimmed tool results (default 300)"),
+      .describe("Default: dedupe, trim-tool-results, strip-base64. trim-tool-calls: big inline file writes; prune-history: old turns, lossy."),
+    keep_recent: z.number().int().nonnegative().optional().describe("Tail messages left untouched (default 6; prune-history keeps ≥2)"),
+    max_tool_result_tokens: z.number().int().positive().optional().describe("Budget per trimmed tool result (default 300)"),
   },
   // Pure: reads its input and returns text. Clients (Codex, ChatGPT) may skip approval for read-only tools.
   { title: "Optimize context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async ({ conversation, strategies, keep_recent, max_tool_result_tokens }) => {
+    // prune-history is lossy. Where the client can show a form, the user
+    // confirms it there; elsewhere the tool description asks the model to
+    // get consent in the chat first, as before.
+    let consentNote = "";
+    if (strategies?.includes("prune-history")) {
+      const c = await askConsent(
+        server,
+        `Prune old turns from this conversation? It is lossy: all but the last ${Math.max(2, keep_recent ?? 6)} messages are replaced by a summary the assistant writes.`,
+        { prune: { type: "boolean", title: "Replace old turns with a summary", default: true } }
+      );
+      if (c.asked && (!c.ok || c.content.prune === false)) {
+        strategies = strategies.filter((s) => s !== "prune-history");
+        consentNote = `\nprune-history skipped: ${c.ok ? "the user unticked it" : c.why}.`;
+      }
+    }
     const result = optimizeConversation(conversation, {
       strategies: strategies as any,
       keepRecent: keep_recent,
@@ -113,13 +174,14 @@ server.tool(
     const summary =
       `Saved ~${formatTokens(saved)} tokens (${formatTokens(result.tokensBefore)} → ${formatTokens(result.tokensAfter)}) ` +
       `via ${result.applied.length} change(s):\n` +
-      result.applied.map((c) => `- [${c.strategy}] message #${c.messageIndex}: ${c.note} (~${formatTokens(c.tokensSaved)})`).join("\n");
+      result.applied.map((c) => `- [${c.strategy}] message #${c.messageIndex}: ${c.note} (~${formatTokens(c.tokensSaved)})`).join("\n") +
+      consentNote;
     // Echoing a huge optimized conversation back inline would flood the very
     // context this tool exists to save. Above the cap, return the summary and
     // point at the CLI (compact JSON keeps mid-size results affordable).
     const ECHO_CAP_CHARS = 100_000;
     const conversationJson = JSON.stringify(result.conversation);
-    const content: Array<{ type: "text"; text: string }> = [
+    const content: Text[] = [
       { type: "text", text: summary },
       conversationJson.length <= ECHO_CAP_CHARS
         ? { type: "text", text: conversationJson }
@@ -147,20 +209,23 @@ server.tool(
   }
   );
 
-  server.tool(
+  const packInput = {
+    paths: z.array(z.string()).max(50).optional().describe(http ? "Not read over HTTP; pass `text`" : "Files or folders, absolute paths"),
+    text: z.string().optional().describe("Raw text to pack instead of files"),
+    query: z.string().optional().describe("The question; omit for an outline"),
+    max_tokens: z.number().int().positive().max(200_000).optional().describe("Budget, default 4000"),
+    ids: z.array(z.string()).max(200).optional().describe("Chunk ids from an outline or result, e.g. docs/guide.md#4"),
+    model: z.string().optional().describe("Model the budget is counted for (default Claude)"),
+    semantic: z.boolean().optional().describe("Also rank by meaning (local Ollama embeddings)"),
+  };
+  server.registerTool(
     "pack_context",
-    "Read only the parts of large files a question needs: chunks files or folders along their structure, ranks the chunks against `query` and returns the best that fit `max_tokens`, each with an id and line range. No query: an outline; pick with `ids`. Use instead of reading a big doc, log or folder whole when not editing it. Text, code, PDF, Word, PowerPoint, ODT.",
     {
-      paths: z.array(z.string()).max(50).optional().describe("Files or folders, absolute paths; over HTTP pass `text`"),
-      text: z.string().optional().describe("Raw text to pack instead of files"),
-      query: z.string().optional().describe("The question; omit for an outline"),
-      max_tokens: z.number().int().positive().max(200_000).optional().describe("Budget, default 4000"),
-      ids: z.array(z.string()).max(200).optional().describe("Chunk ids from an outline or result, e.g. docs/guide.md#4"),
-      model: z.string().optional().describe("Model the budget is counted for (default Claude)"),
-      semantic: z.boolean().optional().describe("Also rank by meaning (local Ollama embeddings)"),
+      description: "Read only the parts of large files a question needs: chunks files or folders along their structure, ranks chunks against `query` and returns the best that fit `max_tokens`, with ids and line ranges. No query: an outline; pick with `ids`. Use instead of reading a big doc, log or folder whole when not editing it. Text, code, PDF, Word, PowerPoint, ODT.",
+      inputSchema: packInput,
+      // Reads files, never writes. Clients (Codex, ChatGPT) may skip approval for read-only tools.
+      annotations: { title: "Pack context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    // Reads files, never writes. Clients (Codex, ChatGPT) may skip approval for read-only tools.
-    { title: "Pack context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async ({ paths, text, query, max_tokens, ids, model, semantic }) => {
       const err = (t: string) => ({ content: [{ type: "text" as const, text: t }], isError: true });
       if (paths?.length && !fileAccess) {
@@ -173,7 +238,7 @@ server.tool(
       }
       const result = await packContextSemantic(sources, { query, budget: max_tokens, ids, model, semantic });
       const note = skipped.length ? `\nSkipped: ${skipped.slice(0, 10).join("; ")}${skipped.length > 10 ? ` (+${skipped.length - 10} more)` : ""}` : "";
-      return { content: [{ type: "text", text: renderPack(result) + note }] };
+      return { content: [{ type: "text" as const, text: renderPack(result) + note }] };
     }
   );
 
@@ -200,11 +265,141 @@ server.tool(
     })
   );
 
+  // The handoff: in a chat app nothing can trim the history, so the real cut
+  // is a new chat that starts from a brief the model writes now (no API key:
+  // the language work happens in the host model's own turn).
+  server.registerPrompt(
+    "handoff",
+    {
+      title: "Hand off to a new chat",
+      description: "Write a short brief of this chat, save it, and continue in a new chat: the only way to cut a long chat's cost.",
+      argsSchema: { focus: z.string().max(200).optional().describe("What the next chat should work on (optional)") },
+    },
+    async ({ focus }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text:
+              `Hand this chat off to a new one. Write a dense brief of at most ${HANDOFF_LIMITS.briefTargetTokens} tokens: the goal, decisions made (with the reason in a few words), the current state, open items and the next step, and key identifiers (names, paths, IDs, versions, numbers). ` +
+              "Leave out what is finished or no longer needed. Separately, list only the blocks that must stay exact (code, config, commands, figures), each with a short label. " +
+              "Then call save_handoff with the brief, those blocks as `verbatim`, a short title, the model you run as, and `chat_tokens` if you have a profile_context figure (else `turns`). " +
+              "Do not write the brief into this reply before the call. After it, tell me in two lines how to continue, as its result says." +
+              (focus?.trim() ? ` The next chat will work on: ${focus.trim()}` : ""),
+          },
+        },
+      ],
+    })
+  );
+
+  server.registerTool(
+    "save_handoff",
+    {
+      description: `Save a handoff for continuing in a new chat (a chat's history cannot be cut; a new chat can). Write \`brief\` yourself (≤${HANDOFF_LIMITS.briefTargetTokens} tokens: goal, decisions, state, open items, identifiers); put what must stay exact in \`verbatim\`. Only when the user agrees.`,
+      // Bounds (sizes, counts) are checked by validateHandoff, not spelled out
+      // here: every schema keyword rides in each request's tool definitions.
+      inputSchema: {
+        brief: z.string(),
+        verbatim: z.array(z.object({ label: z.string(), text: z.string() })).optional().describe("Code, config, figures"),
+        title: z.string().optional(),
+        chat_tokens: z.number().optional().describe("Chat size, from profile_context"),
+        turns: z.number().optional(),
+        model: z.string().optional(),
+      },
+      // Over HTTP without --store-handoffs it writes nothing and is read-only;
+      // otherwise it writes a file under the home directory (never anything else).
+      annotations: { title: "Save handoff", readOnlyHint: !storeHandoffs, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ brief, verbatim, title, chat_tokens, turns, model }) => {
+      const input = { brief, verbatim, title, model, chatTokens: chat_tokens, turns };
+      const problems = validateHandoff(input);
+      if (problems.length) return { isError: true, content: [{ type: "text" as const, text: `Not saved: ${problems.join(" ")}` }] };
+      let blocks = verbatim;
+      if (storeHandoffs) {
+        const n = verbatim?.length ?? 0;
+        const c = await askConsent(
+          server,
+          `Save a handoff of this chat on this computer (${tildify(handoffDir())}) to start a new chat from? "${(title ?? brief.split("\n")[0]).slice(0, 80)}"${n ? `, with ${n} verbatim block(s): ${verbatim!.map((b) => b.label).join(", ").slice(0, 200)}` : ""}.`,
+          n ? { include_verbatim: { type: "boolean", title: "Include the verbatim blocks", default: true } } : {}
+        );
+        if (c.asked && !c.ok) {
+          return { content: [{ type: "text" as const, text: `Not saved: ${c.why}. Do not retry; ask the user in the chat if they still want a handoff.` }] };
+        }
+        if (c.asked && c.content.include_verbatim === false) blocks = undefined;
+      }
+      let saved;
+      try {
+        saved = saveHandoff({ ...input, verbatim: blocks }, { store: storeHandoffs });
+      } catch (e) {
+        return { isError: true, content: [{ type: "text" as const, text: (e as Error).message }] };
+      }
+      const m = saved.meta;
+      const parts = `brief ~${formatTokens(m.briefTokens)}${m.blocks.length ? `, ${m.blocks.length} verbatim block(s) ~${formatTokens(m.blocks.reduce((t, b) => t + b.tokens, 0))}` : ""}`;
+      const lines = [
+        saved.dir
+          ? `Handoff saved: ${m.id} (~${formatTokens(m.tokens)} tokens: ${parts}) in ${tildify(saved.dir)}.`
+          : `Handoff ready (~${formatTokens(m.tokens)} tokens: ${parts}), not stored: this server runs over HTTP and keeps nothing.`,
+      ];
+      if (m.masked > 0) lines.push(`Masked ${m.masked} secret-looking string(s) (${saved.maskedKinds.join(", ")}) before saving; the user re-adds them by hand in the new chat if needed.`);
+      if (m.briefTokens > HANDOFF_LIMITS.briefTargetTokens) lines.push(`The brief is ~${m.briefTokens} tokens; the target is ≤${HANDOFF_LIMITS.briefTargetTokens}. It is saved; tighter is cheaper next time.`);
+      lines.push(renderMath(saved.math));
+      if (saved.dir) {
+        lines.push(
+          http
+            ? "Now print the brief and the verbatim blocks in one fenced block, and tell the user to start a new chat with it as the first message (or, on the machine running this server, `context-doctor handoff latest --copy`). Then stop working in this chat."
+            : "Now tell the user, in two lines: open a new chat and attach the resource handoff://latest (Claude Desktop: + menu, context-doctor), or paste the handoff; `context-doctor handoff latest --copy` copies it. " +
+                "Where attaching is not possible (ChatGPT, the web, phones), print the brief and the verbatim blocks in one fenced block to paste. Then stop working in this chat."
+        );
+        // Resources exist only on the local server (see below); tell it the list grew.
+        // The notification is async: a rejection (a client gone mid-call) must
+        // not become an unhandled one, which would end the process.
+        if (!http) server.server.sendResourceListChanged().catch(() => {});
+      } else {
+        lines.push("Now print the brief and the verbatim blocks in one fenced block, and tell the user to start a new chat with it as the first message. Then stop working in this chat.");
+      }
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    }
+  );
+
+  // Saved handoffs as resources: Claude Desktop, Cursor, VS Code and Claude
+  // Code (@) let the user attach one to a new chat. Local (stdio) server only:
+  // over HTTP anyone holding the URL could read them.
+  if (storeHandoffs && !http) {
+    const NONE = "No handoff saved yet. In a long chat, pick the `handoff` prompt (+ menu) or ask for a handoff; the assistant saves it with save_handoff.";
+    server.registerResource(
+      "handoff-latest",
+      "handoff://latest",
+      { title: "Latest handoff", description: "The newest saved handoff: attach it to a new chat to continue there.", mimeType: "text/markdown" },
+      async (uri) => ({ contents: [{ uri: uri.href, mimeType: "text/markdown", text: readHandoff("latest")?.markdown ?? NONE }] })
+    );
+    server.registerResource(
+      "handoff",
+      new ResourceTemplate("handoff://{id}", {
+        list: async () => ({
+          resources: listHandoffs().slice(0, 20).map((m) => ({
+            uri: `handoff://${m.id}`,
+            name: m.id,
+            title: m.title,
+            description: `~${formatTokens(m.tokens)} tokens, saved ${m.created.slice(0, 16).replace("T", " ")} UTC`,
+            mimeType: "text/markdown",
+          })),
+        }),
+      }),
+      { title: "Saved handoff", description: "A saved handoff, by id.", mimeType: "text/markdown" },
+      async (uri, { id }) => {
+        const h = readHandoff(String(Array.isArray(id) ? id[0] : id));
+        if (!h) throw new McpError(ErrorCode.InvalidParams, `No saved handoff at ${uri.href}. List them with resources/list, or run \`context-doctor handoff list\`.`);
+        return { contents: [{ uri: uri.href, mimeType: "text/markdown", text: h.markdown }] };
+      }
+    );
+  }
+
   server.tool(
     "context_best_practices",
-    "Curated checklist of context-management practices, optionally for one provider. Call it when the user asks how to keep context lean or how to structure prompts for caching.",
+    "Curated context-management checklist, optionally for one provider. Call it when the user asks how to keep context lean or structure prompts for caching.",
     {
-      provider: z.enum(["general", "anthropic", "openai"]).optional().describe("Provider to specialize tips for (default: general)"),
+      provider: z.enum(["general", "anthropic", "openai"]).optional().describe("Default: general"),
     },
     // Pure: reads its input and returns text. Clients (Codex, ChatGPT) may skip approval for read-only tools.
     { title: "Context best practices", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -269,6 +464,9 @@ if (argv.includes("--http")) {
   };
   const port = Number(argAfter("--port")) > 0 ? Number(argAfter("--port")) : 8808;
   const host = argAfter("--host") ?? "127.0.0.1";
+  // Handoffs stay on this machine only when its owner says so: a server on a
+  // shared host or behind a public tunnel must not collect other people's chats.
+  const storeHandoffs = argv.includes("--store-handoffs");
   const { createServer: createHttpServer } = await import("node:http");
   const { StreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
 
@@ -306,7 +504,7 @@ if (argv.includes("--http")) {
       }
 
       // Fresh server + transport per request (stateless — nothing shared).
-      const server = createServer({ fileAccess: false });
+      const server = createServer({ http: true, storeHandoffs });
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         // A client that never asked for a stream gets plain JSON back.

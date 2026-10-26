@@ -57,9 +57,10 @@ test("tools/call works statelessly over HTTP", async () => {
     assert.ok(json.result.content[0].text.includes("CONTEXT DOCTOR"));
 });
 test("every tool is annotated read-only, so clients that gate on approval (Codex exec) can run it", async () => {
+    // Over HTTP save_handoff stores nothing (no --store-handoffs), so it is read-only too.
     const { json } = await rpc({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} });
     const tools = json.result.tools;
-    assert.equal(tools.length, 4);
+    assert.equal(tools.length, 5);
     for (const t of tools) {
         assert.equal(t.annotations?.readOnlyHint, true, `${t.name} readOnlyHint`);
         assert.equal(t.annotations?.destructiveHint, false, `${t.name} destructiveHint`);
@@ -142,10 +143,16 @@ test("the standing instruction is action-shaped and small, and the checkup promp
         // ChatGPT's guide: keep what matters most in the first 512 characters.
         const head = instructions.slice(0, 512);
         assert.match(head, /^Context hygiene rules/);
-        for (const must of [/call profile_context .*BEFORE answering/, /~30 turns/, /Do not estimate token counts yourself/, /over ~2k tokens/, /inline base64\./])
+        for (const must of [/call profile_context .*BEFORE answering/, /~30 turns/, /Do not estimate token counts yourself/, /When a chat grows long, offer a handoff once/, /save_handoff/, /over ~2k tokens/, /inline base64\./])
             assert.match(head, must);
+        // ...and those 512 stand alone: they end exactly at the end of a rule, so a
+        // client that keeps only them cuts no rule mid-sentence.
+        assert.ok(instructions.length <= 512 || instructions[511] === "\n" || instructions[512] === "\n", `character 512 falls inside a rule: ${JSON.stringify(instructions.slice(490, 530))}`);
+        assert.match(head.trimEnd(), /\.$/);
+        // The handoff comes right after the measuring rule, not last.
+        assert.ok(instructions.indexOf("handoff") < instructions.indexOf("over ~2k tokens"));
         const { prompts } = await client.listPrompts();
-        assert.deepEqual(prompts.map((p) => p.name), ["context_checkup"]);
+        assert.deepEqual(prompts.map((p) => p.name), ["context_checkup", "handoff"]);
         const got = await client.getPrompt({ name: "context_checkup", arguments: {} });
         const text = (got.messages[0]?.content).text ?? "";
         assert.match(text, /profile_context/);

@@ -55,6 +55,7 @@ import { planCache, renderCachePlan } from "./cacheplan.js";
 import { cacheMisses, cacheMissesLine, cacheMissesSignificant, renderCacheMisses } from "./cachemisses.js";
 import { renderPayback, subagentPayback } from "./subagentpay.js";
 import { compactionQuality, renderCompactionQuality } from "./compactquality.js";
+import { isHandoffId, listHandoffs, readHandoff, renderHandoffList } from "./handoff.js";
 const HELP = `context-doctor — profile and optimize LLM context windows
 
 Start here:
@@ -151,6 +152,10 @@ Fix on request:
                                                 Where an Anthropic request should carry cache_control,
                                                 what it saves over n calls; --out writes it applied
                                                 (top-level automatic caching unless --explicit)
+  context-doctor handoff [list|show <id>|latest] [--copy]
+                                                Handoffs saved from chat apps (the \`handoff\` prompt or
+                                                save_handoff): list them, print one, or --copy it to
+                                                paste as the first message of a new chat
 
 Integrations:
   context-doctor ci [--base <ref>] [--max-tokens n] [--max-increase n] [--markdown]
@@ -269,7 +274,7 @@ const COMMANDS = [
     "analyze", "optimize", "proxy", "install", "uninstall", "savings", "compact-window", "autopilot", "mcp",
     "instructions", "session", "cursor", "statusline", "hook", "report", "doctor", "dashboard", "init",
     "experiment", "diff", "accuracy", "overhead", "ci", "cache-plan", "compactions", "cache-misses", "subagents", "tasks",
-    "reads", "pack", "watch", "ab", "help", "version",
+    "reads", "pack", "watch", "ab", "handoff", "help", "version",
 ];
 /** --strategy takes one of the optimizer's ids; a typo used to run nothing and report success. */
 function strategyArg(v) {
@@ -334,6 +339,7 @@ const FLAGS = [
     { names: ["--upstream-google"], value: "text", set: (a, v) => { a.upstreamGoogle = v; } },
     // Read by the MCP server itself: `mcp --http [--port n] [--host h]`.
     { names: ["--http"], set: () => { } },
+    { names: ["--store-handoffs"], set: () => { } },
 ];
 const FLAG_BY_NAME = new Map(FLAGS.flatMap((f) => f.names.map((n) => [n, f])));
 const FLAG_NAMES = [...FLAG_BY_NAME.keys(), "--help", "--version"];
@@ -856,6 +862,44 @@ async function main() {
             console.error("Usage: context-doctor autopilot on|off|pause|resume|status [--port n]");
             process.exitCode = 1;
         }
+        return;
+    }
+    if (args.command === "handoff") {
+        // Read-only: handoffs are written by the MCP server's save_handoff.
+        const sub = args.file ?? "list";
+        if (sub === "list") {
+            const metas = listHandoffs();
+            console.log(args.json ? JSON.stringify(metas, null, 2) : renderHandoffList(metas));
+            return;
+        }
+        const id = sub === "show" ? args.positionals?.[1] : sub === "latest" || isHandoffId(sub) ? sub : undefined;
+        if (!id) {
+            console.error(sub === "show"
+                ? "Usage: context-doctor handoff show <id> (the ids are in `context-doctor handoff list`)."
+                : `Usage: context-doctor handoff [list | show <id> | latest] [--copy] [--json]; got "${sub}".`);
+            process.exitCode = 1;
+            return;
+        }
+        const h = readHandoff(id);
+        if (!h) {
+            console.error(id === "latest"
+                ? "No handoffs saved yet. In a long chat, pick the `handoff` prompt (Claude Desktop's + menu) or ask for a handoff."
+                : `No saved handoff "${id}". List them: ${selfCommand("handoff list")}`);
+            process.exitCode = 1;
+            return;
+        }
+        if (args.json) {
+            console.log(JSON.stringify({ ...h.meta, markdown: h.markdown }, null, 2));
+            return;
+        }
+        if (args.copy) {
+            const copied = copyToClipboard(h.markdown);
+            console.log(copied
+                ? `Copied handoff ${h.meta.id} (~${formatTokens(h.meta.tokens)} tokens). Paste it as the first message of a new chat.`
+                : `No clipboard tool found; copy the handoff below by hand.\n\n${h.markdown}`);
+            return;
+        }
+        process.stdout.write(h.markdown);
         return;
     }
     if (args.command === "instructions") {

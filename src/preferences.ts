@@ -4,17 +4,19 @@
  * "custom instructions" are read on every turn of every chat, which is the
  * closest thing those surfaces have to a UserPromptSubmit hook.
  *
- * Kept short (~185 Claude tokens, ~125 GPT): it rides in every conversation.
+ * Kept short (~190 Claude tokens, ~125 GPT): it rides in every conversation.
+ * The handoff is the one real cut a chat app allows: its history cannot be
+ * edited, so a long chat continues in a new one from a short brief.
  */
 
 import { spawnSync } from "node:child_process";
 
 export const CHAT_PREFERENCES = [
-  "Context hygiene: when I paste something long, summarize it into the points you will use and work from that;",
-  "do not carry it verbatim or re-quote it later, refer to it by name. Never inline base64.",
-  "Once, when a chat first passes ~30 turns, and whenever I ask about tokens, limits, cost or speed: if a profile_context",
-  "tool exists, call it with a sketch before answering and act on its top finding; otherwise offer me a 300-token",
-  "handoff summary (decisions, current state, open items) to start a fresh chat.",
+  "Context hygiene: summarize anything long I paste into the points you will use; refer to it by name, never re-quote it,",
+  "never inline base64. When I ask about tokens, limits, cost or speed, and once past ~30 turns: if profile_context exists,",
+  "call it with a sketch and act on its top finding. When a chat grows long, offer a handoff once (its history cannot",
+  "be trimmed): a 400-token brief of goal, decisions, state and open items, plus what must stay exact, saved with",
+  "save_handoff if it exists, to start a new chat.",
 ].join(" ");
 
 /** Where to paste, per app. Paths are the UI labels, not URLs, so they survive redesigns. */
