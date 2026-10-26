@@ -668,7 +668,15 @@ export async function runDoctor(): Promise<void> {
       // Another local proxy on autopilot's port: `autopilot on` would not start there.
       const other = await portOccupant(DEFAULT_AUTOPILOT_PORT);
       if (other.listening && !other.ours) {
-        checks.push({ label: "Autopilot port", status: "warn", detail: `${occupantName(other)} already listens on ${proxyUrl(DEFAULT_AUTOPILOT_PORT)}: \`autopilot on\` could not start there; use another port (context-doctor autopilot on --port 8788)` });
+        checks.push({
+          label: "Autopilot port",
+          status: "warn",
+          detail: other.bindable
+            ? `${occupantName(other)} listens on port ${DEFAULT_AUTOPILOT_PORT} on another address: \`autopilot on\` would start beside it on 127.0.0.1 and take the traffic sent to 127.0.0.1 (Claude Code's), while apps that use localhost:${DEFAULT_AUTOPILOT_PORT} may reach ${occupantName(other)}; to keep them apart: context-doctor autopilot on --port 8788`
+            : `${occupantName(other)} already listens on ${proxyUrl(DEFAULT_AUTOPILOT_PORT)}: \`autopilot on\` could not start there; use another port (context-doctor autopilot on --port 8788)`,
+        });
+      } else if (other.onIpv6Loopback) {
+        checks.push({ label: "Autopilot port", status: "warn", detail: `${other.onIpv6Loopback} listens on [::1]:${DEFAULT_AUTOPILOT_PORT}: apps that use localhost:${DEFAULT_AUTOPILOT_PORT} may reach it instead of autopilot, which uses 127.0.0.1` });
       }
     } else if (!cfg) {
       let routedTo: string | undefined;
@@ -707,11 +715,15 @@ export async function runDoctor(): Promise<void> {
       );
       // Not ours, yet listening on our port: with Claude Code routed there,
       // its requests go through that program, and the proxy cannot restart.
-      if (!h.ok) {
-        const other = await portOccupant(cfg.port);
-        if (other.listening && !other.ours) {
-          checks.push({ label: "Autopilot port", status: "fail", detail: `${occupantName(other)} listens on ${proxyUrl(cfg.port)} instead of the proxy${routed ? ", and Claude Code's requests go to it" : ""}: stop it, or move autopilot (context-doctor autopilot off, then autopilot on --port 8788)` });
-        }
+      const other = await portOccupant(cfg.port);
+      if (!h.ok && other.listening && !other.ours) {
+        checks.push({
+          label: "Autopilot port",
+          status: "fail",
+          detail: `${occupantName(other)} answers on ${proxyUrl(cfg.port)} instead of the proxy${routed ? ", and Claude Code's requests go to it" : ""}${other.bindable ? " (the proxy can start beside it on 127.0.0.1: the next Claude Code prompt restarts it)" : ""}: stop it, or move autopilot (context-doctor autopilot off, then autopilot on --port 8788)`,
+        });
+      } else if (other.onIpv6Loopback) {
+        checks.push({ label: "Autopilot port", status: "warn", detail: `${other.onIpv6Loopback} listens on [::1]:${cfg.port}: Claude Code reaches autopilot at 127.0.0.1, but apps that use localhost:${cfg.port} may reach ${other.onIpv6Loopback} instead` });
       }
     }
   }

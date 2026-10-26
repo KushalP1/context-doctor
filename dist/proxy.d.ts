@@ -4,8 +4,8 @@
  * in flight (dedupe, trim stale tool results, strip base64) before being
  * forwarded — no code changes in your app, just a base-URL env var:
  *
- *   ANTHROPIC_BASE_URL=http://localhost:8787        (Anthropic SDKs)
- *   OPENAI_BASE_URL=http://localhost:8787/v1        (OpenAI SDKs)
+ *   ANTHROPIC_BASE_URL=http://127.0.0.1:8787        (Anthropic SDKs)
+ *   OPENAI_BASE_URL=http://127.0.0.1:8787/v1        (OpenAI SDKs)
  *
  * API keys pass through untouched in headers — the proxy stores nothing and
  * talks only to the official upstream endpoints (overridable for testing).

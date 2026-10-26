@@ -69,17 +69,26 @@ export interface Health {
 export declare function health(port: number, timeoutMs?: number): Promise<Health>;
 /** Who holds a local port: nobody, our proxy, or another program (named when it says). */
 export interface PortOccupant {
+    /** Something answers a connection to 127.0.0.1:port. */
     listening: boolean;
     ours: boolean;
     /** What the other program calls itself: its /health service, its Server header, or its process name. */
     name?: string;
     pid?: number;
+    /**
+     * Whether the proxy could bind 127.0.0.1:port beside it. On macOS a
+     * listener on 0.0.0.0, :: or ::1 leaves 127.0.0.1 free (the more specific
+     * address wins for 127.0.0.1 traffic); on Linux a 0.0.0.0 listener does not.
+     */
+    bindable?: boolean;
+    /** Another program on [::1]:port, where `localhost` may resolve, while 127.0.0.1 is ours or free. */
+    onIpv6Loopback?: string;
 }
 /**
- * Whether something already listens on 127.0.0.1:`port`, and whether it is
- * this proxy. Another local proxy on autopilot's port (Headroom's default is
- * 8787 too) makes `autopilot on` fail to start, or, with Claude Code already
- * routed there, sends its requests through the other program.
+ * Whether something already listens on 127.0.0.1:`port`, whether it is this
+ * proxy (by its /health, however slowly it answers), whether the proxy could
+ * still bind 127.0.0.1 beside it, and whether another program holds
+ * [::1]:port, where `localhost` may go. Headroom's default port is 8787 too.
  */
 export declare function portOccupant(port: number, timeoutMs?: number): Promise<PortOccupant>;
 export declare function baseUrlToRestore(paths: AutopilotPaths, port: number, current: string | null): string | null;

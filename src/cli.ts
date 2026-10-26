@@ -265,9 +265,9 @@ Examples:
   context-doctor analyze chat.json --model claude-sonnet-5
   context-doctor optimize chat.json --strategy dedupe --strategy prune-history --out slim.json
   context-doctor proxy --autopilot --port 8787
-    then: export ANTHROPIC_BASE_URL=http://localhost:8787
-          export OPENAI_BASE_URL=http://localhost:8787/v1
-          export GOOGLE_GEMINI_BASE_URL=http://localhost:8787
+    then: export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
+          export OPENAI_BASE_URL=http://127.0.0.1:8787/v1
+          export GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8787
 `;
 
 /**

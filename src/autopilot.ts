@@ -312,53 +312,117 @@ export async function health(port: number, timeoutMs = 800): Promise<Health> {
 
 /** Who holds a local port: nobody, our proxy, or another program (named when it says). */
 export interface PortOccupant {
+  /** Something answers a connection to 127.0.0.1:port. */
   listening: boolean;
   ours: boolean;
   /** What the other program calls itself: its /health service, its Server header, or its process name. */
   name?: string;
   pid?: number;
+  /**
+   * Whether the proxy could bind 127.0.0.1:port beside it. On macOS a
+   * listener on 0.0.0.0, :: or ::1 leaves 127.0.0.1 free (the more specific
+   * address wins for 127.0.0.1 traffic); on Linux a 0.0.0.0 listener does not.
+   */
+  bindable?: boolean;
+  /** Another program on [::1]:port, where `localhost` may resolve, while 127.0.0.1 is ours or free. */
+  onIpv6Loopback?: string;
 }
 
-/**
- * Whether something already listens on 127.0.0.1:`port`, and whether it is
- * this proxy. Another local proxy on autopilot's port (Headroom's default is
- * 8787 too) makes `autopilot on` fail to start, or, with Claude Code already
- * routed there, sends its requests through the other program.
- */
-export async function portOccupant(port: number, timeoutMs = 800): Promise<PortOccupant> {
-  const h = await health(port, timeoutMs);
-  if (h.ok) return { listening: true, ours: true };
+const isOurHealth = (j: unknown): boolean => (j as { service?: unknown } | null)?.service === "context-doctor-proxy";
+
+/** GET a local URL's /health (or /) and say who it is, without throwing. */
+async function probe(base: string, timeoutMs: number): Promise<{ ours: boolean; name?: string } | undefined> {
+  for (const path of ["/health", "/"]) {
+    try {
+      const r = await fetch(`${base}${path}`, { signal: AbortSignal.timeout(timeoutMs) });
+      const text = (await r.text()).slice(0, 2000);
+      let j: unknown;
+      try { j = JSON.parse(text); } catch { /* not JSON */ }
+      if (isOurHealth(j)) return { ours: true };
+      const service = (j as Record<string, unknown> | undefined)?.service ?? (j as Record<string, unknown> | undefined)?.name ?? (j as Record<string, unknown> | undefined)?.app;
+      const named = typeof service === "string" && service.trim() ? service : /headroom/i.test(text) ? "headroom" : r.headers.get("server") ?? undefined;
+      if (named) return { ours: false, name: named.replace(/[\u0000-\u001f]/g, "").slice(0, 60) };
+      if (path === "/") return { ours: false };
+    } catch {
+      /* not HTTP, or slow */
+    }
+  }
+  return undefined;
+}
+
+async function connects(host: string, port: number, timeoutMs: number): Promise<boolean> {
   const { createConnection } = await import("node:net");
-  const listening = await new Promise<boolean>((resolve) => {
-    const socket = createConnection({ host: "127.0.0.1", port });
+  return new Promise<boolean>((resolve) => {
+    const socket = createConnection({ host, port });
     const done = (v: boolean) => { socket.destroy(); resolve(v); };
     socket.setTimeout(timeoutMs, () => done(false));
     socket.once("connect", () => done(true));
     socket.once("error", () => done(false));
   });
-  if (!listening) return { listening: false, ours: false };
-  const out: PortOccupant = { listening: true, ours: false };
-  for (const path of ["/health", "/"]) {
-    try {
-      const r = await fetch(`${proxyUrl(port)}${path}`, { signal: AbortSignal.timeout(timeoutMs) });
-      const text = (await r.text()).slice(0, 2000);
-      let service: unknown;
-      try { const j = JSON.parse(text); service = j?.service ?? j?.name ?? j?.app; } catch { /* not JSON */ }
-      const named = typeof service === "string" && service.trim() ? service : /headroom/i.test(text) ? "headroom" : r.headers.get("server") ?? undefined;
-      if (named) { out.name = named.replace(/[\u0000-\u001f]/g, "").slice(0, 60); break; }
-    } catch { /* not HTTP, or slow */ }
+}
+
+async function canBind(port: number): Promise<boolean> {
+  const { createServer } = await import("node:net");
+  return new Promise<boolean>((resolve) => {
+    const s = createServer();
+    s.once("error", () => resolve(false));
+    s.listen(port, "127.0.0.1", () => s.close(() => resolve(true)));
+  });
+}
+
+/** The process listening on a TCP port: lsof on macOS and Linux, netstat and tasklist on Windows; nothing when neither can say. */
+function listenerProcess(port: number): { pid?: number; command?: string } {
+  try {
+    if (platform() === "win32") {
+      const net = execFileSync("netstat", ["-ano", "-p", "TCP"], { encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] });
+      const line = net.split(/\r?\n/).find((l) => new RegExp(`:${port}\\s+\\S+\\s+LISTENING\\s+\\d+`, "i").test(l));
+      const pid = Number(/LISTENING\s+(\d+)/i.exec(line ?? "")?.[1]);
+      if (!(pid > 0)) return {};
+      let command: string | undefined;
+      try {
+        const task = execFileSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], { encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] });
+        command = /^"([^"]+)"/.exec(task.trim())?.[1];
+      } catch { /* the pid alone */ }
+      return { pid, command };
+    }
+    const out = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
+    const pid = Number(/^p(\d+)/m.exec(out)?.[1]);
+    return { pid: pid > 0 ? pid : undefined, command: /^c(.+)$/m.exec(out)?.[1] };
+  } catch {
+    return {}; // no lsof (minimal Linux), no netstat, or nothing it can see
   }
-  // The process, where lsof can say (macOS, Linux): the fact people act on.
-  if (platform() !== "win32") {
-    try {
-      const line = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
-      const pid = Number(/^p(\d+)/m.exec(line)?.[1]);
-      const command = /^c(.+)$/m.exec(line)?.[1];
-      if (Number.isFinite(pid) && pid > 0) out.pid = pid;
-      if (command && !out.name) out.name = command.slice(0, 60);
-      else if (command && out.name && !out.name.toLowerCase().includes(command.toLowerCase())) out.name = `${out.name} (${command.slice(0, 40)})`;
-    } catch { /* no lsof, or nothing it can see */ }
+}
+
+/**
+ * Whether something already listens on 127.0.0.1:`port`, whether it is this
+ * proxy (by its /health, however slowly it answers), whether the proxy could
+ * still bind 127.0.0.1 beside it, and whether another program holds
+ * [::1]:port, where `localhost` may go. Headroom's default port is 8787 too.
+ */
+export async function portOccupant(port: number, timeoutMs = 2000): Promise<PortOccupant> {
+  const h = await health(port, timeoutMs);
+  const ipv6 = async (): Promise<string | undefined> => {
+    if (!(await connects("::1", port, 500))) return undefined;
+    const p = await probe(`http://[::1]:${port}`, timeoutMs);
+    return p && !p.ours ? p.name ?? "another program" : undefined;
+  };
+  if (h.ok) {
+    const other = await ipv6();
+    return { listening: true, ours: true, ...(other ? { onIpv6Loopback: other } : {}) };
   }
+  if (!(await connects("127.0.0.1", port, timeoutMs))) {
+    const other = await ipv6();
+    return { listening: false, ours: false, ...(other ? { onIpv6Loopback: other } : {}) };
+  }
+  const who = await probe(proxyUrl(port), timeoutMs);
+  // Our own proxy, answering /health too slowly the first time.
+  if (who?.ours) return { listening: true, ours: true };
+  const out: PortOccupant = { listening: true, ours: false, bindable: await canBind(port) };
+  if (who?.name) out.name = who.name;
+  const proc = listenerProcess(port);
+  if (proc.pid) out.pid = proc.pid;
+  if (proc.command && !out.name) out.name = proc.command.slice(0, 60);
+  else if (proc.command && out.name && !out.name.toLowerCase().includes(proc.command.toLowerCase())) out.name = `${out.name} (${proc.command.slice(0, 40)})`;
   return out;
 }
 

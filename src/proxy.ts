@@ -4,8 +4,8 @@
  * in flight (dedupe, trim stale tool results, strip base64) before being
  * forwarded — no code changes in your app, just a base-URL env var:
  *
- *   ANTHROPIC_BASE_URL=http://localhost:8787        (Anthropic SDKs)
- *   OPENAI_BASE_URL=http://localhost:8787/v1        (OpenAI SDKs)
+ *   ANTHROPIC_BASE_URL=http://127.0.0.1:8787        (Anthropic SDKs)
+ *   OPENAI_BASE_URL=http://127.0.0.1:8787/v1        (OpenAI SDKs)
  *
  * API keys pass through untouched in headers — the proxy stores nothing and
  * talks only to the official upstream endpoints (overridable for testing).
@@ -776,12 +776,14 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
     // Print the token as <token>, never the value: this log is what people paste into bug reports.
     const prefix = opts.token ? "/t/<token>" : "";
     console.error(`context-doctor proxy listening on http://${host}:${port}`);
-    console.error(`  Anthropic apps/SDKs: export ANTHROPIC_BASE_URL=http://localhost:${port}${prefix}`);
-    console.error(`  OpenAI apps/SDKs:    export OPENAI_BASE_URL=http://localhost:${port}${prefix}/v1`);
+    // 127.0.0.1, not localhost: on macOS another program can hold the same
+    // port on :: or ::1 beside this one, and `localhost` may resolve there.
+    console.error(`  Anthropic apps/SDKs: export ANTHROPIC_BASE_URL=http://127.0.0.1:${port}${prefix}`);
+    console.error(`  OpenAI apps/SDKs:    export OPENAI_BASE_URL=http://127.0.0.1:${port}${prefix}/v1`);
     console.error(opts.autopilot
       ? `  Autopilot: stale re-runnable tool output is cleared only when the prompt cache is cold; savings are logged here.`
       : `  Every request's context is optimized in flight; savings are logged here.`);
-    console.error(`  Cumulative savings: http://localhost:${port}${prefix}/stats`);
+    console.error(`  Cumulative savings: http://127.0.0.1:${port}${prefix}/stats`);
     if (opts.token) {
       console.error(`  Token required: every path except /health must start with /t/<token>/.`);
       console.error(`  Cursor with your own OpenAI key: expose this port on HTTPS (a tunnel), then Settings > Models > OpenAI API Key >`);
