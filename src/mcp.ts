@@ -32,6 +32,7 @@ import { recordLedger } from "./ledger.js";
 import { renderSketchProfile, runSketchProfile } from "./sketch.js";
 import { packContextSemantic, readSources, renderPack } from "./pack.js";
 import { SERVER_INSTRUCTIONS } from "./rules.js";
+import { compactOutline, compactProfile, compactSketch, resultMode, type CompactResult } from "./compact.js";
 import { HANDOFF_LIMITS, handoffDir, listHandoffs, readHandoff, renderMath, saveHandoff, tildify, validateHandoff } from "./handoff.js";
 import { sourcesFromOpenAiFiles } from "./fileparams.js";
 
@@ -41,6 +42,17 @@ type Text = { type: "text"; text: string };
 
 /** Largest size hint a sketch block may carry (a block, not a library). */
 const SKETCH_MAX = { approx_tokens: 10_000_000, approx_lines: 1_000_000, approx_words: 5_000_000, approx_chars: 40_000_000 };
+
+/**
+ * A tool result in the form the caller should get: the full text by default,
+ * or (ChatGPT, or CONTEXT_DOCTOR_RESULTS=compact) a short text with the detail
+ * as structuredContent and presentation-only data in _meta. See compact.ts.
+ */
+function shaped(requestMeta: unknown, full: string, compact: () => CompactResult) {
+  if (resultMode(requestMeta) === "full") return { content: [{ type: "text" as const, text: full }] };
+  const c = compact();
+  return { content: [{ type: "text" as const, text: c.text }], structuredContent: c.structured, _meta: c.meta };
+}
 
 type Consent = { asked: false } | { asked: true; ok: boolean; content: Record<string, unknown>; why?: string };
 
@@ -108,7 +120,7 @@ function createServer({ http = false, storeHandoffs = !http }: { http?: boolean;
   },
   // Pure: reads its input and returns text. Clients (Codex, ChatGPT) may skip approval for read-only tools.
   { title: "Profile context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  async ({ conversation, sketch, model }) => {
+  async ({ conversation, sketch, model }, extra) => {
     if (sketch) {
       for (const [i, b] of sketch.blocks.entries()) {
         for (const [k, max] of Object.entries(SKETCH_MAX)) {
@@ -122,7 +134,11 @@ function createServer({ http = false, storeHandoffs = !http }: { http?: boolean;
       // profile as the profile of the conversation it passed.
       const both = conversation ? "Note: both `conversation` and `sketch` were passed; profiled the sketch only. Pass one.\n\n" : "";
       const p = runSketchProfile({ ...sketch, model: sketch.model ?? model });
-      return { content: [{ type: "text", text: both + renderSketchProfile(p) }] };
+      const full = both + renderSketchProfile(p);
+      return shaped(extra?._meta, full, () => {
+        const c = compactSketch(p, full);
+        return { ...c, text: both + c.text };
+      });
     }
     if (!conversation) {
       return {
@@ -131,7 +147,8 @@ function createServer({ http = false, storeHandoffs = !http }: { http?: boolean;
       };
     }
     const profile = profileConversation(parseConversation(conversation), model);
-    return { content: [{ type: "text", text: renderProfile(profile) }] };
+    const full = renderProfile(profile);
+    return shaped(extra?._meta, full, () => compactProfile(profile, full));
   }
 );
 
@@ -240,7 +257,7 @@ server.tool(
       annotations: { title: "Pack context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       ...(http ? { _meta: { "openai/fileParams": ["files"] } } : {}),
     },
-    async (args: Record<string, any>) => {
+    async (args: Record<string, any>, extra) => {
       const { paths, text, query, max_tokens, ids, model, semantic, files } = args as {
         paths?: string[]; text?: string; query?: string; max_tokens?: number; ids?: string[]; model?: string; semantic?: boolean;
         files?: Array<{ download_url: string; file_id: string; mime_type?: string; file_name?: string }>;
@@ -261,7 +278,12 @@ server.tool(
       }
       const result = await packContextSemantic(sources, { query, budget: max_tokens, ids, model, semantic });
       const note = skipped.length ? `\nSkipped: ${skipped.slice(0, 10).join("; ")}${skipped.length > 10 ? ` (+${skipped.length - 10} more)` : ""}` : "";
-      return { content: [{ type: "text" as const, text: renderPack(result) + note }] };
+      const full = renderPack(result) + note;
+      if (result.mode !== "outline") return { content: [{ type: "text" as const, text: full }] };
+      return shaped(extra?._meta, full, () => {
+        const c = compactOutline(result, full);
+        return { ...c, text: c.text + note };
+      });
     }
   );
 
