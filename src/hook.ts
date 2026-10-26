@@ -28,7 +28,7 @@ import { formatUsd, pricingFor } from "./pricing.js";
 import { checkBudget, loadConfig } from "./config.js";
 import { modelSwitchMessage } from "./modelswitch.js";
 import { compactFacts, compactInstructions } from "./precompact.js";
-import { fanoutMessage, subagentCosts, type FanoutState } from "./fanout.js";
+import { fanoutHook, subagentCosts } from "./fanout.js";
 
 /** Default nudge threshold; a project budget or env var can lower/raise it. */
 const DEFAULT_WARN_TOKENS = 80_000;
@@ -75,7 +75,6 @@ interface SessionState {
   b: number; // transcript bytes at last full parse
   cr?: number; // last reply timestamp of the idle period already advised on (cold resume)
   rv?: ResumeVerdict; // Claude Code's SessionStart verdict on the resumed cache
-  fo?: FanoutState; // subagent launches this session and what was said about them (fanout.ts)
 }
 
 /**
@@ -224,10 +223,7 @@ export async function runHook(app?: "copilot"): Promise<void> {
     // the user's own median, to the user, and once to the model. Never a
     // permission decision, never exit 2: the subagent always starts.
     if (input.hook_event_name === "PreToolUse") {
-      const sid = input.session_id ?? input.transcript_path ?? "unknown";
-      const prev = readSessionState(sid);
-      const r = fanoutMessage(input as Parameters<typeof fanoutMessage>[0], subagentCosts(), prev.fo ?? { spawns: [], shown: [] });
-      writeSessionState(sid, { ...prev, fo: r.state });
+      const r = fanoutHook(input as Parameters<typeof fanoutHook>[0], subagentCosts(), input.session_id ?? input.transcript_path ?? "unknown");
       const out: Record<string, unknown> = {};
       if (r.systemMessage) out.systemMessage = r.systemMessage;
       if (r.additionalContext) out.hookSpecificOutput = { hookEventName: "PreToolUse", additionalContext: r.additionalContext };

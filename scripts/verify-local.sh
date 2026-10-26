@@ -49,11 +49,13 @@ run "Python wheel installs and imports from a clean venv" bash -c "cd /tmp && $V
 
 echo "== 5. CLI on real history (read-only)"
 cd "$R/.."
-for cmd in "doctor" "savings --days 7" "cache-misses --days 7" "overhead" "reads --days 7" "tasks --days 7" "session" "compact-window status" "autopilot status" "accuracy --limit 3" "report" "statusline </dev/null" "instructions" "init" "ab --list" "handoff list" "--version"; do
+for cmd in "doctor" "savings --days 7" "cache-misses --days 7" "overhead" "reads --days 7" "tasks --days 7" "session" "compact-window status" "autopilot status" "accuracy --limit 3" "report" "statusline </dev/null" "instructions" "init" "ab --list" "handoff list" "limits" "overhead prune --days 7" "recall cache misses" "--version"; do
   out=$(eval node $R/dist/cli.js $cmd 2>&1); st=$?
   if [ $st -eq 0 ] && ! echo "$out" | grep -qiE "TypeError|ReferenceError|undefined is not|NaN|Cannot read"; then ok "cli: $cmd"; else bad "cli: $cmd (exit $st)"; echo "$out" | tail -5 | sed 's/^/    /'; fi
 done
 cd $R
+# subagents caches the medians the subagent price quotes: kept out of the real ~/.claude.
+run "cli: subagents --days 7 (cache in a throwaway folder)" env CONTEXT_DOCTOR_HOOK_STATE=$(sb)/state.json node dist/cli.js subagents --days 7
 run "cli: analyze example" env HOME=$(sb) node dist/cli.js analyze examples/sample-conversation.json --model claude-sonnet-5
 run "cli: optimize example" env HOME=$(sb) bash -c "node dist/cli.js optimize examples/sample-conversation.json --out /tmp/cd-opt.json && node -e 'JSON.parse(require(\"fs\").readFileSync(\"/tmp/cd-opt.json\"))'"
 run "cli: pack README with query" bash -c "node dist/cli.js pack README.md -q 'autopilot proxy' | head -1 | grep -q '^PACKED'"

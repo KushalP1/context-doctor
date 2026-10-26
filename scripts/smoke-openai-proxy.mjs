@@ -39,11 +39,12 @@ const up = createServer((req, res) => {
 await new Promise((r) => up.listen(0, "127.0.0.1", r));
 const upPort = up.address().port, port = 8829;
 // Autopilot clears only on a cold cache, and treats a conversation it has no
-// record of as warm. Record both conversations below as last sent two hours ago.
+// record of as warm. An OpenAI cache can live 24 hours (autoclear.ts), so
+// record both conversations below as last sent 25 hours ago.
 const statePath = join(mkdtempSync(join(tmpdir(), "cd-smoke-")), "state.json");
 const seed = new AutoClearer({ statePath });
-seed.apply({ model: "gpt-5.5", messages: [{ role: "system", content: "You are an agent." }, { role: "user", content: "check the logs" }] }, Date.now() - 7_200_000);
-seed.apply({ model: "gpt-5.5", input: [{ role: "user", content: "go" }] }, Date.now() - 7_200_000);
+seed.apply({ model: "gpt-5.5", messages: [{ role: "system", content: "You are an agent." }, { role: "user", content: "check the logs" }] }, Date.now() - 25 * 3_600_000);
+seed.apply({ model: "gpt-5.5", input: [{ role: "user", content: "go" }] }, Date.now() - 25 * 3_600_000);
 seed.flush();
 const proxy = spawn(process.execPath, [new URL("../dist/cli.js", import.meta.url).pathname, "proxy", "--autopilot", "--port", String(port), "--autopilot-state", statePath, "--upstream-openai", `http://127.0.0.1:${upPort}`], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CONTEXT_DOCTOR_CACHE_KEY: "1" } });
 await new Promise((r) => proxy.stderr.on("data", (d) => /listening/.test(String(d)) && r()));
@@ -67,7 +68,7 @@ for (;;) { const { done, value } = await reader.read(); if (done) break; first ?
 check(first < 250 && text.includes("[DONE]"), "streamed chat completion arrives incrementally", `first bytes after ${first} ms, whole after ${Date.now() - t0} ms`);
 const sent = seen.at(-1).body.messages.filter((m) => m.role === "tool");
 const cleared = sent.filter((m) => m.content.length < big.length).length;
-check(cleared > 0 && sent.at(-1).content === big, "cold request (idle 2 h): stale tool output cleared, the recent ones kept", `${cleared} of ${sent.length} cleared`);
+check(cleared > 0 && sent.at(-1).content === big, "cold request (idle 25 h): stale tool output cleared, the recent ones kept", `${cleared} of ${sent.length} cleared`);
 
 // 3. Responses API (Codex with an API key)
 const input = [{ role: "user", content: "go" }];

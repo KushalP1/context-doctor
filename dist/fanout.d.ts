@@ -83,24 +83,45 @@ export interface FanoutInput {
         run_in_background?: unknown;
     };
 }
-export interface FanoutState {
-    /** Launch times this session, newest last (the last ten minutes). */
-    spawns: number[];
-    /** Types already priced for the user this session. */
-    shown: string[];
-    /** The model has had its one note this session. */
-    told?: boolean;
-}
 /**
- * What to say before this subagent starts, and the session state after it.
- * The user sees the price the first time a type starts in a session and when
- * launches bunch up (3 within two minutes, then every 5th); the model gets
- * one short note per session, only where a cheaper model exists.
+ * One launch, as the session's launch log records it. The log is appended
+ * to before it is read, so hooks that run at once for a fan-out (one per
+ * subagent) each see the launches before their own and decide alone:
+ * exactly one is the first of its type, the third is the burst. A shared
+ * state file read and written back by each would lose all but one write.
  */
-export declare function fanoutMessage(input: FanoutInput, costs: SubagentCosts | undefined, state: FanoutState, now?: number): {
+export interface SpawnLine {
+    t: number;
+    type: string;
+    /** Unique per launch. */
+    id: string;
+    /** This launch was quoted a cheaper model (the model gets one note, on the first such launch). */
+    c: boolean;
+}
+/** The session's launch log, beside the hook's per-session state. */
+export declare function spawnLogPath(sessionId: string): string;
+/** Append this launch, then read the log back (its last 64 KB: hundreds of launches). */
+export declare function recordSpawn(path: string, line: SpawnLine): SpawnLine[];
+/** What a launch's input says: its type and the model alias it asks for. */
+export declare function launchOf(input: FanoutInput): {
+    type: string;
+    alias?: string;
+} | undefined;
+/**
+ * What to say before this launch, from the session's launch log (this one
+ * included, as `own`). The user sees the price on the first launch of a type
+ * in the session and when launches bunch up (3 within two minutes, then
+ * every 5th); the model gets one short note a session, on the first launch
+ * that was quoted a cheaper model.
+ */
+export declare function fanoutMessage(est: FanoutEstimate | undefined, alias: string | undefined, log: SpawnLine[], own: SpawnLine): {
     systemMessage?: string;
     additionalContext?: string;
-    state: FanoutState;
+};
+/** The whole PreToolUse answer: estimate, log, decide. Silent (an empty object) for anything else. */
+export declare function fanoutHook(input: FanoutInput, costs: SubagentCosts | undefined, sessionId: string, now?: number): {
+    systemMessage?: string;
+    additionalContext?: string;
 };
 /** For `doctor` and the docs: where the medians come from. */
 export declare function describeCosts(c: SubagentCosts | undefined): string;

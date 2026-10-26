@@ -20,7 +20,8 @@
  * Fable, the note gives the Sonnet price too: the Agent tool takes
  * `model: "sonnet"`.
  */
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { statePath } from "./ledger.js";
 import { listSessions } from "./session.js";
@@ -202,41 +203,79 @@ export function estimateSubagent(costs, type, modelAlias, parentModel) {
     return est;
 }
 const BURST_MS = 120_000;
-/**
- * What to say before this subagent starts, and the session state after it.
- * The user sees the price the first time a type starts in a session and when
- * launches bunch up (3 within two minutes, then every 5th); the model gets
- * one short note per session, only where a cheaper model exists.
- */
-export function fanoutMessage(input, costs, state, now = Date.now()) {
-    const next = { spawns: [...state.spawns.filter((t) => now - t < 10 * 60_000), now].slice(-50), shown: [...state.shown], told: state.told };
-    if (!costs || !/^(Agent|Task)$/.test(String(input.tool_name ?? "")))
-        return { state: next };
-    const ti = input.tool_input ?? {};
+/** The session's launch log, beside the hook's per-session state. */
+export function spawnLogPath(sessionId) {
+    return join(statePath().replace(/\.json$/, "") + ".d", createHash("sha1").update(sessionId).digest("hex").slice(0, 16) + ".spawns.jsonl");
+}
+/** Append this launch, then read the log back (its last 64 KB: hundreds of launches). */
+export function recordSpawn(path, line) {
+    try {
+        mkdirSync(dirname(path), { recursive: true });
+        appendFileSync(path, JSON.stringify(line) + "\n");
+        const size = statSync(path).size;
+        const text = readFileSync(path, "utf8");
+        return text.slice(Math.max(0, size - 64 * 1024)).split("\n").flatMap((l) => {
+            try {
+                const v = JSON.parse(l);
+                return v && typeof v.t === "number" && typeof v.type === "string" && typeof v.id === "string" ? [{ t: v.t, type: v.type, id: v.id, c: v.c === true }] : [];
+            }
+            catch {
+                return [];
+            }
+        });
+    }
+    catch {
+        return [line];
+    }
+}
+/** What a launch's input says: its type and the model alias it asks for. */
+export function launchOf(input) {
+    if (!/^(Agent|Task)$/.test(String(input.tool_name ?? "")))
+        return undefined;
+    const ti = input.tool_input && typeof input.tool_input === "object" ? input.tool_input : {};
     const type = typeof ti.subagent_type === "string" && ti.subagent_type.trim() ? ti.subagent_type.trim().slice(0, 60) : "general-purpose";
-    const alias = typeof ti.model === "string" ? ti.model : undefined;
-    const parentModel = input.transcript_path && existsSync(input.transcript_path) ? tailUsage(input.transcript_path)?.model : undefined;
-    const est = estimateSubagent(costs, type, alias, parentModel);
+    return { type, alias: typeof ti.model === "string" ? ti.model : undefined };
+}
+/**
+ * What to say before this launch, from the session's launch log (this one
+ * included, as `own`). The user sees the price on the first launch of a type
+ * in the session and when launches bunch up (3 within two minutes, then
+ * every 5th); the model gets one short note a session, on the first launch
+ * that was quoted a cheaper model.
+ */
+export function fanoutMessage(est, alias, log, own) {
     if (!est)
-        return { state: next };
-    const burst = next.spawns.filter((t) => now - t < BURST_MS).length;
-    const firstOfType = !next.shown.includes(type);
+        return {};
+    const at = log.findIndex((l) => l.id === own.id);
+    const upTo = at >= 0 ? log.slice(0, at + 1) : [...log, own];
+    const firstOfType = upTo.find((l) => l.type === own.type)?.id === own.id;
+    const burst = upTo.filter((l) => Math.abs(own.t - l.t) < BURST_MS).length;
     const showBurst = burst >= 3 && (burst === 3 || burst % 5 === 0);
-    const out = { state: next };
+    const out = {};
+    const cheaper = est.cheaper && !alias ? est.cheaper : undefined;
     if (firstOfType || showBurst) {
         const runs = `${est.runs} run${est.runs === 1 ? "" : "s"}`;
-        const cheaper = est.cheaper && !alias ? ` On Sonnet: ~${formatUsd(est.cheaper.median)}${est.cheaper.measured ? "" : " at its price"}.` : "";
+        const sonnet = cheaper ? ` On Sonnet: ~${formatUsd(cheaper.median)}${cheaper.measured ? "" : " at its price"}.` : "";
         out.systemMessage = showBurst
-            ? `context-doctor: ${burst} subagents in 2 minutes, ~${formatUsd(est.median * burst)} together at your median of ~${formatUsd(est.median)} for ${type} on ${short(est.model)} (${runs}).${cheaper}`
-            : `context-doctor: a ${type} subagent on ${short(est.model)} costs ~${formatUsd(est.median)} at your median (p90 ${formatUsd(est.p90)}, ${runs}, list price).${cheaper}`;
-        if (firstOfType)
-            next.shown = [...next.shown, type].slice(-30);
+            ? `context-doctor: ${burst} subagents in 2 minutes, ~${formatUsd(est.median * burst)} together at your median of ~${formatUsd(est.median)} for ${own.type} on ${short(est.model)} (${runs}).${sonnet}`
+            : `context-doctor: a ${own.type} subagent on ${short(est.model)} costs ~${formatUsd(est.median)} at your median (p90 ${formatUsd(est.p90)}, ${runs}, list price).${sonnet}`;
     }
-    if (!next.told && est.cheaper && !alias) {
-        out.additionalContext = `context-doctor: on this machine a ${type} subagent costs ~${formatUsd(est.median)} at the median on ${short(est.model)}, ~${formatUsd(est.cheaper.median)} on Sonnet. For search, reading or summarising, pass model: "sonnet" to the Agent tool.`;
-        next.told = true;
+    if (cheaper && upTo.find((l) => l.c)?.id === own.id) {
+        out.additionalContext = `context-doctor: on this machine a ${own.type} subagent costs ~${formatUsd(est.median)} at the median on ${short(est.model)}, ~${formatUsd(cheaper.median)} on Sonnet. For search, reading or summarising, pass model: "sonnet" to the Agent tool.`;
     }
     return out;
+}
+/** The whole PreToolUse answer: estimate, log, decide. Silent (an empty object) for anything else. */
+export function fanoutHook(input, costs, sessionId, now = Date.now()) {
+    const launch = launchOf(input);
+    if (!launch || !costs)
+        return {};
+    const parentModel = input.transcript_path && existsSync(input.transcript_path) ? tailUsage(input.transcript_path)?.model : undefined;
+    const est = estimateSubagent(costs, launch.type, launch.alias, parentModel);
+    if (!est)
+        return {};
+    const own = { t: now, type: launch.type, id: randomUUID(), c: Boolean(est.cheaper && !launch.alias) };
+    return fanoutMessage(est, launch.alias, recordSpawn(spawnLogPath(sessionId), own), own);
 }
 /** For `doctor` and the docs: where the medians come from. */
 export function describeCosts(c) {

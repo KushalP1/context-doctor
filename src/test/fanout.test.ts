@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { estimateSubagent, fanoutMessage, measureSubagentCosts, subagentCosts, type SubagentCosts } from "../fanout.js";
+import { estimateSubagent, fanoutMessage, launchOf, measureSubagentCosts, subagentCosts, type SubagentCosts } from "../fanout.js";
 import { sandboxEnv } from "./sandbox.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
@@ -43,22 +43,41 @@ test("the estimate: the type on the model it will run on, the Sonnet option at S
 });
 
 test("what is said: the price on a type's first launch and on a burst, one note to the model; nothing for other tools", () => {
-  const input = (type: string, model?: string) => ({ session_id: "s", tool_name: "Agent", tool_input: { subagent_type: type, description: "d", prompt: "p", ...(model ? { model } : {}) } });
-  let state = { spawns: [] as number[], shown: [] as string[] };
-  const first = fanoutMessage(input("general-purpose"), costs, state, NOW);
+  const est = estimateSubagent(costs, "general-purpose", undefined, "claude-opus-5-5")!;
+  const line = (t: number, type = "general-purpose", c = true) => ({ t: NOW + t, type, id: `id${t}-${type}`, c });
+  const log = [line(0)];
+  const first = fanoutMessage(est, undefined, log, log[0]);
   assert.match(first.systemMessage!, /^context-doctor: a general-purpose subagent on Opus 5\.5 costs ~\$4\.00 at your median \(p90 \$14\.00, 30 runs, list price\)\. On Sonnet: ~\$2\.00 at its price\.$/);
   assert.match(first.additionalContext!, /pass model: "sonnet" to the Agent tool/);
-  state = first.state;
-  const second = fanoutMessage(input("general-purpose"), costs, state, NOW + 10_000);
+  log.push(line(10_000));
+  const second = fanoutMessage(est, undefined, log, log[1]);
   assert.equal(second.systemMessage, undefined, "the same type again: quiet");
   assert.equal(second.additionalContext, undefined, "the model is told once a session");
-  const third = fanoutMessage(input("general-purpose"), costs, second.state, NOW + 20_000);
-  assert.match(third.systemMessage!, /3 subagents in 2 minutes, ~\$12\.00 together/);
-  const asked = fanoutMessage(input("Explore", "sonnet"), costs, { spawns: [], shown: [] }, NOW);
+  log.push(line(20_000));
+  assert.match(fanoutMessage(est, undefined, log, log[2]).systemMessage!, /3 subagents in 2 minutes, ~\$12\.00 together/);
+  const sonnet = estimateSubagent(costs, "Explore", "sonnet")!;
+  const asked = fanoutMessage(sonnet, "sonnet", [line(0, "Explore", false)], line(0, "Explore", false));
   assert.ok(!/On Sonnet/.test(asked.systemMessage!) && asked.additionalContext === undefined, "already on Sonnet: no cheaper option");
-  assert.deepEqual(Object.keys(fanoutMessage({ tool_name: "Bash", tool_input: {} }, costs, { spawns: [], shown: [] }, NOW)), ["state"]);
-  assert.deepEqual(Object.keys(fanoutMessage(input("Explore"), undefined, { spawns: [], shown: [] }, NOW)), ["state"]);
-  assert.ok(fanoutMessage({ tool_name: "Task", tool_input: { subagent_type: "Explore" } }, costs, { spawns: [], shown: [] }, NOW).systemMessage, "Task, the tool's name before 2.1.63");
+  assert.deepEqual(fanoutMessage(undefined, undefined, [line(0)], line(0)), {}, "no estimate: nothing");
+  assert.deepEqual(launchOf({ tool_name: "Bash", tool_input: {} }), undefined);
+  assert.deepEqual(launchOf({ tool_name: "Task", tool_input: { subagent_type: "Explore" } }), { type: "Explore", alias: undefined }, "Task, the tool's name before 2.1.63");
+  assert.deepEqual(launchOf({ tool_name: "Agent", tool_input: "nope" as any }), { type: "general-purpose", alias: undefined });
+});
+
+test("a fan-out: five hooks at once for one session say the first price once, the burst once, and tell the model once", async () => {
+  const home = mkdtempSync(join(tmpdir(), "cd-fanout-par-"));
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(join(home, ".claude", ".context-doctor-subagent-costs.json"), JSON.stringify({ ...costs, computedAt: Date.now() }));
+  const { execFile } = await import("node:child_process");
+  const one = () => new Promise<string>((resolve) => {
+    const child = execFile(process.execPath, [cliPath, "hook"], { env: sandboxEnv(home) }, (_e, stdout) => resolve(stdout));
+    child.stdin?.end(JSON.stringify({ hook_event_name: "PreToolUse", session_id: "fan", tool_name: "Agent", tool_input: { subagent_type: "general-purpose", prompt: "p" } }));
+  });
+  const outs = (await Promise.all([one(), one(), one(), one(), one()])).map((o) => (o.trim() ? JSON.parse(o) : {}));
+  const messages = outs.map((o) => o.systemMessage).filter(Boolean);
+  assert.equal(messages.filter((m: string) => /costs ~\$4\.00 at your median/.test(m)).length, 1, messages.join("\n"));
+  assert.equal(messages.filter((m: string) => /3 subagents in 2 minutes/.test(m)).length, 1, messages.join("\n"));
+  assert.equal(outs.filter((o) => o.hookSpecificOutput?.additionalContext).length, 1);
 });
 
 /** A subagent transcript and its meta, under a parent session in the sandboxed home. */

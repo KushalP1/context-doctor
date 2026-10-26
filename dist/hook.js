@@ -27,7 +27,7 @@ import { formatUsd, pricingFor } from "./pricing.js";
 import { checkBudget, loadConfig } from "./config.js";
 import { modelSwitchMessage } from "./modelswitch.js";
 import { compactFacts, compactInstructions } from "./precompact.js";
-import { fanoutMessage, subagentCosts } from "./fanout.js";
+import { fanoutHook, subagentCosts } from "./fanout.js";
 /** Default nudge threshold; a project budget or env var can lower/raise it. */
 const DEFAULT_WARN_TOKENS = 80_000;
 /**
@@ -216,10 +216,7 @@ export async function runHook(app) {
         // the user's own median, to the user, and once to the model. Never a
         // permission decision, never exit 2: the subagent always starts.
         if (input.hook_event_name === "PreToolUse") {
-            const sid = input.session_id ?? input.transcript_path ?? "unknown";
-            const prev = readSessionState(sid);
-            const r = fanoutMessage(input, subagentCosts(), prev.fo ?? { spawns: [], shown: [] });
-            writeSessionState(sid, { ...prev, fo: r.state });
+            const r = fanoutHook(input, subagentCosts(), input.session_id ?? input.transcript_path ?? "unknown");
             const out = {};
             if (r.systemMessage)
                 out.systemMessage = r.systemMessage;
