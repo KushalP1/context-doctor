@@ -61,13 +61,20 @@ function scanClaude(path, acc, since, runRows) {
     const costOf = new Map();
     let prevCall;
     forEachLine(path, (line) => {
-        if (!line.includes('"usage"') && !line.includes('"tool_use"'))
+        const prompt = line.includes('"type":"user"') && !line.includes('"tool_result"');
+        if (!prompt && !line.includes('"usage"') && !line.includes('"tool_use"'))
             return;
         let e;
         try {
             e = JSON.parse(line);
         }
         catch {
+            return;
+        }
+        // A prompt the user typed between two identical calls makes the second a
+        // new request, not a poll (the same check, asked for again).
+        if (e?.type === "user" && !e.isSidechain && !e.isMeta && !(Array.isArray(e.message?.content) && e.message.content.some((b) => b?.type === "tool_result"))) {
+            prevCall = undefined;
             return;
         }
         if (e?.type !== "assistant" || e.isSidechain || !e.message)
@@ -123,6 +130,8 @@ function scanCodex(path, acc, since) {
         const inPeriod = !(Number.isFinite(at) && at < since);
         if (e.type === "turn_context" && typeof p.model === "string")
             model = p.model;
+        if (e.type === "response_item" && p.type === "message" && p.role === "user")
+            prevCall = undefined;
         if (e.type === "response_item" && (p.type === "function_call" || p.type === "custom_tool_call" || p.type === "local_shell_call")) {
             const name = String(p.name ?? (p.type === "local_shell_call" ? "shell" : p.type));
             const key = callKey(name, p.arguments ?? p.input ?? p.action);

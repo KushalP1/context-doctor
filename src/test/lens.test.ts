@@ -68,3 +68,14 @@ test("Codex: wait polls priced at the response that made them; reasoning_output_
   assert.equal(lensOverSessions(30, { paths: [p], now: Date.parse("2026-10-27T00:00:00Z") }).polls.repeats, 2);
   assert.equal(lensOverSessions(30, { paths: [p], now: Date.parse("2027-01-27T00:00:00Z") }).byModel.length, 0, "outside the period: nothing");
 });
+
+test("a prompt between two identical calls makes the second a new request, not a poll", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cd-lens-prompt-"));
+  const call = (i: number) => JSON.stringify({ type: "assistant", timestamp: at(i * 10), uuid: `c${i}`, message: { id: `m${i}`, model: "claude-opus-5-5", role: "assistant", content: [{ type: "tool_use", id: `t${i}`, name: "Bash", input: { command: "npm test" } }], usage: { input_tokens: 10, cache_read_input_tokens: 1000, output_tokens: 10 } } });
+  const result = (i: number) => JSON.stringify({ type: "user", timestamp: at(i * 10 + 1), message: { role: "user", content: [{ type: "tool_result", tool_use_id: `t${i}`, content: "ok" }] } });
+  const prompt = (i: number) => JSON.stringify({ type: "user", timestamp: at(i * 10 + 2), message: { role: "user", content: "fixed it, run the tests again" } });
+  const p = join(dir, "s.jsonl");
+  writeFileSync(p, [call(0), result(0), prompt(0), call(1), result(1), call(2)].join("\n") + "\n");
+  const l = sessionLens(p);
+  assert.equal(l.polls.repeats, 1, "only the third call, which came with no prompt between");
+});
