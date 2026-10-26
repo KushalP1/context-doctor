@@ -10,7 +10,7 @@ context-doctor never calls a model itself (no API key). The model you are alread
 
 1. In a long chat, open the **+** menu, pick **Hand off to a new chat** (the `handoff` prompt from context-doctor). Optionally say what the next chat should work on.
 2. The model writes a dense brief of at most **400 tokens** (goal, decisions with a short reason, current state, open items and the next step, key identifiers such as names, paths, IDs, versions and numbers) and lists, separately, only the blocks that must stay exact (code, config, commands, figures). It saves them with the `save_handoff` tool.
-3. If your client can show forms (MCP elicitation), it asks you first: save the handoff, with or without the verbatim blocks. Elsewhere the click on the prompt was your consent.
+3. If your client can show forms (MCP elicitation), it asks you first: save the handoff, with or without the verbatim blocks. Once a client has declared forms, anything but an explicit yes (a decline, a dismissal, an error, no answer in two minutes) means nothing is saved. A client without forms never asks; there the click on the prompt was your consent.
 4. The reply tells you how to continue and what it saves. For a 52k-token chat on Claude Sonnet the tool reports: *Now: ~52k tokens re-read on every turn ($0.104 at list price, $0.010 cached). After: ~600 in a new chat ($0.0012 at list price), plus the app's own system prompt, which every chat carries. Saves ~51k tokens per further turn (99%).* The chat's size comes from `profile_context` when the model has that figure, or is estimated from the turn count.
 5. Open a new chat and attach **`handoff://latest`** from the **+** menu (context-doctor's resources), or paste the handoff. The new chat starts from it.
 
@@ -35,9 +35,11 @@ The CLI only reads; handoffs are written by `save_handoff`.
 ## What is stored, where
 
 - One folder per handoff: `~/.context-doctor/handoffs/<yyyymmdd-hhmmss>-<slug>/` (UTC time), holding `handoff.md` (what a new chat starts from) and `meta.json` (title, time, sizes). The home directory is whatever `HOME` (or `USERPROFILE` on Windows) says, so a sandboxed home is respected.
-- Folders are created `0700` and files `0600`; a handoff holds chat content. Files are created exclusively, so nothing already at that path is written through, and a second save in the same second gets its own folder.
-- The newest **100** are kept; older handoff folders (ours only: named like one, with a `meta.json`) are removed when a new one is saved.
-- **Secret-looking strings are masked before anything is written**: provider keys by their published prefixes (Anthropic, OpenAI, AWS, GitHub, GitLab, Slack, Google, npm, Stripe), private keys, JWTs, and `password = …` style assignments whose value looks like a token. The tool result says how many were masked and of what kind, so the user can re-add one by hand if the next chat really needs it.
+- `~/.context-doctor` and its `handoffs` folder must be real folders inside the home directory: if either is a symbolic link, or resolves outside the home directory, nothing is saved (and nothing is listed or read) and the reply says why. Folders are created `0700` and files `0600`; a handoff holds chat content. Files are created exclusively, so nothing already at that path is written through, and a second save in the same second gets its own folder.
+- The newest **100** are kept, by the time they were written (a folder dated in the future counts as the oldest) and never the one just saved; older ones are removed when a new one is saved, and only real folders of ours (named like one, with a `meta.json` naming it), never a link, a file or anything else in the folder.
+- **Secret-looking strings are masked before anything is written**, in the brief, the title, the labels, the verbatim blocks and the model name: provider keys by their shapes (Anthropic, OpenAI, AWS, GitHub, GitLab, Slack tokens and webhooks, Google, npm, Stripe live and test keys and webhook secrets, Hugging Face, SendGrid, Twilio), private key blocks (PGP and escaped JSON ones too), JWTs, passwords in URLs (`scheme://user:pass@`), `Authorization: Bearer` values, `mysql -p<password>`, and any assignment whose key names a secret (`password: hunter2`, `DB_PASSWORD=`, `AWS_SECRET_ACCESS_KEY=`, `apiKey:`, `TOKEN=`, `AccountKey=`), while paths, type names, environment references, calls, counts and placeholders such as `YOUR_API_KEY_HERE` are left alone. The tool result says how many were masked and of what kind, so the user can re-add one by hand if the next chat really needs it. The consent form masks before it shortens a title, so a key at the cut cannot leak its start.
+- Control characters (escape sequences included) are removed from everything saved, and from anything `context-doctor handoff` prints or copies, so a handoff cannot drive your terminal. Newlines and tabs stay.
+- Errors never show an absolute path: `~` stands for the home directory, and over HTTP an error says only that the server could not store the handoff.
 - Limits, checked by the server whatever the client sends: brief up to 6,000 characters (the target is ≤400 tokens; a longer one is saved with a note), up to 20 verbatim blocks of up to 20,000 characters each, 60,000 characters in all, titles up to 80 characters.
 
 ## Resources
@@ -46,11 +48,13 @@ On the local (stdio) server, saved handoffs are MCP resources: `handoff://latest
 
 ## Over HTTP (ChatGPT developer mode, remote clients)
 
-A server reachable over a URL may be reachable by anyone who has the URL (a tunnel, a shared host). There:
+A server reachable over a URL may be reachable by anyone who has the URL (a tunnel, a shared host), and a server on 127.0.0.1 can still be reached from a web page in your browser. There:
 
 - `save_handoff` stores nothing and is annotated read-only (so ChatGPT does not ask for a confirmation it does not need); it returns the token math and asks the model to print the handoff for pasting;
 - no handoff resources exist at all;
-- `context-doctor mcp --http --store-handoffs` stores handoffs on the machine running the server (for a server on your own machine behind your own tunnel). The tool is then annotated as a write, and resources are still not exposed over the network; read them with `context-doctor handoff latest --copy` on that machine.
+- **no consent form can be shown**: the stateless HTTP server cannot ask the client anything in the middle of a call, so the only consent is the chat's (ChatGPT asks before a tool marked as a write);
+- `context-doctor mcp --http --store-handoffs` stores handoffs on the machine running the server (for a server on your own machine behind your own tunnel). It is never the default. The tool is then annotated as a write, and resources are still not exposed over the network; read them with `context-doctor handoff latest --copy` on that machine;
+- every request must name this server in its Host header (localhost, 127.0.0.1, [::1], the `--host` it was given, or a name in `--allowed-hosts`), and a browser's Origin must be loopback, an allowed host's, ChatGPT's or in `--allowed-origins`. Behind a tunnel, start the server with `--allowed-hosts <the tunnel's host name>`. This stops a web page from using DNS rebinding to save, evict or plant handoffs.
 
 ## Why not summarize in place
 
