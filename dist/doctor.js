@@ -6,7 +6,7 @@
  * when any check fails (✗), so a script can tell; an app that is absent, or
  * that nothing was installed into, is a note (–), not a failure.
  */
-import { autopilotPaths, health, installedVersion, proxyUrl, recentSurfaces } from "./autopilot.js";
+import { autopilotPaths, DEFAULT_AUTOPILOT_PORT, health, installedVersion, portOccupant, proxyUrl, recentSurfaces } from "./autopilot.js";
 import { spawn } from "node:child_process";
 import { accessSync, constants as fsConstants, existsSync, readFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
@@ -143,6 +143,10 @@ function pluginEnabled(layers) {
         }
     }
     return [...state.values()].some(Boolean);
+}
+/** "headroom (pid 4242)", or "another program". */
+function occupantName(o) {
+    return `${o.name ?? "another program"}${o.pid ? ` (pid ${o.pid})` : ""}`;
 }
 /**
  * The subagent price (PreToolUse on the Agent tool, fanout.ts): registered
@@ -661,6 +665,11 @@ export async function runDoctor() {
         }
         if (!existsSync(paths.config)) {
             checks.push({ label: "Autopilot", status: "skip", detail: "off (context-doctor autopilot on: clears stale tool output in every new Claude Code session)" });
+            // Another local proxy on autopilot's port: `autopilot on` would not start there.
+            const other = await portOccupant(DEFAULT_AUTOPILOT_PORT);
+            if (other.listening && !other.ours) {
+                checks.push({ label: "Autopilot port", status: "warn", detail: `${occupantName(other)} already listens on ${proxyUrl(DEFAULT_AUTOPILOT_PORT)}: \`autopilot on\` could not start there; use another port (context-doctor autopilot on --port 8788)` });
+            }
         }
         else if (!cfg) {
             let routedTo;
@@ -702,6 +711,14 @@ export async function runDoctor() {
                     : h.ok && h.autopilot && routed
                         ? { label: "Autopilot", status: "ok", detail: `proxy up on ${proxyUrl(cfg.port)}, Claude Code routed through it${seen >= 0 ? ` (${seen} requests since start)` : ""}${paused ? " (PAUSED: passthrough)" : ""}` }
                         : { label: "Autopilot", status: "fail", detail: !h.ok ? `proxy not answering on ${proxyUrl(cfg.port)}: the next Claude Code prompt restarts it; or run: context-doctor autopilot on` : "settings.json no longer routes Claude Code to the proxy: run context-doctor autopilot on" });
+            // Not ours, yet listening on our port: with Claude Code routed there,
+            // its requests go through that program, and the proxy cannot restart.
+            if (!h.ok) {
+                const other = await portOccupant(cfg.port);
+                if (other.listening && !other.ours) {
+                    checks.push({ label: "Autopilot port", status: "fail", detail: `${occupantName(other)} listens on ${proxyUrl(cfg.port)} instead of the proxy${routed ? ", and Claude Code's requests go to it" : ""}: stop it, or move autopilot (context-doctor autopilot off, then autopilot on --port 8788)` });
+                }
+            }
         }
     }
     const mark = { ok: "✓", warn: "!", fail: "✗", skip: "–" };

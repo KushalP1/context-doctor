@@ -67,6 +67,21 @@ export interface Health {
     version?: string;
 }
 export declare function health(port: number, timeoutMs?: number): Promise<Health>;
+/** Who holds a local port: nobody, our proxy, or another program (named when it says). */
+export interface PortOccupant {
+    listening: boolean;
+    ours: boolean;
+    /** What the other program calls itself: its /health service, its Server header, or its process name. */
+    name?: string;
+    pid?: number;
+}
+/**
+ * Whether something already listens on 127.0.0.1:`port`, and whether it is
+ * this proxy. Another local proxy on autopilot's port (Headroom's default is
+ * 8787 too) makes `autopilot on` fail to start, or, with Claude Code already
+ * routed there, sends its requests through the other program.
+ */
+export declare function portOccupant(port: number, timeoutMs?: number): Promise<PortOccupant>;
 export declare function baseUrlToRestore(paths: AutopilotPaths, port: number, current: string | null): string | null;
 /** Which Claude Code surfaces ran recent sessions: entrypoint -> count. */
 export declare function recentSurfaces(days?: number, home?: string): Map<string, number>;

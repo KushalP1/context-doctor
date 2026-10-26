@@ -310,6 +310,58 @@ export async function health(port: number, timeoutMs = 800): Promise<Health> {
   }
 }
 
+/** Who holds a local port: nobody, our proxy, or another program (named when it says). */
+export interface PortOccupant {
+  listening: boolean;
+  ours: boolean;
+  /** What the other program calls itself: its /health service, its Server header, or its process name. */
+  name?: string;
+  pid?: number;
+}
+
+/**
+ * Whether something already listens on 127.0.0.1:`port`, and whether it is
+ * this proxy. Another local proxy on autopilot's port (Headroom's default is
+ * 8787 too) makes `autopilot on` fail to start, or, with Claude Code already
+ * routed there, sends its requests through the other program.
+ */
+export async function portOccupant(port: number, timeoutMs = 800): Promise<PortOccupant> {
+  const h = await health(port, timeoutMs);
+  if (h.ok) return { listening: true, ours: true };
+  const { createConnection } = await import("node:net");
+  const listening = await new Promise<boolean>((resolve) => {
+    const socket = createConnection({ host: "127.0.0.1", port });
+    const done = (v: boolean) => { socket.destroy(); resolve(v); };
+    socket.setTimeout(timeoutMs, () => done(false));
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+  });
+  if (!listening) return { listening: false, ours: false };
+  const out: PortOccupant = { listening: true, ours: false };
+  for (const path of ["/health", "/"]) {
+    try {
+      const r = await fetch(`${proxyUrl(port)}${path}`, { signal: AbortSignal.timeout(timeoutMs) });
+      const text = (await r.text()).slice(0, 2000);
+      let service: unknown;
+      try { const j = JSON.parse(text); service = j?.service ?? j?.name ?? j?.app; } catch { /* not JSON */ }
+      const named = typeof service === "string" && service.trim() ? service : /headroom/i.test(text) ? "headroom" : r.headers.get("server") ?? undefined;
+      if (named) { out.name = named.replace(/[\u0000-\u001f]/g, "").slice(0, 60); break; }
+    } catch { /* not HTTP, or slow */ }
+  }
+  // The process, where lsof can say (macOS, Linux): the fact people act on.
+  if (platform() !== "win32") {
+    try {
+      const line = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
+      const pid = Number(/^p(\d+)/m.exec(line)?.[1]);
+      const command = /^c(.+)$/m.exec(line)?.[1];
+      if (Number.isFinite(pid) && pid > 0) out.pid = pid;
+      if (command && !out.name) out.name = command.slice(0, 60);
+      else if (command && out.name && !out.name.toLowerCase().includes(command.toLowerCase())) out.name = `${out.name} (${command.slice(0, 40)})`;
+    } catch { /* no lsof, or nothing it can see */ }
+  }
+  return out;
+}
+
 async function waitHealthy(port: number, ms: number): Promise<Health> {
   const end = Date.now() + ms;
   for (;;) {
