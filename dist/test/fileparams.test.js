@@ -191,8 +191,11 @@ test("pack_context over HTTP declares openai/fileParams with the file schema Cha
         // The HTTP definitions ride on every ChatGPT request too: same budget as stdio's.
         const { estimateTokens } = await import("../tokens.js");
         const all = (await rpc("tools/list")).result.tools;
-        const total = all.reduce((n, t) => n + estimateTokens(JSON.stringify({ name: t.name, description: t.description, input_schema: t.inputSchema }), "claude"), 0);
-        assert.ok(total <= 2400, `HTTP tool definitions are ~${total} Claude tokens; keep them under 2,400`);
+        // An upper bound, as for stdio: the definitions as sent, at 2.1 chars/token (Claude's densest measured).
+        const sent = JSON.stringify(all.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })));
+        const bound = Math.ceil(sent.length / 2.1);
+        assert.ok(bound <= 2400, `HTTP tool definitions are at most ${bound} Claude tokens (${sent.length} chars); keep them under 2,400`);
+        assert.ok(estimateTokens(sent, "claude") <= bound);
     }
     finally {
         child.kill();

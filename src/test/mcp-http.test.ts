@@ -181,8 +181,14 @@ test("the tool definitions stay small: they ride on every request in clients tha
   await client.connect(new StdioClientTransport({ command: process.execPath, args: ["dist/mcp.js"] }));
   try {
     const { tools } = await client.listTools();
-    const total = tools.reduce((s, t) => s + estimateTokens(JSON.stringify({ name: t.name, description: t.description, input_schema: t.inputSchema }), "claude"), 0);
-    assert.ok(total <= 2400, `tool definitions are ~${total} Claude tokens; keep them under 2,400`);
+    // Counted as an upper bound, not an estimate: the definitions exactly as
+    // a client sends them to the model, at the densest Claude tokenization
+    // measured on code and JSON (2.1 chars/token, the p10 in docs/tokenizer.md).
+    const sent = JSON.stringify(tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })));
+    const bound = Math.ceil(sent.length / 2.1);
+    assert.ok(bound <= 2400, `tool definitions are at most ${bound} Claude tokens (${sent.length} chars); keep them under 2,400`);
+    assert.ok(estimateTokens(sent, "claude") <= bound);
+    assert.ok(!sent.includes("$schema"), "the schema dialect line is left out");
   } finally {
     await client.close();
   }
@@ -207,4 +213,17 @@ test("profile_context: both inputs get a note; a label that is really content is
   assert.ok(!text.includes(longLabel.slice(0, 200)), "the long label is not echoed whole");
   assert.match(text, /the full nginx config/);
   assert.ok(text.length < 3000, `short output (${text.length} chars)`);
+});
+
+test("bounds the schema no longer spells out are checked by the tools themselves", async () => {
+  const call = async (name: string, args: unknown) => (await rpc({ jsonrpc: "2.0", id: 91, method: "tools/call", params: { name, arguments: args } })).json.result;
+  const turns = await call("profile_context", { sketch: { turns: 200_000, blocks: [] } });
+  assert.equal(turns.isError, true);
+  assert.match(turns.content[0].text, /turns is 200000/);
+  const zero = await call("profile_context", { sketch: { turns: 3, blocks: [{ turn: 1, kind: "paste", label: "x", approx_tokens: 0 }] } });
+  assert.match(zero.content[0].text, /approx_tokens is 0; a size is above 0/);
+  const many = await call("pack_context", { text: "hello world", query: "hello", ids: Array.from({ length: 201 }, (_, i) => `text#${i}`) });
+  assert.match(many.content[0].text, /201 ids; ask for at most 200/);
+  const budget = await call("pack_context", { text: "hello world", query: "hello", max_tokens: 300_000 });
+  assert.match(budget.content[0].text, /the most is 200000/);
 });

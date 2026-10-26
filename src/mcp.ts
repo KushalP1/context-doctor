@@ -103,35 +103,41 @@ function createServer({ http = false, storeHandoffs = !http }: { http?: boolean;
   "profile_context",
   "Profile a conversation's context: token breakdown, largest blocks, wasted context. Pass `conversation` (JSON or text) or, in a chat app, a `sketch` (~120 tokens). Call it when the user asks about tokens, cost, speed or limits, and once past ~30 turns or 3+ large pastes. Act on the top finding.",
   {
-    conversation: z.string().optional().describe("Conversation JSON or text. In a chat app pass `sketch` instead."),
+    conversation: z.string().optional().describe("JSON or text; in a chat app pass `sketch`"),
     sketch: z.object({
-      turns: z.number().int().nonnegative().max(100_000).describe("Exchanges so far"),
-      model: z.string().optional().describe("Model this chat runs as"),
+      turns: z.number().int().nonnegative().describe("Exchanges so far"),
+      model: z.string().optional(),
       blocks: z.array(z.object({
-        turn: z.number().int().positive().max(100_000),
+        turn: z.number().int().positive(),
         kind: z.enum(["paste", "code", "tool_result", "image", "base64", "text"]),
         label: z.string().describe("Short name"),
-        // Upper bounds are checked in the handler (SKETCH_MAX): each schema
+        // Bounds are checked in the handler (SKETCH_LIMITS): each schema
         // keyword rides in every request's tool definitions.
-        approx_tokens: z.number().positive().optional(),
-        approx_lines: z.number().positive().optional(),
-        approx_words: z.number().positive().optional(),
-        approx_chars: z.number().positive().optional(),
-        repeated: z.number().int().positive().max(1000).optional().describe("Times it appears (2+ = duplicate)"),
+        approx_tokens: z.number().optional(),
+        approx_lines: z.number().optional(),
+        approx_words: z.number().optional(),
+        approx_chars: z.number().optional(),
+        repeated: z.number().int().optional().describe("Times it appears (2+ = duplicate)"),
         stale: z.boolean().optional().describe("Acted on, no longer needed"),
-      })).max(500).describe("Only blocks over ~500 tokens, repeated, or images."),
-    }).optional().describe("For chat apps. One size hint per block: lines for code, words for prose, chars or tokens for logs and tool output."),
+      })).describe("Only blocks over ~500 tokens, repeated, or images."),
+    }).optional().describe("For chat apps. One size hint per block: lines for code, words for prose, chars for logs."),
     model: z.string().optional().describe("e.g. claude-sonnet-5"),
   },
   // Pure: reads its input and returns text. Clients (Codex, ChatGPT) may skip approval for read-only tools.
   { title: "Profile context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async ({ conversation, sketch, model }, extra) => {
     if (sketch) {
+      const bad = (text: string) => ({ isError: true, content: [{ type: "text" as const, text }] });
+      if (sketch.turns > 100_000) return bad(`sketch.turns is ${sketch.turns}; the most that makes sense is 100000.`);
+      if (sketch.blocks.length > 500) return bad(`sketch.blocks has ${sketch.blocks.length} blocks; list at most 500 (only those over ~500 tokens, repeated, or images).`);
       for (const [i, b] of sketch.blocks.entries()) {
+        if (b.turn > 100_000) return bad(`sketch.blocks[${i}].turn is ${b.turn}; the most that makes sense is 100000.`);
+        if (b.repeated !== undefined && (b.repeated < 1 || b.repeated > 1000)) return bad(`sketch.blocks[${i}].repeated is ${b.repeated}; give 1 to 1000.`);
         for (const [k, max] of Object.entries(SKETCH_MAX)) {
           const v = (b as Record<string, unknown>)[k];
+          if (typeof v === "number" && !(v > 0)) return bad(`sketch.blocks[${i}].${k} is ${v}; a size is above 0.`);
           if (typeof v === "number" && v > max) {
-            return { isError: true, content: [{ type: "text" as const, text: `sketch.blocks[${i}].${k} is ${v}; the most that makes sense is ${max}. Give a rough size of the block itself.` }] };
+            return bad(`sketch.blocks[${i}].${k} is ${v}; the most that makes sense is ${max}. Give a rough size of the block itself.`);
           }
         }
       }
@@ -161,11 +167,11 @@ server.tool(
   "optimize_context",
   "Rewrite a conversation to reclaim tokens (dedupe, trim stale tool results, strip base64; prune-history is lossy). Returns slimmed JSON and the savings. Use after profile_context finds waste the user wants fixed; prune-history only with the user's consent, then write the summary the result asks for.",
   {
-    conversation: z.string().describe("Conversation JSON (OpenAI, Anthropic, or a message array)"),
+    conversation: z.string().describe("Conversation JSON"),
     strategies: z.array(z.enum(STRATEGY_IDS)).optional()
       .describe("Default: dedupe, trim-tool-results, strip-base64"),
-    keep_recent: z.number().int().nonnegative().optional().describe("Tail messages left untouched (default 6; prune-history keeps ≥2)"),
-    max_tool_result_tokens: z.number().int().positive().optional().describe("Budget per trimmed tool result (default 300)"),
+    keep_recent: z.number().int().nonnegative().optional().describe("Tail messages kept (default 6)"),
+    max_tool_result_tokens: z.number().int().positive().optional().describe("Per trimmed result (default 300)"),
   },
   // Pure: reads its input and returns text. Clients (Codex, ChatGPT) may skip approval for read-only tools.
   { title: "Optimize context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -249,12 +255,12 @@ server.tool(
   // no `semantic` (local embeddings belong to a local server); `files` takes
   // their place, so the definitions stay within the same budget as stdio's.
   const packInput = {
-    ...(http ? {} : { paths: z.array(z.string()).max(50).optional().describe("Files or folders, absolute paths") }),
+    ...(http ? {} : { paths: z.array(z.string()).optional().describe("Files or folders, absolute paths") }),
     text: z.string().optional().describe("Raw text to pack instead of files"),
     query: z.string().optional().describe("The question; omit for an outline"),
-    max_tokens: z.number().int().positive().max(200_000).optional().describe("Budget, default 4000"),
-    ids: z.array(z.string()).max(200).optional().describe("Chunk ids from an outline or result, e.g. docs/guide.md#4"),
-    model: z.string().optional().describe("Model the budget is counted for (default Claude)"),
+    max_tokens: z.number().int().positive().optional().describe("Budget, default 4000"),
+    ids: z.array(z.string()).optional().describe("Chunk ids, e.g. docs/guide.md#4"),
+    model: z.string().optional().describe("Model to count for"),
     ...(http
       ? { files: z.array(fileSchema).optional().describe("Files the user uploaded") }
       : { semantic: z.boolean().optional().describe("Also rank by meaning (local Ollama embeddings)") }),
@@ -274,6 +280,10 @@ server.tool(
         files?: Array<{ download_url: string; file_id: string; mime_type?: string; file_name?: string }>;
       };
       const err = (t: string) => ({ content: [{ type: "text" as const, text: t }], isError: true });
+      // Bounds here, not in the schema (every keyword there rides in each request).
+      if ((paths?.length ?? 0) > 50) return err(`${paths!.length} paths; pass at most 50 (a folder counts as one).`);
+      if ((ids?.length ?? 0) > 200) return err(`${ids!.length} ids; ask for at most 200.`);
+      if (max_tokens !== undefined && max_tokens > 200_000) return err(`max_tokens ${max_tokens}; the most is 200000.`);
       if (paths?.length && !fileAccess) {
         return err("This server runs over HTTP and does not read files. Pass the document as `text`, or attach it (`files`).");
       }
@@ -527,7 +537,27 @@ server.tool(
     }
   );
 
+  dropSchemaDialect(server);
   return server;
+}
+
+/**
+ * Every tool's JSON schema came with `"$schema": "http://json-schema.org/draft-07/schema#"`
+ * (the SDK's converter adds it): 52 characters a tool, in every request of
+ * clients that load the definitions up front, telling the model nothing. The
+ * SDK builds tools/list itself, so its handler is wrapped to leave it out.
+ * Should the SDK's internals change, the list goes out as the SDK makes it
+ * (the budget test then says so).
+ */
+function dropSchemaDialect(server: McpServer): void {
+  const handlers = (server.server as unknown as { _requestHandlers?: Map<string, (req: unknown, extra: unknown) => Promise<unknown>> })._requestHandlers;
+  const list = handlers?.get("tools/list");
+  if (!handlers || !list) return;
+  handlers.set("tools/list", async (req, extra) => {
+    const r = (await list(req, extra)) as { tools?: Array<{ inputSchema?: Record<string, unknown> }> };
+    for (const t of r?.tools ?? []) if (t.inputSchema) delete t.inputSchema.$schema;
+    return r;
+  });
 }
 
 const BEST_PRACTICES: Record<string, string[]> = {
