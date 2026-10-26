@@ -24,12 +24,14 @@ export interface OpenAiFile {
     mime_type?: string;
     file_name?: string;
 }
+/** Per file: bytes and time. Per call: files, bytes and time (downloads and extraction together). */
 export declare const FILE_LIMITS: {
     files: number;
     bytes: number;
     totalBytes: number;
     timeoutMs: number;
     redirects: number;
+    callMs: number;
 };
 /** Loopback, private, link-local, CGNAT, unspecified, multicast or reserved: never a place a download should go. */
 export declare function isPrivateAddress(ip: string): boolean;
@@ -39,8 +41,15 @@ export declare function checkFileUrl(raw: string, env?: NodeJS.ProcessEnv): {
 } | {
     error: string;
 };
-/** Download one file, following at most FILE_LIMITS.redirects https redirects. */
-export declare function downloadFile(raw: string, env?: NodeJS.ProcessEnv): Promise<{
+/**
+ * Download one file, following at most FILE_LIMITS.redirects https redirects,
+ * within FILE_LIMITS.timeoutMs (or the caller's earlier `deadline`) and
+ * `maxBytes` (default the per-file limit). Never throws.
+ */
+export declare function downloadFile(raw: string, env?: NodeJS.ProcessEnv, { deadline: callDeadline, maxBytes }?: {
+    deadline?: number;
+    maxBytes?: number;
+}): Promise<{
     body: Buffer;
 } | {
     error: string;

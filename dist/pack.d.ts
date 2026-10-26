@@ -118,6 +118,15 @@ export interface ReadSourcesOptions {
     includeSecrets?: boolean;
     /** How the caller can opt in, appended to a "secret, skipped" note. */
     secretsHint?: string;
+    /**
+     * Internal (readSourcesAsync): instead of extracting a PDF or office file
+     * on the spot, reserve its slot and list it here for asynchronous
+     * extraction under a time budget.
+     */
+    defer?: Array<{
+        slot: number;
+        path: string;
+    }>;
 }
 /**
  * Read files and directories (recursively, skipping build and dependency
@@ -138,3 +147,14 @@ export declare function readSources(paths: string[], cwdOrOptions?: string | Rea
     sources: PackSource[];
     skipped: string[];
 };
+/**
+ * readSources for a server: the same walk, with PDFs and office documents
+ * extracted asynchronously and all of them within one time budget, so a slow
+ * or hostile document neither blocks the event loop nor holds the call.
+ */
+export declare function readSourcesAsync(paths: string[], options?: Omit<ReadSourcesOptions, "defer"> & {
+    budgetMs?: number;
+}): Promise<{
+    sources: PackSource[];
+    skipped: string[];
+}>;

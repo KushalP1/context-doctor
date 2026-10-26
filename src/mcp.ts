@@ -30,7 +30,7 @@ import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
 import { recordLedger } from "./ledger.js";
 import { renderSketchProfile, runSketchProfile } from "./sketch.js";
-import { packContextSemantic, readSources, renderPack } from "./pack.js";
+import { packContextSemantic, readSourcesAsync, renderPack } from "./pack.js";
 import { SERVER_INSTRUCTIONS } from "./rules.js";
 import { compactOutline, compactProfile, compactSketch, resultMode, type CompactResult } from "./compact.js";
 import { HANDOFF_LIMITS, handoffDir, listHandoffs, maskSecrets, readHandoff, renderMath, saveHandoff, tildify, validateHandoff } from "./handoff.js";
@@ -270,7 +270,9 @@ server.tool(
       if (paths?.length && !fileAccess) {
         return err("This server runs over HTTP and does not read files. Pass the document as `text`, or attach it (`files`).");
       }
-      const { sources, skipped } = paths?.length ? readSources(paths) : { sources: [], skipped: [] as string[] };
+      // Asynchronous extraction under one time budget: a slow or hostile PDF
+      // must not block the server (stdio serves every chat in Claude Desktop).
+      const { sources, skipped } = paths?.length ? await readSourcesAsync(paths) : { sources: [], skipped: [] as string[] };
       if (http && files?.length) {
         const got = await sourcesFromOpenAiFiles(files);
         sources.push(...got.sources);

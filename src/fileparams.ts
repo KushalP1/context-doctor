@@ -26,7 +26,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 import type { PackSource } from "./pack.js";
-import { EXTRACTABLE, extractText } from "./extract.js";
+import { EXTRACT_BUDGET_MS, EXTRACTABLE, extractTextAsync } from "./extract.js";
 
 export interface OpenAiFile {
   download_url: string;
@@ -35,7 +35,8 @@ export interface OpenAiFile {
   file_name?: string;
 }
 
-export const FILE_LIMITS = { files: 10, bytes: 5 * 1024 * 1024, totalBytes: 20 * 1024 * 1024, timeoutMs: 20_000, redirects: 3 };
+/** Per file: bytes and time. Per call: files, bytes and time (downloads and extraction together). */
+export const FILE_LIMITS = { files: 10, bytes: 5 * 1024 * 1024, totalBytes: 20 * 1024 * 1024, timeoutMs: 20_000, redirects: 3, callMs: 60_000 };
 
 const MIME_EXT: Record<string, string> = {
   "application/pdf": ".pdf",
@@ -90,7 +91,15 @@ export function isPrivateAddress(ip: string): boolean {
       if (g[5] === 0 && g[6] === 0 && g[7] <= 1) return true;
       return isPrivateV4(`${g[6] >> 8}.${g[6] & 255}.${g[7] >> 8}.${g[7] & 255}`);
     }
+    // IPv4-translated (::ffff:0:a.b.c.d, RFC 2765): judge the IPv4 inside.
+    if (g.slice(0, 4).every((n) => n === 0) && g[4] === 0xffff && g[5] === 0) {
+      return isPrivateV4(`${g[6] >> 8}.${g[6] & 255}.${g[7] >> 8}.${g[7] & 255}`);
+    }
     if (g[0] === 0x64 && g[1] === 0xff9b) return true; // NAT64: whatever IPv4 it carries
+    // 6to4 (2002::/16) and Teredo (2001:0::/32) tunnel to an IPv4 written into
+    // the address, private ones included; no file host needs them.
+    if (g[0] === 0x2002) return true;
+    if (g[0] === 0x2001 && g[1] === 0) return true;
     if ((g[0] & 0xfe00) === 0xfc00) return true; // fc00::/7, unique local
     if ((g[0] & 0xffc0) === 0xfe80) return true; // fe80::/10, link-local
     if ((g[0] & 0xff00) === 0xff00) return true; // multicast
@@ -142,7 +151,7 @@ function guardedLookup(allowLoopback: boolean) {
   };
 }
 
-function getOnce(url: URL, env: NodeJS.ProcessEnv, deadline: number): Promise<{ status: number; location?: string; body?: Buffer; error?: string }> {
+function getOnce(url: URL, env: NodeJS.ProcessEnv, deadline: number, maxBytes: number): Promise<{ status: number; location?: string; body?: Buffer; error?: string }> {
   return new Promise((resolve) => {
     const allowLoopback = loopbackAllowed(env) && isLoopback(url.hostname);
     const request = url.protocol === "https:" ? httpsRequest : httpRequest;
@@ -158,7 +167,7 @@ function getOnce(url: URL, env: NodeJS.ProcessEnv, deadline: number): Promise<{ 
     // time would never trip it. This one bounds the whole download.
     const overall = setTimeout(() => {
       req.destroy();
-      done({ status: 0, error: `timed out after ${Math.round(FILE_LIMITS.timeoutMs / 1000)} s` });
+      done({ status: 0, error: "timed out" });
     }, timeout);
     const req = request(url, { method: "GET", lookup: guardedLookup(allowLoopback) as any, timeout, headers: { accept: "*/*", "user-agent": "context-doctor" } }, (res) => {
       const status = res.statusCode ?? 0;
@@ -170,18 +179,23 @@ function getOnce(url: URL, env: NodeJS.ProcessEnv, deadline: number): Promise<{ 
         res.resume();
         return done({ status, error: `HTTP ${status}` });
       }
+      // The smaller of the per-file limit and what is left of the call's total,
+      // enforced as bytes arrive: nothing past it is ever held in memory.
+      const tooLarge = maxBytes < FILE_LIMITS.bytes
+        ? `over the ${FILE_LIMITS.totalBytes / 1024 / 1024} MB total for one call`
+        : `too large (over ${FILE_LIMITS.bytes / 1024 / 1024} MB)`;
       const declared = Number(res.headers["content-length"]);
-      if (Number.isFinite(declared) && declared > FILE_LIMITS.bytes) {
+      if (Number.isFinite(declared) && declared > maxBytes) {
         req.destroy();
-        return done({ status, error: `too large (${Math.round(declared / 1024)} KB; the limit is ${FILE_LIMITS.bytes / 1024 / 1024} MB)` });
+        return done({ status, error: tooLarge });
       }
       const parts: Buffer[] = [];
       let size = 0;
       res.on("data", (d: Buffer) => {
         size += d.length;
-        if (size > FILE_LIMITS.bytes) {
+        if (size > maxBytes) {
           req.destroy();
-          done({ status, error: `too large (over ${FILE_LIMITS.bytes / 1024 / 1024} MB)` });
+          done({ status, error: tooLarge });
           return;
         }
         parts.push(d);
@@ -191,25 +205,40 @@ function getOnce(url: URL, env: NodeJS.ProcessEnv, deadline: number): Promise<{ 
     });
     req.on("timeout", () => {
       req.destroy();
-      done({ status: 0, error: `timed out after ${Math.round(FILE_LIMITS.timeoutMs / 1000)} s` });
+      done({ status: 0, error: "timed out" });
     });
     req.on("error", (e: NodeJS.ErrnoException) => done({ status: 0, error: e.code === "EPRIVATE" ? "refused: the host resolves to a private address" : e.message }));
     req.end();
   });
 }
 
-/** Download one file, following at most FILE_LIMITS.redirects https redirects. */
-export async function downloadFile(raw: string, env: NodeJS.ProcessEnv = process.env): Promise<{ body: Buffer } | { error: string }> {
-  const deadline = Date.now() + FILE_LIMITS.timeoutMs;
+/**
+ * Download one file, following at most FILE_LIMITS.redirects https redirects,
+ * within FILE_LIMITS.timeoutMs (or the caller's earlier `deadline`) and
+ * `maxBytes` (default the per-file limit). Never throws.
+ */
+export async function downloadFile(
+  raw: string,
+  env: NodeJS.ProcessEnv = process.env,
+  { deadline: callDeadline, maxBytes = FILE_LIMITS.bytes }: { deadline?: number; maxBytes?: number } = {}
+): Promise<{ body: Buffer } | { error: string }> {
+  const deadline = Math.min(Date.now() + FILE_LIMITS.timeoutMs, callDeadline ?? Infinity);
+  const limit = Math.max(0, Math.min(maxBytes, FILE_LIMITS.bytes));
   let current = raw;
   for (let hop = 0; hop <= FILE_LIMITS.redirects; hop++) {
     const checked = checkFileUrl(current, env);
     if ("error" in checked) return { error: hop === 0 ? `refused: ${checked.error}` : `refused a redirect: ${checked.error}` };
-    const r = await getOnce(checked.url, env, deadline);
+    if (Date.now() >= deadline) return { error: "timed out" };
+    const r = await getOnce(checked.url, env, deadline, limit);
     if (r.error) return { error: r.error };
     if (r.location !== undefined) {
       if (!r.location) return { error: `HTTP ${r.status} without a location` };
-      current = new URL(r.location, checked.url).toString();
+      // A malformed Location (http://[::1) is that file's problem, not the call's.
+      try {
+        current = new URL(r.location, checked.url).toString();
+      } catch {
+        return { error: "refused a redirect: not a URL" };
+      }
       continue;
     }
     return { body: r.body ?? Buffer.alloc(0) };
@@ -228,18 +257,20 @@ export async function sourcesFromOpenAiFiles(files: OpenAiFile[], env: NodeJS.Pr
   const sources: PackSource[] = [];
   const skipped: string[] = [];
   let total = 0;
+  // One budget for the whole call, downloads and extraction together.
+  const callDeadline = Date.now() + FILE_LIMITS.callMs;
   for (const f of files.slice(0, FILE_LIMITS.files)) {
     const name = safeName(f);
-    const got = await downloadFile(String(f.download_url ?? ""), env);
+    if (Date.now() >= callDeadline) {
+      skipped.push(`${name}: not read, the ${FILE_LIMITS.callMs / 1000} s allowed for one call ran out`);
+      continue;
+    }
+    const got = await downloadFile(String(f.download_url ?? ""), env, { deadline: callDeadline, maxBytes: FILE_LIMITS.totalBytes - total });
     if ("error" in got) {
       skipped.push(`${name}: ${got.error}`);
       continue;
     }
     total += got.body.length;
-    if (total > FILE_LIMITS.totalBytes) {
-      skipped.push(`${name}: over the ${FILE_LIMITS.totalBytes / 1024 / 1024} MB total for one call`);
-      continue;
-    }
     const ext = extname(name).toLowerCase();
     const docExt = EXTRACTABLE.has(ext) ? ext : MIME_EXT[(f.mime_type ?? "").split(";")[0].trim().toLowerCase()];
     if (docExt) {
@@ -248,7 +279,8 @@ export async function sourcesFromOpenAiFiles(files: OpenAiFile[], env: NodeJS.Pr
       try {
         const path = join(dir, `upload${docExt}`);
         writeFileSync(path, got.body, { mode: 0o600 });
-        const text = extractText(path);
+        // Asynchronous and bounded: a hostile document cannot hold the server.
+        const text = await extractTextAsync(path, Math.min(Date.now() + EXTRACT_BUDGET_MS, callDeadline));
         if ("error" in text) skipped.push(`${name}: ${text.error}`);
         else sources.push({ name, text: text.text });
       } finally {

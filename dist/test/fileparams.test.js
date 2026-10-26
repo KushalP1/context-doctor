@@ -48,6 +48,16 @@ const mock = createServer((req, res) => {
     }
     if (url === "/hang")
         return; // never answers
+    if (url === "/bad-location")
+        return void res.writeHead(302, { location: "http://[::1" }).end();
+    if (url.startsWith("/chunk45")) {
+        // 4.5 MB, chunked (no content-length): only counting while streaming can stop it.
+        res.writeHead(200, { "content-type": "text/plain" });
+        const chunk = Buffer.alloc(512 * 1024, 98);
+        for (let i = 0; i < 9; i++)
+            res.write(chunk);
+        return void res.end();
+    }
     res.writeHead(404).end();
 });
 const port = await freePort();
@@ -71,6 +81,9 @@ test("download URLs: https to a public host only; no credentials, local names or
         ["https://[::ffff:a9fe:a9fe]/latest", /private/],
         ["https://2130706433/a", /private/],
         ["https://0x7f.1/a", /private/],
+        ["https://[::ffff:0:7f00:1]/a", /private/],
+        ["https://[2002:7f00:1::]/a", /private/],
+        ["https://[2001:0:4136:e378:8000:63bf:80ff:fffe]/a", /private/],
         ["file:///etc/passwd", /only https/],
         ["not a url", /not a URL/],
     ];
@@ -89,6 +102,8 @@ test("private address ranges, v4 and v6", () => {
         "::1", "::", "0:0:0:0:0:0:0:1", "fe80::1", "fe80::1%lo0", "fc00::1", "fd12:3456::1", "ff02::1", "2001:db8::1", "64:ff9b::7f00:1",
         // One loopback, many spellings: the URL parser turns [::ffff:127.0.0.1] into [::ffff:7f00:1].
         "::ffff:10.0.0.1", "::ffff:127.0.0.1", "::ffff:7f00:1", "0:0:0:0:0:ffff:7f00:0001", "::ffff:a9fe:a9fe", "::7f00:1", "[::1]",
+        // IPv4-translated, 6to4 and Teredo carry an IPv4 the tunnel delivers to.
+        "::ffff:0:7f00:1", "::ffff:0:a9fe:a9fe", "2002:7f00:1::", "2002:c0a8:101::1", "2001:0:4136:e378:8000:63bf:80ff:fffe",
         "not-an-ip",
     ]) {
         assert.equal(isPrivateAddress(ip), true, ip);
@@ -214,5 +229,40 @@ test("pack_context over HTTP packs an uploaded file; the same URL is refused wit
     }
     finally {
         strict.child.kill();
+    }
+});
+test("a malformed redirect is that file's problem: it is skipped with a reason and the others are read", async () => {
+    const r = await downloadFile(at("/bad-location"), TEST_ENV);
+    assert.ok("error" in r && /refused a redirect: not a URL/.test(r.error), JSON.stringify(r));
+    const got = await sourcesFromOpenAiFiles([
+        { download_url: at("/bad-location"), file_id: "bad", file_name: "bad.md" },
+        { download_url: at("/doc.md"), file_id: "good", file_name: "good.md" },
+    ], TEST_ENV);
+    assert.deepEqual(got.sources.map((x) => x.name), ["good.md"]);
+    assert.match(got.skipped.join("\n"), /bad\.md: refused a redirect: not a URL/);
+});
+test("the 20 MB total for a call is enforced while bytes arrive, and one time budget covers the call", async () => {
+    const files = Array.from({ length: 5 }, (_, i) => ({ download_url: at(`/chunk45?${i}`), file_id: `f${i}`, file_name: `part${i}.txt` }));
+    const got = await sourcesFromOpenAiFiles(files, TEST_ENV);
+    assert.equal(got.sources.length, 4, "4 x 4.5 MB fit in 20 MB");
+    assert.match(got.skipped.join("\n"), /part4\.txt: over the 20 MB total for one call/);
+    const total = got.sources.reduce((n, x) => n + x.text.length, 0);
+    assert.ok(total <= FILE_LIMITS.totalBytes);
+    const saved = FILE_LIMITS.callMs;
+    FILE_LIMITS.callMs = 400;
+    try {
+        const started = Date.now();
+        const slow = await sourcesFromOpenAiFiles([
+            { download_url: at("/hang"), file_id: "h1", file_name: "hang1.md" },
+            { download_url: at("/hang"), file_id: "h2", file_name: "hang2.md" },
+            { download_url: at("/doc.md"), file_id: "d", file_name: "late.md" },
+        ], TEST_ENV);
+        assert.ok(Date.now() - started < 3000, `the call stopped at its budget (${Date.now() - started} ms)`);
+        assert.equal(slow.sources.length, 0);
+        assert.match(slow.skipped.join("\n"), /hang1\.md: timed out/);
+        assert.match(slow.skipped.join("\n"), /late\.md: not read, the 0\.4 s allowed for one call ran out/);
+    }
+    finally {
+        FILE_LIMITS.callMs = saved;
     }
 });

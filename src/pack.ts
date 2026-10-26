@@ -19,7 +19,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSyn
 import { homedir } from "node:os";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { estimateTokens, formatTokens } from "./tokens.js";
-import { EXTRACTABLE, extractText } from "./extract.js";
+import { EXTRACT_BUDGET_MS, EXTRACTABLE, extractText, extractTextAsync } from "./extract.js";
 
 export interface PackSource {
   /** Name shown in chunk ids, e.g. a path relative to where the user is. */
@@ -511,6 +511,12 @@ export interface ReadSourcesOptions {
   includeSecrets?: boolean;
   /** How the caller can opt in, appended to a "secret, skipped" note. */
   secretsHint?: string;
+  /**
+   * Internal (readSourcesAsync): instead of extracting a PDF or office file
+   * on the spot, reserve its slot and list it here for asynchronous
+   * extraction under a time budget.
+   */
+  defer?: Array<{ slot: number; path: string }>;
 }
 
 /** A short reason for a filesystem error: EACCES reads as "permission denied", not a stack trace. */
@@ -654,6 +660,13 @@ export function readSources(
     const rel = relative(cwd, p);
     const name = rel && !rel.startsWith("..") ? rel : p;
     if (EXTRACTABLE.has(extname(p).toLowerCase())) {
+      if (options.defer) {
+        bytes += st.size;
+        seen.add(real);
+        sources.push({ name, text: "" });
+        options.defer.push({ slot: sources.length - 1, path: p });
+        return;
+      }
       const got = extractText(p);
       if ("error" in got) skipped.push(`${p}: ${got.error}`);
       else {
@@ -690,4 +703,27 @@ export function readSources(
     if (hidden > 0) skipped.push(`${p}: ${hidden} hidden file(s) or folder(s) not read (name one to pack it)`);
   }
   return { sources, skipped };
+}
+
+/**
+ * readSources for a server: the same walk, with PDFs and office documents
+ * extracted asynchronously and all of them within one time budget, so a slow
+ * or hostile document neither blocks the event loop nor holds the call.
+ */
+export async function readSourcesAsync(
+  paths: string[],
+  options: Omit<ReadSourcesOptions, "defer"> & { budgetMs?: number } = {}
+): Promise<{ sources: PackSource[]; skipped: string[] }> {
+  const defer: Array<{ slot: number; path: string }> = [];
+  const { sources, skipped } = readSources(paths, { ...options, defer });
+  const deadline = Date.now() + (options.budgetMs ?? EXTRACT_BUDGET_MS);
+  const failed = new Set<number>();
+  for (const d of defer) {
+    const got = await extractTextAsync(d.path, deadline);
+    if ("error" in got) {
+      skipped.push(`${d.path}: ${got.error}`);
+      failed.add(d.slot);
+    } else sources[d.slot].text = got.text;
+  }
+  return { sources: sources.filter((_, i) => !failed.has(i)), skipped };
 }

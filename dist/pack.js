@@ -18,7 +18,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSyn
 import { homedir } from "node:os";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { estimateTokens, formatTokens } from "./tokens.js";
-import { EXTRACTABLE, extractText } from "./extract.js";
+import { EXTRACT_BUDGET_MS, EXTRACTABLE, extractText, extractTextAsync } from "./extract.js";
 const DEFAULT_BUDGET = 4000;
 const DEFAULT_CHUNK_TOKENS = 400;
 /** Claude's tokenizer produces the most tokens per char; a budget in its terms never overruns another's. */
@@ -590,6 +590,13 @@ export function readSources(paths, cwdOrOptions = process.cwd()) {
         const rel = relative(cwd, p);
         const name = rel && !rel.startsWith("..") ? rel : p;
         if (EXTRACTABLE.has(extname(p).toLowerCase())) {
+            if (options.defer) {
+                bytes += st.size;
+                seen.add(real);
+                sources.push({ name, text: "" });
+                options.defer.push({ slot: sources.length - 1, path: p });
+                return;
+            }
             const got = extractText(p);
             if ("error" in got)
                 skipped.push(`${p}: ${got.error}`);
@@ -630,4 +637,25 @@ export function readSources(paths, cwdOrOptions = process.cwd()) {
             skipped.push(`${p}: ${hidden} hidden file(s) or folder(s) not read (name one to pack it)`);
     }
     return { sources, skipped };
+}
+/**
+ * readSources for a server: the same walk, with PDFs and office documents
+ * extracted asynchronously and all of them within one time budget, so a slow
+ * or hostile document neither blocks the event loop nor holds the call.
+ */
+export async function readSourcesAsync(paths, options = {}) {
+    const defer = [];
+    const { sources, skipped } = readSources(paths, { ...options, defer });
+    const deadline = Date.now() + (options.budgetMs ?? EXTRACT_BUDGET_MS);
+    const failed = new Set();
+    for (const d of defer) {
+        const got = await extractTextAsync(d.path, deadline);
+        if ("error" in got) {
+            skipped.push(`${d.path}: ${got.error}`);
+            failed.add(d.slot);
+        }
+        else
+            sources[d.slot].text = got.text;
+    }
+    return { sources: sources.filter((_, i) => !failed.has(i)), skipped };
 }
