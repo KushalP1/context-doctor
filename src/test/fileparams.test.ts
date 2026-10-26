@@ -60,6 +60,11 @@ test("download URLs: https to a public host only; no credentials, local names or
     ["https://169.254.169.254/latest/meta-data", /private/],
     ["https://[::1]/a", /private/],
     ["https://[fd00::1]/a", /private/],
+    ["https://[::ffff:127.0.0.1]/a", /private/],
+    ["https://[::ffff:7f00:1]/a", /private/],
+    ["https://[::ffff:a9fe:a9fe]/latest", /private/],
+    ["https://2130706433/a", /private/],
+    ["https://0x7f.1/a", /private/],
     ["file:///etc/passwd", /only https/],
     ["not a url", /not a URL/],
   ];
@@ -74,10 +79,16 @@ test("download URLs: https to a public host only; no credentials, local names or
 });
 
 test("private address ranges, v4 and v6", () => {
-  for (const ip of ["127.0.0.1", "10.1.1.1", "172.16.0.1", "172.31.255.255", "192.168.1.1", "169.254.1.1", "100.64.0.1", "0.0.0.0", "224.0.0.1", "::1", "::", "fe80::1", "fc00::1", "::ffff:10.0.0.1", "not-an-ip"]) {
+  for (const ip of [
+    "127.0.0.1", "10.1.1.1", "172.16.0.1", "172.31.255.255", "192.168.1.1", "169.254.1.1", "100.64.0.1", "0.0.0.0", "224.0.0.1",
+    "::1", "::", "0:0:0:0:0:0:0:1", "fe80::1", "fe80::1%lo0", "fc00::1", "fd12:3456::1", "ff02::1", "2001:db8::1", "64:ff9b::7f00:1",
+    // One loopback, many spellings: the URL parser turns [::ffff:127.0.0.1] into [::ffff:7f00:1].
+    "::ffff:10.0.0.1", "::ffff:127.0.0.1", "::ffff:7f00:1", "0:0:0:0:0:ffff:7f00:0001", "::ffff:a9fe:a9fe", "::7f00:1", "[::1]",
+    "not-an-ip",
+  ]) {
     assert.equal(isPrivateAddress(ip), true, ip);
   }
-  for (const ip of ["8.8.8.8", "172.32.0.1", "100.128.0.1", "2606:4700::1111", "::ffff:8.8.8.8"]) assert.equal(isPrivateAddress(ip), false, ip);
+  for (const ip of ["8.8.8.8", "172.32.0.1", "100.128.0.1", "2606:4700::1111", "2001:4860:4860::8888", "::ffff:8.8.8.8", "::ffff:808:808"]) assert.equal(isPrivateAddress(ip), false, ip);
 });
 
 test("download: the body, same-host redirects followed, redirects to http or private hosts refused, sizes and time capped", async () => {

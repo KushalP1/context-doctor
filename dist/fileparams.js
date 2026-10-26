@@ -38,21 +38,59 @@ const MIME_EXT = {
 function loopbackAllowed(env = process.env) {
     return env.CONTEXT_DOCTOR_TEST_LOOPBACK_FILES === "1";
 }
+function isPrivateV4(ip) {
+    const [a, b] = ip.split(".").map(Number);
+    return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || (a === 192 && b === 0) || (a === 198 && (b === 18 || b === 19));
+}
+/**
+ * The eight 16-bit groups of an IPv6 address, a dotted IPv4 tail included,
+ * or undefined. Needed because one address has many spellings: the URL
+ * parser writes [::ffff:127.0.0.1] as [::ffff:7f00:1], which a pattern for
+ * the dotted form lets through to the loopback interface.
+ */
+function hextets(ip) {
+    let s = ip.toLowerCase().replace(/^\[|\]$/g, "").replace(/%.*$/, "");
+    const v4 = s.match(/(\d+\.\d+\.\d+\.\d+)$/);
+    if (v4) {
+        const [a, b, c, d] = v4[1].split(".").map(Number);
+        s = s.slice(0, -v4[1].length) + `${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+    }
+    const [head, tail] = s.split("::");
+    const h = head ? head.split(":") : [];
+    const t = tail !== undefined && tail ? tail.split(":") : [];
+    const fill = s.includes("::") ? 8 - h.length - t.length : 0;
+    const all = [...h, ...Array(Math.max(0, fill)).fill("0"), ...t].map((x) => parseInt(x || "0", 16));
+    return all.length === 8 && all.every((n) => Number.isInteger(n) && n >= 0 && n <= 0xffff) ? all : undefined;
+}
 /** Loopback, private, link-local, CGNAT, unspecified, multicast or reserved: never a place a download should go. */
 export function isPrivateAddress(ip) {
-    const v = isIP(ip);
-    if (v === 4) {
-        const [a, b] = ip.split(".").map(Number);
-        return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || (a === 192 && b === 0) || (a === 198 && (b === 18 || b === 19));
-    }
+    const bare = ip.replace(/^\[|\]$/g, "");
+    const v = isIP(bare);
+    if (v === 4)
+        return isPrivateV4(bare);
     if (v === 6) {
-        const s = ip.toLowerCase().replace(/^\[|\]$/g, "");
-        const mapped = s.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-        if (mapped)
-            return isPrivateAddress(mapped[1]);
-        if (s === "::" || s === "::1")
+        const g = hextets(bare);
+        if (!g)
             return true;
-        return /^(fc|fd|fe8|fe9|fea|feb|ff)/.test(s) || s.startsWith("64:ff9b:") || s.startsWith("2001:db8");
+        // ::, ::1, IPv4-mapped (::ffff:a.b.c.d) and IPv4-compatible (::a.b.c.d): judge the IPv4 inside.
+        if (g.slice(0, 5).every((n) => n === 0) && (g[5] === 0xffff || g[5] === 0)) {
+            if (g[5] === 0 && g[6] === 0 && g[7] <= 1)
+                return true;
+            return isPrivateV4(`${g[6] >> 8}.${g[6] & 255}.${g[7] >> 8}.${g[7] & 255}`);
+        }
+        if (g[0] === 0x64 && g[1] === 0xff9b)
+            return true; // NAT64: whatever IPv4 it carries
+        if ((g[0] & 0xfe00) === 0xfc00)
+            return true; // fc00::/7, unique local
+        if ((g[0] & 0xffc0) === 0xfe80)
+            return true; // fe80::/10, link-local
+        if ((g[0] & 0xff00) === 0xff00)
+            return true; // multicast
+        if (g[0] === 0x2001 && g[1] === 0x0db8)
+            return true; // documentation
+        if (g[0] === 0x0100 && g[1] === 0 && g[2] === 0 && g[3] === 0)
+            return true; // discard
+        return false;
     }
     return true; // not an address at all: refuse
 }
