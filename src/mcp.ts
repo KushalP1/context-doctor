@@ -33,7 +33,7 @@ import { renderSketchProfile, runSketchProfile } from "./sketch.js";
 import { packContextSemantic, readSources, renderPack } from "./pack.js";
 import { SERVER_INSTRUCTIONS } from "./rules.js";
 import { compactOutline, compactProfile, compactSketch, resultMode, type CompactResult } from "./compact.js";
-import { HANDOFF_LIMITS, handoffDir, listHandoffs, readHandoff, renderMath, saveHandoff, tildify, validateHandoff } from "./handoff.js";
+import { HANDOFF_LIMITS, handoffDir, listHandoffs, maskSecrets, readHandoff, renderMath, saveHandoff, tildify, validateHandoff } from "./handoff.js";
 import { sourcesFromOpenAiFiles } from "./fileparams.js";
 
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"] as const;
@@ -398,9 +398,10 @@ server.tool(
       let blocks = verbatim;
       if (storeHandoffs) {
         const n = verbatim?.length ?? 0;
+        // The form shows the title and block labels: masked, like what is saved.
         const c = await askConsent(
           server,
-          `Save a handoff of this chat on this computer (${tildify(handoffDir())}) to start a new chat from? "${(title ?? brief.split("\n")[0]).slice(0, 80)}"${n ? `, with ${n} verbatim block(s): ${verbatim!.map((b) => b.label).join(", ").slice(0, 200)}` : ""}.`,
+          maskSecrets(`Save a handoff of this chat on this computer (${tildify(handoffDir())}) to start a new chat from? "${(title ?? brief.split("\n")[0]).slice(0, 80)}"${n ? `, with ${n} verbatim block(s): ${verbatim!.map((b) => b.label).join(", ").slice(0, 200)}` : ""}.`).text,
           n ? { include_verbatim: { type: "boolean", title: "Include the verbatim blocks", default: true } } : {}
         );
         if (c.asked && !c.ok) {

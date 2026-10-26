@@ -12,8 +12,9 @@
  * a widget would read it.
  *
  * Not the default: a client that ignores `structuredContent` would lose the
- * detail. The server sends this form to ChatGPT (recognised by the `openai/*`
- * request metadata it attaches to every tool call) or when
+ * detail. The server sends this form to ChatGPT (recognised by the
+ * `openai/session` or `openai/subject` request metadata, the anonymized
+ * conversation and user ids it attaches to tool calls) or when
  * CONTEXT_DOCTOR_RESULTS=compact; everything else gets the full text, as
  * before. Measured sizes are in ROADMAP.md ("Desktop chat apps").
  */
@@ -26,11 +27,6 @@ export interface CompactResult {
     structured: Record<string, unknown>;
     meta: Record<string, unknown>;
 }
-/**
- * Which form a tool call gets. `requestMeta` is the request's `_meta`: ChatGPT
- * sends `openai/session`, `openai/subject`, `openai/locale` and the like on
- * every call. An explicit CONTEXT_DOCTOR_RESULTS (full or compact) wins.
- */
 export declare function resultMode(requestMeta: unknown, env?: NodeJS.ProcessEnv): ResultMode;
 /** profile_context on a conversation. */
 export declare function compactProfile(p: ContextProfile, fullText: string): CompactResult;

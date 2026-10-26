@@ -12,22 +12,26 @@
  * a widget would read it.
  *
  * Not the default: a client that ignores `structuredContent` would lose the
- * detail. The server sends this form to ChatGPT (recognised by the `openai/*`
- * request metadata it attaches to every tool call) or when
+ * detail. The server sends this form to ChatGPT (recognised by the
+ * `openai/session` or `openai/subject` request metadata, the anonymized
+ * conversation and user ids it attaches to tool calls) or when
  * CONTEXT_DOCTOR_RESULTS=compact; everything else gets the full text, as
  * before. Measured sizes are in ROADMAP.md ("Desktop chat apps").
  */
 import { formatTokens } from "./tokens.js";
 /**
- * Which form a tool call gets. `requestMeta` is the request's `_meta`: ChatGPT
- * sends `openai/session`, `openai/subject`, `openai/locale` and the like on
- * every call. An explicit CONTEXT_DOCTOR_RESULTS (full or compact) wins.
+ * Which form a tool call gets. `requestMeta` is the request's `_meta`.
+ * ChatGPT's identification keys mark ChatGPT itself, the client documented to
+ * show structuredContent to the model; any `openai/*` key would also catch
+ * other OpenAI clients (locale, user agent) that may not. An explicit
+ * CONTEXT_DOCTOR_RESULTS (full or compact) wins.
  */
+const CHATGPT_KEYS = ["openai/session", "openai/subject"];
 export function resultMode(requestMeta, env = process.env) {
     const forced = env.CONTEXT_DOCTOR_RESULTS?.trim().toLowerCase();
     if (forced === "full" || forced === "compact")
         return forced;
-    if (requestMeta && typeof requestMeta === "object" && Object.keys(requestMeta).some((k) => k.startsWith("openai/")))
+    if (requestMeta && typeof requestMeta === "object" && CHATGPT_KEYS.some((k) => k in requestMeta))
         return "compact";
     return "full";
 }

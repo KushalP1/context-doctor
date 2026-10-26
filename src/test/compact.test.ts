@@ -1,6 +1,6 @@
 /**
- * Compact tool results: ChatGPT (recognised by the openai/* metadata on its
- * tool calls) gets a short text with the detail as structuredContent and the
+ * Compact tool results: ChatGPT (recognised by the openai/session or
+ * openai/subject metadata on its tool calls) gets a short text with the detail as structuredContent and the
  * presentation in _meta; every other client keeps the full text.
  */
 import { test } from "node:test";
@@ -75,6 +75,8 @@ test("result mode: an explicit CONTEXT_DOCTOR_RESULTS wins; unknown clients get 
   assert.equal(resultMode(undefined, {}), "full");
   assert.equal(resultMode({ progressToken: 1 }, {}), "full");
   assert.equal(resultMode({ "openai/subject": "u" }, {}), "compact");
+  assert.equal(resultMode({ "openai/session": "s" }, {}), "compact");
+  assert.equal(resultMode({ "openai/locale": "en-US", "openai/userAgent": "x" }, {}), "full", "only ChatGPT's own ids, not any OpenAI key");
   assert.equal(resultMode({ "openai/subject": "u" }, { CONTEXT_DOCTOR_RESULTS: "full" }), "full");
   assert.equal(resultMode(undefined, { CONTEXT_DOCTOR_RESULTS: "compact" }), "compact");
 });
