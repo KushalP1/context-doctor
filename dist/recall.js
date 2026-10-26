@@ -20,15 +20,17 @@
  */
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { claudeProjectDir, forEachLine } from "./session.js";
 import { packContext } from "./pack.js";
 import { maskSecrets, stripControls } from "./handoff.js";
 import { formatTokens } from "./tokens.js";
 /** A tool output longer than this keeps its head and tail: the middle of a 5 MB log rarely answers a question. */
 const ENTRY_MAX_CHARS = 200_000;
-/** Beyond this much text the oldest entries are left out (and said to be). */
-const TOTAL_MAX_CHARS = 40_000_000;
+/** Beyond this much text the oldest entries are left out (and said to be): ~3M tokens, three full 1M windows. */
+const TOTAL_MAX_CHARS = 8_000_000;
+/** Past each cut, this much more is masked first, so a secret across the cut still matches whole. */
+const MASK_MARGIN = 16_384;
 function textOf(content) {
     if (typeof content === "string")
         return content;
@@ -39,11 +41,38 @@ function textOf(content) {
         .filter(Boolean)
         .join("\n");
 }
-function clip(text) {
+function clipRaw(text) {
     if (text.length <= ENTRY_MAX_CHARS)
-        return text;
+        return { whole: text };
     const half = ENTRY_MAX_CHARS / 2;
-    return `${text.slice(0, half)}\n[… ${text.length - ENTRY_MAX_CHARS} characters …]\n${text.slice(-half)}`;
+    return { head: text.slice(0, half + MASK_MARGIN), tail: text.slice(-(half + MASK_MARGIN)), length: text.length };
+}
+const rawLength = (r) => ("whole" in r ? r.whole.length : ENTRY_MAX_CHARS);
+/**
+ * Mask, then clip: a secret cut by the clip would no longer match its
+ * pattern (half a private key leaked that way). Head and tail are masked
+ * with a margin past each cut before they are cut to size; a private key
+ * that runs past the head's margin is masked to its end by its own pattern,
+ * and a tail that starts inside a key (an END line with no BEGIN before it)
+ * is masked up to that line. Masking waits until the entries to keep are
+ * known: a 300 MB transcript masks only what it returns.
+ */
+function maskRaw(r) {
+    if ("whole" in r) {
+        const m = maskSecrets(stripControls(r.whole));
+        return { text: m.text, masked: m.count };
+    }
+    const half = ENTRY_MAX_CHARS / 2;
+    const head = maskSecrets(stripControls(r.head));
+    let tailText = stripControls(r.tail);
+    let extra = 0;
+    const end = /-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/.exec(tailText);
+    if (end && !/-----BEGIN [A-Z0-9 ]*PRIVATE KEY/.test(tailText.slice(0, end.index))) {
+        tailText = `[private key masked by context-doctor]${tailText.slice(end.index + end[0].length)}`;
+        extra = 1;
+    }
+    const tail = maskSecrets(tailText);
+    return { text: `${head.text.slice(0, half)}\n[… ${r.length - ENTRY_MAX_CHARS} characters …]\n${tail.text.slice(-half)}`, masked: head.count + tail.count + extra };
 }
 /** A tool call in one line: its name and the input that says what it did (command, path, pattern). */
 function callLine(name, input) {
@@ -52,18 +81,39 @@ function callLine(name, input) {
     const detail = key ? String(i[key]) : typeof input === "string" ? input : JSON.stringify(input ?? "");
     return `${name}: ${detail.slice(0, 2000)}`;
 }
-/** Claude Code transcript rows, or Codex rollout lines, as entries in order. */
-export function transcriptEntries(path) {
+/**
+ * Claude Code transcript rows, or Codex rollout lines, as entries in order:
+ * streamed, holding only the newest `maxChars` of text (a 300 MB transcript
+ * is never in memory at once). A subagent's transcript (all its rows are
+ * sidechain rows) is read as itself; in a main transcript sidechain rows
+ * are skipped.
+ */
+export function transcriptEntries(path, maxChars = TOTAL_MAX_CHARS) {
     const entries = [];
+    let start = 0, chars = 0, total = 0, compactions = 0;
+    let sidechainFile = /[\\/]subagents[\\/]agent-[^\\/]*\.jsonl$/.test(path) || undefined;
     const toolNames = new Map();
-    const push = (at, kind, text) => {
-        const t = text.trim();
-        if (t)
-            entries.push({ n: entries.length + 1, at: typeof at === "string" ? at : undefined, kind, text: clip(t), compactedBy: 0 });
-    };
-    const compact = () => {
-        for (const e of entries)
-            e.compactedBy++;
+    const push = (at, kind, raw) => {
+        const trimmed = raw.trim();
+        if (!trimmed)
+            return;
+        total++;
+        const clipped = clipRaw(trimmed);
+        entries.push({ n: total, at: typeof at === "string" ? at : undefined, kind, raw: clipped, compactedBy: 0, c: compactions });
+        chars += rawLength(clipped);
+        // Older entries past the budget are let go at once (their text could be
+        // hundreds of megabytes in all), and the array itself trimmed now and then.
+        while (chars > maxChars && start < entries.length - 1) {
+            chars -= rawLength(entries[start].raw);
+            entries[start].raw = { whole: "" };
+            start++;
+        }
+        if (start > 1024) {
+            entries.splice(0, start);
+            start = 0;
+        }
+        if (toolNames.size > 100_000)
+            toolNames.clear();
     };
     forEachLine(path, (line) => {
         let e;
@@ -78,8 +128,10 @@ export function transcriptEntries(path) {
         // Codex rollouts: {timestamp, type, payload}.
         if (e.payload && typeof e.payload === "object" && typeof e.type === "string" && !e.message) {
             const p = e.payload;
-            if (e.type === "compacted" || p.type === "context_compacted")
-                return compact();
+            if (e.type === "compacted" || p.type === "context_compacted") {
+                compactions++;
+                return;
+            }
             if (e.type !== "response_item")
                 return;
             if (p.type === "message" && (p.role === "user" || p.role === "assistant"))
@@ -102,14 +154,19 @@ export function transcriptEntries(path) {
             return;
         }
         // Claude Code transcripts.
-        if (e.isSidechain)
+        if (e.type === "system" && e.subtype === "compact_boundary") {
+            compactions++;
             return;
-        if (e.type === "system" && e.subtype === "compact_boundary")
-            return compact();
+        }
         if (e.isCompactSummary)
             return; // the summary is what the context holds now
         const m = e.message;
         if (!m)
+            return;
+        // The first message row says whose file this is: a subagent's rows are all sidechain.
+        if (sidechainFile === undefined)
+            sidechainFile = e.isSidechain === true;
+        if (e.isSidechain && !sidechainFile)
             return;
         const content = m.content;
         if (e.type === "user") {
@@ -137,7 +194,13 @@ export function transcriptEntries(path) {
             }
         }
     });
-    return entries;
+    let masked = 0;
+    const kept = entries.slice(start).map(({ c, raw, ...e }) => {
+        const m = maskRaw(raw);
+        masked += m.masked;
+        return { ...e, text: m.text, compactedBy: compactions - c };
+    });
+    return { entries: kept, total, compactions, masked };
 }
 /** The first line of a Codex rollout names the folder it started in. */
 function codexCwd(path) {
@@ -158,36 +221,29 @@ function codexCwd(path) {
         return undefined;
     }
 }
-/**
- * This session's transcript, never another project's: CLAUDE_CODE_SESSION_ID,
- * then the newest transcript in this folder's Claude Code project, then the
- * newest Codex rollout of the last week started in this folder.
- */
-export function currentTranscript(env = process.env, cwd = process.cwd(), home = homedir()) {
-    const here = claudeProjectDir(cwd, home);
-    const id = env.CLAUDE_CODE_SESSION_ID?.trim();
-    if (id && /^[\w.-]+$/.test(id)) {
-        const found = findSession(id, home);
-        if (found)
-            return { path: found, how: `this Claude Code session (${id})` };
-    }
+/** The newest `.jsonl` directly in a folder, with its time. */
+function newestIn(dir) {
     let newest;
     try {
-        for (const f of readdirSync(here)) {
+        for (const f of readdirSync(dir)) {
             if (!f.endsWith(".jsonl"))
                 continue;
-            const p = join(here, f);
+            const p = join(dir, f);
             const at = statSync(p).mtimeMs;
             if (!newest || at > newest.at)
                 newest = { path: p, at };
         }
     }
     catch {
-        /* no Claude Code project for this folder */
+        /* no such folder */
     }
-    if (newest)
-        return { path: newest.path, how: "the newest Claude Code session in this folder" };
+    return newest;
+}
+/** The newest Codex rollout of the last week that started in `cwd`. */
+function newestCodexFor(cwd, home) {
     const codexRoot = join(home, ".codex", "sessions");
+    if (!existsSync(codexRoot))
+        return undefined;
     const since = Date.now() - 7 * 86_400_000;
     const candidates = [];
     const walk = (dir, depth) => {
@@ -215,10 +271,39 @@ export function currentTranscript(env = process.env, cwd = process.cwd(), home =
                 candidates.push({ path: p, at: st.mtimeMs });
         }
     };
-    if (existsSync(codexRoot))
-        walk(codexRoot, 0);
-    const codex = candidates.sort((a, b) => b.at - a.at).find((c) => codexCwd(c.path) === resolve(cwd));
-    return codex ? { path: codex.path, how: "the newest Codex session started in this folder" } : undefined;
+    walk(codexRoot, 0);
+    return candidates.sort((a, b) => b.at - a.at).find((c) => codexCwd(c.path) === resolve(cwd));
+}
+/**
+ * This session's transcript, never another project's.
+ *  - CLAUDE_CODE_SESSION_ID names it. In a shell Claude Code starts, it is
+ *    current. In the MCP server (`envMayBeStale`) it is the session the
+ *    server started with: after /clear, Claude Code 2.1.308 keeps the old id
+ *    there while writing a new transcript, so a newer transcript in the same
+ *    project wins, and the answer says so.
+ *  - Otherwise the newest of: this folder's Claude Code transcripts, and the
+ *    Codex rollouts of the last week started in this folder (a Codex session
+ *    today beats a Claude Code chat from last month).
+ */
+export function currentTranscript(env = process.env, cwd = process.cwd(), home = homedir(), opts = {}) {
+    const id = env.CLAUDE_CODE_SESSION_ID?.trim();
+    if (id && /^[\w.-]+$/.test(id)) {
+        const found = findSession(id, home);
+        if (found && found.endsWith(`${id}.jsonl`)) {
+            if (opts.envMayBeStale) {
+                const newest = newestIn(dirname(found));
+                if (newest && newest.path !== found && newest.at > statSync(found).mtimeMs) {
+                    return { path: newest.path, how: `the newest Claude Code session in this project (${basename(newest.path, ".jsonl")}; CLAUDE_CODE_SESSION_ID still names ${id}, as after /clear)` };
+                }
+            }
+            return { path: found, how: `this Claude Code session (${id})` };
+        }
+    }
+    const claude = newestIn(claudeProjectDir(cwd, home));
+    const codex = newestCodexFor(cwd, home);
+    if (codex && (!claude || codex.at > claude.at))
+        return { path: codex.path, how: "the newest Codex session started in this folder" };
+    return claude ? { path: claude.path, how: "the newest Claude Code session in this folder" } : undefined;
 }
 /** A session named by id (Claude Code `<id>.jsonl` in any project, or a Codex rollout whose name holds it) or by path. */
 export function findSession(idOrPath, home = homedir()) {
@@ -268,25 +353,16 @@ export function findSession(idOrPath, home = homedir()) {
  * tokens, best first. Masked before ranking, so a secret is never returned.
  */
 export function recall(path, query, opts = {}) {
-    let entries = transcriptEntries(path);
-    const compactions = entries.length ? Math.max(0, ...entries.map((e) => e.compactedBy)) : 0;
-    let chars = 0;
-    let from = entries.length;
-    while (from > 0 && chars + entries[from - 1].text.length <= TOTAL_MAX_CHARS)
-        chars += entries[--from].text.length;
-    entries = entries.slice(from);
-    let masked = 0;
+    const read = transcriptEntries(path);
+    const { entries, compactions } = read;
     const byName = new Map();
     const sources = entries.map((e) => {
-        const m = maskSecrets(stripControls(e.text));
-        masked += m.count;
         const name = `#${e.n}`;
         byName.set(name, e);
-        return { name, text: m.text };
+        return { name, text: e.text };
     });
     const budget = Math.max(200, opts.budget ?? 2000);
     const r = packContext(sources, { query, budget, maxChunkTokens: 300 });
-    const total = entries.length + from;
     const where = (e) => (e.compactedBy === 0 ? "in context" : `before compaction ${compactions - e.compactedBy + 1} of ${compactions}`);
     const hits = [...r.selected]
         .sort((a, b) => b.score - a.score)
@@ -295,7 +371,7 @@ export function recall(path, query, opts = {}) {
         return { id: c.id, n: e.n, at: e.at, kind: e.kind, where: where(e), tokens: c.tokens, score: c.score, text: c.text };
     });
     const more = r.chunks.filter((c) => c.score > 0 && !r.selected.includes(c)).length;
-    return { path, how: opts.how ?? "the session named", query, entries: total, compactions, totalTokens: r.totalTokens, hits, masked, more };
+    return { path, how: opts.how ?? "the session named", query, entries: read.total, compactions, totalTokens: r.totalTokens, hits, masked: read.masked, more, leftOut: read.total - entries.length };
 }
 export function renderRecall(r, home = homedir()) {
     const name = basename(r.path).replace(/\.jsonl$/, "").slice(0, 48);
@@ -307,6 +383,8 @@ export function renderRecall(r, home = homedir()) {
     out.push(`Best ${r.hits.length} excerpt${r.hits.length === 1 ? "" : "s"} for "${r.query}", best first${r.more ? ` (${r.more} more matched; a narrower query or a larger max_tokens gets them)` : ""}:`);
     if (r.masked)
         out.push(`${r.masked} secret-looking string${r.masked === 1 ? "" : "s"} masked.`);
+    if (r.leftOut)
+        out.push(`The oldest ${r.leftOut} entries were not searched: the transcript is that large.`);
     for (const h of r.hits) {
         const when = h.at ? h.at.slice(0, 16).replace("T", " ") + " UTC" : "time not recorded";
         out.push("", `── entry ${h.n} of ${r.entries} · ${when} · ${h.kind} · ${h.where} · ~${formatTokens(h.tokens)}`, h.text);

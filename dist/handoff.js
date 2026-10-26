@@ -150,6 +150,9 @@ const SECRET_KEY_NAME = "(?:password|passwd|passphrase|pwd|secret|secret[_-]?key
 // The key: an identifier whose LAST segment names a secret (DB_PASSWORD,
 // OPENAI_API_KEY, _authToken), so token_count or max_tokens are not keys.
 const ASSIGNMENT = new RegExp(`(?<![A-Za-z0-9])((?:[A-Za-z0-9]+[_.-])*${SECRET_KEY_NAME}["']?\\s*[:=]\\s*["']?)([^\\s"'\`,;()<>{}\\[\\]]{3,})(?=$|[\\s"'\`,;)\\]}])`, "gim");
+// The same keys with a quoted value, spaces and all: a passphrase
+// (`"password": "correct horse battery staple"`) is several words.
+const QUOTED_ASSIGNMENT = new RegExp(`(?<![A-Za-z0-9])((?:[A-Za-z0-9]+[_.-])*${SECRET_KEY_NAME}["']?\\s*[:=]\\s*)(["'])([^"'\\n]{3,500})\\2`, "gim");
 const NOT_A_VALUE = /^(?:string|str|number|int|integer|bool|boolean|any|null|nil|none|undefined|true|false|required|optional|empty|redacted|hidden|secret|password|\*+|x{3,}|\.{3,})$/i;
 const PLACEHOLDER = /^(?:your[_-]|<|\$\{?|%|\{\{|changeme|placeholder|example|dummy)|(?:[_-]here)(?:[_-]?\d+)?$/i;
 function isRealValue(v) {
@@ -181,6 +184,13 @@ export function maskSecrets(text) {
             return r;
         });
     }
+    out = out.replace(QUOTED_ASSIGNMENT, (whole, key, quote, value) => {
+        if (!isRealValue(value.trim()))
+            return whole;
+        count++;
+        kinds.add("a password or secret assignment");
+        return `${key}${quote}[${MASK}]${quote}`;
+    });
     out = out.replace(ASSIGNMENT, (whole, key, value) => {
         if (!isRealValue(value))
             return whole;

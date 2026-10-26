@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { currentTranscript, findSession, recall, renderRecall, transcriptEntries } from "../recall.js";
@@ -41,7 +41,7 @@ function write(dir, name, rows) {
 }
 test("entries: tool calls and output named, the compaction summary and subagent rows left out, positions counted", () => {
     const p = write(mkdtempSync(join(tmpdir(), "cd-recall-e-")), "s.jsonl", session());
-    const e = transcriptEntries(p);
+    const e = transcriptEntries(p).entries;
     assert.deepEqual(e.map((x) => x.kind), ["user", "tool call", "tool output (Bash)", "user", "assistant"]);
     assert.deepEqual(e.map((x) => x.compactedBy), [1, 1, 1, 1, 0]);
     assert.equal(e[1].text, "Bash: npm test -- payments");
@@ -123,4 +123,62 @@ test("the cleared note points at recall only for clients that keep a transcript;
     const long = compactInstructions({ edited: Array.from({ length: 25 }, (_, i) => `/very/long/path/to/some/file/number/${i}/${"x".repeat(80)}.ts`), todos: Array.from({ length: 15 }, (_, i) => `task ${i} ${"y".repeat(60)}`), directives: [], failing: [] });
     assert.ok(long.length <= 2400, String(long.length));
     assert.match(long, /recall tool \(or `npx context-doctor recall/);
+});
+test("after /clear the MCP server's CLAUDE_CODE_SESSION_ID is stale: a newer transcript in the same project wins, and says so", async () => {
+    const { utimesSync } = await import("node:fs");
+    const home = mkdtempSync(join(tmpdir(), "cd-recall-clear-"));
+    const cwd = join(home, "proj");
+    const dir = claudeProjectDir(cwd, home);
+    const old = write(dir, "before-clear.jsonl", session());
+    const fresh = write(dir, "after-clear.jsonl", session());
+    utimesSync(old, new Date(Date.now() - 3_600_000), new Date(Date.now() - 3_600_000));
+    const env = { CLAUDE_CODE_SESSION_ID: "before-clear" };
+    assert.equal(currentTranscript(env, cwd, home)?.path, old, "a shell's id is current: kept");
+    const mcp = currentTranscript(env, cwd, home, { envMayBeStale: true });
+    assert.equal(mcp.path, fresh);
+    assert.match(mcp.how, /still names before-clear, as after \/clear/);
+});
+test("in a folder with an old Claude Code chat and today's Codex session, Codex's is the session", async () => {
+    const { utimesSync } = await import("node:fs");
+    const home = mkdtempSync(join(tmpdir(), "cd-recall-codex-"));
+    const cwd = join(home, "app");
+    mkdirSync(cwd, { recursive: true });
+    const claude = write(claudeProjectDir(cwd, home), "old.jsonl", session());
+    utimesSync(claude, new Date(Date.now() - 20 * 86_400_000), new Date(Date.now() - 20 * 86_400_000));
+    const rollout = write(join(home, ".codex", "sessions", "2026", "10", "26"), "rollout-today.jsonl", [JSON.stringify({ timestamp: at(0), type: "session_meta", payload: { cwd: resolvePath(cwd) } })]);
+    assert.equal(currentTranscript({}, cwd, home)?.path, rollout);
+});
+test("a subagent's transcript (all sidechain rows) is searched as itself", () => {
+    const dir = join(mkdtempSync(join(tmpdir(), "cd-recall-sub-")), "sess", "subagents");
+    const p = write(dir, "agent-a1.jsonl", [
+        JSON.stringify({ type: "user", isSidechain: true, timestamp: at(0), message: { role: "user", content: "find the flaky retry logic" } }),
+        JSON.stringify({ type: "assistant", isSidechain: true, timestamp: at(1), message: { role: "assistant", content: [{ type: "text", text: "The retry backoff in queue.ts doubles without a cap." }] } }),
+    ]);
+    const r = recall(p, "retry backoff cap");
+    assert.ok(r.hits.length > 0);
+    assert.match(r.hits[0].text, /doubles without a cap/);
+});
+test("secrets are masked before an entry is clipped (a key across the cut), passphrases whole; huge transcripts stream", () => {
+    const body = fake("b3BlbnNzaC1rZXktdjEAAAAA", "QmFzZTY0S2V5Qm9keUxpbmUx").repeat(60);
+    const pem = `-----BEGIN OPENSSH PRIVATE KEY-----\n${body}\n-----END OPENSSH PRIVATE KEY-----`;
+    const rows = (text, i) => JSON.stringify({ type: "user", timestamp: at(i), message: { role: "user", content: [{ type: "tool_result", tool_use_id: `t${i}`, content: text }] } });
+    const dir = mkdtempSync(join(tmpdir(), "cd-recall-mask-"));
+    const p = write(dir, "s.jsonl", [
+        // Across the 100k head cut, in a text masked whole.
+        rows("A".repeat(99_000) + pem + "B".repeat(150_000), 1),
+        // Over 2 MB: head and tail masked with a margin; a tail that starts inside a key.
+        rows("C".repeat(2_400_000 - 100_500) + pem + "D".repeat(99_000), 2),
+        rows('config: {"password": "correct horse battery staple"}', 3),
+    ]);
+    const read = transcriptEntries(p);
+    const all = read.entries.map((e) => e.text).join("\n");
+    assert.ok(!all.includes("QmFzZTY0S2V5Qm9keUxpbmUx"), "no part of the key body survives");
+    assert.ok(!all.includes("horse battery"), all.slice(-200));
+    assert.ok(read.masked >= 3);
+    // Streaming: only the newest characters are held; the rest is counted and said.
+    const big = write(dir, "big.jsonl", [...Array.from({ length: 300 }, (_, i) => rows(`entry ${i} ` + "log line ".repeat(1000), i)), rows("the zebrafish unique marker", 301)]);
+    const small = transcriptEntries(big, 100_000);
+    assert.equal(small.total, 301);
+    assert.ok(small.entries.reduce((n, e) => n + e.text.length, 0) <= 110_000);
+    assert.equal(small.entries.at(-1).text, "the zebrafish unique marker");
 });

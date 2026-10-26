@@ -500,7 +500,8 @@ server.tool(
         annotations: { title: "Recall", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
       async ({ query, max_tokens }) => {
-        const session = currentTranscript();
+        // The server's CLAUDE_CODE_SESSION_ID is the session it started with: stale after /clear.
+        const session = currentTranscript(process.env, process.cwd(), undefined, { envMayBeStale: true });
         if (!session) {
           return { isError: true, content: [{ type: "text" as const, text: "No transcript of this session on disk (Claude Code and Codex keep one; chat apps do not)." }] };
         }

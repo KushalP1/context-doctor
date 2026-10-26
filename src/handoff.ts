@@ -222,6 +222,12 @@ const ASSIGNMENT = new RegExp(
   `(?<![A-Za-z0-9])((?:[A-Za-z0-9]+[_.-])*${SECRET_KEY_NAME}["']?\\s*[:=]\\s*["']?)([^\\s"'\`,;()<>{}\\[\\]]{3,})(?=$|[\\s"'\`,;)\\]}])`,
   "gim"
 );
+// The same keys with a quoted value, spaces and all: a passphrase
+// (`"password": "correct horse battery staple"`) is several words.
+const QUOTED_ASSIGNMENT = new RegExp(
+  `(?<![A-Za-z0-9])((?:[A-Za-z0-9]+[_.-])*${SECRET_KEY_NAME}["']?\\s*[:=]\\s*)(["'])([^"'\\n]{3,500})\\2`,
+  "gim"
+);
 const NOT_A_VALUE = /^(?:string|str|number|int|integer|bool|boolean|any|null|nil|none|undefined|true|false|required|optional|empty|redacted|hidden|secret|password|\*+|x{3,}|\.{3,})$/i;
 const PLACEHOLDER = /^(?:your[_-]|<|\$\{?|%|\{\{|changeme|placeholder|example|dummy)|(?:[_-]here)(?:[_-]?\d+)?$/i;
 
@@ -249,6 +255,12 @@ export function maskSecrets(text: string): { text: string; count: number; kinds:
       return r;
     });
   }
+  out = out.replace(QUOTED_ASSIGNMENT, (whole: string, key: string, quote: string, value: string) => {
+    if (!isRealValue(value.trim())) return whole;
+    count++;
+    kinds.add("a password or secret assignment");
+    return `${key}${quote}[${MASK}]${quote}`;
+  });
   out = out.replace(ASSIGNMENT, (whole: string, key: string, value: string) => {
     if (!isRealValue(value)) return whole;
     count++;
