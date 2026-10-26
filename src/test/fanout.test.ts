@@ -42,6 +42,22 @@ test("the estimate: the type on the model it will run on, the Sonnet option at S
   assert.equal(estimateSubagent({ ...costs, n: 1, all: stat(1, 3, 3), byType: {}, byTypeModel: {}, byModel: {} }, "Explore"), undefined, "too few runs: no number");
 });
 
+test("a type pinned to a model (all its runs on Haiku) is priced on it, not on the parent's, and offered no Sonnet", () => {
+  const pinned: SubagentCosts = {
+    ...costs,
+    byType: { ...costs.byType, "claude-code-guide": stat(6, 0.06, 0.09, "claude-haiku-5-5") },
+    byTypeModel: { ...costs.byTypeModel, "claude-code-guide|claude-haiku-5-5": stat(6, 0.06, 0.09, "claude-haiku-5-5") },
+    byModel: { ...costs.byModel, "claude-haiku-5-5": stat(6, 0.06, 0.09), "claude-sonnet-5-5": stat(4, 1.2, 2) },
+  };
+  const e = estimateSubagent(pinned, "claude-code-guide", undefined, "claude-opus-5-5")!;
+  assert.equal(e.model, "claude-haiku-5-5");
+  assert.equal(e.median, 0.06);
+  assert.equal(e.cheaper, undefined, "Sonnet is dearer than Haiku");
+  // general-purpose ran on Opus and Fable: it follows the parent.
+  const mixed: SubagentCosts = { ...costs, byTypeModel: { ...costs.byTypeModel, "general-purpose|claude-fable-5-1": stat(20, 6, 20, "claude-fable-5-1") } };
+  assert.equal(estimateSubagent(mixed, "general-purpose", undefined, "claude-fable-5-1")!.model, "claude-fable-5-1");
+});
+
 test("what is said: the price on a type's first launch and on a burst, one note to the model; nothing for other tools", () => {
   const est = estimateSubagent(costs, "general-purpose", undefined, "claude-opus-5-5")!;
   const line = (t: number, type = "general-purpose", c = true) => ({ t: NOW + t, type, id: `id${t}-${type}`, c });

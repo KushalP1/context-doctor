@@ -183,13 +183,32 @@ export interface FanoutEstimate {
   cheaper?: { model: string; median: number; measured: boolean };
 }
 
+const familyOf = (model: string): string | undefined => /(opus|sonnet|haiku|fable|mythos)/i.exec(model)?.[1]?.toLowerCase().replace("mythos", "fable");
+
+/** The model a type is pinned to: 90%+ of its runs (3 or more) in one family, priced at that family's most-run model. */
+export function pinnedModel(costs: SubagentCosts, type: string): string | undefined {
+  const runs = Object.entries(costs.byTypeModel).filter(([k]) => k.startsWith(`${type}|`)).map(([k, v]) => ({ model: k.slice(type.length + 1), n: v.n }));
+  const total = runs.reduce((a, r) => a + r.n, 0);
+  if (total < MIN_RUNS) return undefined;
+  const families = new Map<string, number>();
+  for (const r of runs) {
+    const f = familyOf(r.model);
+    if (f) families.set(f, (families.get(f) ?? 0) + r.n);
+  }
+  const [family, n] = [...families.entries()].sort((a, b) => b[1] - a[1])[0] ?? [];
+  if (!family || n! / total < 0.9) return undefined;
+  return runs.filter((r) => familyOf(r.model) === family).sort((a, b) => b.n - a.n)[0].model;
+}
+
 /** What a subagent of this type on this model costs, from the user's own runs. Undefined with too few. */
 export function estimateSubagent(costs: SubagentCosts, type: string, modelAlias?: string, parentModel?: string): FanoutEstimate | undefined {
   const byType = costs.byType[type];
-  // A subagent runs on the model it is given, else (built-in types included,
-  // on the author's history) on the parent's: the parent's, not the type's
-  // past model, which may be a version since replaced.
-  const model = (modelAlias ? aliasModel(modelAlias, costs) : undefined) ?? parentModel ?? (byType && byType.n >= MIN_RUNS ? byType.model : undefined);
+  // A subagent runs on the model it is given; else a type whose runs all
+  // used one family is pinned to it by its definition (claude-code-guide runs
+  // on Haiku whatever the parent is), priced at its usual model; else it
+  // inherits the parent's model (general-purpose and Explore ran on several
+  // families on the author's history: they follow the parent).
+  const model = (modelAlias ? aliasModel(modelAlias, costs) : undefined) ?? pinnedModel(costs, type) ?? parentModel ?? (byType && byType.n >= MIN_RUNS ? byType.model : undefined);
   const scale = (from?: string, to?: string): number => {
     const a = pricingFor(from), b = pricingFor(to);
     return a && b && a.inputPerM > 0 ? b.inputPerM / a.inputPerM : 1;
@@ -202,8 +221,9 @@ export function estimateSubagent(costs: SubagentCosts, type: string, modelAlias?
   else if (costs.all && costs.all.n >= MIN_RUNS) { base = costs.all; factor = scale(costs.all.model, model ?? costs.all.model); }
   if (!base) return undefined;
   const est: FanoutEstimate = { type, model: model ?? base.model, median: base.median * factor, p90: base.p90 * factor, runs: base.n };
-  if (est.model && /opus|fable|mythos/i.test(est.model)) {
-    const sonnet = aliasModel("sonnet", costs)!;
+  const sonnet = aliasModel("sonnet", costs)!;
+  // Sonnet is offered only where it is cheaper than what the subagent runs on.
+  if (est.model && /opus|fable|mythos/i.test(est.model) && (pricingFor(sonnet)?.inputPerM ?? Infinity) < (pricingFor(est.model)?.inputPerM ?? 0)) {
     const measured = costs.byTypeModel[`${type}|${sonnet}`];
     est.cheaper = measured && measured.n >= MIN_RUNS
       ? { model: sonnet, median: measured.median, measured: true }

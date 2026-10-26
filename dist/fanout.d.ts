@@ -69,6 +69,8 @@ export interface FanoutEstimate {
         measured: boolean;
     };
 }
+/** The model a type is pinned to: 90%+ of its runs (3 or more) in one family, priced at that family's most-run model. */
+export declare function pinnedModel(costs: SubagentCosts, type: string): string | undefined;
 /** What a subagent of this type on this model costs, from the user's own runs. Undefined with too few. */
 export declare function estimateSubagent(costs: SubagentCosts, type: string, modelAlias?: string, parentModel?: string): FanoutEstimate | undefined;
 /** PreToolUse input for the Agent tool, as far as this reads it. */
