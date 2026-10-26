@@ -6,8 +6,8 @@
  * profile_context's full report (bars, message previews) and pack_context's
  * outline (one line per chunk, the heading path repeated on each) are mostly
  * presentation. ChatGPT surfaces `content` and `structuredContent` to the
- * model and keeps `_meta` for the widget only (developers.openai.com/apps-sdk
- * reference, "Tool results"), so the compact form puts one line of text and
+ * model and keeps `_meta` for the widget only (developers.openai.com/plugins/reference,
+ * "Tool results"), so the compact form puts one line of text and
  * the decision-relevant fields in front of the model, and the rest where only
  * a widget would read it.
  *

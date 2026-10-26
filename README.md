@@ -100,21 +100,24 @@ On a Claude subscription you do not pay list price; the same tokens come out of 
 | **Cursor** (agent) | A native **after-tool-call hook** (`~/.cursor/hooks.json`): in a heavy chat the agent gets the same hygiene guidance and the largest waste, once per 40% of growth. (Cursor's prompt hook can only allow or block a prompt, so this is the event where guidance reaches the model) | MCP tools, editor status bar extension, `cursor` profiler. With your own OpenAI key, autopilot too via a tokened tunnel ([how](./docs/proxy.md#putting-the-proxy-on-a-public-url-cursor-with-your-own-openai-key-remote-apps)) |
 | **Codex** (ChatGPT app's Codex tab, IDE extension, CLI) | Every-prompt hook with the API's own token counts | MCP tools, skill, `session` reads Codex rollouts. On an API key, autopilot too (`autopilot on` sets `openai_base_url` in `~/.codex/config.toml`; Codex no longer reads `OPENAI_BASE_URL`) |
 | **Gemini CLI** | Every-prompt hook (`BeforeAgent`) with the API's own token counts. On an API key, autopilot too: `GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8787` (Google sign-in traffic goes elsewhere) | MCP tools, `session` and `watch` read its chats, `overhead` sizes GEMINI.md |
-| **GitHub Copilot** (Copilot CLI, the Copilot app, VS Code agent sessions) | A **session-start hook** (`~/.copilot/hooks/context-doctor.json`) gives every new or resumed session the five standing rules. No size check: Copilot passes a transcript only to hooks that cannot add context | MCP tools (`~/.copilot/mcp-config.json`, which VS Code's Copilot sessions read too) |
+| **GitHub Copilot** (Copilot CLI, the Copilot app, VS Code agent sessions) | A **session-start hook** (`~/.copilot/hooks/context-doctor.json`) gives every new or resumed session the standing rules. No size check: Copilot passes a transcript only to hooks that cannot add context | MCP tools (`~/.copilot/mcp-config.json`, which VS Code's Copilot sessions read too) |
 | **Your own apps on the Anthropic, OpenAI or Gemini API** | Autopilot on `/v1/messages`, `/v1/chat/completions`, `/v1/responses` and Gemini's `generateContent` (`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` / `GOOGLE_GEMINI_BASE_URL`), or the optimizing proxy (which can cost more on cached traffic); no proxy possible (serverless, edge)? `withContextDoctor(client)` runs autopilot inside the SDK client | Exact usage and cache hit rates in `/stats`, prompt-cache placement advice ([proxy](./docs/proxy.md)) |
-| **Claude Desktop chat** | The five standing rules below in every chat; one cheap `profile_context` call the model makes once at ~30 turns and on any cost question; `pack_context` instead of reading a big local file whole | One-click `.mcpb` install, `context_checkup` prompt ([chat apps](./docs/chat-apps.md)) |
+| **Claude Desktop chat** | The six standing rules below, sent to every chat (whether classic Chat shows them to the model is unverified, [why](./docs/chat-apps.md)); one cheap `profile_context` call the model makes once at ~30 turns and on any cost question; `pack_context` instead of reading a big local file whole; a handoff offered once a chat is long, since a chat's history cannot be cut and a new chat can | One-click `.mcpb` install, `context_checkup`, `handoff` and `ask_file` prompts, `handoff://latest` to attach in the next chat ([handoff](./docs/handoff.md)) |
 | **claude.ai, ChatGPT, the phone apps** | Your account's standing preferences, pasted once ([Quick start](#quick-start)) | Profile an exported chat with `analyze` or `session` |
 | **CI** | `analyze --fail-over-budget` fails a build whose prompts outgrow a budget; the GitHub Action gates memory-file growth | `.contextdoctorrc` budgets and presets ([CI](./docs/ci.md)) |
 
 Not claimed, because no process on your machine sends those requests: trimming inside Claude Desktop chat, claude.ai, ChatGPT, Cursor's own subscription models, or Codex signed in with ChatGPT. Those get the rules and the measurements above, not autopilot.
 
-The MCP server hands these standing rules, verbatim, to every chat where it is enabled (Claude Desktop, Cursor and Claude Code put them in front of the model):
+The MCP server hands these standing rules, verbatim, to every chat where it is enabled (Cursor and Claude Code put them in front of the model; for Claude Desktop's classic Chat that is [unverified](./docs/chat-apps.md)):
 
-> 1. When asked about tokens, cost, speed or limits, and once at ~30 turns or 3+ large pastes: call profile_context BEFORE answering; act on its top finding. In a chat app pass a `sketch` (turns + big blocks). Do not estimate token counts yourself.
-> 2. Summarize any paste or tool result over ~2k tokens into the points you need; keep it verbatim only to edit or quote it exactly.
-> 3. Refer to earlier content by name; never re-quote it or inline base64.
-> 4. To answer from a big file or folder you won't edit, call pack_context with the question; don't read it whole.
-> 5. If optimize_context returns a pruned-turns digest, write its ≤150-token summary.
+> 1. When asked about tokens, cost, speed or limits, and once at ~30 turns or 3+ large pastes: call profile_context BEFORE answering; in a chat app pass a `sketch`. Act on its top finding. Do not estimate token counts yourself.
+> 2. When a chat grows long, offer a handoff once (save_handoff): only a new chat cuts its history.
+> 3. Summarize any paste or tool result over ~2k tokens into the points you need.
+> 4. Refer to earlier content by name; never re-quote it or inline base64.
+> 5. For a big file you won't edit, call pack_context with the question; don't read it whole.
+> 6. If optimize_context returns a pruned-turns digest, write its ≤150-token summary.
+
+Rules 1-4 end exactly at character 512, the part ChatGPT's guide says must stand alone.
 
 ## Commands
 
@@ -126,7 +129,8 @@ The MCP server hands these standing rules, verbatim, to every chat where it is e
 | `context-doctor autopilot on\|off\|pause\|resume\|status` | Every new Claude Code session started in a terminal or IDE goes through the local proxy, which clears stale tool output only when the prompt cache is cold: measured 12.7% less input cost, no session worse ([details](./docs/autopilot.md)) |
 | `context-doctor proxy --autopilot` | Local proxy for your own Anthropic, OpenAI and Gemini API apps: clears stale tool output only when the prompt cache is cold, so it never costs more. Plain `proxy` runs the optimizing strategies (dedupe, trim, strip base64), which can cost more on cached traffic. `--token` for a public URL; `/stats` for cumulative savings ([details](./docs/proxy.md)) |
 | `context-doctor compact-window [status\|off\|<size>]` | Replay your last 30 days at auto-compact windows from 200k to 800k: input cost, saving, and how many more compactions each means. `400k` (or `250000`, `0.4m`) sets Claude Code's `autoCompactWindow`, with a backup; `off` removes it. Works in every Claude Code surface, the desktop app included |
-| `context-doctor instructions [--copy]` | The ~185-token standing rules (~125 on GPT) for claude.ai / ChatGPT preferences, for web and phones where no server runs |
+| `context-doctor instructions [--copy]` | The ~190-token standing rules (~130 on GPT) for claude.ai / ChatGPT preferences, for web and phones where no server runs |
+| `context-doctor handoff [list\|show <id>\|latest] [--copy]` | Handoffs saved from chat apps (the `handoff` prompt or `save_handoff`): list them, print one, or copy it to paste as a new chat's first message ([handoff](./docs/handoff.md)) |
 | `context-doctor mcp [--http]` | The MCP server as a subcommand, for clients and registries that launch `npx -y context-doctor mcp` |
 | `context-doctor-mcp` | The MCP server itself — stdio by default (what the installer wires); `--http [--port 8808] [--host H]` serves streamable HTTP at `/mcp` for URL-based clients like ChatGPT developer-mode connectors |
 | `context-doctor session [file]` | Profile a Claude Code session: live context, findings, **measured tokens and prompt-cache economics**, **where the wall clock went** per tool, and **what its subagents cost** (their own windows, your bill; never in the parent's profile). Also reads Codex rollouts, Gemini CLI chats and ChatGPT data exports (`conversations.json`); `--list` to browse |

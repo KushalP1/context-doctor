@@ -230,7 +230,7 @@ server.tool(
   // ChatGPT passes an uploaded file to a tool that names the field in
   // _meta["openai/fileParams"]: { download_url, file_id, mime_type?, file_name? }.
   // Every file schema must declare all four and require only the first two
-  // (developers.openai.com/apps-sdk/reference). Only the HTTP server offers it:
+  // (developers.openai.com/plugins/reference). Only the HTTP server offers it:
   // a local server reads files from disk instead, and stays a little smaller.
   const fileSchema = z.object({
     download_url: z.string(),

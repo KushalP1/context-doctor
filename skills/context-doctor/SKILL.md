@@ -22,11 +22,13 @@ Proactively (do not wait to be asked):
 - Summarize large tool outputs right after consuming them.
 - Once, when the session first passes roughly 30 turns or contains several large pastes, offer: "This conversation is getting heavy — want me to compact the older history into a summary so responses stay fast and cheap?"
 - When asked to summarize/compact, produce a dense factual summary (decisions made, current state, open items, key identifiers) — not a narrative.
+- In a chat app (claude.ai, Claude Desktop, ChatGPT) the history cannot be edited: a summary stops further re-quoting, but the old turns are still re-read on every turn. The real cut is a new chat, so offer a **handoff** once instead: a ≤400-token brief (goal, decisions, current state, open items, key identifiers) plus only the blocks that must stay exact, saved with `save_handoff` when it is available, for the user to start a new chat from.
 
 ## Using the context-doctor tools
 
 If the `context-doctor` MCP tools are available:
 - `profile_context` — pass a conversation JSON (OpenAI or Anthropic format) or raw text; returns a token breakdown, largest messages, findings with estimated savings. In a chat app, where you cannot export the conversation, pass a `sketch` instead: the turn count plus the large, repeated or image blocks, one size hint each (~120 tokens to write).
+- `save_handoff` — stores the handoff brief you wrote and the exact blocks, masks secret-looking strings, and returns the per-turn saving and how to continue (attach `handoff://latest` in a new chat, or paste it). Call it only when the user agrees.
 - `optimize_context` — applies deterministic fixes (dedupe, trim stale tool results, strip base64; opt-in `trim-tool-calls` for big inline file writes and `prune-history`). When the result contains pruned-turn source material and asks for a summary, **you write that summary** (≤150 tokens, dense, factual) and place it where the stub indicates — this is how summarization works without any API key.
 - `pack_context` — before reading a large document, log or folder to answer a question (not to edit it), pass `paths` and the `query`: it returns only the best-matching chunks within `max_tokens` (default 4000), each with an id and line range, plus the next-best ids. No query = an outline to pick from with `ids`.
 - `context_best_practices` — provider-specific checklist to share with the user.

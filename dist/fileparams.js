@@ -3,7 +3,7 @@
  *
  * A tool that lists a top-level field in `_meta["openai/fileParams"]` receives
  * a file the user uploaded as `{ download_url, file_id, mime_type?, file_name? }`
- * (developers.openai.com/apps-sdk/reference, "Define file inputs"; every file
+ * (developers.openai.com/plugins/reference, "Define file inputs"; every file
  * object schema must declare all four properties and require only
  * download_url and file_id). The server downloads it and packs it like a
  * file read from disk, so a 200-page PDF reaches the model as the few chunks a

@@ -40,7 +40,7 @@ The agent's code runs twice over (its smoke tests, then the hidden check), so it
 
 | Lever | Compared with | What the arm does |
 |---|---|---|
-| `rules` | `none` | the five standing context rules in the system prompt, verbatim: what MCP clients and the GitHub Copilot hook inject. They name the MCP tools (`profile_context`, `pack_context`), which this arm does not offer, so a call to one gets "no such tool": the arm measures the text alone |
+| `rules` | `none` | the standing context rules in the system prompt, verbatim: what MCP clients and the GitHub Copilot hook inject. They name the MCP tools (`profile_context`, `save_handoff`, `pack_context`), which this arm does not offer, so a call to one gets "no such tool": the arm measures the text alone |
 | `autoclear` | `none` | the client is wrapped with `withContextDoctor` (autopilot in process), and every request is treated as coming after an idle gap, so stale tool output is cleared whenever a batch is big enough (1 result kept, batches from 1,000 tokens). Shipped autopilot clears far less (cold cache only, 3 kept, 20,000-token batches): this is the worst case for quality, and its cost is not autopilot's cost |
 | `pack` | `none` | a `pack_context` tool (the same chunking and ranking as `context-doctor pack`, 1,500-token budget) and the rule to use it for big files instead of reading them whole |
 | `compact` | `compact-generic` | both arms compact once, after the second request, and go on from the summary alone (the request is not repeated: what the summary dropped is gone); `compact` adds the PreCompact hook's instructions (files changed, failing checks, the user's own instructions), built from the run's history the way the hook builds them from a Claude Code transcript |
