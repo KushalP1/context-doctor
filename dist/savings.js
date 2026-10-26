@@ -241,7 +241,7 @@ export function estimateSavings(days = 30, options = {}, paths, onProgress) {
 }
 const tokens = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : formatTokens(n));
 const usd = (n) => (n >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
-export function renderSavings(r, autopilotOn = false, cw, missLines, limitLines) {
+export function renderSavings(r, autopilotOn = false, cw, missLines, limitLines, lensLines) {
     const lines = [];
     if (r.sessions.length === 0) {
         lines.push(`No Claude Code sessions with 10+ requests in the last ${r.days} days to replay.`);
@@ -292,6 +292,11 @@ export function renderSavings(r, autopilotOn = false, cw, missLines, limitLines)
         // Only when a fit on the user's own limit readings is good enough (limits.ts).
         lines.push("");
         lines.push(...limitLines);
+    }
+    if (lensLines?.length) {
+        // Shown, not claimed: whether shorter output keeps quality is for `ab`.
+        lines.push("");
+        lines.push(...lensLines);
     }
     if (missLines?.length) {
         // Not a lever of ours: money the cache lost on its own, said once, with where to look.

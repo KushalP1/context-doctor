@@ -60,6 +60,7 @@ import { claudeLimitFit, limitSavingsLines, limitsReport, renderLimits } from ".
 import { currentTranscript, findSession, recall, renderRecall } from "./recall.js";
 import { measureSubagentCosts, renderCostMedians, saveSubagentCosts } from "./fanout.js";
 import { applyPrune, canonical, planPrune, renderPrune, undoPrune } from "./prune.js";
+import { lensOverSessions, renderLens, sessionLens } from "./lens.js";
 const HELP = `context-doctor — profile and optimize LLM context windows
 
 Start here:
@@ -759,6 +760,11 @@ async function main() {
                 console.log("");
                 console.log(timing);
             }
+            const lens = renderLens(sessionLens(path));
+            if (lens.length) {
+                console.log("");
+                console.log(lens.join("\n"));
+            }
             const subs = renderSubagents(subagentReport(path), cacheUsage?.paidUsd, 5, { redact: args.redact });
             if (subs) {
                 console.log("");
@@ -796,6 +802,9 @@ async function main() {
         const checking = progressLine("Checking for cache misses");
         const misses = cacheMisses(args.days ?? 30, undefined, checking.tick);
         checking.clear();
+        const looking = progressLine("Pricing output and polling");
+        const lens = lensOverSessions(args.days ?? 30, { claudeOnly: true });
+        looking.clear();
         const on = existsSync(autopilotPaths().config);
         // Savings in the plan's own unit, only when a fit on the user's limit readings is good enough.
         const limitFit = claudeLimitFit(limitsReport(args.days ?? 30, { claudeOnly: true }));
@@ -806,7 +815,7 @@ async function main() {
         ], report.days);
         if (args.json) {
             const { largest: _largest, ...missSummary } = misses;
-            console.log(JSON.stringify({ ...report, cacheMisses: missSummary, limitFit: limitFit ?? null }, null, 2));
+            console.log(JSON.stringify({ ...report, cacheMisses: missSummary, limitFit: limitFit ?? null, outputAndPolling: lens }, null, 2));
         }
         else if (args.share) {
             const text = renderShare(report);
@@ -815,7 +824,7 @@ async function main() {
                 console.log(copyToClipboard(text) ? "\n(copied to the clipboard)" : "\n(no clipboard tool found; copy the lines above)");
         }
         else {
-            console.log(renderSavings(report, on, cwLine, cacheMissesSignificant(misses) ? cacheMissesLine(misses) : undefined, limitLines));
+            console.log(renderSavings(report, on, cwLine, cacheMissesSignificant(misses) ? cacheMissesLine(misses) : undefined, limitLines, renderLens(lens)));
             if (!args.command)
                 console.log(`\nAll commands: ${selfCommand("--help")}`);
         }

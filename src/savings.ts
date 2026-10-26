@@ -296,7 +296,7 @@ export interface CompactWindowLine {
   isCurrent: boolean;
 }
 
-export function renderSavings(r: SavingsReport, autopilotOn = false, cw?: CompactWindowLine, missLines?: string[], limitLines?: string[]): string {
+export function renderSavings(r: SavingsReport, autopilotOn = false, cw?: CompactWindowLine, missLines?: string[], limitLines?: string[], lensLines?: string[]): string {
   const lines: string[] = [];
   if (r.sessions.length === 0) {
     lines.push(`No Claude Code sessions with 10+ requests in the last ${r.days} days to replay.`);
@@ -343,6 +343,11 @@ export function renderSavings(r: SavingsReport, autopilotOn = false, cw?: Compac
     // Only when a fit on the user's own limit readings is good enough (limits.ts).
     lines.push("");
     lines.push(...limitLines);
+  }
+  if (lensLines?.length) {
+    // Shown, not claimed: whether shorter output keeps quality is for `ab`.
+    lines.push("");
+    lines.push(...lensLines);
   }
   if (missLines?.length) {
     // Not a lever of ours: money the cache lost on its own, said once, with where to look.
