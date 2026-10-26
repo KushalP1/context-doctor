@@ -152,48 +152,105 @@ export function validateHandoff(input: HandoffInput): string[] {
   return errs;
 }
 
-// Secret-looking strings: provider keys by their published prefixes, private
-// keys, JWTs, and "password = <value>" style assignments whose value looks like
-// a token (an env-var reference such as process.env.API_KEY is left alone).
-const SECRET_PATTERNS: Array<[kind: string, re: RegExp, keepGroup?: boolean]> = [
-  ["a private key", /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g],
-  ["an Anthropic key", /\bsk-ant-[A-Za-z0-9_-]{20,}/g],
-  ["an OpenAI key", /\bsk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}/g],
-  ["an AWS access key", /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g],
-  ["a GitHub token", /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})\b/g],
-  ["a GitLab token", /\bglpat-[A-Za-z0-9_-]{20,}/g],
-  ["a Slack token", /\bxox[abposr]-[A-Za-z0-9-]{10,}/g],
-  ["a Google API key", /\bAIza[0-9A-Za-z_-]{35}\b/g],
-  ["an npm token", /\bnpm_[A-Za-z0-9]{36}\b/g],
-  ["a Stripe key", /\b(?:sk|rk)_live_[A-Za-z0-9]{20,}/g],
-  ["a JWT", /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g],
-  [
-    "a password or secret assignment",
-    /\b((?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)["']?\s*[:=]\s*["']?)([A-Za-z0-9_\-+/=!@#$%^&*.]{12,})/gi,
-    true,
-  ],
+// Secret-looking strings, in three passes (a QA pass found the first
+// version missed half of a realistic sample and masked a CSS class):
+//  1. whole tokens by their published shapes (provider keys, private key
+//     blocks, JWTs), replaced outright;
+//  2. secrets inside a larger string: URL credentials (scheme://user:pass@),
+//     Authorization Bearer/Basic values, `mysql -p<password>`, Slack webhooks;
+//  3. assignments whose key names a secret (password, DB_PASSWORD, apiKey,
+//     AWS_SECRET_ACCESS_KEY, client_secret, TOKEN, AccountKey, ...): the key
+//     names it, so any real value is masked, however short (`password:
+//     hunter2`), but not paths (`pwd: /home/...`), type names
+//     (`password: string`), environment references (`process.env.X`),
+//     calls (`getSecret(...)`) or placeholders (`YOUR_API_KEY_HERE`).
+type Masker = { kind: string; re: RegExp; replace: (m: RegExpExecArray | string[]) => string | undefined };
+
+const MASK = "masked by context-doctor";
+const whole = (kind: string, re: RegExp, accept: (token: string) => boolean = () => true): Masker => ({
+  kind,
+  re,
+  replace: (m) => (accept(m[0]) ? `[${kind.replace(/^an? /, "")} ${MASK}]` : undefined),
+});
+/** OpenAI keys mix cases and digits; `sk-spinner-wave-12345` (a CSS class) does not. */
+const mixed = (t: string) => /[0-9]/.test(t) && /[A-Z]/.test(t) && /[a-z]/.test(t);
+
+const SECRET_MASKERS: Masker[] = [
+  whole("a private key", /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)/g),
+  whole("an Anthropic key", /(?<![A-Za-z0-9_.-])sk-ant-[A-Za-z0-9_-]{20,}/g),
+  whole("an OpenAI key", /(?<![A-Za-z0-9_.-])sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}/g, mixed),
+  whole("an AWS access key", /(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}(?![A-Za-z0-9])/g),
+  whole("a GitHub token", /(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})/g),
+  whole("a GitLab token", /(?<![A-Za-z0-9])glpat-[A-Za-z0-9_-]{20,}/g),
+  whole("a Slack token", /(?<![A-Za-z0-9])xox[abposr]-[A-Za-z0-9-]{10,}/g),
+  whole("a Slack webhook", /https:\/\/hooks\.slack\.com\/(?:services|workflows|triggers)\/[A-Za-z0-9_/-]+/g),
+  whole("a Google API key", /(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{30,}/g),
+  whole("an npm token", /(?<![A-Za-z0-9])npm_[A-Za-z0-9]{36}(?![A-Za-z0-9])/g),
+  whole("a Stripe key", /(?<![A-Za-z0-9])(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/g),
+  whole("a Stripe webhook secret", /(?<![A-Za-z0-9])whsec_[A-Za-z0-9]{20,}/g),
+  whole("a Hugging Face token", /(?<![A-Za-z0-9])hf_[A-Za-z0-9]{30,}/g),
+  whole("a SendGrid key", /(?<![A-Za-z0-9])SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/g),
+  whole("a Twilio key", /(?<![A-Za-z0-9])SK[0-9a-f]{32}(?![A-Za-z0-9])/g),
+  whole("a JWT", /(?<![A-Za-z0-9])eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g),
+  {
+    kind: "a password in a URL",
+    re: /\b([a-z][a-z0-9+.-]*:\/\/)([^\s:@/]*):([^\s@/]+)@/gi,
+    replace: (m) => `${m[1]}${m[2]}:[${MASK}]@`,
+  },
+  {
+    kind: "a bearer token",
+    re: /\b(Bearer|Basic|Token)(\s+)([A-Za-z0-9._~+/=-]{16,})/g,
+    replace: (m) => `${m[1]}${m[2]}[${MASK}]`,
+  },
+  {
+    kind: "a database password",
+    re: /(\bmysql(?:dump|admin)?\b[^\n]*?\s-p)([^\s-][^\s]*)/g,
+    replace: (m) => `${m[1]}[${MASK}]`,
+  },
 ];
+
+const SECRET_KEY_NAME =
+  "(?:password|passwd|passphrase|pwd|secret|secret[_-]?key|secret[_-]?access[_-]?key|access[_-]?key|client[_-]?secret|api[_-]?key|apikey|" +
+  "access[_-]?token|auth[_-]?token|authtoken|refresh[_-]?token|bearer[_-]?token|token|private[_-]?key|account[_-]?key|shared[_-]?access[_-]?key|credentials?)";
+// The key: an identifier whose LAST segment names a secret (DB_PASSWORD,
+// OPENAI_API_KEY, _authToken), so token_count or max_tokens are not keys.
+const ASSIGNMENT = new RegExp(
+  `(?<![A-Za-z0-9])((?:[A-Za-z0-9]+[_.-])*${SECRET_KEY_NAME}["']?\\s*[:=]\\s*["']?)([^\\s"'\`,;()<>{}\\[\\]]{3,})(?=$|[\\s"'\`,;)\\]}])`,
+  "gim"
+);
+const NOT_A_VALUE = /^(?:string|str|number|int|integer|bool|boolean|any|null|nil|none|undefined|true|false|required|optional|empty|redacted|hidden|secret|password|\*+|x{3,}|\.{3,})$/i;
+const PLACEHOLDER = /^(?:your[_-]|<|\$\{?|%|\{\{|changeme|placeholder|example|dummy)|(?:[_-]here)(?:[_-]?\d+)?$/i;
+
+function isRealValue(v: string): boolean {
+  if (NOT_A_VALUE.test(v) || PLACEHOLDER.test(v)) return false;
+  if (/^(?:\/|~\/|\.{1,2}\/|[A-Za-z]:\\)/.test(v)) return false; // a path (pwd: /home/...)
+  if (/^(?:process\.env|os\.environ|env\.|ENV\[|getenv)/i.test(v)) return false;
+  if (/^[A-Za-z_$][\w$]*(?:\.[\w$]+)+$/.test(v) && !/[0-9]/.test(v)) return false; // config.apiKey
+  if (/^\d{1,7}$/.test(v)) return false; // a count, a port
+  return true;
+}
 
 /** Mask secret-looking strings. Returns the text, how many were masked, and of what kinds. */
 export function maskSecrets(text: string): { text: string; count: number; kinds: string[] } {
   let count = 0;
   const kinds = new Set<string>();
-  let out = text;
-  for (const [kind, re, keep] of SECRET_PATTERNS) {
-    out = out.replace(re, (...m: string[]) => {
-      if (keep) {
-        const value = m[2];
-        // A value that is a word or a dotted reference (process.env.X) is not a secret.
-        if (!/[0-9]/.test(value) || !/[A-Za-z]/.test(value) || /^[A-Za-z_][\w]*(?:\.[\w]+)+$/.test(value)) return m[0];
-        count++;
-        kinds.add(kind);
-        return `${m[1]}[masked by context-doctor]`;
-      }
+  let out = String(text ?? "");
+  for (const m of SECRET_MASKERS) {
+    out = out.replace(m.re, (...args: unknown[]) => {
+      const groups = args.slice(0, -2).filter((a) => typeof a === "string" || a === undefined) as string[];
+      const r = m.replace(groups);
+      if (r === undefined) return groups[0];
       count++;
-      kinds.add(kind);
-      return `[${kind.replace(/^an? /, "")} masked by context-doctor]`;
+      kinds.add(m.kind);
+      return r;
     });
   }
+  out = out.replace(ASSIGNMENT, (whole: string, key: string, value: string) => {
+    if (!isRealValue(value)) return whole;
+    count++;
+    kinds.add("a password or secret assignment");
+    return `${key}[${MASK}]`;
+  });
   return { text: out, count, kinds: [...kinds] };
 }
 

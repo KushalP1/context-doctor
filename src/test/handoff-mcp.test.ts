@@ -207,6 +207,26 @@ test("consent fails closed once a client declares forms: an error, a dismissal o
   }
 });
 
+test("the consent form masks before it truncates: a secret at the cut does not leak a prefix", async () => {
+  const home = mkdtempSync(join(tmpdir(), "cd-hmt-"));
+  const asked: string[] = [];
+  const client = new Client({ name: "elicit-mask", version: "1" }, { capabilities: { elicitation: { form: {} } } });
+  client.setRequestHandler(ElicitRequestSchema, async (req) => {
+    asked.push(req.params.message);
+    return { action: "decline" };
+  });
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: [mcpPath], env: sandboxEnv(home) as Record<string, string> }));
+  try {
+    const key = ["AK", "IA", "IOSFODNN7EXAMPLE"].join("");
+    // Untitled: the form shows the brief's first line, cut to 80 characters, right through the key.
+    await client.callTool({ name: "save_handoff", arguments: { brief: "x".repeat(70) + " " + key + "\nmore", verbatim: [{ label: `token ${["gh", "p_"].join("")}${"a1B2".repeat(9)}`, text: "x" }] } });
+    assert.equal(asked.length, 1);
+    assert.ok(!asked[0].includes("AKIAIOS") && !asked[0].includes("a1B2a1B2"), asked[0]);
+  } finally {
+    await client.close();
+  }
+});
+
 test("no elicitation declared: nothing is asked, the handoff is saved (consent was the chat's)", async () => {
   const home = mkdtempSync(join(tmpdir(), "cd-hn-"));
   const client = await stdioClient(home);

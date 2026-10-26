@@ -210,3 +210,62 @@ test("cli: handoff list, latest, show <id>, --json; unknown ids and bad subcomma
   assert.equal(run("frobnicate").status, 1);
   assert.match(renderHandoffList(listHandoffs(home), home), /newest 100 are kept/);
 });
+
+test("secrets, the QA sample: every realistic shape is masked, and the benign look-alikes are not", () => {
+  // Every value is synthetic and assembled here, so no literal in this file
+  // reads as a credential to a secret scanner.
+  const j = (...p: string[]) => p.join("");
+  const secrets: Record<string, string> = {
+    "AWS secret .env": j("AWS_SECRET_", "ACCESS_KEY=", "wJalrXUtnFEMI/K7MDENG/", "bPxRfiCYEXAMPLEKEY"),
+    "AWS secret yaml": j("aws_secret_", "access_key = ", "wJalrXUtnFEMI/K7MDENG/", "bPxRfiCYEXAMPLEKEY"),
+    "GitHub fine-grained": j("github", "_pat_", "11ABCDEFG0123456789_", "abcdefghijklmnopqrstuvwxyz"),
+    "npm": j("npm", "_", "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"),
+    "Stripe test": j("sk", "_test_", "51H8abcdEFGHijklMNOPqrstUVWX"),
+    "Stripe webhook": j("wh", "sec_", "abcdEFGHijklMNOPqrstUVWXyz012345"),
+    "OpenAI legacy": j("sk", "-", "abcdefghijklmnopqrstT3BlbkFJabcdefghijklmnopqrst"),
+    "PGP key": j("-----BEGIN PGP ", "PRIVATE KEY BLOCK-----\nlQOYBF0abcdef\n-----END PGP ", "PRIVATE KEY BLOCK-----"),
+    "GCP service account": j('"private_key": "-----BEGIN ', 'PRIVATE KEY-----\\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\\n-----END ', 'PRIVATE KEY-----\\n"'),
+    "postgres URL": j("postgres://admin:", "S3cretPassw0rd", "@db.internal:5432/prod"),
+    "https URL creds": j("https://deploy:", "ghtoken123456", "@git.example.com/repo.git"),
+    "redis URL, no digits": j("redis://:", "supersecretpassword", "@cache:6379"),
+    "password: hunter2": j("password: ", "hunter2"),
+    "password, no digits": j('password = "', "correcthorsebatterystaple", '"'),
+    "DB_PASSWORD": j("DB_PASS", "WORD=Tr0ub4dor&3xyz"),
+    "Django SECRET_KEY": j("SECRET_KEY = '", "django-insecure-8h2k$1x9@q!z7w#e4r5t6y", "'"),
+    "secret_key": j("secret_key: ", "abcd1234efgh5678ijkl"),
+    "JSON password": j('{"password": "', "P@ssw0rd2024!", '"}'),
+    "Bearer": j("Authorization: Bearer ", "8f3e2a1b9c7d6e5f4a3b2c1d0e9f8a7b"),
+    "TOKEN=": j("TOKEN=", "8f3e2a1b9c7d6e5f4a3b2c1d0e9f8a7b"),
+    "Slack webhook": j("https://hooks.slack", ".com/services/", "T00000000/B00000000/", "XXXXXXXXXXXXXXXXXXXXXXXX"),
+    "Google API key": j("AI", "za", "SyA1234567890abcdefghijklmnopqrstu"),
+    "Hugging Face": j("hf", "_", "abcdefghijklmnopqrstuvwxyzABCDEFGH"),
+    "SendGrid": j("SG", ".", "abcdefghijklmnopqrstuv", ".", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"),
+    "Twilio": j("S", "K", "0123456789abcdef0123456789abcdef"),
+    "Azure AccountKey": j("DefaultEndpointsProtocol=https;AccountName=acct;Account", "Key=", "abc123def456ghi789jkl012mno345pqr678stu901vwx234yz==", ";EndpointSuffix=core.windows.net"),
+    "mysql -p": j("mysql -u root -p", "S3cr3tPass99", " prod"),
+    "export OPENAI_API_KEY": j("export OPENAI_", "API_KEY=", "abc123def456ghi789"),
+    "apiKey camelCase": j('apiKey: "', "AbC123dEf456GhI789", '"'),
+  };
+  for (const [name, text] of Object.entries(secrets)) {
+    const m = maskSecrets(text);
+    assert.ok(m.count >= 1, `${name} was not masked: ${m.text}`);
+    assert.match(m.text, /masked by context-doctor/, name);
+  }
+  const benign: Record<string, string> = {
+    "env reference": "api_key = process.env.OPENAI_API_KEY",
+    "pwd path": "pwd: /home/runner/work/repo2024/app",
+    "type annotation": "password: string; // min length 12, must contain digits",
+    "CSS class": ".sk-spinner-wave-container-12345 { color: red }",
+    "placeholder": "api_key: YOUR_API_KEY_HERE_123",
+    "a call": "secret = getSecret(name1, version2)",
+    "token counts": "max_tokens: 4000, token_count: 123456, input_tokens = 98765",
+    "git sha": "commit 2aac93e4f1b5c6d7e8f90a1b2c3d4e5f60718293",
+    "uuid": "id: 123e4567-e89b-12d3-a456-426614174000",
+    "prose": "the password field is required; rotate the secret monthly",
+  };
+  for (const [name, text] of Object.entries(benign)) {
+    const m = maskSecrets(text);
+    assert.equal(m.count, 0, `${name} was masked: ${m.text}`);
+    assert.equal(m.text, text);
+  }
+});

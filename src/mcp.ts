@@ -408,7 +408,8 @@ server.tool(
         // The form shows the title and block labels: masked, like what is saved.
         const c = await askConsent(
           server,
-          maskSecrets(`Save a handoff of this chat on this computer (${tildify(handoffDir())}) to start a new chat from? "${(title ?? brief.split("\n")[0]).slice(0, 80)}"${n ? `, with ${n} verbatim block(s): ${verbatim!.map((b) => b.label).join(", ").slice(0, 200)}` : ""}.`).text,
+          // Masked before it is cut: a secret split at the cut would escape the patterns.
+          `Save a handoff of this chat on this computer (${tildify(handoffDir())}) to start a new chat from? "${maskSecrets(title ?? brief.split("\n")[0]).text.slice(0, 80)}"${n ? `, with ${n} verbatim block(s): ${maskSecrets(verbatim!.map((b) => b.label).join(", ")).text.slice(0, 200)}` : ""}.`,
           n ? { include_verbatim: { type: "boolean", title: "Include the verbatim blocks", default: true } } : {}
         );
         if (c.asked && !c.ok) {
