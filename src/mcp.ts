@@ -16,7 +16,7 @@
  *   context_best_practices — curated checklist for a given provider/use case
  *   pack_context      — only the chunks of big files a question needs, within a token budget
  *   save_handoff      — store a handoff brief the next chat starts from (a chat's history cannot be cut)
- * Prompts: context_checkup, handoff. Resources (stdio): handoff://latest, handoff://<id>.
+ * Prompts: context_checkup, handoff, ask_file. Resources (stdio): handoff://latest, handoff://<id>.
  */
 
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -33,6 +33,7 @@ import { renderSketchProfile, runSketchProfile } from "./sketch.js";
 import { packContextSemantic, readSources, renderPack } from "./pack.js";
 import { SERVER_INSTRUCTIONS } from "./rules.js";
 import { HANDOFF_LIMITS, handoffDir, listHandoffs, readHandoff, renderMath, saveHandoff, tildify, validateHandoff } from "./handoff.js";
+import { sourcesFromOpenAiFiles } from "./fileparams.js";
 
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"] as const;
 
@@ -209,14 +210,26 @@ server.tool(
   }
   );
 
+  // ChatGPT passes an uploaded file to a tool that names the field in
+  // _meta["openai/fileParams"]: { download_url, file_id, mime_type?, file_name? }.
+  // Every file schema must declare all four and require only the first two
+  // (developers.openai.com/apps-sdk/reference). Only the HTTP server offers it:
+  // a local server reads files from disk instead, and stays a little smaller.
+  const fileSchema = z.object({
+    download_url: z.string(),
+    file_id: z.string(),
+    mime_type: z.string().optional(),
+    file_name: z.string().optional(),
+  }).strict();
   const packInput = {
-    paths: z.array(z.string()).max(50).optional().describe(http ? "Not read over HTTP; pass `text`" : "Files or folders, absolute paths"),
+    paths: z.array(z.string()).max(50).optional().describe(http ? "Not read over HTTP; pass `text` or `files`" : "Files or folders, absolute paths"),
     text: z.string().optional().describe("Raw text to pack instead of files"),
     query: z.string().optional().describe("The question; omit for an outline"),
     max_tokens: z.number().int().positive().max(200_000).optional().describe("Budget, default 4000"),
     ids: z.array(z.string()).max(200).optional().describe("Chunk ids from an outline or result, e.g. docs/guide.md#4"),
     model: z.string().optional().describe("Model the budget is counted for (default Claude)"),
     semantic: z.boolean().optional().describe("Also rank by meaning (local Ollama embeddings)"),
+    ...(http ? { files: z.array(fileSchema).max(10).optional().describe("Files the user uploaded") } : {}),
   };
   server.registerTool(
     "pack_context",
@@ -225,16 +238,26 @@ server.tool(
       inputSchema: packInput,
       // Reads files, never writes. Clients (Codex, ChatGPT) may skip approval for read-only tools.
       annotations: { title: "Pack context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      ...(http ? { _meta: { "openai/fileParams": ["files"] } } : {}),
     },
-    async ({ paths, text, query, max_tokens, ids, model, semantic }) => {
+    async (args: Record<string, any>) => {
+      const { paths, text, query, max_tokens, ids, model, semantic, files } = args as {
+        paths?: string[]; text?: string; query?: string; max_tokens?: number; ids?: string[]; model?: string; semantic?: boolean;
+        files?: Array<{ download_url: string; file_id: string; mime_type?: string; file_name?: string }>;
+      };
       const err = (t: string) => ({ content: [{ type: "text" as const, text: t }], isError: true });
       if (paths?.length && !fileAccess) {
-        return err("This server runs over HTTP and does not read files. Pass the document as `text`.");
+        return err("This server runs over HTTP and does not read files. Pass the document as `text`, or attach it (`files`).");
       }
       const { sources, skipped } = paths?.length ? readSources(paths) : { sources: [], skipped: [] as string[] };
+      if (http && files?.length) {
+        const got = await sourcesFromOpenAiFiles(files);
+        sources.push(...got.sources);
+        skipped.push(...got.skipped);
+      }
       if (text) sources.push({ name: "text", text });
       if (sources.length === 0) {
-        return err(skipped.length ? `Nothing readable: ${skipped.join("; ")}` : "Pass `paths` (files or folders) or `text`.");
+        return err(skipped.length ? `Nothing readable: ${skipped.join("; ")}` : `Pass ${fileAccess ? "`paths` (files or folders)" : "`files`"} or \`text\`.`);
       }
       const result = await packContextSemantic(sources, { query, budget: max_tokens, ids, model, semantic });
       const note = skipped.length ? `\nSkipped: ${skipped.slice(0, 10).join("; ")}${skipped.length > 10 ? ` (+${skipped.length - 10} more)` : ""}` : "";
@@ -287,6 +310,33 @@ server.tool(
               "Then call save_handoff with the brief, those blocks as `verbatim`, a short title, the model you run as, and `chat_tokens` if you have a profile_context figure (else `turns`). " +
               "Do not write the brief into this reply before the call. After it, tell me in two lines how to continue, as its result says." +
               (focus?.trim() ? ` The next chat will work on: ${focus.trim()}` : ""),
+          },
+        },
+      ],
+    })
+  );
+
+  server.registerPrompt(
+    "ask_file",
+    {
+      title: "Ask a big file",
+      description: "Answer from a big file or folder without reading it whole: pack_context returns only the parts the question needs.",
+      argsSchema: {
+        path: z.string().max(1000).describe("Absolute path to the file or folder"),
+        question: z.string().max(2000).describe("What you want to know from it"),
+      },
+    },
+    async ({ path, question }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text:
+              `Answer from ${JSON.stringify(path)} without pasting or reading it whole: ${question}\n\n` +
+              `Call pack_context with paths [${JSON.stringify(path)}] and the question as \`query\`. Answer from the chunks it returns and cite their ids. ` +
+              "If they do not hold the answer, call it again with the ids it names as next best, or with no query for an outline to pick from; do not read the file whole. " +
+              "If pack_context cannot read paths here, ask me to attach or paste the file, and pass it as `files` or `text`.",
           },
         },
       ],

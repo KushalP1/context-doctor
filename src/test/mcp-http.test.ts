@@ -163,7 +163,7 @@ test("the standing instruction is action-shaped and small, and the checkup promp
     assert.ok(instructions.indexOf("handoff") < instructions.indexOf("over ~2k tokens"));
 
     const { prompts } = await client.listPrompts();
-    assert.deepEqual(prompts.map((p) => p.name), ["context_checkup", "handoff"]);
+    assert.deepEqual(prompts.map((p) => p.name), ["context_checkup", "handoff", "ask_file"]);
     const got = await client.getPrompt({ name: "context_checkup", arguments: {} });
     const text = (got.messages[0]?.content as { text?: string }).text ?? "";
     assert.match(text, /profile_context/);

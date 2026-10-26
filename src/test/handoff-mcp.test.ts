@@ -1,5 +1,5 @@
 /**
- * The handoff surfaces through the official MCP client, the way
+ * The handoff and ask_file surfaces through the official MCP client, the way
  * Claude Desktop (stdio, prompts in the + menu, attachable resources) and
  * ChatGPT (a URL, tools only) reach them. Every server runs with a throwaway
  * home directory.
@@ -28,7 +28,7 @@ async function stdioClient(home: string, capabilities: Record<string, unknown> =
   return client;
 }
 
-test("prompt: handoff renders the instructions the model acts on", async () => {
+test("prompts: handoff and ask_file render the instructions the model acts on", async () => {
   const client = await stdioClient(mkdtempSync(join(tmpdir(), "cd-hp-")));
   try {
     const { prompts } = await client.listPrompts();
@@ -44,6 +44,13 @@ test("prompt: handoff renders the instructions the model acts on", async () => {
     assert.match(ht, /The next chat will work on: the Friday prod run/);
     assert.doesNotMatch(text({ content: [(await client.getPrompt({ name: "handoff", arguments: {} })).messages[0].content] }), /next chat will work on/);
 
+    const askFile = prompts.find((p) => p.name === "ask_file")!;
+    assert.deepEqual(askFile.arguments?.map((a) => [a.name, a.required]), [["path", true], ["question", true]]);
+    const a = await client.getPrompt({ name: "ask_file", arguments: { path: "/srv/logs/app.log", question: "why did the 3am job fail?" } });
+    const at = (a.messages[0].content as { text: string }).text;
+    assert.match(at, /pack_context with paths \["\/srv\/logs\/app\.log"\]/);
+    assert.match(at, /why did the 3am job fail\?/);
+    assert.match(at, /do not read the file whole/);
   } finally {
     await client.close();
   }
