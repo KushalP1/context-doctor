@@ -193,3 +193,28 @@ test("the ledger keeps model names short and clean, and rotates by bytes, foldin
     }
     assert.ok(existsSync(dir));
 });
+test("readJsonBody: a body that never finishes is a 408 within the limit, not a request held open", async () => {
+    const { PassThrough } = await import("node:stream");
+    const { readJsonBody } = await import("../httpguard.js");
+    const slow = Object.assign(new PassThrough(), { headers: { "content-length": "999999" } });
+    slow.write("{");
+    const started = Date.now();
+    const r = await readJsonBody(slow, 1024 * 1024, 200);
+    assert.ok(!("value" in r) && r.status === 408, JSON.stringify(r));
+    assert.ok(Date.now() - started < 2000);
+    const ok = Object.assign(new PassThrough(), { headers: {} });
+    ok.end('{"a":1}');
+    assert.deepEqual(await readJsonBody(ok), { value: { a: 1 } });
+});
+test("only /mcp is the endpoint: /mcpx and friends are 404", async () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-guard-p-"));
+    const s = await server(home);
+    try {
+        assert.equal((await raw(s.port, { path: "/mcpx", body: "{}" })).status, 404);
+        assert.equal((await raw(s.port, { path: "/mcp/../health", body: "{}" })).status, 404);
+        assert.equal((await s.rpc("tools/list")).status, 200);
+    }
+    finally {
+        s.child.kill();
+    }
+});

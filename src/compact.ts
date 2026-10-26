@@ -43,7 +43,7 @@ const CHATGPT_KEYS = ["openai/session", "openai/subject"];
 export function resultMode(requestMeta: unknown, env: NodeJS.ProcessEnv = process.env): ResultMode {
   const forced = env.CONTEXT_DOCTOR_RESULTS?.trim().toLowerCase();
   if (forced === "full" || forced === "compact") return forced;
-  if (requestMeta && typeof requestMeta === "object" && CHATGPT_KEYS.some((k) => k in requestMeta)) return "compact";
+  if (requestMeta && typeof requestMeta === "object" && CHATGPT_KEYS.some((k) => typeof (requestMeta as Record<string, unknown>)[k] === "string")) return "compact";
   return "full";
 }
 

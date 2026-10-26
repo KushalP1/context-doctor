@@ -31,7 +31,7 @@ export function resultMode(requestMeta, env = process.env) {
     const forced = env.CONTEXT_DOCTOR_RESULTS?.trim().toLowerCase();
     if (forced === "full" || forced === "compact")
         return forced;
-    if (requestMeta && typeof requestMeta === "object" && CHATGPT_KEYS.some((k) => k in requestMeta))
+    if (requestMeta && typeof requestMeta === "object" && CHATGPT_KEYS.some((k) => typeof requestMeta[k] === "string"))
         return "compact";
     return "full";
 }

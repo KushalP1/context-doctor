@@ -23,6 +23,7 @@
 import type { IncomingMessage } from "node:http";
 export declare const HTTP_LIMITS: {
     bodyBytes: number;
+    bodyMs: number;
 };
 /** Origins a browser may call from without being listed: ChatGPT's. */
 export declare const DEFAULT_ALLOWED_ORIGINS: string[];
@@ -41,8 +42,12 @@ export declare function hostName(hostHeader: string): string;
 export declare function makeGuard(bindHost: string, allowedHosts?: string, allowedOrigins?: string, env?: NodeJS.ProcessEnv): HttpGuard;
 /** Why this request may not reach /mcp, or undefined when it may. */
 export declare function refusal(guard: HttpGuard, headers: IncomingMessage["headers"]): string | undefined;
-/** The request body as JSON, at most `limit` bytes; otherwise the status and reason to answer with. */
-export declare function readJsonBody(req: IncomingMessage, limit?: number): Promise<{
+/**
+ * The request body as JSON, at most `limit` bytes and within `ms` (a client
+ * that declares more than it sends must not hold a request open); otherwise
+ * the status and reason to answer with.
+ */
+export declare function readJsonBody(req: IncomingMessage, limit?: number, ms?: number): Promise<{
     value: unknown;
 } | {
     status: number;

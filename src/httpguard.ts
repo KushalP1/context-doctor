@@ -23,7 +23,7 @@
 
 import type { IncomingMessage } from "node:http";
 
-export const HTTP_LIMITS = { bodyBytes: 10 * 1024 * 1024 };
+export const HTTP_LIMITS = { bodyBytes: 10 * 1024 * 1024, bodyMs: 30_000 };
 
 /** Origins a browser may call from without being listed: ChatGPT's. */
 export const DEFAULT_ALLOWED_ORIGINS = ["https://chatgpt.com", "https://chat.openai.com"];
@@ -90,18 +90,31 @@ export function refusal(guard: HttpGuard, headers: IncomingMessage["headers"]): 
   return undefined;
 }
 
-/** The request body as JSON, at most `limit` bytes; otherwise the status and reason to answer with. */
-export function readJsonBody(req: IncomingMessage, limit = HTTP_LIMITS.bodyBytes): Promise<{ value: unknown } | { status: number; code: number; message: string }> {
+/**
+ * The request body as JSON, at most `limit` bytes and within `ms` (a client
+ * that declares more than it sends must not hold a request open); otherwise
+ * the status and reason to answer with.
+ */
+export function readJsonBody(req: IncomingMessage, limit = HTTP_LIMITS.bodyBytes, ms = HTTP_LIMITS.bodyMs): Promise<{ value: unknown } | { status: number; code: number; message: string }> {
   return new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      resolve({ status: 408, code: -32600, message: `the request body did not arrive within ${Math.round(ms / 1000)} s` });
+    }, ms);
+    const settle = (r: { value: unknown } | { status: number; code: number; message: string }) => {
+      clearTimeout(timer);
+      resolve(r);
+    };
     const tooLarge = { status: 413, code: -32600, message: `request body over ${Math.round(limit / 1024 / 1024)} MB` };
     const declared = Number(req.headers["content-length"]);
     if (Number.isFinite(declared) && declared > limit) {
       req.resume();
-      return resolve(tooLarge);
+      return settle(tooLarge);
     }
     const parts: Buffer[] = [];
     let size = 0;
-    let done = false;
     req.on("data", (d: Buffer) => {
       if (done) return;
       size += d.length;
@@ -109,7 +122,7 @@ export function readJsonBody(req: IncomingMessage, limit = HTTP_LIMITS.bodyBytes
         done = true;
         parts.length = 0;
         req.resume();
-        return resolve(tooLarge);
+        return settle(tooLarge);
       }
       parts.push(d);
     });
@@ -117,15 +130,15 @@ export function readJsonBody(req: IncomingMessage, limit = HTTP_LIMITS.bodyBytes
       if (done) return;
       done = true;
       try {
-        resolve({ value: JSON.parse(Buffer.concat(parts).toString("utf8")) });
+        settle({ value: JSON.parse(Buffer.concat(parts).toString("utf8")) });
       } catch {
-        resolve({ status: 400, code: -32700, message: "Parse error: the body is not JSON" });
+        settle({ status: 400, code: -32700, message: "Parse error: the body is not JSON" });
       }
     });
     req.on("error", () => {
       if (done) return;
       done = true;
-      resolve({ status: 400, code: -32700, message: "the request body could not be read" });
+      settle({ status: 400, code: -32700, message: "the request body could not be read" });
     });
   });
 }

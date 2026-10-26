@@ -76,6 +76,10 @@ test("download URLs: https to a public host only; no credentials, local names or
     ["https://[::ffff:0:7f00:1]/a", /private/],
     ["https://[2002:7f00:1::]/a", /private/],
     ["https://[2001:0:4136:e378:8000:63bf:80ff:fffe]/a", /private/],
+    ["https://localhost./a", /local host name/],
+    ["https://198.51.100.7/a", /private/],
+    ["https://203.0.113.7/a", /private/],
+    ["https://192.88.99.1/a", /private/],
     ["file:///etc/passwd", /only https/],
     ["not a url", /not a URL/],
   ];

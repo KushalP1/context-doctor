@@ -69,6 +69,7 @@ test("result mode: an explicit CONTEXT_DOCTOR_RESULTS wins; unknown clients get 
     assert.equal(resultMode({ progressToken: 1 }, {}), "full");
     assert.equal(resultMode({ "openai/subject": "u" }, {}), "compact");
     assert.equal(resultMode({ "openai/session": "s" }, {}), "compact");
+    assert.equal(resultMode({ "openai/session": null }, {}), "full", "a key with no id is not ChatGPT's");
     assert.equal(resultMode({ "openai/locale": "en-US", "openai/userAgent": "x" }, {}), "full", "only ChatGPT's own ids, not any OpenAI key");
     assert.equal(resultMode({ "openai/subject": "u" }, { CONTEXT_DOCTOR_RESULTS: "full" }), "full");
     assert.equal(resultMode(undefined, { CONTEXT_DOCTOR_RESULTS: "compact" }), "compact");

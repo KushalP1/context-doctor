@@ -41,7 +41,11 @@ function loopbackAllowed(env = process.env) {
 }
 function isPrivateV4(ip) {
     const [a, b] = ip.split(".").map(Number);
-    return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || (a === 192 && b === 0) || (a === 198 && (b === 18 || b === 19));
+    const c = Number(ip.split(".")[2]);
+    return (a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) ||
+        (a === 100 && b >= 64 && b <= 127) || (a === 192 && b === 0) || (a === 198 && (b === 18 || b === 19)) ||
+        // Documentation (TEST-NET-2/3) and the old 6to4 relay anycast: never a file host.
+        (a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113) || (a === 192 && b === 88 && c === 99));
 }
 /**
  * The eight 16-bit groups of an IPv6 address, a dotted IPv4 tail included,
@@ -126,7 +130,7 @@ export function checkFileUrl(raw, env = process.env) {
         return { error: `only https downloads are allowed (got ${url.protocol.replace(":", "")})` };
     if (testLoopback)
         return { url };
-    if (/^localhost$|\.localhost$|\.local$|\.internal$/i.test(host))
+    if (/^localhost$|\.localhost$|\.local$|\.internal$/i.test(host.replace(/\.$/, "")))
         return { error: "a local host name" };
     if (isIP(host) && isPrivateAddress(host))
         return { error: "a private or loopback address" };

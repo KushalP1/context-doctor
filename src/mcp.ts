@@ -571,7 +571,8 @@ if (argv.includes("--http")) {
         res.end(JSON.stringify({ ok: true, service: "context-doctor-mcp" }));
         return;
       }
-      if (!(req.url ?? "").startsWith("/mcp")) {
+      const path = (req.url ?? "").split("?")[0];
+      if (path !== "/mcp" && path !== "/mcp/") {
         res.statusCode = 404;
         res.end(JSON.stringify({ error: "MCP endpoint is /mcp" }));
         return;
@@ -579,9 +580,9 @@ if (argv.includes("--http")) {
       const deny = (status: number, code: number, message: string) => {
         res.statusCode = status;
         res.setHeader("content-type", "application/json");
-        if (status === 413) res.setHeader("connection", "close");
+        if (status === 413 || status === 408) res.setHeader("connection", "close");
         res.end(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }));
-        if (status === 413) req.destroy();
+        if (status === 413 || status === 408) req.destroy();
       };
       const refused = refusal(guard, req.headers);
       if (refused) return deny(403, -32000, `Forbidden: ${refused}.`);
