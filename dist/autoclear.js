@@ -141,7 +141,8 @@ export function openAICacheOptionsModel(model) {
  *    Retention default to "24h".
  *  - Any entry: "a maximum retention period of 24 hours".
  * So 24 hours, unless the request asks an earlier model for "in_memory" (one
- * hour), or uses explicit mode with no breakpoint, which caches nothing.
+ * hour; not GPT-5.5 or 5.5 Pro, which "support only 24h"), or uses explicit
+ * mode with no breakpoint, which caches nothing.
  * Through 0.37 this was one hour unless "24h": a GPT-5.6 cache still warm at
  * 83 minutes was called cold, and clearing it paid a rewrite.
  */
@@ -150,7 +151,9 @@ function openAITtlMs(body) {
     const history = JSON.stringify(body.input ?? body.messages ?? "");
     if (options && typeof options === "object" && options.mode === "explicit" && !history.includes('"prompt_cache_breakpoint"'))
         return 0;
-    if (!openAICacheOptionsModel(body.model) && !options && body.prompt_cache_retention === "in_memory" && !history.includes('"prompt_cache_breakpoint"'))
+    // GPT-5.5 and GPT-5.5 Pro support only "24h": an "in_memory" there is not what the cache does.
+    const only24h = /gpt-5\.5(?![\d.])/i.test(typeof body.model === "string" ? body.model : "");
+    if (!openAICacheOptionsModel(body.model) && !only24h && !options && body.prompt_cache_retention === "in_memory" && !history.includes('"prompt_cache_breakpoint"'))
         return HOUR;
     return 24 * HOUR;
 }

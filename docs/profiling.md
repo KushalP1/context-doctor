@@ -58,7 +58,7 @@ Prompt cache: 95.6% of input served from cache across 1117 requests
   input cost $438.88 — caching saved $2481.89 against $2920.76 uncached (list prices)
 ```
 
-A cache read bills at 2.5-10% of input depending on the provider and model, while a write bills 1.25x input (5-minute cache) or 2x (1-hour cache) on Anthropic, so a session that keeps invalidating its prefix can cost *more* than one with no caching at all. context-doctor warns on the two failure modes: a **low hit rate** (something early in the prompt changes every request) and **cache churn** (writes rivalling reads). For an API request of your own, `cache-plan <request.json>` says where `cache_control` belongs and prices it.
+A cache read bills at 2.5-10% of input depending on the provider and model, while a write bills 1.25x input (5-minute cache) or 2x (1-hour cache) on Anthropic, and on OpenAI's GPT-5.6 and later 1.25x (30 minutes) or 2.5x (12 hours) (earlier OpenAI models charge no writes). Codex rollouts record one `cache_write_input_tokens` count with no split by lifetime, so Codex writes are priced as 30-minute writes (Codex sets no `prompt_cache_options` on the author's machine; a 12-hour write there would be underpriced by half). So a session that keeps invalidating its prefix can cost *more* than one with no caching at all. context-doctor warns on the two failure modes: a **low hit rate** (something early in the prompt changes every request) and **cache churn** (writes rivalling reads). For an API request of your own, `cache-plan <request.json>` says where `cache_control` belongs and prices it.
 
 ### Subagents: their own windows, your bill
 

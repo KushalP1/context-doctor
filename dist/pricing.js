@@ -169,7 +169,8 @@ export function usageCost(usage, pricing) {
  * `cache_write_input_tokens`). OpenAI's input count holds every input token
  * once, each billed at the uncached, cached or write rate, so the uncached
  * part is what is left after reads AND writes. Writes without a split are
- * 30-minute writes, the default lifetime.
+ * 30-minute writes, the default lifetime: Codex rollouts record only the
+ * total, so a Codex 12-hour write would be priced at half its 2.5x.
  */
 export function openAIUsage(raw) {
     const u = raw ?? {};

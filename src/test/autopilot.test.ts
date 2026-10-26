@@ -146,6 +146,9 @@ test("GPT: cache lifetime is taken as the longest OpenAI may keep it (24h unless
   assert.equal(requestTtlMs(openaiResponses(1)), 24 * HOUR);
   assert.equal(requestTtlMs(openaiResponses(1, { prompt_cache_retention: "24h" })), 24 * HOUR);
   assert.equal(requestTtlMs(openaiResponses(1, { prompt_cache_retention: "in_memory" })), HOUR, "in_memory: up to one hour");
+  assert.equal(requestTtlMs(openaiResponses(1, { model: "gpt-5.5", prompt_cache_retention: "in_memory" })), 24 * HOUR, "GPT-5.5 supports only 24h");
+  assert.equal(requestTtlMs(openaiResponses(1, { model: "gpt-5.5-pro", prompt_cache_retention: "in_memory" })), 24 * HOUR);
+  assert.equal(requestTtlMs(openaiResponses(1, { model: "gpt-5.4", prompt_cache_retention: "in_memory" })), HOUR);
   const c = new AutoClearer();
   c.apply(openaiChat(2), 0);
   assert.equal(c.apply(openaiChat(12), 30 * 60_000).newlyCleared, 0, "30 minutes later an OpenAI cache may still be warm: wait");

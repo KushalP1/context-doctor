@@ -140,7 +140,7 @@ runRows) {
             const price = pricingFor(model);
             const w1h = Math.min(write, num(u.cache_creation?.ephemeral_1h_input_tokens));
             const w5m = u.cache_creation ? Math.min(write - w1h, num(u.cache_creation?.ephemeral_5m_input_tokens)) : write - w1h;
-            onRequest(price ? (write * price.inputPerM * (oneHour ? CACHE_WRITE_1H : CACHE_WRITE_5M)) / 1e6 : 0, { at, version, write, oneHour: w1h, fiveMinute: w5m, first });
+            onRequest(price ? (write * price.inputPerM * (oneHour ? CACHE_WRITE_1H : CACHE_WRITE_5M)) / 1e6 : 0, { at, version, write, oneHour: w1h, fiveMinute: w5m, first, model, entrypoint: typeof e.entrypoint === "string" ? e.entrypoint.slice(0, 40) : undefined });
             if (prev && !compacted && at - prev.at < Math.min(ttl, prev.ttl) && prev.total > MIN_CONTEXT) {
                 const isMiss = write > MISS_SHARE * prev.total;
                 let miss;
@@ -257,7 +257,7 @@ export function cacheMisses(days = 30, paths, onProgress) {
         map.set(key, s);
     };
     const versions = new Map();
-    const versionOf = (v) => versions.get(v) ?? versions.set(v, { requests: 0, sessions: new Set(), firsts: [], writes: 0, oneHour: 0, fiveMinute: 0, eligible: 0, misses: 0, byModel: new Map(), from: Infinity, to: 0 }).get(v);
+    const versionOf = (v) => versions.get(v) ?? versions.set(v, { requests: 0, sessions: new Set(), firsts: [], writes: 0, oneHour: 0, fiveMinute: 0, eligible: 0, misses: 0, byModel: new Map(), ttlBy: new Map(), from: Infinity, to: 0 }).get(v);
     const runRows = new Set();
     for (const [i, p] of targets.entries()) {
         onProgress?.(i, targets.length);
@@ -291,6 +291,11 @@ export function cacheMisses(days = 30, paths, onProgress) {
                 v.writes += info.write;
                 v.oneHour += info.oneHour;
                 v.fiveMinute += info.fiveMinute;
+                const key = `${info.model ?? "an unknown model"}${info.entrypoint ? ` in ${info.entrypoint}` : ""}`;
+                const t = v.ttlBy.get(key) ?? v.ttlBy.set(key, { requests: 0, oneHour: 0, fiveMinute: 0 }).get(key);
+                t.requests++;
+                t.oneHour += info.oneHour;
+                t.fiveMinute += info.fiveMinute;
                 v.from = Math.min(v.from, info.at);
                 v.to = Math.max(v.to, info.at);
                 if (info.first !== undefined && info.first > 1000)
@@ -358,6 +363,7 @@ export function versionReport(versions) {
         misses: v.misses,
         missRate: v.eligible ? v.misses / v.eligible : 0,
         byModel: [...v.byModel.entries()].map(([model, m]) => ({ model, ...m })),
+        ttlBy: [...v.ttlBy.entries()].map(([key, t]) => ({ key, requests: t.requests, oneHourShare: t.oneHour + t.fiveMinute > 0 ? t.oneHour / (t.oneHour + t.fiveMinute) : undefined })),
         from: Number.isFinite(v.from) ? new Date(v.from).toISOString() : "",
         to: v.to ? new Date(v.to).toISOString() : "",
     }));
@@ -376,7 +382,30 @@ export function versionReport(versions) {
         }
     };
     const share = (x) => `${Math.round(x * 100)}%`;
-    step("1-hour cache share", (v) => v.requests >= MIN_VERSION_REQUESTS, (v) => v.oneHourShare, (_a, _b, x, y) => Math.abs(y - x) >= 0.3, (a, b, x, y) => `Cache writes at the 1-hour TTL went from ${share(x)} on ${a.version} to ${share(y)} on ${b.version}: ${y < x ? "more of the cache now expires after 5 minutes, so a short pause re-writes it" : "the cache now survives pauses up to an hour"}.`);
+    // The 1-hour share, within one model on one surface (the desktop app and
+    // the terminal, an API key and a subscription, can each pick the TTL):
+    // the same model on the same surface, version against version.
+    const groups = new Set(byVersion.flatMap((v) => v.ttlBy.map((t) => t.key)));
+    for (const key of groups) {
+        let prev;
+        for (const v of byVersion) {
+            const t = v.ttlBy.find((x) => x.key === key);
+            if (!t || t.requests < MIN_VERSION_REQUESTS || t.oneHourShare === undefined)
+                continue;
+            if (prev && Math.abs(t.oneHourShare - prev.share) >= 0.3) {
+                const x = prev.share, y = t.oneHourShare;
+                regressions.push({
+                    metric: "1-hour cache share",
+                    from: prev.v.version,
+                    to: v.version,
+                    before: x,
+                    after: y,
+                    text: `On ${key}, cache writes at the 1-hour TTL went from ${share(x)} on ${prev.v.version} to ${share(y)} on ${v.version}: ${y < x ? "more of the cache now expires after 5 minutes, so a short pause re-writes it" : "the cache now survives pauses up to an hour"}.`,
+                });
+            }
+            prev = { v, share: t.oneHourShare };
+        }
+    }
     step("first request", (v) => v.firstRequests >= MIN_VERSION_FIRSTS, (v) => v.firstMedian, (_a, _b, x, y) => Math.abs(y - x) >= Math.max(3000, 0.15 * x), (a, b, x, y) => `A new session's first request (the fixed overhead) went from ~${formatTokens(x)} on ${a.version} to ~${formatTokens(y)} on ${b.version} (median of ${a.firstRequests} and ${b.firstRequests} sessions; your CLAUDE.md, rules and MCP servers move it too: context-doctor overhead).`);
     // Miss rates: within one model, version against version, since a version's
     // overall rate mostly follows the models it ran (Sonnet 5 missed 10x as
@@ -462,6 +491,7 @@ export function renderCacheMisses(r, limitLines) {
         out.push("", "Changes after an upgrade:");
         for (const g of r.regressions)
             out.push(`  • ${g.text}`);
+        out.push("  Read with care: these compare one model (and, for the TTL, one surface) across", "  versions, but a version also arrives with new habits, projects and memory files;", "  the sign-in (API key or subscription) is not in the transcript at all.");
     }
     else if (shown.length >= 2) {
         out.push("", "No step change between versions that the numbers support.");

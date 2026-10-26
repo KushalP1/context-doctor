@@ -102,6 +102,12 @@ export interface VersionStats {
         eligible: number;
         misses: number;
     }>;
+    /** The 1-hour share per model and surface. */
+    ttlBy: Array<{
+        key: string;
+        requests: number;
+        oneHourShare?: number;
+    }>;
     /** First and last time the version was seen. */
     from: string;
     to: string;
@@ -126,6 +132,9 @@ export interface RequestInfo {
     fiveMinute: number;
     /** The session's first request, minus its first user message: the fixed overhead. Only on that request. */
     first?: number;
+    model?: string;
+    /** The Claude Code surface (cli, claude-vscode, claude-desktop...): it can choose the cache TTL too. */
+    entrypoint?: string;
 }
 export declare function missesInTranscript(path: string, since?: number, add?: (eligible: {
     model: string;
@@ -148,6 +157,12 @@ interface VersionAcc {
     byModel: Map<string, {
         eligible: number;
         misses: number;
+    }>;
+    /** Cache writes by TTL per model and surface: either can change the TTL as much as the version. */
+    ttlBy: Map<string, {
+        requests: number;
+        oneHour: number;
+        fiveMinute: number;
     }>;
     from: number;
     to: number;
