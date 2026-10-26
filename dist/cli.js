@@ -340,6 +340,8 @@ const FLAGS = [
     // Read by the MCP server itself: `mcp --http [--port n] [--host h]`.
     { names: ["--http"], set: () => { } },
     { names: ["--store-handoffs"], set: () => { } },
+    { names: ["--allowed-hosts"], value: "text", set: () => { } },
+    { names: ["--allowed-origins"], value: "text", set: () => { } },
 ];
 const FLAG_BY_NAME = new Map(FLAGS.flatMap((f) => f.names.map((n) => [n, f])));
 const FLAG_NAMES = [...FLAG_BY_NAME.keys(), "--help", "--version"];

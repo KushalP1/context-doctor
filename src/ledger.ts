@@ -117,16 +117,33 @@ export function ledgerPath(): string {
   return join(dirname(statePath()), ".context-doctor-ledger.jsonl");
 }
 
+/** Longest string field kept in a ledger entry (a model name, a session id). */
+export const LEDGER_STRING_MAX = 100;
+/** On rotation: what is kept, by bytes and by entries; longer lines are folded, not kept. */
+const LEDGER_ROTATE_AT = 256 * 1024;
+const LEDGER_KEEP_BYTES = 128 * 1024;
+const LEDGER_KEEP_LINES = 500;
+const LEDGER_LINE_MAX = 4 * 1024;
+
+/** A string field as the ledger keeps it: no control characters, at most LEDGER_STRING_MAX. */
+function cap(v: unknown): string | undefined {
+  if (typeof v !== "string") return undefined;
+  // eslint-disable-next-line no-control-regex
+  const clean = v.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+  return clean.length > LEDGER_STRING_MAX ? clean.slice(0, LEDGER_STRING_MAX) : clean;
+}
+
 export function recordLedger(entry: Omit<LedgerEntry, "ts">): void {
   const path = ledgerPath();
   try {
     // Claude-Desktop-only machines have no ~/.claude — create it so their
     // optimize events count in `context-doctor report` too.
     mkdirSync(dirname(path), { recursive: true });
-    // Cap growth: past ~256KB keep the most recent 500 entries — but fold the
-    // dropped ones into a rollup first, or every lifetime total in the reports
-    // silently shrinks the moment a heavy user crosses the cap.
-    if (existsSync(path) && statSync(path).size > 256 * 1024) {
+    // Cap growth by bytes, not lines: past 256KB keep the newest entries that
+    // fit 128KB (at most 500), and fold the rest into a rollup first, or every
+    // lifetime total in the reports silently shrinks the moment a heavy user
+    // crosses the cap. A line too long to be a real entry is folded, never kept.
+    if (existsSync(path) && statSync(path).size > LEDGER_ROTATE_AT) {
       const lines = readFileSync(path, "utf8").trimEnd().split("\n");
       const parse = (line: string): LedgerEntry[] => {
         try {
@@ -135,13 +152,30 @@ export function recordLedger(entry: Omit<LedgerEntry, "ts">): void {
           return [];
         }
       };
-      const kept = lines.slice(-500);
-      const dropped = lines.slice(0, -500).flatMap(parse);
+      const keptAt = new Set<number>();
+      let bytes = 0;
+      for (let i = lines.length - 1; i >= 0 && keptAt.size < LEDGER_KEEP_LINES; i--) {
+        const n = Buffer.byteLength(lines[i]) + 1;
+        if (n > LEDGER_LINE_MAX) continue;
+        if (bytes + n > LEDGER_KEEP_BYTES) break;
+        keptAt.add(i);
+        bytes += n;
+      }
+      const kept = lines.filter((_, i) => keptAt.has(i));
+      const dropped = lines.filter((_, i) => !keptAt.has(i)).flatMap(parse);
       const carried = foldTotals(dropped);
       const rollup: LedgerEntry = { ts: Date.now(), ev: "rollup", carried };
       writeFileSync(path, [JSON.stringify(rollup), ...kept].join("\n") + "\n");
     }
-    appendFileSync(path, JSON.stringify({ ts: Date.now(), ...entry }) + "\n");
+    const clean: Omit<LedgerEntry, "ts"> = { ...entry };
+    for (const k of ["model", "sid", "cv", "app"] as const) {
+      if (k in clean) {
+        const v = cap(clean[k]);
+        if (v === undefined) delete clean[k];
+        else clean[k] = v;
+      }
+    }
+    appendFileSync(path, JSON.stringify({ ts: Date.now(), ...clean }) + "\n");
   } catch {
     /* best-effort */
   }

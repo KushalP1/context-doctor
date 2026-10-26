@@ -57,5 +57,7 @@ export interface CarriedTotals {
 export declare function foldTotals(entries: LedgerEntry[]): CarriedTotals;
 export declare function statePath(): string;
 export declare function ledgerPath(): string;
+/** Longest string field kept in a ledger entry (a model name, a session id). */
+export declare const LEDGER_STRING_MAX = 100;
 export declare function recordLedger(entry: Omit<LedgerEntry, "ts">): void;
 export declare function readLedger(): LedgerEntry[];

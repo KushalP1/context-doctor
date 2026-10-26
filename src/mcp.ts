@@ -35,6 +35,7 @@ import { SERVER_INSTRUCTIONS } from "./rules.js";
 import { compactOutline, compactProfile, compactSketch, resultMode, type CompactResult } from "./compact.js";
 import { HANDOFF_LIMITS, handoffDir, listHandoffs, maskSecrets, readHandoff, renderMath, saveHandoff, tildify, validateHandoff } from "./handoff.js";
 import { sourcesFromOpenAiFiles } from "./fileparams.js";
+import { makeGuard, readJsonBody, refusal } from "./httpguard.js";
 
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"] as const;
 
@@ -133,7 +134,7 @@ function createServer({ http = false, storeHandoffs = !http }: { http?: boolean;
       // Both given: the sketch is used. Say so, or the model reads a sketch
       // profile as the profile of the conversation it passed.
       const both = conversation ? "Note: both `conversation` and `sketch` were passed; profiled the sketch only. Pass one.\n\n" : "";
-      const p = runSketchProfile({ ...sketch, model: sketch.model ?? model });
+      const p = runSketchProfile({ ...sketch, model: sketch.model ?? model }, { record: !http });
       const full = both + renderSketchProfile(p);
       return shaped(extra?._meta, full, () => {
         const c = compactSketch(p, full);
@@ -186,7 +187,9 @@ server.tool(
       maxToolResultTokens: max_tool_result_tokens,
     });
     const saved = result.tokensBefore - result.tokensAfter;
-    if (saved > 0) {
+    // The ledger is this machine's record; a server reachable over HTTP writes
+    // nothing a caller sends (its model string included) into it.
+    if (saved > 0 && !http) {
       recordLedger({ ev: "optimize", src: "mcp", saved, model: (result.conversation as { model?: string })?.model });
     }
     const summary =
@@ -550,6 +553,8 @@ if (argv.includes("--http")) {
   // Handoffs stay on this machine only when its owner says so: a server on a
   // shared host or behind a public tunnel must not collect other people's chats.
   const storeHandoffs = argv.includes("--store-handoffs");
+  // Host and Origin checks against DNS rebinding and cross-site requests (httpguard.ts).
+  const guard = makeGuard(host, argAfter("--allowed-hosts"), argAfter("--allowed-origins"));
   const { createServer: createHttpServer } = await import("node:http");
   const { StreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
 
@@ -565,6 +570,15 @@ if (argv.includes("--http")) {
         res.end(JSON.stringify({ error: "MCP endpoint is /mcp" }));
         return;
       }
+      const deny = (status: number, code: number, message: string) => {
+        res.statusCode = status;
+        res.setHeader("content-type", "application/json");
+        if (status === 413) res.setHeader("connection", "close");
+        res.end(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }));
+        if (status === 413) req.destroy();
+      };
+      const refused = refusal(guard, req.headers);
+      if (refused) return deny(403, -32000, `Forbidden: ${refused}.`);
       if (req.method !== "POST") {
         // Stateless mode: no standalone SSE stream, no sessions to delete.
         res.statusCode = 405;
@@ -572,6 +586,9 @@ if (argv.includes("--http")) {
         res.end(JSON.stringify({ error: "Stateless server: POST /mcp only" }));
         return;
       }
+      // Read (capped) and parse the body here; the transport gets it parsed.
+      const body = await readJsonBody(req);
+      if (!("value" in body)) return deny(body.status, body.code, body.message);
       // The streamable-HTTP spec says a client MUST accept both
       // application/json and text/event-stream, and the SDK answers anything
       // else with a 406. Plenty of real callers send only application/json, or
@@ -598,7 +615,7 @@ if (argv.includes("--http")) {
         void server.close();
       });
       await server.connect(transport);
-      await transport.handleRequest(req, res);
+      await transport.handleRequest(req, res, body.value);
     } catch (e) {
       if (!res.headersSent) res.statusCode = 500;
       res.end(JSON.stringify({ error: (e as Error).message }));
@@ -606,6 +623,11 @@ if (argv.includes("--http")) {
   }).listen(port, host, () => {
     console.error(`context-doctor MCP (streamable HTTP) on http://${host}:${port}/mcp`);
     console.error(`ChatGPT developer-mode connectors need a URL their servers can reach — expose this via your host or a tunnel.`);
+    console.error(
+      guard.hosts === "*"
+        ? "Host check off (--allowed-hosts '*')."
+        : `Answering Host: ${[...guard.hosts].join(", ")}. Behind a tunnel, add its host name: --allowed-hosts <name>.`
+    );
   });
 } else {
   const transport = new StdioServerTransport();

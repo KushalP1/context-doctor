@@ -61,7 +61,9 @@ export declare function exchangeTokens(model?: string): number;
 export declare const MAX_LABEL_CHARS = 60;
 export declare function profileSketch(sketch: ConversationSketch): SketchProfile;
 export declare function renderSketchProfile(p: SketchProfile): string;
-/** Profile a sketch and log it to the ledger like a hook check. */
-export declare function runSketchProfile(sketch: ConversationSketch): SketchProfile;
+/** Profile a sketch and log it to the ledger like a hook check (unless `record` is false: the HTTP server). */
+export declare function runSketchProfile(sketch: ConversationSketch, { record }?: {
+    record?: boolean;
+}): SketchProfile;
 /** Profile a sketch, log it, and render. */
 export declare function runSketch(sketch: ConversationSketch): string;

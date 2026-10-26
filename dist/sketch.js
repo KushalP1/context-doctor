@@ -202,9 +202,11 @@ export function renderSketchProfile(p) {
     }
     return lines.join("\n");
 }
-/** Profile a sketch and log it to the ledger like a hook check. */
-export function runSketchProfile(sketch) {
+/** Profile a sketch and log it to the ledger like a hook check (unless `record` is false: the HTTP server). */
+export function runSketchProfile(sketch, { record = true } = {}) {
     const profile = profileSketch(sketch);
+    if (!record)
+        return profile;
     // No session id: each sketch describes a different chat, and a shared id made
     // the dashboard read "big sketch, then a smaller one" as tokens saved.
     recordLedger({ ev: "check", src: "mcp", tok: profile.totalTokens, warn: profile.findings.some((f) => f.severity !== "info"), model: sketch.model });
