@@ -263,7 +263,7 @@ test("a handoffs folder that is a link, or a ~/.context-doctor that is one, is r
     mkdirSync(join(elsewhere, "20000101-000000-victim"));
     writeFileSync(join(elsewhere, "20000101-000000-victim", "meta.json"), meta("20000101-000000-victim"));
     writeFileSync(join(elsewhere, "20000101-000000-victim", "precious.txt"), "data");
-    assert.throws(() => saveHandoff({ brief: BRIEF }, { home }), (e) => /~\/\.context-doctor\/handoffs is a symbolic link/.test(e.message) && !e.message.includes(home));
+    assert.throws(() => saveHandoff({ brief: BRIEF }, { home }), (e) => /~[\\/]\.context-doctor[\\/]handoffs is a symbolic link/.test(e.message) && !e.message.includes(home));
     assert.deepEqual(listHandoffs(home), []);
     assert.equal(readHandoff("20000101-000000-victim", home), undefined);
     assert.ok(existsSync(join(elsewhere, "20000101-000000-victim", "precious.txt")));
@@ -272,7 +272,7 @@ test("a handoffs folder that is a link, or a ~/.context-doctor that is one, is r
     const home2 = tmpHome();
     const elsewhere2 = tmpHome();
     symlinkSync(elsewhere2, join(home2, ".context-doctor"));
-    assert.throws(() => saveHandoff({ brief: BRIEF }, { home: home2 }), /~\/\.context-doctor is a symbolic link/);
+    assert.throws(() => saveHandoff({ brief: BRIEF }, { home: home2 }), /~[\\/]\.context-doctor is a symbolic link/);
     assert.deepEqual(readdirSync(elsewhere2), []);
 });
 test("rotation removes only real folders of ours: a link named like a handoff, a file, a folder without our meta all stay", { skip: !posix && "symlinks" }, () => {

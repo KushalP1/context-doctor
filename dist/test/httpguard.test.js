@@ -49,13 +49,20 @@ test("the guard: a browser Origin must be loopback, an allowed host's, ChatGPT's
 });
 function raw(port, { method = "POST", path = "/mcp", headers = {}, body = "" } = {}) {
     return new Promise((resolve) => {
+        // A server that refuses an upload may close while the client is still
+        // writing: the answer that arrived counts, not the write error after it.
+        let answered = false;
         const req = request({ host: "127.0.0.1", port, method, path, headers: { "content-type": "application/json", accept: "application/json", ...headers } }, (res) => {
+            answered = true;
             let data = "";
             res.on("data", (d) => (data += d));
             res.on("end", () => resolve({ status: res.statusCode ?? 0, body: data }));
             res.on("error", () => resolve({ status: res.statusCode ?? -1, body: data }));
         });
-        req.on("error", (e) => resolve({ status: -1, body: e.message }));
+        req.on("error", (e) => {
+            if (!answered)
+                resolve({ status: -1, body: e.message });
+        });
         if (Array.isArray(body)) {
             const parts = [...body];
             const next = () => {

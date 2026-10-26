@@ -69,7 +69,7 @@ test("save_handoff over stdio: stored under the sandboxed home, listed and reada
         const t = text(r);
         assert.notEqual(r.isError, true, t);
         assert.match(t, /^Handoff saved: \d{8}-\d{6}-invoices-v2 \(~\d+ tokens: brief ~\d+, 1 verbatim block/);
-        assert.match(t, /~\/\.context-doctor\/handoffs\//);
+        assert.match(t, /~[\\/]\.context-doctor[\\/]handoffs[\\/]/);
         assert.match(t, /Now: ~52k tokens re-read on every turn \(\$/);
         assert.match(t, /Saves ~5\dk tokens per further turn/);
         assert.match(t, /attach the resource handoff:\/\/latest/);
@@ -302,7 +302,7 @@ test("errors name no absolute path: ~ over stdio, nothing at all over HTTP", { s
     try {
         const r = await client.callTool({ name: "save_handoff", arguments: { brief: BRIEF } });
         assert.equal(r.isError, true);
-        assert.match(text(r), /^Not saved: ~\/\.context-doctor\/handoffs is a symbolic link/);
+        assert.match(text(r), /^Not saved: ~[\\/]\.context-doctor[\\/]handoffs is a symbolic link/);
         assert.ok(!text(r).includes(home));
     }
     finally {
