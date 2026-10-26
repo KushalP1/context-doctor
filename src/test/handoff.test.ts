@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -268,4 +268,107 @@ test("secrets, the QA sample: every realistic shape is masked, and the benign lo
     assert.equal(m.count, 0, `${name} was masked: ${m.text}`);
     assert.equal(m.text, text);
   }
+});
+
+// -- Storage safety (QA findings 6-9 and 11) -----------------------------------
+
+const posix = process.platform !== "win32";
+
+test("a handoffs folder that is a link, or a ~/.context-doctor that is one, is refused; nothing outside home is touched", { skip: !posix && "directory symlinks need privileges on Windows" }, () => {
+  const meta = (id: string) => JSON.stringify({ id, title: "x", created: "2000-01-01T00:00:00.000Z", tokens: 1, briefTokens: 1, blocks: [], masked: 0 });
+  // handoffs -> elsewhere, with a victim that looks like one of ours
+  const home = tmpHome();
+  const elsewhere = tmpHome();
+  mkdirSync(join(home, ".context-doctor"));
+  symlinkSync(elsewhere, join(home, ".context-doctor", "handoffs"));
+  mkdirSync(join(elsewhere, "20000101-000000-victim"));
+  writeFileSync(join(elsewhere, "20000101-000000-victim", "meta.json"), meta("20000101-000000-victim"));
+  writeFileSync(join(elsewhere, "20000101-000000-victim", "precious.txt"), "data");
+  assert.throws(() => saveHandoff({ brief: BRIEF }, { home }), (e: Error) => /~\/\.context-doctor\/handoffs is a symbolic link/.test(e.message) && !e.message.includes(home));
+  assert.deepEqual(listHandoffs(home), []);
+  assert.equal(readHandoff("20000101-000000-victim", home), undefined);
+  assert.ok(existsSync(join(elsewhere, "20000101-000000-victim", "precious.txt")));
+  assert.deepEqual(readdirSync(elsewhere), ["20000101-000000-victim"]);
+  // ~/.context-doctor -> elsewhere
+  const home2 = tmpHome();
+  const elsewhere2 = tmpHome();
+  symlinkSync(elsewhere2, join(home2, ".context-doctor"));
+  assert.throws(() => saveHandoff({ brief: BRIEF }, { home: home2 }), /~\/\.context-doctor is a symbolic link/);
+  assert.deepEqual(readdirSync(elsewhere2), []);
+});
+
+test("rotation removes only real folders of ours: a link named like a handoff, a file, a folder without our meta all stay", { skip: !posix && "symlinks" }, () => {
+  const meta = (id: string) => JSON.stringify({ id, title: "x", created: "2020-01-01T00:00:00.000Z", tokens: 1, briefTokens: 1, blocks: [], masked: 0 });
+  const home = tmpHome();
+  const dir = handoffDir(home);
+  mkdirSync(dir, { recursive: true });
+  for (let i = 0; i < 100; i++) {
+    const id = `20200101-0000${String(i).padStart(2, "0")}-old`;
+    mkdirSync(join(dir, id));
+    writeFileSync(join(dir, id, "meta.json"), JSON.stringify({ ...JSON.parse(meta(id)), created: new Date(Date.UTC(2020, 0, 1, 0, 0, i)).toISOString() }));
+    writeFileSync(join(dir, id, "handoff.md"), "x");
+  }
+  const target = tmpHome();
+  writeFileSync(join(target, "meta.json"), meta("19990101-000000-link"));
+  writeFileSync(join(target, "precious.txt"), "data");
+  symlinkSync(target, join(dir, "19990101-000000-link"));
+  writeFileSync(join(dir, "19990101-000001-file"), "a file named like an id");
+  mkdirSync(join(dir, "19990101-000000-nometa"));
+  const s = saveHandoff({ brief: "new" }, { home });
+  assert.equal(s.rotated, 1);
+  assert.ok(existsSync(s.dir!));
+  assert.ok(!existsSync(join(dir, "20200101-000000-old")), "the oldest of ours went");
+  for (const n of ["19990101-000000-link", "19990101-000001-file", "19990101-000000-nometa"]) assert.ok(lstatSync(join(dir, n)), n);
+  assert.ok(existsSync(join(target, "precious.txt")));
+});
+
+test("ordering is by time and save order, never the id string: future-dated folders cannot evict or outrank a new save", () => {
+  const home = tmpHome();
+  const dir = handoffDir(home);
+  mkdirSync(dir, { recursive: true });
+  for (let i = 0; i < 100; i++) {
+    const id = `20991231-0000${String(i).padStart(2, "0")}-future`;
+    mkdirSync(join(dir, id));
+    writeFileSync(join(dir, id, "meta.json"), JSON.stringify({ id, title: "planted", created: new Date(Date.UTC(2099, 11, 31, 0, 0, i)).toISOString(), tokens: 1, briefTokens: 1, blocks: [], masked: 0 }));
+    writeFileSync(join(dir, id, "handoff.md"), "planted");
+  }
+  const s = saveHandoff({ brief: "just saved", title: "mine" }, { home });
+  assert.ok(existsSync(s.dir!), "the folder the tool reports exists");
+  assert.equal(s.rotated, 1);
+  assert.equal(readHandoff("latest", home)?.meta.title, "mine");
+
+  // Two saves in one second under different titles: the later one is the latest.
+  const home2 = tmpHome();
+  const now = new Date("2026-10-26T10:00:00Z");
+  saveHandoff({ brief: "first", title: "zzz first" }, { home: home2, now });
+  saveHandoff({ brief: "second", title: "aaa second" }, { home: home2, now });
+  assert.equal(readHandoff("latest", home2)?.meta.title, "aaa second");
+  for (let i = 0; i < 60; i++) saveHandoff({ brief: "n", title: "same" }, { home: home2, now });
+  assert.equal(listHandoffs(home2).length, 62);
+  assert.equal(listHandoffs(home2)[0].id, "20261026-100000-same-60");
+});
+
+test("control characters never reach the file or a terminal; the model name is capped, cleaned and masked", () => {
+  const home = tmpHome();
+  const key = ["sk", "ant", "api03", "Q".repeat(30)].join("-");
+  const s = saveHandoff(
+    { brief: "line\u001b]0;PWNED\u0007\u001b[2J\r\nnext\u0085", title: "t\u001b[31mred", verbatim: [{ label: "L\u0000\u009b", text: "code\u001b[0m" }], model: `${key}\u001b[2J${"m".repeat(500)}` },
+    { home }
+  );
+  const md = readFileSync(join(s.dir!, "handoff.md"), "utf8");
+  const metaText = readFileSync(join(s.dir!, "meta.json"), "utf8");
+  for (const t of [md, s.meta.title, s.meta.blocks[0].label]) assert.doesNotMatch(t, /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/);
+  assert.match(md, /line\]0;PWNED\[2J\nnext/);
+  assert.ok(s.meta.model!.length <= HANDOFF_LIMITS.modelChars);
+  assert.ok(!metaText.includes("QQQQ") && !metaText.includes("\\u001b"), metaText.slice(0, 300));
+  assert.throws(() => saveHandoff({ brief: "b", model: 42 as unknown as string }, { home }), /model/);
+
+  // A hand-edited handoff.md with escape sequences is printed clean.
+  writeFileSync(join(s.dir!, "handoff.md"), "# Handoff\n\u001b]0;PWNED\u0007\u001b[2Jvisible\n", { flag: "w" });
+  const shown = spawnSync(process.execPath, [cli, "handoff", "latest"], { env: sandboxEnv(home), encoding: "utf8" });
+  assert.equal(shown.status, 0);
+  assert.doesNotMatch(shown.stdout, /\u001b|\u0007/);
+  assert.match(shown.stdout, /visible/);
+  const listed = spawnSync(process.execPath, [cli, "handoff", "list"], { env: sandboxEnv(home), encoding: "utf8" });
+  assert.doesNotMatch(listed.stdout, /\u001b/);
 });

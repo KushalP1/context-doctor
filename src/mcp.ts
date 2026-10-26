@@ -33,7 +33,7 @@ import { renderSketchProfile, runSketchProfile } from "./sketch.js";
 import { packContextSemantic, readSourcesAsync, renderPack } from "./pack.js";
 import { SERVER_INSTRUCTIONS } from "./rules.js";
 import { compactOutline, compactProfile, compactSketch, resultMode, type CompactResult } from "./compact.js";
-import { HANDOFF_LIMITS, handoffDir, listHandoffs, maskSecrets, readHandoff, renderMath, saveHandoff, tildify, validateHandoff } from "./handoff.js";
+import { HANDOFF_LIMITS, handoffDir, listHandoffs, maskSecrets, readHandoff, renderMath, saveHandoff, tildify, tildifyAll, validateHandoff } from "./handoff.js";
 import { sourcesFromOpenAiFiles } from "./fileparams.js";
 import { makeGuard, readJsonBody, refusal } from "./httpguard.js";
 
@@ -421,7 +421,10 @@ server.tool(
       try {
         saved = saveHandoff({ ...input, verbatim: blocks }, { store: storeHandoffs });
       } catch (e) {
-        return { isError: true, content: [{ type: "text" as const, text: (e as Error).message }] };
+        // Never an absolute path in a reply: ~ for the home directory, and over
+        // HTTP not even that, since the caller may be anyone with the URL.
+        const why = tildifyAll((e as Error).message);
+        return { isError: true, content: [{ type: "text" as const, text: `Not saved: ${http ? "the server could not store the handoff" : why}.` }] };
       }
       const m = saved.meta;
       const parts = `brief ~${formatTokens(m.briefTokens)}${m.blocks.length ? `, ${m.blocks.length} verbatim block(s) ~${formatTokens(m.blocks.reduce((t, b) => t + b.tokens, 0))}` : ""}`;

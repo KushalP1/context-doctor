@@ -25,6 +25,7 @@ export declare const HANDOFF_LIMITS: {
     readonly briefTargetTokens: 400;
     readonly briefChars: 6000;
     readonly titleChars: 80;
+    readonly modelChars: 100;
     readonly blocks: 20;
     readonly labelChars: 80;
     readonly blockChars: 20000;
@@ -63,6 +64,8 @@ export interface HandoffMeta {
     }>;
     /** Secret-looking strings replaced before saving. */
     masked: number;
+    /** Save order on this machine (wall clock in µs plus a counter): breaks ties between saves with the same `created`. */
+    order?: number;
 }
 export interface HandoffMath {
     /** Tokens the current chat re-reads per turn, when known. */
@@ -115,8 +118,17 @@ export declare function readHandoff(idOrLatest: string, home?: string): {
     markdown: string;
 } | undefined;
 /**
+ * C0 and C1 control characters out, so a title or brief cannot drive a
+ * terminal (escape sequences that retitle a window or clear the screen) when
+ * the CLI prints it. Newlines and tabs stay; CRLF becomes LF.
+ */
+export declare function stripControls(text: string, { keepNewlines }?: {
+    keepNewlines?: boolean;
+}): string;
+/**
  * Build a handoff, and store it unless `store` is false (the HTTP server keeps
- * nothing by default). Throws with the validation problems on bad input.
+ * nothing by default). Throws with the validation problems on bad input, and
+ * with a message that names no absolute path when the folder is unsafe.
  */
 export declare function saveHandoff(input: HandoffInput, { home, now, store }?: {
     home?: string;
@@ -125,5 +137,7 @@ export declare function saveHandoff(input: HandoffInput, { home, now, store }?: 
 }): SavedHandoff;
 /** Where a path sits, with the home directory shown as ~. */
 export declare function tildify(path: string, home?: string): string;
+/** Every absolute mention of the home directory in `text` as ~ (error messages that reach a client). */
+export declare function tildifyAll(text: string, home?: string): string;
 /** `context-doctor handoff list`. */
 export declare function renderHandoffList(metas: HandoffMeta[], home?: string): string;

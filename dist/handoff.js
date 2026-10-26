@@ -20,7 +20,7 @@
  * Folders are 0700 and files 0600: a handoff holds chat content. Secret-looking
  * strings are masked before anything is written, and the caller is told.
  */
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { estimateTokens, formatTokens } from "./tokens.js";
@@ -31,6 +31,7 @@ export const HANDOFF_LIMITS = {
     briefTargetTokens: 400,
     briefChars: 6_000,
     titleChars: 80,
+    modelChars: 100,
     blocks: 20,
     labelChars: 80,
     blockChars: 20_000,
@@ -94,6 +95,8 @@ export function validateHandoff(input) {
         if (total > L.totalChars)
             errs.push(`The handoff is ${total} characters; the limit is ${L.totalChars}. A handoff that big is not a cut.`);
     }
+    if (input.model !== undefined && typeof input.model !== "string")
+        errs.push("`model` must be a string.");
     for (const n of ["chatTokens", "turns"]) {
         const v = input[n];
         if (v !== undefined && (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 100_000_000))
@@ -250,9 +253,85 @@ export function renderMath(m) {
         `Saves ~${formatTokens(saved)} tokens per further turn${m.now > 0 ? ` (${Math.round((saved / m.now) * 100)}%)` : ""}; on a subscription that is usage limit.`,
     ].join("\n");
 }
+/** `inner` is `root` itself or somewhere under it. */
+function within(root, inner) {
+    const rel = relative(root, inner);
+    return rel === "" || (rel !== ".." && !rel.startsWith(".." + sep) && !isAbsolute(rel));
+}
+/** An error whose message names paths relative to the home directory, never absolutely. */
+class HandoffError extends Error {
+}
+/**
+ * The handoffs folder, if it is safe to use: ~/.context-doctor and its
+ * handoffs folder must be real directories (not symbolic links) whose real
+ * path is inside the home directory's. With `create`, missing ones are made
+ * (0700), one level at a time, and checked after. Otherwise undefined (read)
+ * or a HandoffError (create). A QA pass pointed handoffs at another folder
+ * with a link, and rotation deleted a folder outside the home directory.
+ */
+function safeHandoffDir(home, create) {
+    const refuse = (why) => {
+        if (create)
+            throw new HandoffError(why);
+        return undefined;
+    };
+    let realHome;
+    try {
+        realHome = realpathSync(home);
+    }
+    catch {
+        return refuse("the home directory cannot be read");
+    }
+    const parent = join(home, ".context-doctor");
+    const dir = handoffDir(home);
+    for (const d of [parent, dir]) {
+        let st;
+        try {
+            st = lstatSync(d);
+        }
+        catch {
+            if (!create)
+                return undefined;
+            try {
+                mkdirSync(d, { mode: 0o700 });
+                st = lstatSync(d);
+            }
+            catch (e) {
+                return refuse(`cannot create ${tildify(d, home)} (${e.code ?? "error"})`);
+            }
+        }
+        if (st.isSymbolicLink())
+            return refuse(`${tildify(d, home)} is a symbolic link; handoffs are only written to a real folder in the home directory`);
+        if (!st.isDirectory())
+            return refuse(`${tildify(d, home)} is not a folder`);
+        let real;
+        try {
+            real = realpathSync(d);
+        }
+        catch {
+            return refuse(`${tildify(d, home)} cannot be read`);
+        }
+        if (!within(realHome, real))
+            return refuse(`${tildify(d, home)} resolves outside the home directory`);
+    }
+    return dir;
+}
+/** Ordering time: a handoff dated in the future (clock skew, a planted folder) sorts as the oldest, never the newest. */
+function sortTime(meta, now) {
+    const t = Date.parse(meta.created);
+    return Number.isFinite(t) && t <= now + 60_000 ? t : 0;
+}
+/** Newest first by `created` (future dates last), then by save order, then by id. Never by the id string alone. */
+function newestFirst(now) {
+    const order = (m) => (typeof m.order === "number" && Number.isFinite(m.order) ? m.order : 0);
+    return (a, b) => sortTime(b, now) - sortTime(a, now) || order(b) - order(a) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
+}
+let saveCounter = 0;
 /** Every saved handoff, newest first. Entries that are not ours (bad name, symlink, no meta) are skipped. */
 export function listHandoffs(home = homedir()) {
-    const dir = handoffDir(home);
+    const dir = safeHandoffDir(home, false);
+    if (!dir)
+        return [];
     let names;
     try {
         names = readdirSync(dir);
@@ -268,8 +347,11 @@ export function listHandoffs(home = homedir()) {
         try {
             if (!lstatSync(folder).isDirectory())
                 continue;
-            const meta = JSON.parse(readFileSync(join(folder, "meta.json"), "utf8"));
-            if (meta?.id !== name)
+            const metaPath = join(folder, "meta.json");
+            if (!lstatSync(metaPath).isFile())
+                continue;
+            const meta = JSON.parse(readFileSync(metaPath, "utf8"));
+            if (meta?.id !== name || typeof meta.created !== "string")
                 continue;
             metas.push(meta);
         }
@@ -277,12 +359,7 @@ export function listHandoffs(home = homedir()) {
             continue;
         }
     }
-    return metas.sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
-}
-/** `inner` is `root` itself or somewhere under it. */
-function within(root, inner) {
-    const rel = relative(root, inner);
-    return rel === "" || (rel !== ".." && !rel.startsWith(".." + sep) && !isAbsolute(rel));
+    return metas.sort(newestFirst(Date.now()));
 }
 /**
  * One handoff by id, or the newest for "latest". Undefined for anything that
@@ -293,14 +370,16 @@ export function readHandoff(idOrLatest, home = homedir()) {
     const id = idOrLatest === "latest" ? listHandoffs(home)[0]?.id : idOrLatest;
     if (!isHandoffId(id))
         return undefined;
-    const dir = handoffDir(home);
+    const dir = safeHandoffDir(home, false);
+    if (!dir)
+        return undefined;
     const folder = join(dir, id);
     const file = join(folder, "handoff.md");
     if (!within(dir, file))
         return undefined;
     try {
         const st = lstatSync(file);
-        if (!st.isFile() || st.size > HANDOFF_LIMITS.readBytes || !lstatSync(folder).isDirectory())
+        if (!st.isFile() || st.size > HANDOFF_LIMITS.readBytes || !lstatSync(folder).isDirectory() || !lstatSync(join(folder, "meta.json")).isFile())
             return undefined;
         const meta = JSON.parse(readFileSync(join(folder, "meta.json"), "utf8"));
         if (meta?.id !== id)
@@ -311,15 +390,24 @@ export function readHandoff(idOrLatest, home = homedir()) {
         return undefined;
     }
 }
-/** Keep the newest `kept` handoffs; remove older folders that are ours (named like one, with a meta.json). */
-function rotate(home, kept) {
-    const all = listHandoffs(home);
+/**
+ * Keep the newest `kept` handoffs, the one just written always among them;
+ * remove older folders that are ours: named like one, a real directory (not
+ * a link) in the real handoffs folder, with our meta.json naming it.
+ */
+function rotate(home, kept, justWritten) {
+    const dir = safeHandoffDir(home, false);
+    if (!dir)
+        return 0;
+    const others = listHandoffs(home).filter((m) => m.id !== justWritten);
     let removed = 0;
-    for (const meta of all.slice(kept)) {
-        const folder = join(handoffDir(home), meta.id);
-        if (!within(handoffDir(home), folder) || !existsSync(join(folder, "meta.json")))
-            continue;
+    for (const meta of others.slice(Math.max(0, kept - 1))) {
+        const folder = join(dir, meta.id);
         try {
+            if (!within(dir, folder) || !lstatSync(folder).isDirectory() || !lstatSync(join(folder, "meta.json")).isFile())
+                continue;
+            if (!within(realpathSync(dir), realpathSync(folder)))
+                continue;
             rmSync(folder, { recursive: true, force: true });
             removed++;
         }
@@ -330,8 +418,19 @@ function rotate(home, kept) {
     return removed;
 }
 /**
+ * C0 and C1 control characters out, so a title or brief cannot drive a
+ * terminal (escape sequences that retitle a window or clear the screen) when
+ * the CLI prints it. Newlines and tabs stay; CRLF becomes LF.
+ */
+export function stripControls(text, { keepNewlines = true } = {}) {
+    const t = String(text ?? "").replace(/\r\n?/g, "\n");
+    // eslint-disable-next-line no-control-regex
+    return keepNewlines ? t.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "") : t.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+}
+/**
  * Build a handoff, and store it unless `store` is false (the HTTP server keeps
- * nothing by default). Throws with the validation problems on bad input.
+ * nothing by default). Throws with the validation problems on bad input, and
+ * with a message that names no absolute path when the folder is unsafe.
  */
 export function saveHandoff(input, { home = homedir(), now = new Date(), store = true } = {}) {
     const errs = validateHandoff(input);
@@ -345,10 +444,12 @@ export function saveHandoff(input, { home = homedir(), now = new Date(), store =
         m.kinds.forEach((k) => kinds.add(k));
         return m.text;
     };
-    const brief = mask(input.brief);
+    const brief = mask(stripControls(input.brief));
     // Untitled: the brief's first line, which is already masked.
-    const title = oneLine(input.title?.trim() ? mask(input.title) : brief.split("\n").find((l) => l.trim())?.replace(/^#+\s*/, "") || "handoff", HANDOFF_LIMITS.titleChars);
-    const blocks = (input.verbatim ?? []).map((b) => ({ label: oneLine(mask(b.label), HANDOFF_LIMITS.labelChars), text: mask(b.text) }));
+    const title = oneLine(input.title?.trim() ? mask(stripControls(input.title, { keepNewlines: false })) : brief.split("\n").find((l) => l.trim())?.replace(/^#+\s*/, "") || "handoff", HANDOFF_LIMITS.titleChars);
+    const blocks = (input.verbatim ?? []).map((b) => ({ label: oneLine(mask(stripControls(b.label, { keepNewlines: false })), HANDOFF_LIMITS.labelChars), text: mask(stripControls(b.text)) }));
+    // The model name is the caller's string: capped, cleaned and masked like the rest.
+    const model = input.model === undefined ? undefined : mask(stripControls(String(input.model), { keepNewlines: false })).slice(0, HANDOFF_LIMITS.modelChars) || undefined;
     const created = now.toISOString();
     const markdown = renderHandoffMarkdown(title, created, brief, blocks);
     const base = `${stamp(now)}-${slugify(title)}`;
@@ -356,20 +457,20 @@ export function saveHandoff(input, { home = homedir(), now = new Date(), store =
         id: base,
         title,
         created,
-        model: input.model,
-        tokens: estimateTokens(markdown, input.model),
-        briefTokens: estimateTokens(brief, input.model),
-        blocks: blocks.map((b) => ({ label: b.label, tokens: estimateTokens(b.text, input.model) })),
+        model,
+        tokens: estimateTokens(markdown, model),
+        briefTokens: estimateTokens(brief, model),
+        blocks: blocks.map((b) => ({ label: b.label, tokens: estimateTokens(b.text, model) })),
         masked,
+        order: Date.now() * 1000 + (saveCounter++ % 1000),
     };
-    const math = handoffMath(meta.tokens, input);
+    const math = handoffMath(meta.tokens, { ...input, model });
     if (!store)
         return { meta, markdown, maskedKinds: [...kinds], math, rotated: 0 };
-    const dir = handoffDir(home);
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const dir = safeHandoffDir(home, true);
     // A second save in the same second gets -2, -3, …: never overwrite one.
     let folder = "";
-    for (let n = 1; n <= 50; n++) {
+    for (let n = 1; n <= 200; n++) {
         const id = n === 1 ? base : `${base}-${n}`;
         const candidate = join(dir, id);
         try {
@@ -380,20 +481,31 @@ export function saveHandoff(input, { home = homedir(), now = new Date(), store =
         }
         catch (e) {
             if (e.code !== "EEXIST")
-                throw e;
+                throw new HandoffError(`cannot create a handoff folder in ${tildify(dir, home)} (${e.code ?? "error"})`);
         }
     }
     if (!folder)
-        throw new Error(`Could not create a handoff folder in ${dir}.`);
-    // "wx": fail rather than write through anything already at that path.
-    writeFileSync(join(folder, "handoff.md"), markdown, { mode: 0o600, flag: "wx" });
-    writeFileSync(join(folder, "meta.json"), JSON.stringify(meta, null, 2) + "\n", { mode: 0o600, flag: "wx" });
-    const rotated = rotate(home, HANDOFF_LIMITS.kept);
+        throw new HandoffError(`too many handoffs saved in the same second in ${tildify(dir, home)}`);
+    try {
+        // "wx": fail rather than write through anything already at that path.
+        writeFileSync(join(folder, "handoff.md"), markdown, { mode: 0o600, flag: "wx" });
+        writeFileSync(join(folder, "meta.json"), JSON.stringify(meta, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+    }
+    catch (e) {
+        throw new HandoffError(`cannot write the handoff in ${tildify(folder, home)} (${e.code ?? "error"})`);
+    }
+    const rotated = rotate(home, HANDOFF_LIMITS.kept, meta.id);
+    if (!existsSync(join(folder, "handoff.md")))
+        throw new HandoffError(`the handoff in ${tildify(folder, home)} is gone`);
     return { meta, markdown, dir: folder, maskedKinds: [...kinds], math, rotated };
 }
 /** Where a path sits, with the home directory shown as ~. */
 export function tildify(path, home = homedir()) {
-    return path.startsWith(home) ? "~" + path.slice(home.length) : path;
+    return home && path.startsWith(home) ? "~" + path.slice(home.length) : path;
+}
+/** Every absolute mention of the home directory in `text` as ~ (error messages that reach a client). */
+export function tildifyAll(text, home = homedir()) {
+    return home && home.length > 1 ? String(text).split(home).join("~") : String(text);
 }
 /** `context-doctor handoff list`. */
 export function renderHandoffList(metas, home = homedir()) {
@@ -406,7 +518,7 @@ export function renderHandoffList(metas, home = homedir()) {
     }
     const lines = metas.map((m) => {
         const blocks = m.blocks.length ? `, ${m.blocks.length} verbatim` : "";
-        return `  ${m.id}  ~${formatTokens(m.tokens)}${blocks}  ${oneLine(m.title, 60)}`;
+        return `  ${m.id}  ~${formatTokens(m.tokens)}${blocks}  ${oneLine(stripControls(String(m.title ?? ""), { keepNewlines: false }), 60)}`;
     });
     return [
         `${metas.length} handoff(s), newest first (${tildify(handoffDir(home), home)}; the newest ${HANDOFF_LIMITS.kept} are kept):`,

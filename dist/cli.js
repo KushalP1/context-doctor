@@ -55,7 +55,7 @@ import { planCache, renderCachePlan } from "./cacheplan.js";
 import { cacheMisses, cacheMissesLine, cacheMissesSignificant, renderCacheMisses } from "./cachemisses.js";
 import { renderPayback, subagentPayback } from "./subagentpay.js";
 import { compactionQuality, renderCompactionQuality } from "./compactquality.js";
-import { isHandoffId, listHandoffs, readHandoff, renderHandoffList } from "./handoff.js";
+import { isHandoffId, listHandoffs, readHandoff, renderHandoffList, stripControls } from "./handoff.js";
 const HELP = `context-doctor — profile and optimize LLM context windows
 
 Start here:
@@ -894,14 +894,17 @@ async function main() {
             console.log(JSON.stringify({ ...h.meta, markdown: h.markdown }, null, 2));
             return;
         }
+        // Control characters out before anything reaches a terminal or the
+        // clipboard: a hand-edited or older file could carry escape sequences.
+        const markdown = stripControls(h.markdown);
         if (args.copy) {
-            const copied = copyToClipboard(h.markdown);
+            const copied = copyToClipboard(markdown);
             console.log(copied
                 ? `Copied handoff ${h.meta.id} (~${formatTokens(h.meta.tokens)} tokens). Paste it as the first message of a new chat.`
-                : `No clipboard tool found; copy the handoff below by hand.\n\n${h.markdown}`);
+                : `No clipboard tool found; copy the handoff below by hand.\n\n${markdown}`);
             return;
         }
-        process.stdout.write(h.markdown);
+        process.stdout.write(markdown);
         return;
     }
     if (args.command === "instructions") {

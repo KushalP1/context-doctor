@@ -300,3 +300,32 @@ test("over HTTP with --store-handoffs: stored on this machine, annotated as a wr
     child.kill();
   }
 });
+
+test("errors name no absolute path: ~ over stdio, nothing at all over HTTP", { skip: process.platform === "win32" && "directory symlinks need privileges on Windows" }, async () => {
+  const { mkdirSync, symlinkSync } = await import("node:fs");
+  const setup = () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-herr-"));
+    mkdirSync(join(home, ".context-doctor"));
+    symlinkSync(mkdtempSync(join(tmpdir(), "cd-herr-else-")), join(home, ".context-doctor", "handoffs"));
+    return home;
+  };
+  const home = setup();
+  const client = await stdioClient(home);
+  try {
+    const r = await client.callTool({ name: "save_handoff", arguments: { brief: BRIEF } });
+    assert.equal(r.isError, true);
+    assert.match(text(r), /^Not saved: ~\/\.context-doctor\/handoffs is a symbolic link/);
+    assert.ok(!text(r).includes(home));
+  } finally {
+    await client.close();
+  }
+  const home2 = setup();
+  const { child, rpc } = await httpServer(home2, ["--store-handoffs"]);
+  try {
+    const r = await rpc("tools/call", { name: "save_handoff", arguments: { brief: BRIEF } });
+    assert.equal(r.result.isError, true);
+    assert.equal(r.result.content[0].text, "Not saved: the server could not store the handoff.");
+  } finally {
+    child.kill();
+  }
+});
