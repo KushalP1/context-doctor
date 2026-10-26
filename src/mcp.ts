@@ -39,7 +39,7 @@ const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-b
  */
 function createServer({ fileAccess = true }: { fileAccess?: boolean } = {}): McpServer {
   const server = new McpServer(
-    { name: "context-doctor", version: "0.35.1" },
+    { name: "context-doctor", version: "0.36.0" },
     // Server instructions are injected by MCP clients (Claude Desktop, Cursor, …)
     // into the system context of EVERY conversation where this server is
     // enabled: standing context-hygiene rules in every chat, no hook needed.

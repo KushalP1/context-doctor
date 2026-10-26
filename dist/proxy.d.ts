@@ -65,7 +65,7 @@ export interface ProxyOptions extends OptimizeOptions {
 /** Default request body cap: far above any real request (a 1M-token context is ~4 MB of JSON, images aside). */
 export declare const DEFAULT_MAX_BODY_BYTES: number;
 /** Reported by /health so `autopilot status` can tell an outdated service from a current one. */
-export declare const PROXY_VERSION = "0.35.1";
+export declare const PROXY_VERSION = "0.36.0";
 /**
  * Remove a leading `/t/<token>` from a request path, or return undefined when
  * the prefix is absent or the token differs. The comparison is constant time

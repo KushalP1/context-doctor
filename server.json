@@ -8,12 +8,12 @@
     "source": "github"
   },
   "websiteUrl": "https://github.com/KushalP1/context-doctor#readme",
-  "version": "0.35.1",
+  "version": "0.36.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "context-doctor",
-      "version": "0.35.1",
+      "version": "0.36.0",
       "transport": {
         "type": "stdio"
       },
