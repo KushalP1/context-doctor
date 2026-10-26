@@ -238,15 +238,19 @@ server.tool(
     mime_type: z.string().optional(),
     file_name: z.string().optional(),
   }).strict();
+  // Over HTTP there is no `paths` (no file is read from the server's disk) and
+  // no `semantic` (local embeddings belong to a local server); `files` takes
+  // their place, so the definitions stay within the same budget as stdio's.
   const packInput = {
-    paths: z.array(z.string()).max(50).optional().describe(http ? "Not read over HTTP; pass `text` or `files`" : "Files or folders, absolute paths"),
+    ...(http ? {} : { paths: z.array(z.string()).max(50).optional().describe("Files or folders, absolute paths") }),
     text: z.string().optional().describe("Raw text to pack instead of files"),
     query: z.string().optional().describe("The question; omit for an outline"),
     max_tokens: z.number().int().positive().max(200_000).optional().describe("Budget, default 4000"),
     ids: z.array(z.string()).max(200).optional().describe("Chunk ids from an outline or result, e.g. docs/guide.md#4"),
     model: z.string().optional().describe("Model the budget is counted for (default Claude)"),
-    semantic: z.boolean().optional().describe("Also rank by meaning (local Ollama embeddings)"),
-    ...(http ? { files: z.array(fileSchema).max(10).optional().describe("Files the user uploaded") } : {}),
+    ...(http
+      ? { files: z.array(fileSchema).optional().describe("Files the user uploaded") }
+      : { semantic: z.boolean().optional().describe("Also rank by meaning (local Ollama embeddings)") }),
   };
   server.registerTool(
     "pack_context",
@@ -257,7 +261,7 @@ server.tool(
       annotations: { title: "Pack context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       ...(http ? { _meta: { "openai/fileParams": ["files"] } } : {}),
     },
-    async (args: Record<string, any>, extra) => {
+    async (args: Record<string, any>, extra: { _meta?: Record<string, unknown> }) => {
       const { paths, text, query, max_tokens, ids, model, semantic, files } = args as {
         paths?: string[]; text?: string; query?: string; max_tokens?: number; ids?: string[]; model?: string; semantic?: boolean;
         files?: Array<{ download_url: string; file_id: string; mime_type?: string; file_name?: string }>;
@@ -274,9 +278,13 @@ server.tool(
       }
       if (text) sources.push({ name: "text", text });
       if (sources.length === 0) {
-        return err(skipped.length ? `Nothing readable: ${skipped.join("; ")}` : `Pass ${fileAccess ? "`paths` (files or folders)" : "`files`"} or \`text\`.`);
+        return err(
+          skipped.length ? `Nothing readable: ${skipped.join("; ")}`
+          : fileAccess ? "Pass `paths` (files or folders) or `text`."
+          : "This server runs over HTTP and reads no files from its own disk: pass the user's upload as `files`, or the document as `text`."
+        );
       }
-      const result = await packContextSemantic(sources, { query, budget: max_tokens, ids, model, semantic });
+      const result = await packContextSemantic(sources, { query, budget: max_tokens, ids, model, semantic: http ? undefined : semantic });
       const note = skipped.length ? `\nSkipped: ${skipped.slice(0, 10).join("; ")}${skipped.length > 10 ? ` (+${skipped.length - 10} more)` : ""}` : "";
       const full = renderPack(result) + note;
       if (result.mode !== "outline") return { content: [{ type: "text" as const, text: full }] };

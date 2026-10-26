@@ -156,6 +156,14 @@ test("pack_context over HTTP declares openai/fileParams with the file schema Cha
     assert.deepEqual(item.required.sort(), ["download_url", "file_id"]);
     assert.equal(item.additionalProperties, false);
     for (const k of Object.keys(item.properties)) assert.equal(item.properties[k].type, "string");
+    // No paths (nothing is read from the server's disk) and no local embeddings over HTTP.
+    assert.equal(tool.inputSchema.properties.paths, undefined);
+    assert.equal(tool.inputSchema.properties.semantic, undefined);
+    // The HTTP definitions ride on every ChatGPT request too: same budget as stdio's.
+    const { estimateTokens } = await import("../tokens.js");
+    const all = (await rpc("tools/list")).result.tools as Array<{ name: string; description: string; inputSchema: unknown }>;
+    const total = all.reduce((n, t) => n + estimateTokens(JSON.stringify({ name: t.name, description: t.description, input_schema: t.inputSchema }), "claude"), 0);
+    assert.ok(total <= 2400, `HTTP tool definitions are ~${total} Claude tokens; keep them under 2,400`);
   } finally {
     child.kill();
   }
@@ -180,8 +188,9 @@ test("pack_context over HTTP packs an uploaded file; the same URL is refused wit
     assert.match(t, /runbook\.md#18/);
     assert.match(t, /keyctl/);
     const paths = await rpc("tools/call", { name: "pack_context", arguments: { paths: ["/etc/hosts"] } });
-    assert.equal(paths.result.isError, true);
-    assert.match(paths.result.content[0].text, /does not read files/);
+    const refused = paths.result ?? { isError: true, content: [{ text: paths.error?.message ?? "" }] };
+    assert.equal(refused.isError, true);
+    assert.doesNotMatch(refused.content[0].text, /localhost/, "no file from the server's disk");
   } finally {
     child.kill();
   }
