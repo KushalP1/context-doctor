@@ -23,6 +23,7 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 
 ## Verified 2026-10-26
 
+- main after R1-R8 (not released; an independent QA pass comes first): `npm test` 629 of 629; `scripts/verify-local.sh` 50 of 50, now also running `limits`, `recall`, `overhead prune` and `subagents` on the author's real history (read-only; the subagent-cost cache goes to a throwaway folder); the real `~/.claude` left without any of the new files.
 - 0.37.0: `npm test` 594 of 594 locally and green on CI (macOS, Linux and Windows, Node 20/22/24); `scripts/verify-local.sh` 46 of 46, its published-package step now really running the published package; the QA pass's 14 scripts re-run against the fixes ([0.37.0](#shipped-in-0370-desktop-chat-apps-and-a-security-pass)).
 - `npm test` at 0.36.0: 543 of 543 pass locally (CI runs the suite on macOS, Linux and Windows, Node 20/22/24); Python unit and parity tests on 3.9, 3.11 and 3.14.
 - `scripts/verify-local.sh` before tagging 0.36.0: 45 of 45 checks pass: build, tests, MCP smoke over stdio and streamable HTTP, OpenAI and Gemini proxy smokes, the real Codex binary through autopilot against a local mock, the published package, the Python package with parity fixtures current, every CLI command (now `ab --list` too) on the author's real history, the install/doctor/uninstall round trip in a throwaway HOME (now with GitHub Copilot) with nothing of ours left, and the GitHub Action's steps; the real `~/.claude` and `~/.copilot` were left untouched.
