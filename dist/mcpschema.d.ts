@@ -95,7 +95,12 @@ export declare function claudeMcpConfigs(cwd?: string, home?: string): McpServer
  * file.
  */
 export declare function mcpUsage(days?: number, paths?: string[], onProgress?: (done: number, total: number) => void): McpUsage;
-/** How two listings of one server's tools differ: not at all, in order only, or in a definition. */
+/**
+ * How two listings of one server's tools differ: not at all, in order only,
+ * or in a definition. Only what a client sends the model counts (name,
+ * description, input schema): `_meta`, annotations and an output schema
+ * that change per listing do not move the prompt cache.
+ */
 export declare function toolListChange(a: any[], b: any[]): "order" | "content" | undefined;
 /** Connect to one server the way a client does and size its tool list. */
 export declare function measureServer(cfg: McpServerConfig, timeoutMs?: number): Promise<McpServerSize>;

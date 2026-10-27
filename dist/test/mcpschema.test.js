@@ -75,3 +75,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     assert.match(findings[0].message, /in a different order.*tools_changed/);
     assert.match(findings[0].suggestion ?? "", /deterministic tools\/list order/);
 });
+test("QA: only what reaches the model counts as a change: _meta, annotations and outputSchema do not", async () => {
+    const { toolListChange } = await import("../mcpschema.js");
+    const a = { name: "a", description: "A", inputSchema: { type: "object" }, _meta: { at: 1 }, annotations: { title: "x" }, outputSchema: { type: "object" } };
+    assert.equal(toolListChange([a], [{ ...a, _meta: { at: 2 }, annotations: { title: "y" }, outputSchema: { type: "object", properties: {} } }]), undefined);
+    assert.equal(toolListChange([a], [{ ...a, inputSchema: { type: "object", properties: { q: { type: "string" } } } }]), "content");
+});

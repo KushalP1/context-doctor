@@ -214,9 +214,14 @@ export function mcpUsage(days = 30, paths?: string[], onProgress?: (done: number
   return { calls, names, resources, sessions: files.length, toolSearchSessions };
 }
 
-/** How two listings of one server's tools differ: not at all, in order only, or in a definition. */
+/**
+ * How two listings of one server's tools differ: not at all, in order only,
+ * or in a definition. Only what a client sends the model counts (name,
+ * description, input schema): `_meta`, annotations and an output schema
+ * that change per listing do not move the prompt cache.
+ */
 export function toolListChange(a: any[], b: any[]): "order" | "content" | undefined {
-  const key = (t: any) => JSON.stringify(t);
+  const key = (t: any) => JSON.stringify([t?.name, t?.description ?? "", t?.inputSchema ?? {}]);
   if (a.length === b.length && a.every((t, i) => key(t) === key(b[i]))) return undefined;
   const sorted = (xs: any[]) => xs.map(key).sort().join("\n");
   return sorted(a) === sorted(b) ? "order" : "content";
