@@ -118,3 +118,24 @@ test("`statusline` writes the log in the sandboxed home, and not when told not t
     spawnSync(process.execPath, [cliPath, "statusline"], { input: JSON.stringify(input), env: { ...sandboxEnv(home2), CONTEXT_DOCTOR_NO_MISS_LOG: "1" }, encoding: "utf8" });
     assert.equal(existsSync(join(home2, ".claude", ".context-doctor-misses.jsonl")), false);
 });
+test("QA: two misses between status line runs count as two; the unseen one is named", () => {
+    const path = logIn();
+    recordMiss(pc(1, 100_000, T0 / 1000, ["tools_changed"]), "s", "claude-opus-5-5", T0, path);
+    recordMiss(pc(3, 700_000, T0 / 1000 + 300, ["ttl_expired_1h"]), "s", "claude-opus-5-5", T0, path);
+    const d = diagnosedMisses(0, path);
+    assert.equal(d.misses, 3);
+    assert.equal(d.tokens, 700_000);
+    const by = Object.fromEntries(d.byCause.map((c) => [c.cause, c]));
+    assert.equal(by.ttl_expired_1h.misses, 1);
+    assert.equal(by.ttl_expired_1h.tokens, 300_000, "its share of the 600k");
+    assert.equal(by.unseen.misses, 1);
+    assert.equal(by.unseen.tokens, 300_000);
+    assert.match(by.unseen.label, /not seen/);
+});
+test("QA: a line with no TTL is priced at 5 minutes, Claude Code's default, as the status line does", () => {
+    const path = logIn();
+    const noTtl = { misses: 1, miss_recache_tokens: 100_000, last_miss_at: T0 / 1000, last_miss_cause: { causes: ["unknown"] } };
+    recordMiss(noTtl, "s", "claude-opus-5-5", T0, path);
+    // 100k x (1.25 x $4 - $0.20) = $0.48
+    assert.ok(Math.abs(diagnosedMisses(0, path).extraUsd - 0.48) < 1e-9);
+});

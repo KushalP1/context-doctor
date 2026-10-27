@@ -26,6 +26,9 @@ export function missLogPath() {
 /** Past this size the log keeps its newest MISS_LOG_KEEP bytes (~5,000 misses). */
 const MISS_LOG_ROTATE_AT = 1024 * 1024;
 const MISS_LOG_KEEP = 768 * 1024;
+/** Misses the status line never saw the cause of: the counter moved by more than one between runs. */
+const UNSEEN_KEY = "unseen";
+const UNSEEN = UNSEEN_KEY;
 /**
  * Claude Code's cause names (2.1.308's closed set, `PROMPT_CACHE_MISS_CAUSES`)
  * with what each means and what to do about it. A name not here is shown as it
@@ -50,6 +53,7 @@ export const MISS_CAUSES = {
     extra_body_changed: { label: "extra request fields changed" },
     defer_loading_changed: { label: "deferred tool loading changed" },
     unknown: { label: "unknown" },
+    [UNSEEN_KEY]: { label: "not seen: two misses between status line runs" },
 };
 const CAUSE_NAME = /^[a-z0-9_]{1,40}$/;
 const num = (x) => (typeof x === "number" && Number.isFinite(x) ? x : undefined);
@@ -166,20 +170,29 @@ export function diagnosedMisses(since = 0, path = missLogPath()) {
         if (l.at * 1000 < since)
             continue;
         const tok = prev && l.tok >= prev.tok ? l.tok - prev.tok : l.tok;
+        // Misses by the session's running count: when two happened between two
+        // status line runs, the line names the cause of the last one only, so
+        // its share of the tokens goes to that cause and the rest to "unseen".
+        const k = Math.max(1, prev && l.n >= prev.n ? l.n - prev.n : l.n);
         const price = pricingFor(l.m);
-        const extra = price ? (tok * (price.inputPerM * (l.ttl === "5m" ? CACHE_WRITE_5M : CACHE_WRITE_1H) - price.cacheReadPerM)) / 1e6 : 0;
-        misses++;
+        // No ttl recorded: Claude Code's default, 5 minutes (as the status line prices it).
+        const perToken = price ? (price.inputPerM * (l.ttl === "1h" ? CACHE_WRITE_1H : CACHE_WRITE_5M) - price.cacheReadPerM) / 1e6 : 0;
+        misses += k;
         tokens += tok;
-        extraUsd += extra;
+        extraUsd += tok * perToken;
         sessions.add(l.s);
         from = from === undefined ? l.at * 1000 : Math.min(from, l.at * 1000);
-        for (const c of l.causes) {
+        const add = (c, n, t) => {
             const known = MISS_CAUSES[c];
             const g = causes.get(c) ?? causes.set(c, { cause: c, label: known?.label ?? c.replace(/_/g, " "), fix: known?.fix, misses: 0, tokens: 0, extraUsd: 0 }).get(c);
-            g.misses++;
-            g.tokens += tok;
-            g.extraUsd += extra;
-        }
+            g.misses += n;
+            g.tokens += t;
+            g.extraUsd += t * perToken;
+        };
+        for (const c of l.causes)
+            add(c, 1, tok / k);
+        if (k > 1)
+            add(UNSEEN, k - 1, (tok * (k - 1)) / k);
     }
     return { misses, sessions: sessions.size, tokens, extraUsd, from, byCause: [...causes.values()].sort((a, b) => b.tokens - a.tokens || b.misses - a.misses) };
 }
