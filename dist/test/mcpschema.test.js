@@ -41,3 +41,37 @@ test("an unused server is flagged at full size, or at its names when tool search
     const deferred = mcpFindings({ configs, sizes, usage: { calls: new Map(), names: new Map(), resources: new Map(), sessions: 10, toolSearchSessions: 9 } });
     assert.match(deferred[0].message, /~400 tokens to every request even deferred/);
 });
+// -- N5: a server whose tool list changes between listings ------------------
+test("toolListChange tells order from content", async () => {
+    const { toolListChange } = await import("../mcpschema.js");
+    const a = { name: "a", description: "A", inputSchema: { type: "object" } };
+    const b = { name: "b", description: "B", inputSchema: { type: "object" } };
+    assert.equal(toolListChange([a, b], [a, b]), undefined);
+    assert.equal(toolListChange([a, b], [b, a]), "order");
+    assert.equal(toolListChange([a, b], [a, { ...b, description: "B at 12:01" }]), "content");
+    assert.equal(toolListChange([a, b], [a]), "content");
+});
+test("overhead --mcp flags a server that lists its tools in another order the second time", async () => {
+    // A minimal stdio MCP server, no SDK: answers initialize, then alternates its tool order.
+    const dir = mkdtempSync(join(tmpdir(), "cd-mcp-shuffle-"));
+    const script = join(dir, "server.mjs");
+    writeFileSync(script, `import { createInterface } from "node:readline";
+let n = 0;
+const tools = [{ name: "a", description: "A", inputSchema: { type: "object" } }, { name: "b", description: "B", inputSchema: { type: "object" } }];
+const send = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
+createInterface({ input: process.stdin }).on("line", (line) => {
+  const m = JSON.parse(line);
+  if (m.method === "initialize") send({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: m.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "shuffle", version: "1" } } });
+  else if (m.method === "tools/list") send({ jsonrpc: "2.0", id: m.id, result: { tools: n++ % 2 ? [...tools].reverse() : tools } });
+  else if (m.id !== undefined) send({ jsonrpc: "2.0", id: m.id, result: {} });
+});
+`);
+    const shuffled = await measureServer({ name: "shuffle", scope: "user", command: process.execPath, args: [script] });
+    assert.equal(shuffled.unstable, "order", JSON.stringify(shuffled));
+    const ours = await measureServer({ name: "context-doctor", scope: "user", command: process.execPath, args: ["dist/mcp.js"] });
+    assert.equal(ours.unstable, undefined);
+    const findings = mcpFindings({ configs: [{ name: "shuffle", scope: "user" }], sizes: [shuffled], usage: { calls: new Map([["shuffle", 3]]), names: new Map(), resources: new Map(), sessions: 5, toolSearchSessions: 0 } });
+    assert.equal(findings.length, 1, "flagged even though it is used");
+    assert.match(findings[0].message, /in a different order.*tools_changed/);
+    assert.match(findings[0].suggestion ?? "", /deterministic tools\/list order/);
+});

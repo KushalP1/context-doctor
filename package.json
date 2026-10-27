@@ -77,7 +77,7 @@
     "version": "node scripts/sync-versions.mjs"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "zod": "^3.23.0",
     "@types/node": "^22.0.0",
     "esbuild": "^0.25.12",

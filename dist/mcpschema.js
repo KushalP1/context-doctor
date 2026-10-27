@@ -184,6 +184,14 @@ export function mcpUsage(days = 30, paths, onProgress) {
     }
     return { calls, names, resources, sessions: files.length, toolSearchSessions };
 }
+/** How two listings of one server's tools differ: not at all, in order only, or in a definition. */
+export function toolListChange(a, b) {
+    const key = (t) => JSON.stringify(t);
+    if (a.length === b.length && a.every((t, i) => key(t) === key(b[i])))
+        return undefined;
+    const sorted = (xs) => xs.map(key).sort().join("\n");
+    return sorted(a) === sorted(b) ? "order" : "content";
+}
 /** Connect to one server the way a client does and size its tool list. */
 export async function measureServer(cfg, timeoutMs = 15_000) {
     if (!cfg.command && !(cfg.url && cfg.type !== "sse")) {
@@ -221,8 +229,7 @@ export async function measureServer(cfg, timeoutMs = 15_000) {
         return { name: cfg.name, error: String(e?.message ?? e).split("\n")[0].slice(0, 100) };
     }
     let timer;
-    const work = (async () => {
-        await client.connect(transport);
+    const listAll = async () => {
         const tools = [];
         let cursor;
         do {
@@ -230,10 +237,18 @@ export async function measureServer(cfg, timeoutMs = 15_000) {
             tools.push(...page.tools);
             cursor = page.nextCursor;
         } while (cursor && tools.length < 5000);
+        return tools;
+    };
+    const work = (async () => {
+        await client.connect(transport);
+        const tools = await listAll();
+        // A second listing, at once: what a client gets when it lists again.
+        const again = await listAll().catch(() => tools);
+        const unstable = toolListChange(tools, again);
         const prefix = `mcp__${toolPrefixName(cfg.name)}__`;
         const schemaTokens = tools.reduce((s, t) => s + estimateTokens(JSON.stringify({ name: prefix + t.name, description: t.description ?? "", input_schema: t.inputSchema ?? {} }), CLAUDE), 0);
         const nameTokens = tools.reduce((s, t) => s + estimateTokens(prefix + t.name + "\n", CLAUDE), 0);
-        return { name: cfg.name, tools: tools.length, schemaTokens, nameTokens };
+        return { name: cfg.name, tools: tools.length, schemaTokens, nameTokens, ...(unstable ? { unstable } : {}) };
     })();
     const timeout = new Promise((res) => {
         timer = setTimeout(() => res({ name: cfg.name, error: `no answer in ${timeoutMs / 1000}s` }), timeoutMs);

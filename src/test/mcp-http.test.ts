@@ -227,3 +227,29 @@ test("bounds the schema no longer spells out are checked by the tools themselves
   const budget = await call("pack_context", { text: "hello world", query: "hello", max_tokens: 300_000 });
   assert.match(budget.content[0].text, /the most is 200000/);
 });
+
+// -- N5: a stable tool list, and a cap on a call's arguments ---------------
+
+test("our tools/list is the same on every launch and every listing: a changing list re-writes the cache", async () => {
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
+  const listings: string[] = [];
+  for (let launch = 0; launch < 2; launch++) {
+    const client = new Client({ name: "stability-check", version: "1" });
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: ["dist/mcp.js"] }));
+    try {
+      for (let i = 0; i < 2; i++) listings.push(JSON.stringify((await client.listTools()).tools));
+    } finally {
+      await client.close();
+    }
+  }
+  assert.ok(listings.every((l) => l === listings[0]), "byte-identical across listings and launches");
+});
+
+test("a call whose arguments carry more than 10,000 elements is refused before validation", async () => {
+  const { json: big } = await rpc({ jsonrpc: "2.0", id: 91, method: "tools/call", params: { name: "pack_context", arguments: { text: "a b c", ids: Array.from({ length: 10_001 }, (_, i) => `x#${i}`) } } });
+  const refused = big.error ?? (big.result?.isError ? big.result : undefined);
+  assert.ok(refused, `refused: ${JSON.stringify(big).slice(0, 300)}`);
+  const { json: ok } = await rpc({ jsonrpc: "2.0", id: 92, method: "tools/call", params: { name: "pack_context", arguments: { text: "alpha beta gamma", query: "beta" } } });
+  assert.ok(!ok.error && !ok.result?.isError, JSON.stringify(ok).slice(0, 300));
+});

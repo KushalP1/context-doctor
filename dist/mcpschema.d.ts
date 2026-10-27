@@ -32,6 +32,15 @@ export interface McpServerSize {
     schemaTokens?: number;
     /** Tokens of the tool names alone: roughly what a deferred load costs. */
     nameTokens?: number;
+    /**
+     * The tool list changed between two listings in a row: "order" when the
+     * same tools came back in another order, "content" when a definition
+     * changed (a timestamp or counter in a description, say). Either makes a
+     * client that lists again send different tool definitions, and every
+     * cached request after the tools is written again. The 2026-07-28 MCP spec
+     * asks servers for a deterministic order for exactly this reason.
+     */
+    unstable?: "order" | "content";
     error?: string;
 }
 export interface McpUsage {
@@ -86,5 +95,7 @@ export declare function claudeMcpConfigs(cwd?: string, home?: string): McpServer
  * file.
  */
 export declare function mcpUsage(days?: number, paths?: string[], onProgress?: (done: number, total: number) => void): McpUsage;
+/** How two listings of one server's tools differ: not at all, in order only, or in a definition. */
+export declare function toolListChange(a: any[], b: any[]): "order" | "content" | undefined;
 /** Connect to one server the way a client does and size its tool list. */
 export declare function measureServer(cfg: McpServerConfig, timeoutMs?: number): Promise<McpServerSize>;

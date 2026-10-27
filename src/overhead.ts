@@ -482,6 +482,15 @@ export function mcpFindings(m: McpSection, baseline?: Baseline): OverheadFinding
     const size = m.sizes?.find((s) => s.name === c.name);
     const calls = uses.get(c.name) ?? 0;
     const tokens = size?.schemaTokens === undefined ? undefined : deferred ? size.nameTokens! : size.schemaTokens;
+    if (size?.unstable) {
+      out.push({
+        severity: "warn",
+        message: `MCP server "${c.name}" returned its tools ${size.unstable === "order" ? "in a different order" : "with different definitions"} when listed twice in a row: a client that lists again sends different tool definitions, and the prompt cache after them is written again (Claude Code names this "tools_changed").`,
+        suggestion: size.unstable === "order"
+          ? "Ask its maintainer for a deterministic tools/list order (the 2026-07-28 MCP spec asks for one, for prompt caching), or remove it where you do not need it."
+          : "Something in its definitions changes per listing (a timestamp or counter in a description?): report it to its maintainer, or remove it where you do not need it.",
+      });
+    }
     if (calls > 0 || tokens === undefined || tokens < 200) continue;
     const usd = baseline?.usdPerKPerMonth ? ` (~${formatUsd((tokens / 1000) * baseline.usdPerKPerMonth)}/month)` : "";
     out.push({
@@ -578,7 +587,7 @@ function renderMcp(r: OverheadReport): string[] {
       ? "size: run with --mcp"
       : s?.error
         ? s.error
-        : `${s!.tools} tools, ~${formatTokens(s!.schemaTokens!)} tokens of definitions (names ~${formatTokens(s!.nameTokens!)})`;
+        : `${s!.tools} tools, ~${formatTokens(s!.schemaTokens!)} tokens of definitions (names ~${formatTokens(s!.nameTokens!)})${s!.unstable ? `, UNSTABLE: its tool ${s!.unstable === "order" ? "order" : "definitions"} changed between two listings` : ""}`;
     out.push(`  ${c.name.padEnd(22)} ${c.scope.padEnd(9)} ${String(calls).padStart(6)} calls  ${size}`);
   }
   const app = [...otherServerUses(configs.map((c) => c.name), usage).entries()].sort((a, b) => b[1] - a[1]);

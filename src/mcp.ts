@@ -96,7 +96,14 @@ function createServer({ http = false, storeHandoffs = !http }: { http?: boolean;
     // Server instructions are injected by MCP clients (Claude Desktop, Cursor, …)
     // into the system context of EVERY conversation where this server is
     // enabled: standing context-hygiene rules in every chat, no hook needed.
-    { instructions: SERVER_INSTRUCTIONS }
+    {
+      instructions: SERVER_INSTRUCTIONS,
+      // No call of ours needs more than a few hundred array elements and
+      // object members (a sketch's blocks, pack's ids and paths); refusing a
+      // payload past this before zod walks it keeps an oversized one over
+      // --http from exhausting memory (MCP SDK 1.32.0+).
+      maxToolInputElements: 10_000,
+    }
   );
 
   server.tool(

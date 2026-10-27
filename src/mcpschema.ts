@@ -45,6 +45,15 @@ export interface McpServerSize {
   schemaTokens?: number;
   /** Tokens of the tool names alone: roughly what a deferred load costs. */
   nameTokens?: number;
+  /**
+   * The tool list changed between two listings in a row: "order" when the
+   * same tools came back in another order, "content" when a definition
+   * changed (a timestamp or counter in a description, say). Either makes a
+   * client that lists again send different tool definitions, and every
+   * cached request after the tools is written again. The 2026-07-28 MCP spec
+   * asks servers for a deterministic order for exactly this reason.
+   */
+  unstable?: "order" | "content";
   error?: string;
 }
 
@@ -205,6 +214,14 @@ export function mcpUsage(days = 30, paths?: string[], onProgress?: (done: number
   return { calls, names, resources, sessions: files.length, toolSearchSessions };
 }
 
+/** How two listings of one server's tools differ: not at all, in order only, or in a definition. */
+export function toolListChange(a: any[], b: any[]): "order" | "content" | undefined {
+  const key = (t: any) => JSON.stringify(t);
+  if (a.length === b.length && a.every((t, i) => key(t) === key(b[i]))) return undefined;
+  const sorted = (xs: any[]) => xs.map(key).sort().join("\n");
+  return sorted(a) === sorted(b) ? "order" : "content";
+}
+
 /** Connect to one server the way a client does and size its tool list. */
 export async function measureServer(cfg: McpServerConfig, timeoutMs = 15_000): Promise<McpServerSize> {
   if (!cfg.command && !(cfg.url && cfg.type !== "sse")) {
@@ -240,8 +257,7 @@ export async function measureServer(cfg: McpServerConfig, timeoutMs = 15_000): P
     return { name: cfg.name, error: String((e as Error)?.message ?? e).split("\n")[0].slice(0, 100) };
   }
   let timer: NodeJS.Timeout | undefined;
-  const work = (async () => {
-    await client.connect(transport);
+  const listAll = async (): Promise<any[]> => {
     const tools: any[] = [];
     let cursor: string | undefined;
     do {
@@ -249,13 +265,21 @@ export async function measureServer(cfg: McpServerConfig, timeoutMs = 15_000): P
       tools.push(...page.tools);
       cursor = page.nextCursor;
     } while (cursor && tools.length < 5000);
+    return tools;
+  };
+  const work = (async () => {
+    await client.connect(transport);
+    const tools = await listAll();
+    // A second listing, at once: what a client gets when it lists again.
+    const again = await listAll().catch(() => tools);
+    const unstable = toolListChange(tools, again);
     const prefix = `mcp__${toolPrefixName(cfg.name)}__`;
     const schemaTokens = tools.reduce(
       (s, t) => s + estimateTokens(JSON.stringify({ name: prefix + t.name, description: t.description ?? "", input_schema: t.inputSchema ?? {} }), CLAUDE),
       0
     );
     const nameTokens = tools.reduce((s, t) => s + estimateTokens(prefix + t.name + "\n", CLAUDE), 0);
-    return { name: cfg.name, tools: tools.length, schemaTokens, nameTokens };
+    return { name: cfg.name, tools: tools.length, schemaTokens, nameTokens, ...(unstable ? { unstable } : {}) };
   })();
   const timeout = new Promise<McpServerSize>((res) => {
     timer = setTimeout(() => res({ name: cfg.name, error: `no answer in ${timeoutMs / 1000}s` }), timeoutMs);
