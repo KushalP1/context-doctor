@@ -5,6 +5,12 @@
  * its first line of stdout. That is "context health where the work happens"
  * without an editor extension: the number that matters, visible while typing.
  *
+ * When Claude Code passes `prompt_cache` (2.1.251+), it also says until when
+ * the cache is warm and what letting it go cold costs: the re-write of the
+ * whole context at the TTL's write rate, instead of a read. The time is a
+ * clock time, not a countdown, because the line is only re-run on events and
+ * at `expires_at` (Claude Code does that itself), so a countdown would freeze.
+ *
  * It also keeps the limit ledger: when Claude Code passes `rate_limits`
  * (Pro and Max), each new 5-hour and weekly reading is appended to
  * ~/.claude/.context-doctor-limits.jsonl for `context-doctor limits`.
@@ -18,7 +24,7 @@
 
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { contextWindowFor, formatTokens } from "./tokens.js";
-import { formatUsd } from "./pricing.js";
+import { CACHE_WRITE_1H, CACHE_WRITE_5M, formatUsd, pricingFor } from "./pricing.js";
 import { recordLimits } from "./limits.js";
 
 /** The parts of Claude Code's status payload this reads. All optional. */
@@ -28,6 +34,8 @@ interface StatusInput {
   rate_limits?: unknown;
   model?: { id?: string; display_name?: string };
   cost?: { total_cost_usd?: number };
+  /** The main conversation's cache (2.1.251+), after its first reply. */
+  prompt_cache?: PromptCache | null;
   context_window?: {
     /** Not read: stale after /compact (and a running total in some versions). */
     total_input_tokens?: number;
@@ -35,6 +43,20 @@ interface StatusInput {
     /** The last request's usage; null right after /compact, /clear and in a new session. */
     current_usage?: { input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | null;
   };
+}
+
+/** The fields of Claude Code's `prompt_cache` this reads. Timestamps are epoch seconds. */
+export interface PromptCache {
+  warm?: boolean;
+  caching_observed?: boolean;
+  ttl?: string;
+  expires_at?: number | null;
+  /** What the next request re-caches if the cache is cold by then; null right after a compaction. */
+  recache_tokens_if_cold?: number | null;
+  misses?: number;
+  miss_recache_tokens?: number;
+  last_miss_at?: number | null;
+  last_miss_cause?: { causes?: unknown } | null;
 }
 
 interface LiveUsage {
@@ -85,8 +107,41 @@ function bar(pct: number): string {
   return "▮".repeat(filled) + "░".repeat(10 - filled);
 }
 
+/** "14:32": the local clock time a cache goes cold. */
+function clock(epochSeconds: number): string {
+  const d = new Date(epochSeconds * 1000);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/**
+ * Until when the cache is warm, and what going cold costs: the next request
+ * writes `recache_tokens_if_cold` at the TTL's rate (1.25x input at 5 minutes,
+ * 2x at an hour) where a warm one would read them (0.1x). The extra is the
+ * price; tokens alone when the model has no price. Undefined when Claude Code
+ * does not say (no `prompt_cache`, caching off, or right after a compaction
+ * while the cache is cold).
+ */
+export function cacheClock(pc: PromptCache | null | undefined, model: string | undefined, nowMs = Date.now()): string | undefined {
+  if (!pc || pc.caching_observed === false) return undefined;
+  const tokens = typeof pc.recache_tokens_if_cold === "number" && pc.recache_tokens_if_cold > 0 ? pc.recache_tokens_if_cold : undefined;
+  const price = pricingFor(model);
+  const oneHour = pc.ttl === "1h";
+  const extra = tokens !== undefined && price ? (tokens * (price.inputPerM * (oneHour ? CACHE_WRITE_1H : CACHE_WRITE_5M) - price.cacheReadPerM)) / 1e6 : undefined;
+  const cost = tokens === undefined ? undefined : extra !== undefined && extra > 0 ? `+${formatUsd(extra)}` : `${formatTokens(tokens)} re-write`;
+  const expires = typeof pc.expires_at === "number" && Number.isFinite(pc.expires_at) ? pc.expires_at : undefined;
+  // A payload from before the expiry, re-shown after it, is cold whatever `warm` said.
+  if (pc.warm === true && expires !== undefined && expires * 1000 > nowMs) {
+    const ttl = pc.ttl === "5m" || oneHour ? ` (${pc.ttl})` : "";
+    return `warm till ${clock(expires)}${ttl}${cost ? `, then ${cost}` : ""}`;
+  }
+  if (pc.warm === false || (expires !== undefined && expires * 1000 <= nowMs)) {
+    return cost ? `cold: next turn ${cost}` : undefined;
+  }
+  return undefined;
+}
+
 /** Build the status line, or null when there is nothing trustworthy to show. */
-export function renderStatusLine(input: StatusInput): string | null {
+export function renderStatusLine(input: StatusInput, nowMs = Date.now()): string | null {
   let live: LiveUsage | undefined;
   const cw = input.context_window;
   // Only current_usage is the context. total_input_tokens is a running total
@@ -114,6 +169,8 @@ export function renderStatusLine(input: StatusInput): string | null {
     }
     if (live.cacheShare !== undefined) parts.push(`cache ${Math.round(live.cacheShare * 100)}%`);
   }
+  const warmth = cacheClock(input.prompt_cache, input.model?.id ?? live?.model, nowMs);
+  if (warmth) parts.push(warmth);
   // The session's cost is true whatever the context is; show it on its own.
   if (input.cost?.total_cost_usd && input.cost.total_cost_usd > 0) parts.push(formatUsd(input.cost.total_cost_usd));
   return parts.length > 0 ? parts.join(" · ") : null;

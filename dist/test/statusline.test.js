@@ -76,3 +76,62 @@ test("install --statusline wires it, never overwrites someone else's, and uninst
     await run(theirs, "uninstall");
     assert.equal(settingsOf(theirs).statusLine.command, "my-fancy-prompt.sh", "uninstall never touches a status line that is not ours");
 });
+// -- N1: the cache clock (Claude Code's prompt_cache, 2.1.251+) ----------
+const at = (iso) => Date.parse(iso);
+const hhmm = (epochSeconds) => {
+    const d = new Date(epochSeconds * 1000);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
+test("a warm cache shows the clock time it goes cold and the price of missing it", () => {
+    const now = at("2026-10-27T12:00:00Z");
+    const expires = now / 1000 + 42 * 60;
+    const line = renderStatusLine({
+        model: { id: "claude-opus-5-5" },
+        context_window: { context_window_size: 1_000_000, current_usage: { input_tokens: 2_000, cache_read_input_tokens: 400_000 } },
+        prompt_cache: { warm: true, caching_observed: true, ttl: "1h", expires_at: expires, recache_tokens_if_cold: 402_000 },
+    }, now);
+    // 402k at the 1-hour write rate (2x $4) minus a read ($0.20): $3.14 more.
+    assert.match(line ?? "", new RegExp(`warm till ${hhmm(expires)} \\(1h\\), then \\+\\$3\\.14`));
+    assert.match(line ?? "", /cache 100%/, "the cache share stays");
+});
+test("the 5-minute TTL is priced at its own write rate and named", () => {
+    const now = at("2026-10-27T12:00:00Z");
+    const line = renderStatusLine({ model: { id: "claude-opus-5-5" }, prompt_cache: { warm: true, ttl: "5m", expires_at: now / 1000 + 120, recache_tokens_if_cold: 100_000 } }, now);
+    // 100k x (1.25 x $4 - $0.20) = $0.48
+    assert.match(line ?? "", /\(5m\), then \+\$0\.480/);
+});
+test("a cold cache says what the next turn re-writes; an expired 'warm' payload is cold", () => {
+    const now = at("2026-10-27T12:00:00Z");
+    const cold = renderStatusLine({ model: { id: "claude-opus-5-5" }, prompt_cache: { warm: false, caching_observed: true, ttl: "1h", expires_at: null, recache_tokens_if_cold: 402_000 } }, now);
+    assert.match(cold ?? "", /cold: next turn \+\$3\.14/);
+    // Claude Code re-runs the line at expires_at with the same data: it must flip.
+    const stale = renderStatusLine({ model: { id: "claude-opus-5-5" }, prompt_cache: { warm: true, ttl: "1h", expires_at: now / 1000 - 1, recache_tokens_if_cold: 402_000 } }, now);
+    assert.match(stale ?? "", /cold: next turn/);
+    assert.ok(!stale?.includes("warm till"));
+});
+test("no price: tokens; no prompt_cache, caching off or nothing to re-cache: the line is as before", () => {
+    const now = at("2026-10-27T12:00:00Z");
+    const unknown = renderStatusLine({ model: { id: "some-local-model" }, prompt_cache: { warm: false, ttl: "5m", recache_tokens_if_cold: 250_000 } }, now);
+    assert.equal(unknown, "cold: next turn 250k re-write");
+    const base = { model: { id: "claude-opus-5-5" }, context_window: { context_window_size: 1_000_000, current_usage: { input_tokens: 150_000 } } };
+    const before = renderStatusLine(base, now);
+    assert.equal(renderStatusLine({ ...base, prompt_cache: null }, now), before);
+    assert.equal(renderStatusLine({ ...base, prompt_cache: { warm: false, caching_observed: false, recache_tokens_if_cold: 150_000 } }, now), before);
+    assert.equal(renderStatusLine({ ...base, prompt_cache: { warm: false, caching_observed: true, recache_tokens_if_cold: null } }, now), before, "right after a compaction there is nothing to price");
+    const warmNoTokens = renderStatusLine({ ...base, prompt_cache: { warm: true, ttl: "1h", expires_at: now / 1000 + 600, recache_tokens_if_cold: null } }, now);
+    assert.match(warmNoTokens ?? "", /warm till \d\d:\d\d \(1h\)$/);
+});
+test("`statusline` prints the clock from Claude Code's real payload shape", async () => {
+    const expires = Math.floor(Date.now() / 1000) + 1800;
+    const payload = {
+        model: { id: "claude-fable-5-1", display_name: "Fable 5.1" },
+        context_window: { context_window_size: 1_000_000, current_usage: { input_tokens: 10, cache_read_input_tokens: 300_000, cache_creation_input_tokens: 0 } },
+        prompt_cache: { warm: true, caching_observed: true, ttl: "1h", expires_at: expires, requests: 14, misses: 0, expected_rebuilds: 0, hit_ratio: 0.97, cache_write_tokens: 300_000, miss_recache_tokens: 0, last_miss_at: null, last_miss_cause: null, miss_causes: {}, recache_tokens_if_cold: 300_010 },
+    };
+    const home = mkdtempSync(join(tmpdir(), "ctxdoc-slclock-"));
+    const out = await new Promise((resolve) => {
+        const child = execFile(process.execPath, [cliPath, "statusline"], { env: sandboxEnv(home) }, (_err, stdout) => resolve(stdout));
+        child.stdin?.end(JSON.stringify(payload));
+    });
+    assert.match(out, new RegExp(`warm till ${hhmm(expires)} \\(1h\\), then \\+\\$`));
+});
