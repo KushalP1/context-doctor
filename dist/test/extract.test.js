@@ -124,8 +124,11 @@ test("readSourcesAsync reads the same sources as readSources, PDFs included", { 
     writeFileSync(join(dir, "a.md"), "# A\n\nalpha");
     writeFileSync(join(dir, "manual.pdf"), pdf(["Rotate the signing key with keyctl rotate."]));
     const sync = readSources([dir], dir);
-    const asyncRead = await readSourcesAsync([dir], { cwd: dir });
-    assert.deepEqual(asyncRead.sources.map((s) => s.name).sort(), sync.sources.map((s) => s.name).sort());
+    // The same time a synchronous read allows one tool (30 s): Windows runners
+    // start pdftotext slowly enough that the server's 20 s budget for a whole
+    // call sometimes ran out there, and this test compares reading, not budgets.
+    const asyncRead = await readSourcesAsync([dir], { cwd: dir, budgetMs: 60_000 });
+    assert.deepEqual(asyncRead.sources.map((s) => s.name).sort(), sync.sources.map((s) => s.name).sort(), `skipped: ${asyncRead.skipped.join("; ")}`);
     if (process.platform !== "win32")
         assert.ok(asyncRead.sources.some((s) => /keyctl/.test(s.text)));
 });

@@ -53,7 +53,7 @@ test("install wires Antigravity's empty mcp_config.json and its skill; uninstall
 
   const d = await run(home, ["doctor"]);
   assert.match(d.out, /✓ Antigravity MCP/);
-  assert.match(d.out, /✓ Antigravity skill\s+in ~\/\.gemini\/config\/skills\/context-doctor/);
+  assert.match(d.out, /✓ Antigravity skill\s+in ~[\\/]\.gemini[\\/]config[\\/]skills[\\/]context-doctor/);
 
   const u = await run(home, ["uninstall"]);
   assert.equal(u.code, 0, u.out + u.err);

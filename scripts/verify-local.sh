@@ -62,15 +62,27 @@ run "cli: pack README with query" bash -c "node dist/cli.js pack README.md -q 'a
 run "cli: pack folder respects .gitignore" bash -c "node dist/cli.js pack . -q 'ledger rotation' | head -1 | grep -q '^PACKED'"
 run "cli: overhead split plan (no write)" bash -c "cp README.md /tmp/cd-split.md && node dist/cli.js overhead split /tmp/cd-split.md >/dev/null && cmp -s README.md /tmp/cd-split.md"
 run "cli: ci vs HEAD~5" node dist/cli.js ci --base HEAD~5
+# The status line's cache clock and the miss log (N1, N2), in a throwaway HOME: the log must never land in the real ~/.claude.
+S=$(sb); E=$(( $(date +%s) + 1800 ))
+run "cli: statusline shows until when the cache is warm" bash -c "echo '{\"model\":{\"id\":\"claude-opus-5-5\"},\"prompt_cache\":{\"warm\":true,\"ttl\":\"1h\",\"expires_at\":$E,\"recache_tokens_if_cold\":300000}}' | env HOME=$S node dist/cli.js statusline | grep -q 'warm till .* (1h), then +\\$'"
+run "cli: statusline logs a diagnosed miss; cache-misses groups it" bash -c "echo '{\"session_id\":\"v\",\"model\":{\"id\":\"claude-opus-5-5\"},\"prompt_cache\":{\"ttl\":\"1h\",\"misses\":1,\"miss_recache_tokens\":250000,\"last_miss_at\":$(date +%s),\"last_miss_cause\":{\"causes\":[\"tools_changed\"]}}}' | env HOME=$S node dist/cli.js statusline >/dev/null && env HOME=$S node dist/cli.js cache-misses | grep -q 'tool definitions changed'"
+run "cli: cache-misses --json has the late re-writes and the diagnosis (real history)" bash -c "node dist/cli.js cache-misses --days 30 --json | node -e 'const r=JSON.parse(require(\"fs\").readFileSync(0));if(typeof r.late?.rewrites!==\"number\"||typeof r.diagnosed?.misses!==\"number\")process.exit(1)'"
+# overhead --mcp launches configured servers: only our own, from a throwaway HOME's config.
+S=$(sb); echo "{\"mcpServers\":{\"context-doctor\":{\"command\":\"node\",\"args\":[\"$R/dist/mcp.js\"]}}}" > $S/.claude.json
+run "cli: overhead --mcp sizes a server and finds its tool list stable" bash -c "env HOME=$S node dist/cli.js overhead --mcp | grep 'context-doctor' | grep -q '6 tools' && ! env HOME=$S node dist/cli.js overhead --mcp | grep -q UNSTABLE"
 run "cli: diff two profiles" env HOME=$(sb) bash -c "node dist/cli.js analyze examples/sample-conversation.json --json > /tmp/a.json && node dist/cli.js diff /tmp/a.json /tmp/a.json"
 
 echo "== 6. install/uninstall round trip in a throwaway HOME"
 H=$(sb); mkdir -p $H/.claude $H/.cursor $H/.codex $H/.gemini $H/.copilot $H/Library/Application\ Support/Claude; echo '{}' > $H/.gemini/settings.json
+# Antigravity leaves its MCP file empty: install must read it, uninstall must leave it empty again.
+mkdir -p $H/.gemini/config $H/.gemini/antigravity; : > $H/.gemini/config/mcp_config.json
 # COPILOT_HOME would point Copilot's files outside the throwaway HOME: unset it.
 run "install (all apps)" env -u COPILOT_HOME HOME=$H USERPROFILE=$H node dist/cli.js install
 run "doctor after install" bash -c "env -u COPILOT_HOME HOME=$H node dist/cli.js doctor | grep -q 'All good'"
+run "Antigravity wired (MCP server and skill)" bash -c "grep -q context-doctor $H/.gemini/config/mcp_config.json && [ -f $H/.gemini/config/skills/context-doctor/SKILL.md ]"
 run "uninstall" env -u COPILOT_HOME HOME=$H node dist/cli.js uninstall
-run "nothing of ours left" bash -c "! grep -rl 'context-doctor' $H/.claude/settings.json $H/.cursor/mcp.json $H/.codex/config.toml $H/.gemini/settings.json $H/.copilot 2>/dev/null | grep -q ."
+run "Antigravity's MCP file empty again, its skill gone" bash -c "[ ! -s $H/.gemini/config/mcp_config.json ] && [ ! -e $H/.gemini/config/skills ]"
+run "nothing of ours left" bash -c "! grep -rl 'context-doctor' $H/.claude/settings.json $H/.cursor/mcp.json $H/.codex/config.toml $H/.gemini/settings.json $H/.gemini/config $H/.copilot 2>/dev/null | grep -q ."
 
 echo "== 7. GitHub Action steps (simulated runner)"
 G=$(sb); cd $G && git init -q && printf '# P\n\nRules.\n' > CLAUDE.md && git add -A && git -c user.email=t@t -c user.name=t commit -qm base && B=$(git rev-parse HEAD) && python3 -c "print('Long reference. '*900)" >> CLAUDE.md
