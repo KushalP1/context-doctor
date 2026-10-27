@@ -11,7 +11,10 @@
  * clock time, not a countdown, because the line is only re-run on events and
  * at `expires_at` (Claude Code does that itself), so a countdown would freeze.
  *
- * It also keeps the limit ledger: when Claude Code passes `rate_limits`
+ * It also keeps two logs. Each new cache miss Claude Code diagnoses
+ * (`prompt_cache.last_miss_cause`) goes to
+ * ~/.claude/.context-doctor-misses.jsonl for `cache-misses`. And the limit
+ * ledger: when Claude Code passes `rate_limits`
  * (Pro and Max), each new 5-hour and weekly reading is appended to
  * ~/.claude/.context-doctor-limits.jsonl for `context-doctor limits`.
  *
@@ -23,6 +26,7 @@
  */
 /** The parts of Claude Code's status payload this reads. All optional. */
 interface StatusInput {
+    session_id?: string;
     transcript_path?: string;
     /** Pro/Max (or a gateway's spend limit), after the first reply: each window's used_percentage and resets_at. */
     rate_limits?: unknown;

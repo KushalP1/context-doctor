@@ -25,6 +25,7 @@
  * 29,287 requests, ~$1,925 above cache-read price, 28% of all cache-write
  * spend; 382 of them with nothing in the transcript to explain them.
  */
+import { type DiagnosedMisses } from "./missledger.js";
 export type MissCause = "model switch" | "context edited" | "after an API error" | "over 20 new blocks" | "nothing visible";
 export interface CacheMiss {
     path: string;
@@ -78,6 +79,12 @@ export interface CacheMissReport {
     byVersion: VersionStats[];
     /** Step changes from one version to the next that the numbers support. */
     regressions: Regression[];
+    /**
+     * Claude Code's own diagnosis of each miss in the period, as the status line
+     * logged it (2.1.260+). Its definition of a miss is Claude Code's, wider
+     * than the one above (it counts a cold cache after a pause too).
+     */
+    diagnosed: DiagnosedMisses;
 }
 /** One Claude Code version's requests (the `version` every transcript line carries). */
 export interface VersionStats {
@@ -143,7 +150,7 @@ export declare function missesInTranscript(path: string, since?: number, add?: (
 }, miss?: CacheMiss) => void, onRequest?: (writeUsd: number, info: RequestInfo) => void, 
 /** Shared by every transcript of one report: a fork's copied rows (same uuids) have no first request of their own. */
 runRows?: Set<string>): void;
-export declare function cacheMisses(days?: number, paths?: string[], onProgress?: (done: number, total: number) => void): CacheMissReport;
+export declare function cacheMisses(days?: number, paths?: string[], onProgress?: (done: number, total: number) => void, missLog?: string): CacheMissReport;
 interface VersionAcc {
     requests: number;
     sessions: Set<string>;
@@ -186,5 +193,7 @@ export declare function versionReport(versions: Map<string, VersionAcc>): {
 export declare function cacheMissesSignificant(r: CacheMissReport): boolean;
 /** The one line `savings` adds when the misses are significant. */
 export declare function cacheMissesLine(r: CacheMissReport): string[];
+/** Claude Code's own diagnosis, or how to start recording it. */
+export declare function renderDiagnosed(d: DiagnosedMisses): string[];
 export declare function renderCacheMisses(r: CacheMissReport, limitLines?: string[]): string;
 export {};

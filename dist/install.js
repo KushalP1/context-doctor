@@ -1199,6 +1199,7 @@ const OUR_CLAUDE_FILES = [
     ".context-doctor-proxy.log",
     ".context-doctor-proxy-restart",
     ".context-doctor-limits.jsonl",
+    ".context-doctor-misses.jsonl",
     ".context-doctor-subagent-costs.json",
 ];
 export async function runUninstall() {

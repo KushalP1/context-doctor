@@ -29,6 +29,7 @@ import { forEachLine, listSessions } from "./session.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
 import { CACHE_WRITE_1H, CACHE_WRITE_5M, pricingFor } from "./pricing.js";
 import { compareVersions } from "./modelswitch.js";
+import { diagnosedMisses, missLogPath } from "./missledger.js";
 /** Dollars as a person reads them: "$1,925", "$12.26", "$0". */
 function money(n) {
     if (!(n > 0))
@@ -238,7 +239,7 @@ function recommend(byModel, bySize) {
     }
     return out;
 }
-export function cacheMisses(days = 30, paths, onProgress) {
+export function cacheMisses(days = 30, paths, onProgress, missLog = missLogPath()) {
     const since = Date.now() - days * 86_400_000;
     // Claude Code transcripts: they record the API's cache usage per request.
     const targets = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
@@ -326,6 +327,7 @@ export function cacheMisses(days = 30, paths, onProgress) {
         recommendations: recommend(byModel, bySize),
         largest: [...all].sort((a, b) => (b.extraUsd ?? 0) - (a.extraUsd ?? 0) || b.writeTokens - a.writeTokens).slice(0, 10),
         ...versionReport(versions),
+        diagnosed: diagnosedMisses(since, missLog),
     };
 }
 const median = (xs) => {
@@ -453,10 +455,51 @@ export function cacheMissesLine(r) {
         "context size: context-doctor cache-misses",
     ];
 }
+/** Words into lines of at most `width` characters. */
+function wrap(text, width) {
+    const lines = [];
+    let line = "";
+    for (const word of text.split(" ")) {
+        if (line && line.length + 1 + word.length > width) {
+            lines.push(line);
+            line = word;
+        }
+        else
+            line = line ? `${line} ${word}` : word;
+    }
+    if (line)
+        lines.push(line);
+    return lines;
+}
+/** Claude Code's own diagnosis, or how to start recording it. */
+export function renderDiagnosed(d) {
+    if (d.misses === 0) {
+        return [
+            "Why, in Claude Code's words: nothing recorded yet. Claude Code 2.1.260+ diagnoses",
+            "each miss (tools changed, system prompt changed, idle past the TTL...) and tells",
+            "the status line; `context-doctor install --statusline` records it for this report.",
+        ];
+    }
+    const out = [
+        `Why, in Claude Code's words (${d.misses} misses in ${d.sessions} session${d.sessions === 1 ? "" : "s"} since ${new Date(d.from ?? 0).toISOString().slice(0, 10)},`,
+        `~${formatTokens(d.tokens)} tokens re-written, ${money(d.extraUsd)} above cache-read price; Claude Code also counts`,
+        "a cache gone cold after a pause):",
+    ];
+    for (const c of d.byCause.slice(0, 8)) {
+        out.push(`  ${String(c.misses).padStart(5)}  ${c.label.padEnd(38)} ${`~${formatTokens(c.tokens)}`.padStart(7)} ${money(c.extraUsd).padStart(9)}`);
+        if (c.fix)
+            out.push(...wrap(c.fix, 70).map((l) => `         ${l}`));
+    }
+    if (d.byCause.length > 8)
+        out.push(`  (${d.byCause.length - 8} more causes in --json)`);
+    return out;
+}
 export function renderCacheMisses(r, limitLines) {
     const out = ["CACHE MISSES WITHIN THE CACHE LIFETIME", "═".repeat(60)];
     if (r.eligible === 0) {
         out.push(`No Claude Code requests in the last ${r.days} days that could have read a warm cache (consecutive, within the cache lifetime, over 20k tokens).`);
+        if (r.diagnosed.misses > 0)
+            out.push("", ...renderDiagnosed(r.diagnosed));
         return out.join("\n");
     }
     const share = r.cacheWriteUsd > 0 ? ` (${Math.round((r.extraUsd / r.cacheWriteUsd) * 100)}% of your ${money(r.cacheWriteUsd)} of cache writes)` : "";
@@ -478,6 +521,7 @@ export function renderCacheMisses(r, limitLines) {
             out.push("  \"Nothing visible\": no model switch, compaction, context edit, API error or", "  long tool run before it. The system prompt, tools or memory changing, or the", "  provider evicting the cache early, would look like this from the client.");
         }
     }
+    out.push("", ...renderDiagnosed(r.diagnosed));
     const shown = r.byVersion.filter((v) => v.requests >= 50);
     if (shown.length >= 2) {
         out.push("", "By Claude Code version (versions with 50+ requests):", `  ${"version".padEnd(9)} ${"requests".padStart(8)} ${"1st req".padStart(8)} ${"writes/req".padStart(10)} ${"1h share".padStart(9)} ${"miss rate".padStart(10)}`);

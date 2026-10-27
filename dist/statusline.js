@@ -11,7 +11,10 @@
  * clock time, not a countdown, because the line is only re-run on events and
  * at `expires_at` (Claude Code does that itself), so a countdown would freeze.
  *
- * It also keeps the limit ledger: when Claude Code passes `rate_limits`
+ * It also keeps two logs. Each new cache miss Claude Code diagnoses
+ * (`prompt_cache.last_miss_cause`) goes to
+ * ~/.claude/.context-doctor-misses.jsonl for `cache-misses`. And the limit
+ * ledger: when Claude Code passes `rate_limits`
  * (Pro and Max), each new 5-hour and weekly reading is appended to
  * ~/.claude/.context-doctor-limits.jsonl for `context-doctor limits`.
  *
@@ -25,6 +28,7 @@ import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { contextWindowFor, formatTokens } from "./tokens.js";
 import { CACHE_WRITE_1H, CACHE_WRITE_5M, formatUsd, pricingFor } from "./pricing.js";
 import { recordLimits } from "./limits.js";
+import { recordMiss } from "./missledger.js";
 /** Newest assistant usage from the END of a transcript, without reading the file. */
 export function tailUsage(path, tailBytes = 256 * 1024) {
     try {
@@ -159,6 +163,10 @@ export async function runStatusLine() {
         // (only when Claude Code sends them; a few bytes, only on a change).
         if (process.env.CONTEXT_DOCTOR_NO_LIMITS_LOG !== "1")
             recordLimits(input?.rate_limits);
+        // And Claude Code's diagnosis of a new cache miss, for `cache-misses`
+        // (2.1.260+; one short line per miss, nothing on other refreshes).
+        if (process.env.CONTEXT_DOCTOR_NO_MISS_LOG !== "1")
+            recordMiss(input?.prompt_cache, input?.session_id, input?.model?.id);
     }
     catch {
         /* silent by design */
