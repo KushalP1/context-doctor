@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { selfCommand, withInvocation } from "./invocation.js";
 import { claudeCodeInstalls, describeInstalls, modelSwitchReadiness, PRE_MODEL_SWITCH_SINCE, type ClaudeCodeInstall, type ModelSwitchReadiness } from "./modelswitch.js";
 import { FANOUT_MATCHER } from "./fanout.js";
+import { antigravityAllSkillDirs, antigravityMcpConfigPath, antigravityPresent, antigravitySkillDirs } from "./antigravity.js";
 import { COPILOT_HOOK_EVENT, copilotHome, copilotHookFilePath, copilotMcpConfigPath, isOurCopilotEntry, vsCodePresent } from "./copilot.js";
 
 interface Target {
@@ -40,6 +41,8 @@ function targets(): Target[] {
     { name: "Claude Code", configPath: claudeCode, detect: () => existsSync(claudeCode) || existsSync(join(homedir(), ".claude")) },
     { name: "Cursor", configPath: cursor, detect: () => existsSync(join(homedir(), ".cursor")) },
     { name: "Gemini CLI", configPath: geminiSettingsPath(), detect: geminiCliPresent },
+    // Antigravity's MCP file has Claude Desktop's shape (see antigravity.ts).
+    { name: "Antigravity", configPath: antigravityMcpConfigPath(), detect: antigravityPresent },
   ];
 }
 
@@ -174,7 +177,11 @@ export function isEmptyStub(config: unknown, extraKeys: string[] = []): boolean 
 export function readJson(path: string): Record<string, any> {
   if (!existsSync(path)) return {};
   try {
-    return JSON.parse(readFileSync(path, "utf8"));
+    const text = readFileSync(path, "utf8");
+    // An empty file configures nothing, like an absent one: Antigravity
+    // creates its mcp_config.json empty.
+    if (text.trim() === "") return {};
+    return JSON.parse(text);
   } catch (e) {
     throw new Error(`${path} exists but is not valid JSON — fix or remove it first (${(e as Error).message})`);
   }
@@ -874,6 +881,36 @@ function uninstallCopilotFolders(): void {
   }
 }
 
+/**
+ * Skills folders install created under ~/.gemini for Antigravity, recorded
+ * in a marker there (as for Copilot) so uninstall removes only those, once
+ * empty: a skills folder that was already there is the user's.
+ */
+const ANTIGRAVITY_MARKER = ".context-doctor-created.json";
+
+function antigravityCreated(): string[] {
+  try {
+    const raw = JSON.parse(readFileSync(join(homedir(), ".gemini", ANTIGRAVITY_MARKER), "utf8"));
+    const allowed = new Set(antigravityAllSkillDirs().map((d) => dirname(d)));
+    return Array.isArray(raw?.created) ? raw.created.filter((d: unknown): d is string => typeof d === "string" && allowed.has(d)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberAntigravityFolder(dir: string): void {
+  const all = [...new Set([...antigravityCreated(), dir])];
+  mkdirSync(join(homedir(), ".gemini"), { recursive: true });
+  writeFileSync(join(homedir(), ".gemini", ANTIGRAVITY_MARKER), JSON.stringify({ created: all }) + "\n");
+}
+
+function uninstallAntigravityFolders(): void {
+  const marker = join(homedir(), ".gemini", ANTIGRAVITY_MARKER);
+  if (!existsSync(marker)) return;
+  for (const dir of antigravityCreated()) if (existsSync(dir) && readdirSync(dir).length === 0) rmSync(dir, { recursive: true });
+  rmSync(marker, { force: true });
+}
+
 /** Outcome of an install run, so the CLI can set a truthful exit code. */
 export interface InstallResult {
   /** Detected targets that could not be configured, with the reason. */
@@ -895,7 +932,7 @@ export function runInstall(options: { statusLine?: boolean } = {}): InstallResul
   const found = targets().filter((t) => t.detect());
 
   if (found.length === 0 && !existsSync(codexDir()) && !copilotPresent()) {
-    console.log("No supported AI apps detected (Claude Desktop, Claude Code, Cursor, Codex, Gemini CLI, GitHub Copilot).");
+    console.log("No supported AI apps detected (Claude Desktop, Claude Code, Cursor, Codex, Gemini CLI, GitHub Copilot, Antigravity).");
     console.log("Manual setup — add to your app's MCP config:");
     console.log(JSON.stringify({ mcpServers: { "context-doctor": entry } }, null, 2));
     return { failures: [] };
@@ -937,6 +974,20 @@ export function runInstall(options: { statusLine?: boolean } = {}): InstallResul
   } catch (e) {
     console.error(`✗ Agent Skill: ${(e as Error).message}`);
     failures.push("Agent Skill");
+  }
+
+  if (antigravityPresent()) {
+    for (const dir of antigravitySkillDirs()) {
+      try {
+        // A skills folder Antigravity did not have yet is ours to remove again.
+        if (!existsSync(dirname(dir))) rememberAntigravityFolder(dirname(dir));
+        const skillPath = installSkillInto(dir);
+        if (skillPath) console.log(`✓ Antigravity skill installed (${tilde(skillPath)})`);
+      } catch (e) {
+        console.error(`✗ Antigravity skill: ${(e as Error).message}`);
+        failures.push("Antigravity skill");
+      }
+    }
   }
 
   try {
@@ -1105,11 +1156,13 @@ function withoutOurs(config: Record<string, any>): Record<string, any> {
  * backup is only an earlier install's own write (install run twice);
  * `before` is the backup without our entries.
  */
-function installOrigin(path: string, extraKeys: string[]): { created: boolean; before: Record<string, any> } {
+function installOrigin(path: string, extraKeys: string[]): { created: boolean; before: Record<string, any>; empty?: boolean } {
   const backup = path + BACKUP_SUFFIX;
   if (!existsSync(backup)) return { created: true, before: {} };
   try {
-    const raw = JSON.parse(readFileSync(backup, "utf8"));
+    const text = readFileSync(backup, "utf8");
+    if (text.trim() === "") return { created: false, before: {}, empty: true };
+    const raw = JSON.parse(text);
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { created: false, before: {} };
     const before = withoutOurs(raw);
     const hadOurs = JSON.stringify(before) !== JSON.stringify(raw);
@@ -1127,7 +1180,7 @@ function installOrigin(path: string, extraKeys: string[]): { created: boolean; b
  * written: the one install made of the user's original is kept as it is.
  */
 function writeUninstalled(path: string, config: Record<string, any>, extraKeys: string[] = []): void {
-  const { created, before } = installOrigin(path, extraKeys);
+  const { created, before, empty } = installOrigin(path, extraKeys);
   for (const key of ["mcpServers", "hooks"]) {
     const v = config[key];
     if (v && typeof v === "object" && Object.keys(v).length === 0 && !(key in before)) delete config[key];
@@ -1136,6 +1189,11 @@ function writeUninstalled(path: string, config: Record<string, any>, extraKeys: 
   if (created && isEmptyStub(config, extraKeys)) {
     rmSync(path);
     deletedStubs.push(path);
+    return;
+  }
+  // An empty file before install is an empty file again, not "{}".
+  if (empty && isEmptyStub(config, extraKeys)) {
+    writeFileSync(path, "");
     return;
   }
   writeFileSync(path, JSON.stringify(config, null, 2));
@@ -1227,6 +1285,8 @@ export async function runUninstall(): Promise<void> {
     });
   }
   attempt("Agent Skill", () => removeSkill(join(homedir(), ".claude", "skills", "context-doctor"), "Agent Skill"));
+  for (const dir of antigravityAllSkillDirs()) attempt(`Antigravity skill (${tilde(dir)})`, () => removeSkill(dir, "Antigravity skill"));
+  attempt("Antigravity folders", () => uninstallAntigravityFolders());
   uninstallHook(attempt);
   attempt("Claude Code status line", () => uninstallStatusLine());
   attempt("Codex", () => uninstallCodex());

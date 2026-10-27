@@ -18,6 +18,7 @@ import { loadConfig } from "./config.js";
 import { codexRouting } from "./codexroute.js";
 import { CURSOR_HOOK_EVENTS } from "./install.js";
 import { binOnPath, claudeCodeInstallsFromEnv, claudeInstalledCopies, codexMcpEntry, copilotPresent, geminiCliPresent, geminiSettingsPath, isEmptyStub, isOurPluginKey, launcherNamesMissingPackage } from "./install.js";
+import { antigravityMcpConfigPath, antigravityPresent, antigravitySkillDirs } from "./antigravity.js";
 import { COPILOT_HOOK_EVENT, copilotHookFilePath, copilotLegacyConfigPath, copilotMcpConfigPath, copilotSettingsPath, isOurCopilotEntry, vsCodeUserDirs } from "./copilot.js";
 import { describeDesktopUsage, desktopUsage } from "./desktopusage.js";
 import { withInvocation } from "./invocation.js";
@@ -50,6 +51,33 @@ function missingPackageCheck(label: string): Check {
     : { label, status: "fail", detail: "MCP entry runs `npx context-doctor-mcp`, a package that does not exist on npm, so the server never starts — re-run: context-doctor install" };
 }
 
+/**
+ * Antigravity (app, IDE, CLI): the MCP server in its mcp_config.json, not
+ * switched off there, and the skill. Its hooks are not installed: the
+ * transcript they point at has no documented format (see antigravity.ts).
+ */
+function antigravityChecks(): Check[] {
+  if (!antigravityPresent()) return [{ label: "Antigravity", status: "skip", detail: "not detected" }];
+  const path = antigravityMcpConfigPath();
+  const mcp = existsSync(path) ? checkMcpEntry("Antigravity MCP", path) : { label: "Antigravity MCP", status: "skip" as const, detail: NOT_INSTALLED };
+  let disabled = false;
+  try {
+    disabled = readConfig(path)?.mcpServers?.["context-doctor"]?.disabled === true;
+  } catch {
+    /* checkMcpEntry reported it */
+  }
+  const out: Check[] = [disabled ? { label: "Antigravity MCP", status: "warn", detail: `"disabled": true for context-doctor in ${tilde(path)}: Antigravity does not start it` } : mcp];
+  if (mcp.status === "ok") {
+    const skills = antigravitySkillDirs().filter((d) => existsSync(join(d, "SKILL.md")));
+    out.push(
+      skills.length > 0
+        ? { label: "Antigravity skill", status: "ok", detail: `in ${skills.map(tilde).join(", ")}; no hooks (Antigravity's transcript format is undocumented)` }
+        : { label: "Antigravity skill", status: "warn", detail: "not installed — re-run: context-doctor install" }
+    );
+  }
+  return out;
+}
+
 /** The "not installed" note shared by every app whose config has nothing in it. */
 const NOT_INSTALLED = "not installed (no config, or an empty one)";
 
@@ -61,7 +89,9 @@ const NOT_INSTALLED = "not installed (no config, or an empty one)";
  */
 function readConfig(path: string, extraKeys: string[] = []): Record<string, any> | undefined {
   if (!existsSync(path)) return undefined;
-  const config = JSON.parse(readFileSync(path, "utf8"));
+  const text = readFileSync(path, "utf8");
+  if (text.trim() === "") return undefined; // Antigravity creates its MCP file empty
+  const config = JSON.parse(text);
   return isEmptyStub(config, extraKeys) ? undefined : config;
 }
 
@@ -526,6 +556,8 @@ export async function runDoctor(): Promise<void> {
   } else {
     checks.push({ label: "Gemini CLI", status: "skip", detail: "not detected" });
   }
+
+  checks.push(...antigravityChecks());
 
   checks.push(devinCheck());
 
