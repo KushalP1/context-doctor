@@ -4,7 +4,7 @@
 
 **See where your AI agent's tokens go, and stop paying for the ones that do nothing.**
 
-AI agents re-send their whole context on every message: old tool output, pasted files, long instructions. A 500k-token session pays for all of it again each time, and at full price after a coffee break, when the prompt cache has expired. context-doctor measures that waste on your own sessions, in dollars, and removes it at the moments it pays: before it enters the context, while it sits there, and on every request. It runs on your machine, needs no API key, sends no telemetry, and works with **Claude Code, Claude Desktop, Cursor, Codex, Gemini CLI**, any app on the **Anthropic, OpenAI or Gemini API**, and **CI**. MIT licensed, Node 20+, macOS, Linux and Windows.
+AI agents re-send their whole context on every message: old tool output, pasted files, long instructions. A 500k-token session pays for all of it again each time, and at full price after a coffee break, when the prompt cache has expired. context-doctor measures that waste on your own sessions, in dollars, and removes it at the moments it pays: before it enters the context, while it sits there, and on every request. It runs on your machine, needs no API key, sends no telemetry, and works with **Claude Code** (terminal, IDE, desktop app), **Claude Desktop, ChatGPT, Codex, Cursor, Gemini CLI, GitHub Copilot**, any app on the **Anthropic, OpenAI or Gemini API**, and **CI**. MIT licensed, Node 20+, macOS, Linux and Windows.
 
 ```bash
 npx context-doctor savings     # what your recent sessions cost, and what each fix would have saved
@@ -26,7 +26,7 @@ Pick where you work. Each takes about a minute and is fully reversible.
 | **claude.ai, ChatGPT, phone apps** | `npx context-doctor instructions --copy`, then paste into the app's personal preferences (it tells you where). ChatGPT can also reach the MCP server at a URL ([how](./docs/chat-apps.md#chatgpt)) |
 | **Your own app on an LLM API** | Run `npx context-doctor proxy --autopilot` and point `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` (add `/v1`) or `GOOGLE_GEMINI_BASE_URL` at `http://127.0.0.1:8787`. No proxy possible? Wrap the SDK client: `withContextDoctor(new Anthropic())` ([library](./docs/library.md)) |
 | **Python / RAG pipelines** | `pip install "git+https://github.com/KushalP1/context-doctor#subdirectory=python"` (PyPI release coming), then `pack_documents(retrieved_docs, question, budget=4000)` trims LangChain or LlamaIndex results to the chunks that matter. [Python README](./python/README.md) |
-| **GitHub pull requests** | `uses: KushalP1/context-doctor@v0.32.0` comments how much a PR grows CLAUDE.md, AGENTS.md and rules, and can fail over a budget ([setup](./docs/ci.md)) |
+| **GitHub pull requests** | `uses: KushalP1/context-doctor@v0.38.0` comments how much a PR grows CLAUDE.md, AGENTS.md and rules, and can fail over a budget ([setup](./docs/ci.md)) |
 
 ## What it does
 
@@ -106,7 +106,7 @@ On a Claude subscription you do not pay list price; the same tokens come out of 
 | **GitHub Copilot** (Copilot CLI, the Copilot app, VS Code agent sessions) | A **session-start hook** (`~/.copilot/hooks/context-doctor.json`) gives every new or resumed session the standing rules. No size check: Copilot passes a transcript only to hooks that cannot add context | MCP tools (`~/.copilot/mcp-config.json`, which VS Code's Copilot sessions read too) |
 | **Your own apps on the Anthropic, OpenAI or Gemini API** | Autopilot on `/v1/messages`, `/v1/chat/completions`, `/v1/responses` and Gemini's `generateContent` (`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` / `GOOGLE_GEMINI_BASE_URL`), or the optimizing proxy (which can cost more on cached traffic); no proxy possible (serverless, edge)? `withContextDoctor(client)` runs autopilot inside the SDK client | Exact usage and cache hit rates in `/stats`, prompt-cache placement advice ([proxy](./docs/proxy.md)) |
 | **Claude Desktop chat** | The six standing rules below, sent to every chat (whether classic Chat shows them to the model is unverified, [why](./docs/chat-apps.md)); one cheap `profile_context` call the model makes once at ~30 turns and on any cost question; `pack_context` instead of reading a big local file whole; a handoff offered once a chat is long, since a chat's history cannot be cut and a new chat can | One-click `.mcpb` install, `context_checkup`, `handoff` and `ask_file` prompts, `handoff://latest` to attach in the next chat ([handoff](./docs/handoff.md)) |
-| **claude.ai, ChatGPT, the phone apps** | Your account's standing preferences, pasted once ([Quick start](#quick-start)) | Profile an exported chat with `analyze` or `session` |
+| **claude.ai, ChatGPT, the phone apps** | Your account's standing preferences, pasted once ([Quick start](#quick-start)) | Profile an exported chat with `analyze` or `session`. ChatGPT developer mode: the MCP tools at a URL, uploads into `pack_context` ([how](./docs/chat-apps.md#chatgpt)) |
 | **CI** | `analyze --fail-over-budget` fails a build whose prompts outgrow a budget; the GitHub Action gates memory-file growth | `.contextdoctorrc` budgets and presets ([CI](./docs/ci.md)) |
 
 Not claimed, because no process on your machine sends those requests: trimming inside Claude Desktop chat, claude.ai, ChatGPT, Cursor's own subscription models, or Codex signed in with ChatGPT. Those get the rules and the measurements above, not autopilot.
@@ -126,8 +126,8 @@ Rules 1-4 end exactly at character 512, the part ChatGPT's guide says must stand
 
 | Command | What it does |
 |---|---|
-| `context-doctor install` / `uninstall` | Wire (or remove) everything it finds: the MCP server for Claude Desktop, Claude Code, Cursor, Codex, Gemini CLI and GitHub Copilot; the Agent Skill (Claude Code, Codex); the every-prompt hook (Claude Code, Codex, Gemini CLI's `BeforeAgent`, Cursor's `postToolUse`, `postToolUseFailure` and `sessionStart`); Claude Code's `PreCompact` and `SessionStart` hooks; Copilot's `sessionStart` (the standing rules). `--statusline` adds the status bar line ([details](./docs/install.md)) |
-| `context-doctor doctor` | Self-check the whole installation — one pasteable ✓/✗ diagnosis with fixes |
+| `context-doctor install` / `uninstall` | Wire (or remove) everything it finds: the MCP server for Claude Desktop, Claude Code, Cursor, Codex, Gemini CLI and GitHub Copilot; the Agent Skill (Claude Code, Codex); the every-prompt hook (Claude Code, Codex, Gemini CLI's `BeforeAgent`, Cursor's `postToolUse`, `postToolUseFailure` and `sessionStart`); Claude Code's `PreCompact`, `SessionStart`, `PreToolUse` (the subagent price) and, on 2.1.251+, `PreModelSwitch` hooks; Copilot's `sessionStart` (the standing rules). `--statusline` adds the status bar line ([details](./docs/install.md)) |
+| `context-doctor doctor` | Self-check the whole installation — one pasteable ✓/✗ diagnosis with fixes, including which surfaces autopilot can reach and any other program on its port |
 | `context-doctor savings [--days n] [--share [--copy]]` | What your recent Claude Code sessions cost, and what `/compact` at cold resumes, autopilot and an earlier auto-compact window would save, replayed through the shipped code against your actual billed usage. `--share` prints totals only (no project names or paths) to post. A bare `context-doctor` in a terminal shows the same |
 | `context-doctor autopilot on\|off\|pause\|resume\|status` | Every new Claude Code session started in a terminal or IDE goes through the local proxy, which clears stale tool output only when the prompt cache is cold: measured 12.7% less input cost, no session worse ([details](./docs/autopilot.md)) |
 | `context-doctor proxy --autopilot` | Local proxy for your own Anthropic, OpenAI and Gemini API apps: clears stale tool output only when the prompt cache is cold, so it never costs more. Plain `proxy` runs the optimizing strategies (dedupe, trim, strip base64), which can cost more on cached traffic. `--token` for a public URL; `/stats` for cumulative savings ([details](./docs/proxy.md)) |
@@ -135,7 +135,7 @@ Rules 1-4 end exactly at character 512, the part ChatGPT's guide says must stand
 | `context-doctor instructions [--copy]` | The ~190-token standing rules (~130 on GPT) for claude.ai / ChatGPT preferences, for web and phones where no server runs |
 | `context-doctor handoff [list\|show <id>\|latest] [--copy]` | Handoffs saved from chat apps (the `handoff` prompt or `save_handoff`): list them, print one, or copy it to paste as a new chat's first message ([handoff](./docs/handoff.md)) |
 | `context-doctor mcp [--http]` | The MCP server as a subcommand, for clients and registries that launch `npx -y context-doctor mcp` |
-| `context-doctor-mcp` | The MCP server itself — stdio by default (what the installer wires); `--http [--port 8808] [--host H] [--allowed-hosts names] [--store-handoffs]` serves streamable HTTP at `/mcp` for URL-based clients like ChatGPT developer-mode connectors (only for the host names it knows: behind a tunnel, pass its name to `--allowed-hosts`) |
+| `context-doctor-mcp` | The MCP server itself — stdio by default (what the installer wires); `--http [--port 8808] [--host H] [--allowed-hosts names] [--allowed-origins list] [--store-handoffs]` serves streamable HTTP at `/mcp` for URL-based clients like ChatGPT developer-mode connectors (only for the host names it knows: behind a tunnel, pass its name to `--allowed-hosts`) |
 | `context-doctor session [file]` | Profile a Claude Code session: live context, findings, **measured tokens and prompt-cache economics**, **where the wall clock went** per tool, output's and reasoning's share of the cost, repeated identical (polling) tool calls priced, and **what its subagents cost** (their own windows, your bill; never in the parent's profile). Also reads Codex rollouts, Gemini CLI chats and ChatGPT data exports (`conversations.json`); `--list` to browse |
 | `context-doctor watch [file]` | Live monitor of a growing session transcript or agent trace (Claude Code / Codex JSONL, or a plain OpenAI/Anthropic conversation JSON file): token/cost line per change, findings as they appear |
 | `context-doctor cursor [--list]` | Profile a chat from Cursor's local history (both storage formats) |
@@ -169,27 +169,27 @@ Rules 1-4 end exactly at character 512, the part ChatGPT's guide says must stand
 
 ## What's new
 
-- **0.38 Your limits in their own unit, regressions after upgrades, recall, and a subagent price**: `context-doctor limits` shows each plan window's %, pace and run-out time (Claude Pro/Max through the status line, Codex from its rollouts) and what 1M tokens cost in % of it, fitted on your readings with the error; `savings` then speaks in your limit too. `cache-misses` flags step changes after a Claude Code upgrade, `recall` searches the session's own transcript (compacted turns included), a hook prices a subagent before it starts (never blocking), and `overhead prune` switches off unused MCP servers and skills per project, reversibly. OpenAI caches count as warm for up to 24 hours. An independent QA pass's findings were fixed before the release ([what's new](./docs/whats-new.md)).
+- **0.38 Your limits in their own unit, regressions after upgrades, recall, and a subagent price**: `context-doctor limits` shows each plan window's %, pace and run-out time (Claude Pro/Max through the status line, Codex from its rollouts) and what 1M tokens cost in % of it, fitted on your readings with the error; `savings` then speaks in your limit too. `cache-misses` flags step changes after a Claude Code upgrade, `recall` searches the session's own transcript (compacted turns included), a hook prices a subagent before it starts (never blocking), and `overhead prune` switches off unused MCP servers and skills per project, reversibly. OpenAI caches count as warm for up to 24 hours. An independent QA pass's findings were fixed before the release.
 - **0.37 Desktop chat apps: a handoff, uploads, compact results, and a security pass**: a chat app's history cannot be edited, so the `handoff` prompt (Claude Desktop's **+** menu) has the model write a ≤400-token brief and save it with `save_handoff` (secrets masked, `handoff://latest` to attach in the next chat, the per-turn saving reported: a 52k-token chat drops to ~600). `ask_file` answers from a big file through `pack_context`, which over `--http` also takes ChatGPT uploads; ChatGPT gets compact results. An independent QA pass's eleven findings were fixed with tests; **behind a tunnel, `--http` now needs `--allowed-hosts <tunnel host>`** ([handoff](./docs/handoff.md)).
 
-Every release: [docs/whats-new.md](./docs/whats-new.md).
+Every release, with the details: [docs/whats-new.md](./docs/whats-new.md).
 
 ## Documentation
 
 - [What `install` does](./docs/install.md): every file it writes, what runs in each session after, and when you need MCP
 - [Autopilot](./docs/autopilot.md): how it clears stale tool output, and why it never costs more
 - [The proxy](./docs/proxy.md): autopilot and the optimizing mode for your API apps, `/stats`, cache advice, a public URL for Cursor
-- [Chat apps](./docs/chat-apps.md): Claude Desktop, ChatGPT, claude.ai and the phone apps; what acts by itself and what only nudges; the MCP tools
-- [Profiling](./docs/profiling.md): conversations, sessions, prompt-cache economics, subagents, `report`, sharing a profile safely
-- [Pack and overhead](./docs/pack-and-overhead.md): keep big documents and fixed overhead out of the context
+- [Chat apps](./docs/chat-apps.md): Claude Desktop, ChatGPT, claude.ai and the phone apps; what acts by itself and what only nudges; the MCP tools, prompts and resources
+- [Handoff](./docs/handoff.md): continue a long chat in a new one from a ≤400-token brief
+- [Profiling](./docs/profiling.md): sessions, prompt-cache economics, subagents, `tasks`, `reads`, `compactions`, `cache-misses`, `limits`, `report`
+- [Pack and overhead](./docs/pack-and-overhead.md): `pack`, `recall`, `overhead`, `overhead split` and `overhead prune`
 - [Detectors and fixes](./docs/detectors.md): what the profiler finds and what each optimizer strategy changes
 - [Library](./docs/library.md): `profileConversation`, `optimizeConversation`, `packContext`, `withContextDoctor`
 - [Budgets and CI](./docs/ci.md): the GitHub Action and `.contextdoctorrc`
 - [Editor and status line](./docs/editor-and-statusline.md): the VS Code / Cursor extension and Claude Code's status bar
 - [Token counts](./docs/tokenizer.md): why counts are "~", how the Claude ratios were measured, exact counts
-- [Performance](./docs/performance.md): what context-doctor itself costs
-- [Experiment](./docs/experiment.md): does a smaller context actually help? Measure it
-- [A/B suite](./docs/ab.md): does a lever cost quality? Eight small coding tasks, each run with and without it and scored by a hidden check
+- [Performance](./docs/performance.md): what context-doctor itself costs (its six MCP tool definitions: at most ~2,344 tokens)
+- [Experiment](./docs/experiment.md) and [A/B suite](./docs/ab.md): does a smaller context help, and does a lever cost quality? Measured on real tasks
 - [What's new](./docs/whats-new.md), [Roadmap](./ROADMAP.md), [Python package](./python/README.md)
 
 ## Contributing

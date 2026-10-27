@@ -46,7 +46,7 @@ Without autopilot nothing runs in the background: the hook, skill, MCP server an
 
 ## Do you need MCP?
 
-Only for the in-chat tools: MCP is how the model inside Claude Desktop, Cursor's chat or a ChatGPT developer-mode connector calls `profile_context`, `optimize_context`, `pack_context` and `context_best_practices` itself. Everything else works without it: the CLI on files and transcripts (nothing but `npx`, so any terminal, script or CI), autopilot and the proxy, the hooks (the apps invoke them directly), the skill (a markdown file) and the [library](./library.md). A developer who only wants cheaper API calls never touches MCP; a Claude Code user gets the hooks and the skill without it, and the MCP server adds the in-chat tools on top. `install` sets up all of it at once so you do not have to think about which mechanism is which.
+Only for the in-chat tools: MCP is how the model inside Claude Desktop, Cursor's chat or a ChatGPT developer-mode connector calls `profile_context`, `optimize_context`, `pack_context`, `save_handoff`, `recall` (local server only) and `context_best_practices` itself, and how Claude Desktop shows the `context_checkup`, `handoff` and `ask_file` prompts. Everything else works without it: the CLI on files and transcripts (nothing but `npx`, so any terminal, script or CI), autopilot and the proxy, the hooks (the apps invoke them directly), the skill (a markdown file) and the [library](./library.md). A developer who only wants cheaper API calls never touches MCP; a Claude Code user gets the hooks and the skill without it, and the MCP server adds the in-chat tools on top. `install` sets up all of it at once so you do not have to think about which mechanism is which.
 
 ## What it never does
 

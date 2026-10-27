@@ -16,7 +16,7 @@ const { conversation, tokensBefore, tokensAfter } = optimizeConversation(chatJso
   strategies: ["dedupe", "trim-tool-results", "strip-base64"],
 });
 
-// Autopilot without a proxy: wrap the SDK client (Anthropic or OpenAI)
+// Autopilot without a proxy: wrap the SDK client (Anthropic, OpenAI or Google Gen AI)
 import Anthropic from "@anthropic-ai/sdk";
 import { withContextDoctor, contextDoctorStats } from "context-doctor";
 const client = withContextDoctor(new Anthropic());       // use exactly as before

@@ -2,7 +2,7 @@
 
 [← README](../README.md)
 
-Autopilot, the hooks and compaction slim context that is already there. Two commands stop it getting in.
+Autopilot, the hooks and compaction slim context that is already there. `pack` and `overhead` stop it getting in, and `recall` gets back one detail of what was cleared instead of all of it.
 
 **`pack`: only the parts of a document a question needs.** A 60k-token manual pasted to answer one question is paid on that message and re-read on every message after it. `pack` splits files and folders along their own structure (markdown headings, top-level code declarations, paragraphs; one-line logs and minified files are cut too), ranks the chunks against your question with BM25, and returns the best ones that fit a budget. Every chunk carries an id and its line range, and the result names the next-best ids, so asking for more is one call. Without a question you get an outline to pick from.
 
@@ -25,6 +25,12 @@ Not included: 1019 chunk(s). Next best: src/watch.ts#1 (...); src/test/compactwi
 ```
 
 In Claude Desktop, Claude Code, Cursor and Codex the same thing is the `pack_context` MCP tool, and the standing instructions tell the model to use it when it needs to answer from a large file it is not editing. Ranking is lexical, offline and keyless; it misses pure paraphrase, which is what the outline is for. If you run [Ollama](https://ollama.com) with an embedding model (`ollama pull nomic-embed-text`), `--semantic` (or `semantic: true` on the MCP tool) also ranks by meaning and merges the two rankings; chunk vectors are cached, so repeat packs are fast. Without one it says so and stays lexical. Measured on this repository (README plus source, ~305k tokens): 9 of 10 factual questions were answered from a 2k-token pack. PDFs, Word (`.docx`, `.doc`, `.rtf`), PowerPoint and ODT files are read with tools the OS already has (`pdftotext` where installed, PDFKit and `textutil` on macOS, `unzip` elsewhere); when none is available, pack says what to install. Over HTTP (the ChatGPT connector mode) the tool reads no files, only text you pass.
+
+**`recall`: what this session already saw, without re-reading it.** Autopilot clears old tool output and a compaction summarises old turns; when the model needs one detail back, re-running the command or re-reading the file puts the whole thing in again. `recall` searches the session's own transcript on disk instead (Claude Code, or Codex's newest rollout started in that folder; compacted turns and cleared output included) and returns only the best excerpts with their time and position, within `--max-tokens` (default 2,000), secret-looking strings masked. It is also the `recall` MCP tool on the local server, and autopilot's notes for Claude Code point to it. It reads the current session (`CLAUDE_CODE_SESSION_ID`, else the newest transcript of this folder), never another project's unless you name one with `--session <id|path>`. Transcripts are streamed: 300 MB in 1.1 s on the author's machine.
+
+```bash
+context-doctor recall "which port did the test server use"
+```
 
 **`overhead`: what every request re-reads before your message.** The system prompt, tool and MCP schemas, skills and your memory files ride on every request: cached, so each read is cheap, but read on every request of every session and written again at full price after each cold start. Transcripts never show them. `overhead` measures the fixed part from the first request of each recent Claude Code session (the API's own count, minus your first message), lists every memory file each agent loads in the current directory (Claude Code's CLAUDE.md with its `@imports`, rules and auto memory; Codex's AGENTS.md; Cursor's always-applied rules; GEMINI.md), and prices each per month from your own request and cold-start counts.
 

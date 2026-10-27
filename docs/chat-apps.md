@@ -6,11 +6,15 @@ context-doctor ships an MCP server, so the AI itself can profile and slim contex
 
 ## Which surfaces act by itself
 
-**Claude Code: yes.** The hook runs on every prompt and the status line on every refresh. Past ~80k tokens the model receives hygiene guidance naming the largest waste, and compaction is offered. Measured: 115 automatic checks, 48 warnings, across 32 sessions on one machine.
+**Claude Code: yes**, in the terminal, the IDEs and the desktop app's Code tab. The hook runs on every prompt and the status line on every refresh; autopilot reaches the terminal and IDE sessions only (the desktop app sets its own API address). Past ~80k tokens the model receives hygiene guidance naming the largest waste, and compaction is offered. Measured: 115 automatic checks, 48 warnings, across 32 sessions on one machine.
 
 **Cursor: yes, since 0.26.** `install` adds a native `postToolUse` hook to `~/.cursor/hooks.json`; Cursor passes it the agent transcript, and its `additional_context` reaches the model. In a heavy chat the agent gets hygiene guidance and the largest recoverable waste, once per 40% of growth. Cursor's transcript records tool calls but not their output, and keeps turns Cursor has since summarized, so the note gives the chat's accumulated size, with no window share or price. Corrected in 0.26: Cursor also runs Claude Code's hook, but as `beforeSubmitPrompt`, whose output can only allow or block the prompt, so from 0.15 to 0.25 the guidance never reached Cursor's model.
 
 **Codex (ChatGPT.app's Codex tab, the Codex IDE extension, the `codex` CLI): yes, since 0.16.** `install` writes the hook to `~/.codex/hooks.json`, the MCP server to `~/.codex/config.toml`, and the skill to `~/.codex/skills/`. Codex uses Claude Code's hook contract almost verbatim and passes its own rollout transcript, which carries the API's real usage figures, so the guidance comes from measured tokens. One extra step, Codex's rule not ours: a new hook runs only after you trust it once (type `/hooks` in Codex). The MCP tools are marked read-only, so Codex runs them without an approval prompt, `codex exec` included. `session` and `session --list` read Codex rollouts too.
+
+**Gemini CLI: yes, since 0.27.** `install` adds the every-prompt hook (`BeforeAgent`, with the API's own token counts) and the MCP server to `~/.gemini/settings.json`.
+
+**GitHub Copilot (the Copilot CLI, the Copilot app, VS Code's agent sessions): the rules, at session start.** Since 0.36 `install` adds the MCP server to `~/.copilot/mcp-config.json` and a `sessionStart` hook that gives each new or resumed session the standing rules. No size check: Copilot gives a transcript only to hooks that cannot add context ([install](./install.md)).
 
 **API traffic through the proxy: yes.** Every request passes through it with no model involved; with `--autopilot`, stale tool output is cleared whenever the cache is cold ([the proxy](./proxy.md)).
 
@@ -20,7 +24,7 @@ context-doctor ships an MCP server, so the AI itself can profile and slim contex
 
 **The ChatGPT chat UI: no.** No MCP, no hooks, no data path in the chat product itself. Use Codex, or a developer-mode connector at a URL you host (below).
 
-So "every chat inherently better" is true for Claude Code, Cursor, Codex and the proxy; for Claude Desktop it is "the rules are sent to every chat, the checkup is one cheap tool call away, and a handoff is one click"; and not a claim we make for the ChatGPT chat UI.
+So "every chat inherently better" is true for Claude Code, Cursor, Codex, Gemini CLI and the proxy; for Copilot it is the rules at the start of every session; for Claude Desktop it is "the rules are sent to every chat, the checkup is one cheap tool call away, and a handoff is one click"; and not a claim we make for the ChatGPT chat UI.
 
 ## Claude Desktop, step by step
 
@@ -63,3 +67,5 @@ Where there is no hook and no MCP at all (claude.ai on the web, the Claude and C
 | `save_handoff` | Stores a handoff brief (≤400 tokens) and the blocks that must stay exact, masks secret-looking strings, and returns the per-turn saving and how to continue in a new chat. Over HTTP it stores nothing unless `--store-handoffs` ([handoff](./handoff.md)) |
 
 Prompts, in clients that show them (Claude Desktop's **+** menu, Claude Code's slash menu, VS Code, Cursor, Gemini CLI): `context_checkup`, `handoff` (write, save and continue in a new chat) and `ask_file` (a path and a question, answered through `pack_context`). Resources, on the local server: `handoff://latest` and `handoff://<id>`, attachable in Claude Desktop, Cursor, VS Code (Add Context) and Claude Code (`@`).
+
+What the tools cost: their definitions ride on every request in clients that load them up front, at most ~2,344 Claude tokens for the six over stdio (an upper bound, [performance](./performance.md)); over HTTP there are five (no `recall`).
