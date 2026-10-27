@@ -30,8 +30,9 @@
  * under 6:15 after a 5-minute one) that wrote the context again. A person
  * back from a break, or a loop whose interval sits on the TTL: an agent that
  * woke every 61-62 minutes paid $248 of $285 in cache writes over 89
- * wake-ups (anthropics/claude-code#104736). Three or more in one session are
- * named as a loop, with the interval that keeps the cache warm.
+ * wake-ups (anthropics/claude-code#104736). Three or more in a row in one
+ * session, at the same interval (within 90 s or 2%), are named as a loop,
+ * with the interval that keeps the cache warm.
  */
 import { type DiagnosedMisses } from "./missledger.js";
 export type MissCause = "model switch" | "context edited" | "after an API error" | "over 20 new blocks" | "nothing visible";
@@ -63,6 +64,8 @@ export interface LateRewrite {
     writeTokens: number;
     /** Above the cache-read price; undefined when the model has no known price. */
     extraUsd?: number;
+    /** Its number among the transcript's cold starts: consecutive ones had no other cold start between. */
+    cold?: number;
 }
 export interface MissStats {
     /** Requests that could have read a warm cache (the definition above). */

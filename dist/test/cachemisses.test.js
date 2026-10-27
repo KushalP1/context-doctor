@@ -197,3 +197,27 @@ test("a model switch past the TTL is the switch's cost, not lateness; no late re
     assert.equal(r.late.rewrites, 0);
     assert.ok(!renderCacheMisses(r).includes("Just too late"));
 });
+test("QA: a person back at 61, 67 and 73 minutes is not a loop; a loop broken by another cold start is two runs", () => {
+    const M = "claude-opus-5-5";
+    const rows = [reply(s(0), M, 0, 200_000, {}, true)];
+    let t = 0;
+    for (const gapMin of [61, 67, 73]) {
+        t += 30;
+        rows.push(reply(s(t), M, 200_000, 2_000, {}, true)); // a warm turn
+        t += gapMin * 60;
+        rows.push(reply(s(t), M, 0, 202_000, {}, true)); // back: re-written
+    }
+    const human = cacheMisses(30, [transcript(rows)]);
+    assert.equal(human.late.rewrites, 3);
+    assert.equal(human.late.loops.length, 0);
+    // 61-minute wake-ups, but a two-hour pause (a cold start that is not late) between the second and third.
+    const broken = [reply(s(0), M, 0, 200_000, {}, true)];
+    t = 0;
+    for (const gap of [3660, 3670, 7200, 3665, 3660]) {
+        t += gap;
+        broken.push(reply(s(t), M, 0, 200_000, {}, true));
+    }
+    const r = cacheMisses(30, [transcript(broken)]);
+    assert.equal(r.late.rewrites, 4);
+    assert.equal(r.late.loops.length, 0, "two runs of two, not one loop of four");
+});

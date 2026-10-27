@@ -30,8 +30,9 @@
  * under 6:15 after a 5-minute one) that wrote the context again. A person
  * back from a break, or a loop whose interval sits on the TTL: an agent that
  * woke every 61-62 minutes paid $248 of $285 in cache writes over 89
- * wake-ups (anthropics/claude-code#104736). Three or more in one session are
- * named as a loop, with the interval that keeps the cache warm.
+ * wake-ups (anthropics/claude-code#104736). Three or more in a row in one
+ * session, at the same interval (within 90 s or 2%), are named as a loop,
+ * with the interval that keeps the cache warm.
  */
 import { forEachLine, listSessions } from "./session.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
@@ -74,6 +75,9 @@ runRows, onLate = () => { }) {
     let edited = false;
     let firstUser;
     let started = false;
+    // Requests that found the cache past its lifetime, numbered in order: two
+    // late re-writes are consecutive when no other cold start came between.
+    let colds = 0;
     forEachLine(path, (line) => {
         // Cheap row counting without a parse: Claude Code writes one row per
         // content block, so main-chain rows since the last request are the blocks
@@ -149,6 +153,8 @@ runRows, onLate = () => { }) {
             runRows?.add(uuid);
         const first = !started && !copied ? Math.max(0, total - estimateTokens(firstUser ?? "", model)) : undefined;
         started = true;
+        if (prev && at - prev.at >= prev.ttl)
+            colds++;
         if (at >= since) {
             const price = pricingFor(model);
             const w1h = Math.min(write, num(u.cache_creation?.ephemeral_1h_input_tokens));
@@ -189,6 +195,7 @@ runRows, onLate = () => { }) {
                     contextTokens: prev.total,
                     writeTokens: write,
                     extraUsd: price ? (Math.min(write, prev.total) * (price.inputPerM * (oneHour ? CACHE_WRITE_1H : CACHE_WRITE_5M) - price.cacheReadPerM)) / 1e6 : undefined,
+                    cold: colds,
                 });
             }
         }
@@ -358,9 +365,16 @@ export function cacheMisses(days = 30, paths, onProgress, missLog = missLogPath(
     };
 }
 /**
+ * Two wake-ups of one loop: gaps within 90 s or 2% of each other, whichever
+ * is wider. A timer drifts by seconds (the loop in #104736 woke at 61.0 to
+ * 62.1 minutes); a person back from lunch at 61, 67 and 73 minutes is no loop,
+ * though all three are "just too late" (±10% of the median called them one).
+ */
+const sameInterval = (a, b) => Math.abs(a - b) <= Math.max(90, 0.02 * Math.max(a, b));
+/**
  * Late re-writes in total, and per session where they repeat: 3+ on the same
- * TTL with gaps within 10% of their median are a loop on the TTL; a person
- * coming back at random intervals is not.
+ * TTL, consecutive among the session's cold starts (nothing else found the
+ * cache cold between them), at the same interval.
  */
 function lateReport(late) {
     const groups = new Map();
@@ -370,17 +384,29 @@ function lateReport(late) {
     }
     const loops = [];
     for (const ls of groups.values()) {
-        const mid = median(ls.map((l) => l.gapSeconds)) ?? 0;
-        const regular = ls.filter((l) => Math.abs(l.gapSeconds - mid) <= mid * 0.1);
-        if (regular.length < LOOP_MIN)
-            continue;
-        loops.push({
-            path: ls[0].path,
-            rewrites: regular.length,
-            medianGapSeconds: mid,
-            ttlSeconds: ls[0].ttlSeconds,
-            extraUsd: regular.reduce((n, l) => n + (l.extraUsd ?? 0), 0),
-        });
+        ls.sort((a, b) => (a.cold ?? 0) - (b.cold ?? 0));
+        let run = [];
+        const close = () => {
+            if (run.length >= LOOP_MIN) {
+                loops.push({
+                    path: run[0].path,
+                    rewrites: run.length,
+                    medianGapSeconds: median(run.map((l) => l.gapSeconds)) ?? 0,
+                    ttlSeconds: run[0].ttlSeconds,
+                    extraUsd: run.reduce((n, l) => n + (l.extraUsd ?? 0), 0),
+                });
+            }
+        };
+        for (const l of ls) {
+            const last = run.at(-1);
+            const joins = last !== undefined && l.cold !== undefined && last.cold !== undefined && l.cold === last.cold + 1 && sameInterval(l.gapSeconds, run[0].gapSeconds) && sameInterval(l.gapSeconds, last.gapSeconds);
+            if (!joins) {
+                close();
+                run = [];
+            }
+            run.push(l);
+        }
+        close();
     }
     loops.sort((a, b) => b.extraUsd - a.extraUsd);
     return {
