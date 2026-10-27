@@ -162,3 +162,18 @@ test("`statusline` prints the clock from Claude Code's real payload shape", asyn
   });
   assert.match(out, new RegExp(`warm till ${hhmm(expires)} \\(1h\\), then \\+\\$`));
 });
+
+test("QA: absurd prompt_cache values print nothing for the cache, never NaN or 1e294", () => {
+  const now = at("2026-10-27T12:00:00Z");
+  for (const pc of [
+    { warm: true, ttl: "1h", expires_at: 1e300, recache_tokens_if_cold: 1e300 },
+    { warm: true, ttl: "1h", expires_at: (now / 1000 + 600) * 1000, recache_tokens_if_cold: 150_000 }, // milliseconds
+    { warm: true, ttl: "1h", expires_at: Number.NaN, recache_tokens_if_cold: 150_000 },
+    { warm: false, ttl: "1h", expires_at: null, recache_tokens_if_cold: -5 },
+    { warm: false, ttl: "1h", expires_at: null, recache_tokens_if_cold: 5e12 },
+  ]) {
+    const line = renderStatusLine({ model: { id: "claude-opus-5-5" }, prompt_cache: pc as any }, now) ?? "";
+    assert.ok(!/NaN|e\+|Infinity/.test(line), `${JSON.stringify(pc)} -> ${line}`);
+    assert.ok(!line.includes("warm till"), `${JSON.stringify(pc)} -> ${line}`);
+  }
+});

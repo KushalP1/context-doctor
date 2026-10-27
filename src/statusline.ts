@@ -113,10 +113,16 @@ function bar(pct: number): string {
 }
 
 /** "14:32": the local clock time a cache goes cold. */
-function clock(epochSeconds: number): string {
+function clock(epochSeconds: number): string | undefined {
   const d = new Date(epochSeconds * 1000);
+  if (!Number.isFinite(d.getTime())) return undefined;
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
+
+/** No context re-caches more than this; a larger figure is not one to show. */
+const MAX_RECACHE_TOKENS = 10_000_000;
+/** A cache lives an hour at most; an expiry further out than this is not a real one. */
+const MAX_EXPIRY_AHEAD_S = 2 * 3600;
 
 /**
  * Until when the cache is warm, and what going cold costs: the next request
@@ -128,16 +134,21 @@ function clock(epochSeconds: number): string {
  */
 export function cacheClock(pc: PromptCache | null | undefined, model: string | undefined, nowMs = Date.now()): string | undefined {
   if (!pc || pc.caching_observed === false) return undefined;
-  const tokens = typeof pc.recache_tokens_if_cold === "number" && pc.recache_tokens_if_cold > 0 ? pc.recache_tokens_if_cold : undefined;
+  const r = pc.recache_tokens_if_cold;
+  const tokens = typeof r === "number" && Number.isFinite(r) && r > 0 && r <= MAX_RECACHE_TOKENS ? r : undefined;
   const price = pricingFor(model);
   const oneHour = pc.ttl === "1h";
   const extra = tokens !== undefined && price ? (tokens * (price.inputPerM * (oneHour ? CACHE_WRITE_1H : CACHE_WRITE_5M) - price.cacheReadPerM)) / 1e6 : undefined;
   const cost = tokens === undefined ? undefined : extra !== undefined && extra > 0 ? `+${formatUsd(extra)}` : `${formatTokens(tokens)} re-write`;
-  const expires = typeof pc.expires_at === "number" && Number.isFinite(pc.expires_at) ? pc.expires_at : undefined;
+  // Epoch seconds within two hours of now: milliseconds, 1e300 and the like
+  // would print a nonsense time ("NaN:NaN"), so they count as no expiry.
+  const e = pc.expires_at;
+  const expires = typeof e === "number" && Number.isFinite(e) && e > 0 && e * 1000 <= nowMs + MAX_EXPIRY_AHEAD_S * 1000 ? e : undefined;
   // A payload from before the expiry, re-shown after it, is cold whatever `warm` said.
-  if (pc.warm === true && expires !== undefined && expires * 1000 > nowMs) {
+  const at = expires !== undefined ? clock(expires) : undefined;
+  if (pc.warm === true && expires !== undefined && at && expires * 1000 > nowMs) {
     const ttl = pc.ttl === "5m" || oneHour ? ` (${pc.ttl})` : "";
-    return `warm till ${clock(expires)}${ttl}${cost ? `, then ${cost}` : ""}`;
+    return `warm till ${at}${ttl}${cost ? `, then ${cost}` : ""}`;
   }
   if (pc.warm === false || (expires !== undefined && expires * 1000 <= nowMs)) {
     return cost ? `cold: next turn ${cost}` : undefined;
