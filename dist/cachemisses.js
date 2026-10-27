@@ -24,6 +24,14 @@
  * read rate. Measured on the author's last 30 days (Oct 2026): 390 misses in
  * 29,287 requests, ~$1,925 above cache-read price, 28% of all cache-write
  * spend; 382 of them with nothing in the transcript to explain them.
+ *
+ * Next to them, the re-writes that came just too late: a request less than
+ * 25% past the cache's lifetime (under 75 minutes after a 1-hour entry,
+ * under 6:15 after a 5-minute one) that wrote the context again. A person
+ * back from a break, or a loop whose interval sits on the TTL: an agent that
+ * woke every 61-62 minutes paid $248 of $285 in cache writes over 89
+ * wake-ups (anthropics/claude-code#104736). Three or more in one session are
+ * named as a loop, with the interval that keeps the cache warm.
  */
 import { forEachLine, listSessions } from "./session.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
@@ -48,12 +56,16 @@ const MIN_CONTEXT = 20_000;
 const MISS_SHARE = 0.6;
 /** Anthropic's cache looks back at most this many blocks from a breakpoint for an earlier hit. */
 const LOOKBACK_BLOCKS = 20;
+/** A gap this far past the TTL still counts as "just too late". */
+const LATE_SHARE = 0.25;
+/** This many late re-writes in one session are a loop on the TTL, not chance. */
+const LOOP_MIN = 3;
 const SIZE_BUCKETS = [["<100k", 100_000], ["100-300k", 300_000], ["300-600k", 600_000], ["600k+", Infinity]];
 const bucketOf = (tokens) => SIZE_BUCKETS.find(([, max]) => tokens < max)[0];
 const num = (x) => (typeof x === "number" && Number.isFinite(x) && x > 0 ? x : 0);
 export function missesInTranscript(path, since = 0, add = () => { }, onRequest = () => { }, 
 /** Shared by every transcript of one report: a fork's copied rows (same uuids) have no first request of their own. */
-runRows) {
+runRows, onLate = () => { }) {
     let prev;
     let lastId;
     let compacted = false;
@@ -166,6 +178,19 @@ runRows) {
                 }
                 add({ model, contextTokens: prev.total, version }, miss);
             }
+            else if (prev && !compacted && prev.model === model && prev.total > MIN_CONTEXT && at - prev.at >= prev.ttl && at - prev.at < prev.ttl * (1 + LATE_SHARE) && write > MISS_SHARE * prev.total) {
+                // Cold by minutes: the entry the previous request left had just expired.
+                onLate({
+                    path,
+                    at: new Date(at).toISOString(),
+                    model,
+                    ttlSeconds: prev.ttl / 1000,
+                    gapSeconds: Math.round((at - prev.at) / 1000),
+                    contextTokens: prev.total,
+                    writeTokens: write,
+                    extraUsd: price ? (Math.min(write, prev.total) * (price.inputPerM * (oneHour ? CACHE_WRITE_1H : CACHE_WRITE_5M) - price.cacheReadPerM)) / 1e6 : undefined,
+                });
+            }
         }
         prev = { at, total, model, ttl };
         compacted = false;
@@ -260,6 +285,7 @@ export function cacheMisses(days = 30, paths, onProgress, missLog = missLogPath(
     const versions = new Map();
     const versionOf = (v) => versions.get(v) ?? versions.set(v, { requests: 0, sessions: new Set(), firsts: [], writes: 0, oneHour: 0, fiveMinute: 0, eligible: 0, misses: 0, byModel: new Map(), ttlBy: new Map(), from: Infinity, to: 0 }).get(v);
     const runRows = new Set();
+    const late = [];
     for (const [i, p] of targets.entries()) {
         onProgress?.(i, targets.length);
         try {
@@ -301,7 +327,7 @@ export function cacheMisses(days = 30, paths, onProgress, missLog = missLogPath(
                 v.to = Math.max(v.to, info.at);
                 if (info.first !== undefined && info.first > 1000)
                     v.firsts.push(info.first);
-            }, runRows);
+            }, runRows, (l) => late.push(l));
         }
         catch {
             /* one unreadable transcript must not sink the report */
@@ -328,7 +354,62 @@ export function cacheMisses(days = 30, paths, onProgress, missLog = missLogPath(
         largest: [...all].sort((a, b) => (b.extraUsd ?? 0) - (a.extraUsd ?? 0) || b.writeTokens - a.writeTokens).slice(0, 10),
         ...versionReport(versions),
         diagnosed: diagnosedMisses(since, missLog),
+        late: lateReport(late),
     };
+}
+/**
+ * Late re-writes in total, and per session where they repeat: 3+ on the same
+ * TTL with gaps within 10% of their median are a loop on the TTL; a person
+ * coming back at random intervals is not.
+ */
+function lateReport(late) {
+    const groups = new Map();
+    for (const l of late) {
+        const key = `${l.ttlSeconds}\u0000${l.path}`;
+        groups.set(key, [...(groups.get(key) ?? []), l]);
+    }
+    const loops = [];
+    for (const ls of groups.values()) {
+        const mid = median(ls.map((l) => l.gapSeconds)) ?? 0;
+        const regular = ls.filter((l) => Math.abs(l.gapSeconds - mid) <= mid * 0.1);
+        if (regular.length < LOOP_MIN)
+            continue;
+        loops.push({
+            path: ls[0].path,
+            rewrites: regular.length,
+            medianGapSeconds: mid,
+            ttlSeconds: ls[0].ttlSeconds,
+            extraUsd: regular.reduce((n, l) => n + (l.extraUsd ?? 0), 0),
+        });
+    }
+    loops.sort((a, b) => b.extraUsd - a.extraUsd);
+    return {
+        rewrites: late.length,
+        tokens: late.reduce((n, l) => n + l.writeTokens, 0),
+        extraUsd: late.reduce((n, l) => n + (l.extraUsd ?? 0), 0),
+        loops,
+        largest: [...late].sort((a, b) => (b.extraUsd ?? 0) - (a.extraUsd ?? 0) || b.writeTokens - a.writeTokens).slice(0, 10),
+    };
+}
+/** "55 min" / "4:30": an interval just under a TTL that keeps the cache warm. */
+function underTtl(ttlSeconds) {
+    const s = Math.round(ttlSeconds * 0.9);
+    return s >= 600 ? `${Math.round(s / 60)} min (${s}s)` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} (${s}s)`;
+}
+/** The late re-writes section, or nothing when there are none. */
+export function renderLate(l) {
+    if (l.rewrites === 0)
+        return [];
+    const out = [
+        `Just too late: ${l.rewrites} request${l.rewrites === 1 ? "" : "s"} came less than 25% past the cache's lifetime and wrote it`,
+        `again (~${formatTokens(l.tokens)} tokens, ${money(l.extraUsd)} above cache-read price). A few minutes`,
+        "sooner and they would have read it; the status line shows until when it is warm.",
+    ];
+    for (const loop of l.loops.slice(0, 5)) {
+        const file = loop.path.split(/[\\/]/).pop()?.slice(0, 12) ?? "";
+        out.push(`  • A loop: ${loop.rewrites} wake-ups every ~${Math.round(loop.medianGapSeconds / 60)} min on a ${loop.ttlSeconds >= 3600 ? "1-hour" : "5-minute"} cache, ${money(loop.extraUsd)} (${file}).`, `    Wake every ${underTtl(loop.ttlSeconds)} instead: the delay counts from the end of a turn, the TTL from its last request.`);
+    }
+    return out;
 }
 const median = (xs) => {
     if (!xs.length)
@@ -498,6 +579,9 @@ export function renderCacheMisses(r, limitLines) {
     const out = ["CACHE MISSES WITHIN THE CACHE LIFETIME", "═".repeat(60)];
     if (r.eligible === 0) {
         out.push(`No Claude Code requests in the last ${r.days} days that could have read a warm cache (consecutive, within the cache lifetime, over 20k tokens).`);
+        const late = renderLate(r.late);
+        if (late.length)
+            out.push("", ...late);
         if (r.diagnosed.misses > 0)
             out.push("", ...renderDiagnosed(r.diagnosed));
         return out.join("\n");
@@ -521,6 +605,9 @@ export function renderCacheMisses(r, limitLines) {
             out.push("  \"Nothing visible\": no model switch, compaction, context edit, API error or", "  long tool run before it. The system prompt, tools or memory changing, or the", "  provider evicting the cache early, would look like this from the client.");
         }
     }
+    const late = renderLate(r.late);
+    if (late.length)
+        out.push("", ...late);
     out.push("", ...renderDiagnosed(r.diagnosed));
     const shown = r.byVersion.filter((v) => v.requests >= 50);
     if (shown.length >= 2) {

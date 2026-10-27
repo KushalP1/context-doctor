@@ -144,3 +144,56 @@ test("by Claude Code version: a fall in 1-hour writes, a bigger first request an
     assert.match(text, /1-hour TTL went from 100% on 2\.1\.300 to 0% on 2\.1\.301/);
     assert.match(text, /claude-opus-5-5 the cache missed on/);
 });
+// -- N3: re-writes that came just too late, and loops on the TTL ----------
+test("a request less than 25% past the TTL that re-writes is late; later ones and reads are not", () => {
+    const M = "claude-opus-5-5";
+    const p = transcript([
+        reply(s(0), M, 0, 100_000, {}, true), // 1-hour entry
+        reply(s(3700), M, 0, 101_000, {}, true), // 100 s past the hour: LATE
+        reply(s(3700 + 3600 * 2), M, 0, 102_000, {}, true), // two hours later: just cold, not late
+        reply(s(3700 + 7200 + 320), M, 102_000, 500), // 5:20 later but read it (the 1-hour entry): not late
+        reply(s(3700 + 7200 + 320 + 10), M, 0, 50_000), // a 5-minute entry...
+        reply(s(3700 + 7200 + 320 + 10 + 330), M, 0, 52_000), // ...missed by 30 s: LATE
+    ]);
+    const r = cacheMisses(30, [p]);
+    assert.equal(r.late.rewrites, 2);
+    assert.equal(r.late.tokens, 101_000 + 52_000);
+    assert.equal(r.late.largest[0].ttlSeconds, 3600);
+    assert.equal(r.late.largest[0].gapSeconds, 3700);
+    // 100k (the previous context) at the 1-hour rate minus a read: 100k x (2 x $4 - $0.20).
+    assert.ok(Math.abs((r.late.largest[0].extraUsd ?? 0) - (100_010 * 7.8) / 1e6) < 1e-6, String(r.late.largest[0].extraUsd));
+    assert.equal(r.late.loops.length, 0, "two different TTLs and gaps are not a loop");
+    assert.match(renderCacheMisses(r), /Just too late: 2 requests/);
+});
+test("three or more wake-ups at a regular interval just past the TTL are a loop, with the interval to use", () => {
+    const M = "claude-opus-5-5";
+    const rows = [reply(s(0), M, 0, 200_000, {}, true)];
+    let t = 0;
+    // An agent waking every 61-62 minutes on a 1-hour cache (anthropics/claude-code#104736).
+    for (const gap of [3660, 3720, 3690, 3700]) {
+        t += gap;
+        rows.push(reply(s(t), M, 0, 200_000 + t, {}, true));
+    }
+    const r = cacheMisses(30, [transcript(rows)]);
+    assert.equal(r.late.rewrites, 4);
+    assert.equal(r.late.loops.length, 1);
+    assert.equal(r.late.loops[0].rewrites, 4);
+    assert.equal(r.late.loops[0].ttlSeconds, 3600);
+    const text = renderCacheMisses(r);
+    assert.match(text, /A loop: 4 wake-ups every ~62 min on a 1-hour cache/);
+    assert.match(text, /Wake every 54 min \(3240s\)/);
+    // A person back after a break now and then is not a loop.
+    const irregular = [reply(s(0), M, 0, 200_000, {}, true)];
+    t = 0;
+    for (const gap of [3650, 4400, 3610]) {
+        t += gap;
+        irregular.push(reply(s(t), M, 0, 200_000, {}, true));
+    }
+    assert.equal(cacheMisses(30, [transcript(irregular)]).late.loops.length, 0);
+});
+test("a model switch past the TTL is the switch's cost, not lateness; no late re-writes, no section", () => {
+    const p = transcript([reply(s(0), "claude-opus-5-5", 0, 100_000), reply(s(320), "claude-sonnet-5", 0, 100_000)]);
+    const r = cacheMisses(30, [p]);
+    assert.equal(r.late.rewrites, 0);
+    assert.ok(!renderCacheMisses(r).includes("Just too late"));
+});

@@ -24,6 +24,14 @@
  * read rate. Measured on the author's last 30 days (Oct 2026): 390 misses in
  * 29,287 requests, ~$1,925 above cache-read price, 28% of all cache-write
  * spend; 382 of them with nothing in the transcript to explain them.
+ *
+ * Next to them, the re-writes that came just too late: a request less than
+ * 25% past the cache's lifetime (under 75 minutes after a 1-hour entry,
+ * under 6:15 after a 5-minute one) that wrote the context again. A person
+ * back from a break, or a loop whose interval sits on the TTL: an agent that
+ * woke every 61-62 minutes paid $248 of $285 in cache writes over 89
+ * wake-ups (anthropics/claude-code#104736). Three or more in one session are
+ * named as a loop, with the interval that keeps the cache warm.
  */
 import { type DiagnosedMisses } from "./missledger.js";
 export type MissCause = "model switch" | "context edited" | "after an API error" | "over 20 new blocks" | "nothing visible";
@@ -40,6 +48,19 @@ export interface CacheMiss {
     readShare: number;
     gapSeconds: number;
     cause: MissCause;
+    /** Above the cache-read price; undefined when the model has no known price. */
+    extraUsd?: number;
+}
+/** A request that re-wrote the cache less than 25% past its lifetime. */
+export interface LateRewrite {
+    path: string;
+    at: string;
+    model: string;
+    /** The lifetime of the entry it missed (the previous request's), seconds. */
+    ttlSeconds: number;
+    gapSeconds: number;
+    contextTokens: number;
+    writeTokens: number;
     /** Above the cache-read price; undefined when the model has no known price. */
     extraUsd?: number;
 }
@@ -85,6 +106,20 @@ export interface CacheMissReport {
      * than the one above (it counts a cold cache after a pause too).
      */
     diagnosed: DiagnosedMisses;
+    /** Re-writes less than 25% past the cache lifetime, and the sessions with a loop on it. */
+    late: {
+        rewrites: number;
+        tokens: number;
+        extraUsd: number;
+        loops: Array<{
+            path: string;
+            rewrites: number;
+            medianGapSeconds: number;
+            ttlSeconds: number;
+            extraUsd: number;
+        }>;
+        largest: LateRewrite[];
+    };
 }
 /** One Claude Code version's requests (the `version` every transcript line carries). */
 export interface VersionStats {
@@ -149,8 +184,10 @@ export declare function missesInTranscript(path: string, since?: number, add?: (
     version?: string;
 }, miss?: CacheMiss) => void, onRequest?: (writeUsd: number, info: RequestInfo) => void, 
 /** Shared by every transcript of one report: a fork's copied rows (same uuids) have no first request of their own. */
-runRows?: Set<string>): void;
+runRows?: Set<string>, onLate?: (late: LateRewrite) => void): void;
 export declare function cacheMisses(days?: number, paths?: string[], onProgress?: (done: number, total: number) => void, missLog?: string): CacheMissReport;
+/** The late re-writes section, or nothing when there are none. */
+export declare function renderLate(l: CacheMissReport["late"]): string[];
 interface VersionAcc {
     requests: number;
     sessions: Set<string>;
