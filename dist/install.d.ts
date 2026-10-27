@@ -65,8 +65,24 @@ export declare function claudeInstalledCopies(home?: string): string[];
  */
 export declare function isEmptyStub(config: unknown, extraKeys?: string[]): boolean;
 export declare function readJson(path: string): Record<string, any>;
-/** Copy `path` to its .context-doctor.backup, once per run. */
+/**
+ * Copy `path` to its .context-doctor.backup, once per run, and never over a
+ * backup with a copy of our own write. A second install (a new process, so
+ * `backedUp` is empty again) used to copy the file install had already
+ * changed over the user's original: uninstall then read that backup as
+ * "install made this file" and deleted an empty `{}` or empty config the
+ * user had (Antigravity's, with the app's link to it left dangling). A file
+ * that holds our entry while a backup exists is an earlier install's write;
+ * the backup from that install stays. A file without our entry (the user's,
+ * after an uninstall) is backed up afresh.
+ */
 export declare function backupOnce(path: string): void;
+/**
+ * JSON as the file already writes it: its indentation (spaces or a tab, from
+ * its first indented line) and its trailing newline. A file with no
+ * indented line, or a new one, gets two spaces and no newline, as before.
+ */
+export declare function jsonLike(text: string | undefined, data: unknown): string;
 export declare function writeJsonWithBackup(path: string, data: Record<string, any>): void;
 /**
  * Find an executable on PATH without shelling out (works on Windows too).

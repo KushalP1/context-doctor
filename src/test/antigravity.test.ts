@@ -108,3 +108,50 @@ test("doctor warns when Antigravity has the server switched off", async () => {
   writeFileSync(mcpPath, JSON.stringify(config));
   assert.match((await run(home, ["doctor"])).out, /! Antigravity MCP\s+"disabled": true/);
 });
+
+// -- QA (2026-10-27) -------------------------------------------------------
+
+test("install twice, then uninstall: the user's empty config stays, and so does the app's link to it", async () => {
+  const home = antigravityHome();
+  const mcpPath = join(home, ".gemini", "config", "mcp_config.json");
+  assert.equal((await run(home, ["install"])).code, 0);
+  assert.equal((await run(home, ["install"])).code, 0);
+  assert.equal(readFileSync(mcpPath + ".context-doctor.backup", "utf8"), "", "the second install keeps the first backup, the user's file");
+  assert.equal((await run(home, ["uninstall"])).code, 0);
+  assert.ok(existsSync(mcpPath), "not deleted");
+  assert.equal(readFileSync(mcpPath, "utf8"), "");
+  if (platform() !== "win32") assert.ok(existsSync(join(home, ".gemini", "antigravity", "mcp_config.json")), "the app's link still resolves");
+});
+
+test("install twice over a `{}` config of the user's: uninstall leaves `{}` with its formatting", async () => {
+  const home = antigravityHome();
+  const mcpPath = join(home, ".gemini", "config", "mcp_config.json");
+  writeFileSync(mcpPath, "{}\n");
+  assert.equal((await run(home, ["install"])).code, 0);
+  assert.equal((await run(home, ["install"])).code, 0);
+  assert.equal((await run(home, ["uninstall"])).code, 0);
+  assert.equal(readFileSync(mcpPath, "utf8"), "{}\n");
+});
+
+test("uninstall keeps a config's indentation and trailing newline", async () => {
+  const home = antigravityHome();
+  const mcpPath = join(home, ".gemini", "config", "mcp_config.json");
+  const mine = JSON.stringify({ mcpServers: { mine: { command: "my-server" } } }, null, 4) + "\n";
+  writeFileSync(mcpPath, mine);
+  assert.equal((await run(home, ["install"])).code, 0);
+  assert.match(readFileSync(mcpPath, "utf8"), /^\{\n {4}"mcpServers"[\s\S]*\}\n$/, "install writes it the same way");
+  assert.equal((await run(home, ["uninstall"])).code, 0);
+  assert.equal(readFileSync(mcpPath, "utf8"), mine);
+});
+
+test("a CLI-only Antigravity: the config folder install made goes with uninstall", async () => {
+  const home = mkdtempSync(join(tmpdir(), "ctxdoc-agy-cli-"));
+  mkdirSync(join(home, ".gemini", "antigravity-cli"), { recursive: true });
+  assert.equal((await run(home, ["install"])).code, 0);
+  assert.ok(JSON.parse(readFileSync(join(home, ".gemini", "config", "mcp_config.json"), "utf8")).mcpServers["context-doctor"], "the CLI reads the shared file");
+  assert.ok(existsSync(join(home, ".gemini", "antigravity-cli", "skills", "context-doctor", "SKILL.md")));
+  assert.equal((await run(home, ["uninstall"])).code, 0);
+  assert.ok(!existsSync(join(home, ".gemini", "config")), "no empty ~/.gemini/config left behind");
+  assert.ok(!existsSync(join(home, ".gemini", "antigravity-cli", "skills")));
+  assert.ok(existsSync(join(home, ".gemini", "antigravity-cli")));
+});

@@ -185,18 +185,72 @@ export function readJson(path) {
  * before the run even finished. The first write of a run keeps the original.
  */
 const backedUp = new Set();
-/** Copy `path` to its .context-doctor.backup, once per run. */
+/**
+ * Does the file already hold an entry of ours (an earlier install's write)?
+ * JSON configs by the same test uninstall uses; Codex's TOML by its table.
+ */
+function holdsOurs(path) {
+    let text;
+    try {
+        text = readFileSync(path, "utf8");
+    }
+    catch {
+        return false;
+    }
+    if (path.endsWith(".toml"))
+        return codexMcpEntry(text) !== undefined;
+    try {
+        const raw = JSON.parse(text);
+        return isPlainObject(raw) && JSON.stringify(withoutOurs(raw)) !== JSON.stringify(raw);
+    }
+    catch {
+        return false;
+    }
+}
+/**
+ * Copy `path` to its .context-doctor.backup, once per run, and never over a
+ * backup with a copy of our own write. A second install (a new process, so
+ * `backedUp` is empty again) used to copy the file install had already
+ * changed over the user's original: uninstall then read that backup as
+ * "install made this file" and deleted an empty `{}` or empty config the
+ * user had (Antigravity's, with the app's link to it left dangling). A file
+ * that holds our entry while a backup exists is an earlier install's write;
+ * the backup from that install stays. A file without our entry (the user's,
+ * after an uninstall) is backed up afresh.
+ */
 export function backupOnce(path) {
     if (backedUp.has(path))
         return;
     backedUp.add(path);
-    if (existsSync(path))
-        copyFileSync(path, path + ".context-doctor.backup");
+    if (!existsSync(path))
+        return;
+    const backup = path + ".context-doctor.backup";
+    if (existsSync(backup) && holdsOurs(path))
+        return;
+    copyFileSync(path, backup);
+}
+/**
+ * JSON as the file already writes it: its indentation (spaces or a tab, from
+ * its first indented line) and its trailing newline. A file with no
+ * indented line, or a new one, gets two spaces and no newline, as before.
+ */
+export function jsonLike(text, data) {
+    const indent = text?.match(/^[{\[][ \t]*\r?\n([ \t]+)\S/)?.[1] ?? "  ";
+    const body = JSON.stringify(data, null, indent);
+    return text && /\n$/.test(text) ? body + (text.endsWith("\r\n") ? "\r\n" : "\n") : body;
+}
+function readText(path) {
+    try {
+        return readFileSync(path, "utf8");
+    }
+    catch {
+        return undefined;
+    }
 }
 export function writeJsonWithBackup(path, data) {
     mkdirSync(dirname(path), { recursive: true });
     backupOnce(path);
-    writeFileSync(path, JSON.stringify(data, null, 2));
+    writeFileSync(path, jsonLike(readText(path), data));
 }
 /**
  * Find an executable on PATH without shelling out (works on Windows too).
@@ -885,7 +939,8 @@ function uninstallCopilotFolders() {
     }
 }
 /**
- * Skills folders install created under ~/.gemini for Antigravity, recorded
+ * Folders install created under ~/.gemini for Antigravity (skills folders,
+ * and the shared config folder on a CLI-only install), recorded
  * in a marker there (as for Copilot) so uninstall removes only those, once
  * empty: a skills folder that was already there is the user's.
  */
@@ -893,7 +948,7 @@ const ANTIGRAVITY_MARKER = ".context-doctor-created.json";
 function antigravityCreated() {
     try {
         const raw = JSON.parse(readFileSync(join(homedir(), ".gemini", ANTIGRAVITY_MARKER), "utf8"));
-        const allowed = new Set(antigravityAllSkillDirs().map((d) => dirname(d)));
+        const allowed = new Set([...antigravityAllSkillDirs().map((d) => dirname(d)), dirname(antigravityMcpConfigPath())]);
         return Array.isArray(raw?.created) ? raw.created.filter((d) => typeof d === "string" && allowed.has(d)) : [];
     }
     catch {
@@ -909,7 +964,8 @@ function uninstallAntigravityFolders() {
     const marker = join(homedir(), ".gemini", ANTIGRAVITY_MARKER);
     if (!existsSync(marker))
         return;
-    for (const dir of antigravityCreated())
+    // Deepest first: config/skills before config.
+    for (const dir of antigravityCreated().sort((a, b) => b.length - a.length))
         if (existsSync(dir) && readdirSync(dir).length === 0)
             rmSync(dir, { recursive: true });
     rmSync(marker, { force: true });
@@ -951,6 +1007,10 @@ export function runInstall(options = {}) {
         if (viaPlugin && target.name === "Claude Code")
             continue;
         try {
+            // A CLI-only Antigravity has no ~/.gemini/config yet: the folder the
+            // MCP file needs is ours to remove again once uninstall empties it.
+            if (target.name === "Antigravity" && !existsSync(dirname(target.configPath)))
+                rememberAntigravityFolder(dirname(target.configPath));
             const config = readJsonObject(target.configPath);
             if (config.mcpServers !== undefined && !isPlainObject(config.mcpServers))
                 throw new Error(`"mcpServers" in ${target.configPath} is not an object; fix it, then re-run. Nothing was changed.`);
@@ -1218,7 +1278,9 @@ function writeUninstalled(path, config, extraKeys = []) {
         writeFileSync(path, "");
         return;
     }
-    writeFileSync(path, JSON.stringify(config, null, 2));
+    // The user's own formatting, from before install when the backup has it.
+    const backup = readText(path + BACKUP_SUFFIX);
+    writeFileSync(path, jsonLike(backup?.trim() ? backup : readText(path), config));
 }
 /** Remove the SKILL.md install copied, and its folder once nothing else is in it. */
 function removeSkill(dir, label) {
