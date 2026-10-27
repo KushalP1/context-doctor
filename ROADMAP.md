@@ -23,7 +23,7 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 
 ## Verified 2026-10-27
 
-- On main after N1-N5: `npm test` 668 of 668 locally, with CI on macOS, Linux and Windows (Node 20/22/24); `scripts/verify-local.sh` 56 of 56, with new checks for the status line's cache clock and miss log (in a throwaway HOME), `cache-misses --json` on the author's real history (read-only), `overhead --mcp` on our own server, and Antigravity's install/uninstall round trip; the real `~/.gemini` left untouched.
+- On main after N1-N5 and the QA fixes: `npm test` 677 of 677 locally, with CI on macOS, Linux and Windows (Node 20/22/24); `scripts/verify-local.sh` 57 of 57 (install now runs twice before uninstall), with new checks for the status line's cache clock and miss log (in a throwaway HOME), `cache-misses --json` on the author's real history (read-only), `overhead --mcp` on our own server, and Antigravity's install/uninstall round trip; the real `~/.gemini` left untouched.
 
 ## Verified 2026-10-26
 

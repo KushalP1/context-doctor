@@ -78,6 +78,8 @@ H=$(sb); mkdir -p $H/.claude $H/.cursor $H/.codex $H/.gemini $H/.copilot $H/Libr
 mkdir -p $H/.gemini/config $H/.gemini/antigravity; : > $H/.gemini/config/mcp_config.json
 # COPILOT_HOME would point Copilot's files outside the throwaway HOME: unset it.
 run "install (all apps)" env -u COPILOT_HOME HOME=$H USERPROFILE=$H node dist/cli.js install
+# Twice: a second install must not replace the backups of the user's files with its own first write.
+run "install again (all apps)" env -u COPILOT_HOME HOME=$H USERPROFILE=$H node dist/cli.js install
 run "doctor after install" bash -c "env -u COPILOT_HOME HOME=$H node dist/cli.js doctor | grep -q 'All good'"
 run "Antigravity wired (MCP server and skill)" bash -c "grep -q context-doctor $H/.gemini/config/mcp_config.json && [ -f $H/.gemini/config/skills/context-doctor/SKILL.md ]"
 run "uninstall" env -u COPILOT_HOME HOME=$H node dist/cli.js uninstall
