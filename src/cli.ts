@@ -295,8 +295,9 @@ Start here
   In Claude Code, as a plugin:
     /plugin marketplace add KushalP1/context-doctor
     /plugin install context-doctor@context-doctor
-    then /context-doctor:savings, :checkup, :overhead, :compact-window, :autopilot, :pack
+    then /context-doctor:fix, :savings, :checkup, :overhead, :compact-window, :autopilot, :pack
   In a terminal:
+    context-doctor fix         what to change, ranked by what it saves you; applied only on a yes
     context-doctor install     wire the MCP server, skill and hooks into the apps it finds
     context-doctor savings     what your recent sessions cost, and what each fix would save
     context-doctor doctor      check the installation
@@ -986,7 +987,8 @@ async function main(): Promise<void> {
       if (args.copy) console.log(copyToClipboard(text) ? "\n(copied to the clipboard)" : "\n(no clipboard tool found; copy the lines above)");
     } else {
       console.log(renderSavings(report, on, cwLine, cacheMissesSignificant(misses) ? cacheMissesLine(misses) : undefined, limitLines, renderLens(lens)));
-      if (!args.command) console.log(`\nAll commands: ${selfCommand("--help")}`);
+      console.log(`\nNext: ${selfCommand("fix")} ranks every fix by what it saves you and applies only the ones you say yes to (${selfCommand("fix undo")} reverts them).`);
+      if (!args.command) console.log(`All commands: ${selfCommand("--help")}`);
     }
     return;
   }

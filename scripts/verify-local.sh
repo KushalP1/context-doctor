@@ -49,7 +49,7 @@ run "Python wheel installs and imports from a clean venv" bash -c "cd /tmp && $V
 
 echo "== 5. CLI on real history (read-only)"
 cd "$R/.."
-for cmd in "doctor" "savings --days 7" "cache-misses --days 7" "overhead" "reads --days 7" "tasks --days 7" "session" "compact-window status" "autopilot status" "accuracy --limit 3" "report" "statusline </dev/null" "instructions" "init" "ab --list" "handoff list" "limits" "overhead prune --days 7" "recall cache misses" "--version"; do
+for cmd in "doctor" "savings --days 7" "cache-misses --days 7" "overhead" "reads --days 7" "tasks --days 7" "session" "compact-window status" "autopilot status" "accuracy --limit 3" "report" "statusline </dev/null" "instructions" "init" "ab --list" "handoff list" "limits" "overhead prune --days 7" "recall cache misses" "cache-ttl --days 7" "fix --days 7" "fix --days 7 --share" "--version"; do
   out=$(eval node $R/dist/cli.js $cmd 2>&1); st=$?
   if [ $st -eq 0 ] && ! echo "$out" | grep -qiE "TypeError|ReferenceError|undefined is not|NaN|Cannot read"; then ok "cli: $cmd"; else bad "cli: $cmd (exit $st)"; echo "$out" | tail -5 | sed 's/^/    /'; fi
 done
@@ -70,6 +70,23 @@ run "cli: cache-misses --json has the late re-writes and the diagnosis (real his
 # overhead --mcp launches configured servers: only our own, from a throwaway HOME's config.
 S=$(sb); echo "{\"mcpServers\":{\"context-doctor\":{\"command\":\"node\",\"args\":[\"$R/dist/mcp.js\"]}}}" > $S/.claude.json
 run "cli: overhead --mcp sizes a server and finds its tool list stable" bash -c "env HOME=$S node dist/cli.js overhead --mcp | grep 'context-doctor' | grep -q '6 tools' && ! env HOME=$S node dist/cli.js overhead --mcp | grep -q UNSTABLE"
+# B1/B2: fix and cache-ttl write settings only in a throwaway HOME, from a synthetic history that pauses 20 minutes on a 5-minute cache.
+S=$(sb); mkdir -p $S/.claude/projects/-tmp-v
+node -e 'const fs=require("fs");let n=0;const now=Date.now();for(const d of [2,1]){const r=[];for(let i=0;i<12;i++)r.push(JSON.stringify({type:"assistant",uuid:"v"+n,timestamp:new Date(now-d*864e5+i*12e5).toISOString(),message:{id:"m"+(n++),model:"claude-opus-5-5",content:[],usage:{input_tokens:0,cache_read_input_tokens:0,cache_creation_input_tokens:500000,output_tokens:5,cache_creation:{ephemeral_5m_input_tokens:500000,ephemeral_1h_input_tokens:0}}}}));fs.writeFileSync(process.argv[1]+"/.claude/projects/-tmp-v/s"+d+".jsonl",r.join("\n")+"\n")}' $S
+printf '{\n  "model": "opus"\n}\n' > $S/.claude/settings.json; cp $S/.claude/settings.json $S/orig.json
+run "cli: cache-ttl recommends 1 hour on 20-minute pauses; 1h then off restores settings.json" bash -c "env HOME=$S node dist/cli.js cache-ttl | grep -q 'Main conversation: 1h would have saved' && env HOME=$S node dist/cli.js cache-ttl 1h >/dev/null && grep -q '\"promptCacheTtl\": \"1h\"' $S/.claude/settings.json && env HOME=$S node dist/cli.js cache-ttl off >/dev/null && cmp -s $S/orig.json $S/.claude/settings.json"
+run "cli: fix plans without writing; --apply then undo restores settings.json" bash -c "env HOME=$S node dist/cli.js fix </dev/null | grep -q 'Cache lifetime, main conversation: 1 hour' && cmp -s $S/orig.json $S/.claude/settings.json && env HOME=$S node dist/cli.js fix --apply cache-ttl </dev/null | grep -q '✓' && grep -q promptCacheTtl $S/.claude/settings.json && env HOME=$S node dist/cli.js fix undo | grep -q 'promptCacheTtl removed' && cmp -s $S/orig.json $S/.claude/settings.json"
+# B3: the plugin passes Claude Code's own validation, the plugin directory's checks too where this Claude Code has them.
+CC=$(ls -d "$HOME/Library/Application Support/Claude/claude-code/"*/*/claude.app/Contents/MacOS/claude 2>/dev/null | sort -V | tail -1); [ -x "$CC" ] || CC=$(command -v claude)
+if [ -n "$CC" ]; then
+  if env -u CLAUDECODE "$CC" plugin validate --help 2>&1 | grep -q -- --profile; then
+    run "plugin: claude plugin validate --profile directory --strict" env -u CLAUDECODE "$CC" plugin validate --profile directory --strict .
+  else
+    run "plugin: claude plugin validate" env -u CLAUDECODE "$CC" plugin validate .
+  fi
+else
+  echo "- plugin validate skipped: no Claude Code found"
+fi
 run "cli: diff two profiles" env HOME=$(sb) bash -c "node dist/cli.js analyze examples/sample-conversation.json --json > /tmp/a.json && node dist/cli.js diff /tmp/a.json /tmp/a.json"
 
 echo "== 6. install/uninstall round trip in a throwaway HOME"

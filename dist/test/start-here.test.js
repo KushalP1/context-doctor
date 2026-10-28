@@ -21,8 +21,8 @@ test("bare, with no history and no terminal: a short Start here screen, not the 
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /^context-doctor: see where your Claude Code tokens go/);
     assert.match(r.stdout, /\/plugin install context-doctor@context-doctor/);
-    assert.match(r.stdout, /\/context-doctor:savings/);
-    for (const cmd of ["install", "savings", "doctor"])
+    assert.match(r.stdout, /\/context-doctor:fix, :savings/);
+    for (const cmd of ["fix", "install", "savings", "doctor"])
         assert.match(r.stdout, new RegExp(`context-doctor ${cmd} `));
     assert.match(r.stdout, /github\.com\/KushalP1\/context-doctor#readme/);
     assert.match(r.stdout, /All commands: context-doctor --help/);

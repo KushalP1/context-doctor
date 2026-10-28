@@ -173,3 +173,14 @@ test("CLI: a plan from the history; nothing written without --apply; --apply the
     r = run("bogus");
     assert.notEqual(r.status, 0);
 });
+test("plugin: /context-doctor:fix applies only named ids, and the manifest's version follows package.json", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const skill = readFileSync(join(root, "plugin", "skills", "fix", "SKILL.md"), "utf8");
+    assert.match(skill, /^---\nname: fix\n/);
+    assert.match(skill, /fix --apply cache-ttl,compact-window/);
+    assert.match(skill, /Never pass `--apply all` unless the user asked/);
+    const plugin = JSON.parse(readFileSync(join(root, ".claude-plugin", "plugin.json"), "utf8"));
+    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    assert.equal(plugin.version, pkg.version);
+    assert.match(readFileSync(join(root, "scripts", "sync-versions.mjs"), "utf8"), /\.claude-plugin\/plugin\.json/);
+});

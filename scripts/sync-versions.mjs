@@ -13,9 +13,12 @@ edit("server.json", (s) => {
   for (const p of j.packages ?? []) p.version = version;
   return JSON.stringify(j, null, 2) + "\n";
 });
+// The Claude Code plugin: the plugin directory asks for a version, and Claude
+// Code offers a plugin update when it changes.
+edit(".claude-plugin/plugin.json", (s) => s.replace(/"version": "[^"]+"/, `"version": "${version}"`));
 edit("src/mcp.ts", (s) => s.replace(/\{ name: "context-doctor", version: "[^"]+" \}/, `{ name: "context-doctor", version: "${version}" }`));
 edit("src/proxy.ts", (s) => s.replace(/export const PROXY_VERSION = "[^"]+";/, `export const PROXY_VERSION = "${version}";`));
 
 execSync("npm run build", { stdio: "inherit" });
-execSync("git add server.json src/mcp.ts src/proxy.ts dist", { stdio: "inherit" });
-console.log(`synced ${version} into server.json, the MCP server and the proxy; dist rebuilt`);
+execSync("git add server.json .claude-plugin/plugin.json src/mcp.ts src/proxy.ts dist", { stdio: "inherit" });
+console.log(`synced ${version} into server.json, the plugin manifest, the MCP server and the proxy; dist rebuilt`);
