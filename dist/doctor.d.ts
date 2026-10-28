@@ -12,6 +12,12 @@ interface Check {
     detail: string;
 }
 /**
+ * The prompt cache lifetime (`cache-ttl`), only when one is set: the value,
+ * an environment variable that overrides it, and a Claude Code too old to
+ * read it (it ignores the key; nothing else in the file is affected).
+ */
+export declare function cacheTtlCheck(home?: string, env?: NodeJS.ProcessEnv): Check | undefined;
+/**
  * Devin (Cognition): the Devin CLI, and Devin Desktop (formerly Windsurf).
  * Checked against docs.devin.ai (2026-10-20): the CLI runs hooks from
  * ~/.claude/settings.json in Claude Code's format while its
