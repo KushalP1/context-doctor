@@ -19,7 +19,7 @@ import { selfCommand, withInvocation } from "./invocation.js";
 import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
 import { startProxy } from "./proxy.js";
-import { claudeCodeInstallsFromEnv, runInstall, runUninstall } from "./install.js";
+import { claudeCodeInstallsFromEnv, claudePluginEnabled, runInstall, runUninstall } from "./install.js";
 import { listSessions, parseSessionFile, pickCurrentSession } from "./session.js";
 import { runHook } from "./hook.js";
 import { abCommand } from "./ab.js";
@@ -61,6 +61,8 @@ import { currentTranscript, findSession, recall, renderRecall } from "./recall.j
 import { measureSubagentCosts, renderCostMedians, saveSubagentCosts } from "./fanout.js";
 import { applyPrune, canonical, planPrune, renderPrune, undoPrune } from "./prune.js";
 import { lensOverSessions, renderLens, sessionLens } from "./lens.js";
+import { applyFix, parseFixIds, planFixes, readFixRecords, renderFixPlan, renderFixShare, savedSince, undoFixes } from "./fix.js";
+import { claudeMcpConfigs } from "./mcpschema.js";
 import { currentTtl, estimateCacheTtl, renderCacheTtl, setCacheTtl, settingKey, ttlUnsupported, CACHE_TTL_SINCE } from "./cachettl.js";
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -78,6 +80,11 @@ Start here:
                                                 auto-compact window would save, replayed and priced
                                                 as billed. --share: totals only, to paste. Also
                                                 what a bare \`context-doctor\` shows
+  context-doctor fix [--apply ids|all] [--share] What to change, ranked by dollars on your own
+                                                sessions (compact earlier, the cache lifetime,
+                                                autopilot, MCP tool search, unused servers): each
+                                                applied only on a yes, \`fix undo\` reverts them,
+                                                later runs show what each saved since
   context-doctor doctor                         Self-check the installation (configs, hook, skill,
                                                 MCP handshake) with one pasteable diagnosis
   context-doctor uninstall                      Undo install
@@ -293,6 +300,56 @@ Start here
 
 All commands: context-doctor --help
 Guide: https://github.com/KushalP1/context-doctor#readme`;
+/**
+ * Everything `fix` ranks, measured on this machine's history (read-only):
+ * the same replays `savings`, `compact-window` and `cache-ttl` run.
+ */
+async function measureFixInputs(days) {
+    const replaying = progressLine("Replaying your Claude Code sessions");
+    const report = estimateSavings(days, {}, undefined, replaying.tick);
+    replaying.clear();
+    const setWindow = currentCompactWindow();
+    const measuring = progressLine("Measuring your compactions");
+    const reread = compactionQuality(60, undefined, measuring.tick).extraRereadTokensPerCompaction;
+    measuring.clear();
+    const windowing = progressLine("Replaying an earlier auto-compact window");
+    const cw = estimateCompactWindows([setWindow ?? 400_000], days, undefined, reread, windowing.tick);
+    windowing.clear();
+    const est = cw.estimates[0];
+    const ttling = progressLine("Replaying both cache lifetimes");
+    const ttl = estimateCacheTtl(days, { onProgress: ttling.tick });
+    ttling.clear();
+    let settings = {};
+    try {
+        settings = JSON.parse(readFileSync(join(homedir(), ".claude", "settings.json"), "utf8")) ?? {};
+    }
+    catch { /* none */ }
+    const ts = settings.env?.ENABLE_TOOL_SEARCH;
+    const toolSearchOff = typeof ts === "string" && /^(false|0|no|off)$/i.test(ts.trim()) ? ts : undefined;
+    let prunePlan;
+    try {
+        prunePlan = planPrune(days, { cwds: [process.cwd()] }).plans[0];
+    }
+    catch { /* no project here */ }
+    const sessions = report.sessions.length;
+    return {
+        prunePlan,
+        inputs: {
+            days,
+            billedUsd: report.billedUsd,
+            compactWindow: cw.sessions > 0 && est
+                ? { window: est.window, savedUsd: est.savedUsd, savedShare: est.savedPct, compactionsPerWeek: (est.compactions / cw.days) * 7, nowPerWeek: (cw.actualCompactions / cw.days) * 7, current: setWindow }
+                : undefined,
+            ttl,
+            currentTtl: currentTtl(),
+            autopilot: { on: existsSync(autopilotPaths().config), reachableUsd: report.reachableUsd, reachableShare: report.billedUsd > 0 ? report.reachableUsd / report.billedUsd : 0, unreachableSessions: report.unreachableSessions, sessions },
+            toolSearchOff,
+            mcpServers: toolSearchOff ? claudeMcpConfigs(process.cwd()).filter((c) => !/context-doctor/i.test(c.name)).length : 0,
+            prune: prunePlan,
+            coldResume: { netUsd: Math.max(0, report.coldResumeNetUsd), returns: report.coldResumes, hooked: claudePluginEnabled() || /context-doctor|cli\.js"?\s+hook/.test(JSON.stringify(settings.hooks?.UserPromptSubmit ?? [])) },
+        },
+    };
+}
 /** Exit 1 with a usage message: wrong arguments are the caller's to fix, not a crash. */
 function usageError(message) {
     console.error(message);
@@ -305,7 +362,7 @@ function usageError(message) {
 const COMMANDS = [
     "analyze", "optimize", "proxy", "install", "uninstall", "savings", "compact-window", "autopilot", "mcp",
     "instructions", "session", "cursor", "statusline", "hook", "report", "doctor", "dashboard", "init",
-    "experiment", "diff", "accuracy", "overhead", "ci", "cache-plan", "compactions", "cache-misses", "cache-ttl", "limits", "subagents", "tasks",
+    "experiment", "diff", "accuracy", "overhead", "ci", "cache-plan", "compactions", "cache-misses", "cache-ttl", "fix", "limits", "subagents", "tasks",
     "reads", "pack", "watch", "ab", "handoff", "recall", "help", "version",
 ];
 /** --strategy takes one of the optimizer's ids; a typo used to run nothing and report success. */
@@ -357,6 +414,7 @@ const FLAGS = [
     { names: ["--write"], set: (a) => { a.write = true; } },
     { names: ["--undo"], set: (a) => { a.undo = true; } },
     { names: ["--subagents"], set: (a) => { a.subagentsTtl = true; } },
+    { names: ["--apply"], value: "text", set: (a, v) => { a.apply = v; } },
     { names: ["--calls"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.calls = v; } },
     { names: ["--explicit"], set: (a) => { a.explicit = true; } },
     { names: ["--semantic"], set: (a) => { a.semantic = a.semantic || true; } },
@@ -1002,6 +1060,66 @@ async function main() {
             trimBoundaryStep: loadedRc.config.trimBoundaryStep,
         });
         return; // server keeps the process alive
+    }
+    if (args.command === "fix") {
+        const sub = args.file;
+        if (sub === "undo") {
+            const named = (args.positionals ?? []).slice(1).flatMap((x) => x.split(",")).map((x) => x.trim()).filter(Boolean);
+            console.log((await undoFixes(named.length ? named : undefined, { autopilotOff: () => autopilotOff() })).join("\n"));
+            return;
+        }
+        if (sub !== undefined && sub !== "plan")
+            usageError(`Usage: context-doctor fix [--apply <ids|all>] [--share] [--json] | fix undo [ids]; got "${sub}".`);
+        const { inputs, prunePlan } = await measureFixInputs(args.days ?? 30);
+        const fixes = planFixes(inputs);
+        const since = savedSince(readFixRecords());
+        if (args.json) {
+            console.log(JSON.stringify({ days: inputs.days, billedUsd: inputs.billedUsd, fixes, since }, null, 2));
+            return;
+        }
+        if (args.share) {
+            const text = renderFixShare(inputs.days, inputs.billedUsd, fixes);
+            console.log(text);
+            if (args.copy)
+                console.log(copyToClipboard(text) ? "\n(copied to the clipboard)" : "\n(no clipboard tool found; copy the lines above)");
+            return;
+        }
+        console.log(renderFixPlan(inputs.days, inputs.billedUsd, fixes, since, selfCommand, inputs.coldResume));
+        const available = fixes.filter((f) => f.state === "available");
+        let chosen = [];
+        if (args.apply !== undefined) {
+            const { ids, unknown } = parseFixIds(args.apply, fixes);
+            if (unknown.length)
+                usageError(`--apply: unknown fix ${unknown.join(", ")}. Fixes: ${available.map((f) => f.id).join(", ") || "none available"}.`);
+            chosen = ids;
+        }
+        else if (process.stdin.isTTY && process.stdout.isTTY && available.length) {
+            const rl = (await import("node:readline/promises")).createInterface({ input: process.stdin, output: process.stdout });
+            console.log("");
+            for (const [n, f] of available.entries()) {
+                const a = (await rl.question(`Apply ${n + 1}. ${f.title}? [y/N] `)).trim().toLowerCase();
+                if (a === "y" || a === "yes")
+                    chosen.push(f.id);
+            }
+            rl.close();
+        }
+        if (!chosen.length)
+            return;
+        console.log("");
+        for (const id of chosen) {
+            const f = fixes.find((x) => x.id === id);
+            if (!f || f.state !== "available") {
+                console.log(`${id}: ${f?.note ?? "not available here"}; skipped.`);
+                continue;
+            }
+            const kind = id === "cache-ttl" ? "main" : id === "cache-ttl-subagents" ? "subagents" : undefined;
+            const r = await applyFix(f, { autopilotOn: () => autopilotOn(args.port ?? DEFAULT_AUTOPILOT_PORT) }, { oneHourShare: kind ? inputs.ttl?.[kind].oneHourShare : undefined, prune: prunePlan });
+            console.log(r.lines.join("\n"));
+            if (!r.ok)
+                process.exitCode = 1;
+        }
+        console.log(`\nNew Claude Code sessions pick these up. Undo: ${selfCommand("fix undo")}; ${selfCommand("fix")} later shows what each saved since.`);
+        return;
     }
     if (args.command === "cache-ttl") {
         const sub = args.file ?? "status";

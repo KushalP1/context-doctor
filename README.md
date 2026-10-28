@@ -128,6 +128,7 @@ Rules 1-4 end exactly at character 512, the part ChatGPT's guide says must stand
 | Command | What it does |
 |---|---|
 | `context-doctor install` / `uninstall` | Wire (or remove) everything it finds: the MCP server for Claude Desktop, Claude Code, Cursor, Codex, Gemini CLI, Google Antigravity and GitHub Copilot; the Agent Skill (Claude Code, Codex, Antigravity); the every-prompt hook (Claude Code, Codex, Gemini CLI's `BeforeAgent`, Cursor's `postToolUse`, `postToolUseFailure` and `sessionStart`); Claude Code's `PreCompact`, `SessionStart`, `PreToolUse` (the subagent price) and, on 2.1.251+, `PreModelSwitch` hooks; Copilot's `sessionStart` (the standing rules). `--statusline` adds the status bar line ([details](./docs/install.md)) |
+| `context-doctor fix [--apply ids\|all] [--share]` / `fix undo` | Every lever ranked by what it would have saved on your last 30 days (compact earlier, the cache lifetime, autopilot, MCP tool search, unused servers), with what each costs in quality; applies one only on a yes, `fix undo` reverts exactly what it changed, later runs show what each saved since ([details](./docs/fix.md)) |
 | `context-doctor doctor` | Self-check the whole installation — one pasteable ✓/✗ diagnosis with fixes, including which surfaces autopilot can reach and any other program on its port |
 | `context-doctor savings [--days n] [--share [--copy]]` | What your recent Claude Code sessions cost, and what `/compact` at cold resumes, autopilot and an earlier auto-compact window would save, replayed through the shipped code against your actual billed usage. `--share` prints totals only (no project names or paths) to post. A bare `context-doctor` in a terminal shows the same |
 | `context-doctor autopilot on\|off\|pause\|resume\|status` | Every new Claude Code session started in a terminal or IDE goes through the local proxy, which clears stale tool output only when the prompt cache is cold: measured 12.7% less input cost, no session worse ([details](./docs/autopilot.md)) |
@@ -181,7 +182,7 @@ Every release, with the details: [docs/whats-new.md](./docs/whats-new.md).
 
 - [What `install` does](./docs/install.md): every file it writes, what runs in each session after, and when you need MCP
 - [Autopilot](./docs/autopilot.md): how it clears stale tool output, and why it never costs more
-- [Fixes that change a setting](./docs/fix.md): `cache-ttl`, measured first, undone in one command
+- [Fixes](./docs/fix.md): `fix` (one plan, applied with consent, undone in one step, re-measured) and `cache-ttl`
 - [The proxy](./docs/proxy.md): autopilot and the optimizing mode for your API apps, `/stats`, cache advice, a public URL for Cursor
 - [Chat apps](./docs/chat-apps.md): Claude Desktop, ChatGPT, claude.ai and the phone apps; what acts by itself and what only nudges; the MCP tools, prompts and resources
 - [Handoff](./docs/handoff.md): continue a long chat in a new one from a ≤400-token brief

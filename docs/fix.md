@@ -1,8 +1,38 @@
-# Fixes that change a setting
+# Fixes: `fix` and `cache-ttl`
 
 [← README](../README.md)
 
-Most of context-doctor measures. The commands here change something: one Claude Code setting each, measured on your own history first, written only when you ask, and undone with one command. They work in every Claude Code surface, the desktop app included, because they are settings Claude Code reads itself; no proxy or hook is involved.
+Most of context-doctor measures. The commands here change something: a setting each, measured on your own history first, written only when you say yes, and undone with one command. Except autopilot (a local proxy, terminal and IDE only), each is a setting Claude Code reads itself, so it works in every Claude Code surface, the desktop app included.
+
+## One plan: `context-doctor fix`
+
+```bash
+context-doctor fix                          # the plan; in a terminal it asks about each fix
+context-doctor fix --apply cache-ttl        # apply named fixes without asking (or --apply all)
+context-doctor fix undo                     # put back everything fix changed (or: fix undo cache-ttl)
+context-doctor fix --share                  # the totals, no paths, to post
+```
+
+`fix` runs the same replays as `savings`, `compact-window` and `cache-ttl` on your last 30 days (`--days n`), and lists what to change, largest saving first. Each entry says how it was measured, what it costs in quality, and exactly what it writes:
+
+| Fix | Writes | Quality |
+|---|---|---|
+| `compact-window`: compact earlier (400k unless you set one) | `autoCompactWindow` in `~/.claude/settings.json` | each compaction keeps a summary, not the full history: detail for money |
+| `cache-ttl` / `cache-ttl-subagents`: the cache lifetime that was cheaper on your pauses | `promptCacheTtl` / `subagentPromptCacheTtl` | none: the same content is sent |
+| `autopilot`: clear read tool output when the cache is cold (terminal and IDE sessions only) | the autopilot service and `env.ANTHROPIC_BASE_URL` | clears only what the model has read, never on a warm cache; `recall` finds it |
+| `tool-search`: MCP tool search back on, when `ENABLE_TOOL_SEARCH` switches it off and MCP servers are configured | `env.ENABLE_TOOL_SEARCH = "auto"` | none expected: Anthropic measured better tool choice with search on ([advanced tool use](https://www.anthropic.com/engineering/advanced-tool-use)) |
+| `prune`: MCP servers and skills this folder's project never used | its `.claude/settings.local.json` (as `overhead prune --write`) | none while they stay unused |
+
+The `/compact` offer at cold returns is listed under "Advice you act on": it is the every-prompt hook's job, and `fix` says whether the hook is there to make it.
+
+**Consent.** Nothing is written unless you answer `y` in a terminal or name the fix with `--apply`; piped or in a script, `fix` only prints the plan. Every applied fix is recorded in `~/.claude/.context-doctor-fixes.json` with the value it replaced; `fix undo` restores exactly that (and removes a `settings.json` that `fix` created, if it is left empty), whether you applied one fix or all of them. Each figure is measured alone; applied together they save less than their sum.
+
+**Measured since.** Later runs list what `fix` applied and what each saved since, on the sessions after it:
+- the cache lifetime: the requests since, priced as billed against the lifetime before (the share of 1-hour writes measured when it was set). The same content is sent either way, so this is exact up to list prices;
+- the compact window: each automatic compaction since that came before the old window, priced as the context it took off every later request until the session would have reached the old window, less the compaction's own request and a 20k-token summary. An estimate: what the summary dropped is not priced;
+- autopilot: what the proxy recorded saving since.
+
+**On the author's machine** (last 30 days, read-only, 2026-10-28): $2,781 of input; 1. compact earlier at 400k, $1,418 (51%); 2. the main conversation's cache at 1 hour, $197 (7%); autopilot is on but cannot reach the desktop app where all 34 sessions ran; advice: `/compact` at cold returns, $640 over 197 returns. The first had its own command since 0.25 and was still not applied: the reason `fix` exists.
 
 ## The prompt cache's lifetime: `context-doctor cache-ttl`
 
