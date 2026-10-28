@@ -130,7 +130,10 @@ function runAsync(cmd: string, args: string[], deadline: number): Promise<{ out?
     }, timeout);
     try {
       child = execFile(cmd, args, { encoding: "utf8", timeout, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024, windowsHide: true }, (err, stdout) => {
-        if (err) return finish({ timedOut: Boolean((err as { killed?: boolean }).killed) || Date.now() >= deadline });
+        // Only the clock says the budget ran out: a child killed for another
+        // reason (seen on Windows runners, well inside a 60 s budget) is a
+        // failed tool, and the next one is tried.
+        if (err) return finish({ timedOut: Date.now() >= deadline - 50 });
         finish({ out: typeof stdout === "string" && stdout.trim() ? stdout : undefined, timedOut: false });
       });
       child.on("error", () => finish({ timedOut: false }));
