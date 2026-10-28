@@ -108,7 +108,8 @@ test("extraction is asynchronous and bounded: a hung converter neither blocks th
         const took = Date.now() - started;
         assert.ok("error" in got && /time allowed/.test(got.error), JSON.stringify(got));
         assert.ok(took < 3000, `stopped at the budget, not the converter (${took} ms)`);
-        assert.ok(ticks >= 5, `the event loop kept running (${ticks} ticks)`);
+        // A blocking read gives 0 or 1 ticks; a starved CI runner gave 4 of the ~12 a 600 ms wait allows.
+        assert.ok(ticks >= 3, `the event loop kept running (${ticks} ticks in ${took} ms)`);
         const r = await readSourcesAsync([path], { cwd: dir, budgetMs: 300 });
         assert.equal(r.sources.length, 0);
         assert.match(r.skipped.join("\n"), /slow\.pdf: not read: the time allowed/);
