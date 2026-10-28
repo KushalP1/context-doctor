@@ -23,7 +23,7 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 
 ## Verified 2026-10-28
 
-- After the QA fixes of B1-B3: see the entry above this one once CI has run.
+- After the QA fixes of B1-B3: `npm test` 701 of 701 locally, with CI on macOS, Linux and Windows (Node 20/22/24); `scripts/verify-local.sh` 64 of 64, now also checking that `cache-ttl` writes into `CLAUDE_CONFIG_DIR` and leaves a CRLF, tab-indented settings file byte for byte after `1h` and `off`; the QA's own repros (`roundtrip.mjs`) all pass, and 16 concurrent applies kept every key in 5 of 5 runs. The real `~/.claude` again left without a fix record, lock or new key.
 - On main after B1-B3: `npm test` 691 of 691 locally, and CI green on all 9 jobs (macOS, Linux, Windows; Node 20/22/24) for the B3 commit; `scripts/verify-local.sh` 63 of 63, with new checks: `cache-ttl`, `fix` and `fix --share` on the author's real history (read-only), `cache-ttl 1h`/`off` and `fix --apply cache-ttl`/`fix undo` restoring `settings.json` byte for byte in a throwaway HOME, and `claude plugin validate --profile directory --strict` (Claude Code 2.1.309). The real `~/.claude/settings.json` was left without `promptCacheTtl` or `autoCompactWindow`, and no fix record was written there.
 
 ## Verified 2026-10-27

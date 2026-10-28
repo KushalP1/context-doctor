@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyFix, fixRecordPath, planFixes, readFixRecords, renderFixPlan, renderFixShare, undoFixes, type Fix, type FixId } from "../fix.js";
 import { claudeDir, claudeJsonPath } from "../claudedir.js";
@@ -166,8 +166,8 @@ test("concurrent runs: eight processes applying four fixes lose nothing", async 
 
 test("CLAUDE_CONFIG_DIR: Claude Code's folder and .claude.json follow it, for the real user only", () => {
   const env = { CLAUDE_CONFIG_DIR: "/tmp/cc-config" };
-  assert.equal(claudeDir(undefined, env), "/tmp/cc-config");
-  assert.equal(claudeJsonPath(undefined, env), join("/tmp/cc-config", ".claude.json"));
+  assert.equal(claudeDir(undefined, env), resolve("/tmp/cc-config"));
+  assert.equal(claudeJsonPath(undefined, env), join(resolve("/tmp/cc-config"), ".claude.json"));
   assert.equal(claudeDir("/elsewhere", env), join("/elsewhere", ".claude"), "an explicit other home is that home's");
   // The CLI end to end: settings go into CLAUDE_CONFIG_DIR, not ~/.claude.
   const { home: h } = home();
@@ -220,7 +220,7 @@ test("CLI: applying a fix that a project setting overrides says so and exits 1",
   writeFileSync(join(cwd, ".claude", "settings.json"), '{"promptCacheTtl": "5m"}');
   const r = spawnSync(process.execPath, [cli, "cache-ttl", "1h"], { encoding: "utf8", cwd, env: { ...sandboxEnv(h), CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS: "2.1.309" } });
   assert.equal(r.status, 1);
-  assert.match(r.stdout, /⚠ It will not take effect while promptCacheTtl "5m" in .*\.claude\/settings\.json overrides it/);
+  assert.match(r.stdout, /⚠ It will not take effect while promptCacheTtl "5m" in .*\.claude[\\/]settings\.json overrides it/);
   assert.equal(JSON.parse(read(file)).promptCacheTtl, "1h");
 });
 

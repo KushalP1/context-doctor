@@ -161,7 +161,7 @@ test("CLI: a plan from the history; nothing written without --apply; --apply the
     assert.match(r.stderr, /unknown fix nope/);
     r = run("--apply", "cache-ttl");
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /✓ ~\/\.claude\/settings\.json: promptCacheTtl = "1h"/);
+    assert.match(r.stdout, /✓ ~[\\/]\.claude[\\/]settings\.json: promptCacheTtl = "1h"/);
     assert.equal(JSON.parse(readFileSync(settings, "utf8")).promptCacheTtl, "1h");
     r = run();
     assert.match(r.stdout, /Already applied/);
