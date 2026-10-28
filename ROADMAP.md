@@ -21,6 +21,10 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 | Your own API apps (Anthropic, OpenAI, Gemini) | autopilot or the optimizing proxy; `withContextDoctor(client)` without a proxy (Anthropic, OpenAI and Google Gen AI SDKs) | library: profile, optimize, pack | — |
 | CI | `analyze --fail-over-budget`; the GitHub Action (`uses: KushalP1/context-doctor@<tag>`) comments memory-file growth on PRs and gates on a budget | `ci` locally | Not listed in the GitHub Marketplace: it lists only repositories with no workflow files, and the owner chose to keep context-doctor one repository (no separate Marketplace copy) |
 
+## Verified 2026-10-28
+
+- On main after B1-B3: `npm test` 691 of 691 locally, and CI green on all 9 jobs (macOS, Linux, Windows; Node 20/22/24) for the B3 commit; `scripts/verify-local.sh` 63 of 63, with new checks: `cache-ttl`, `fix` and `fix --share` on the author's real history (read-only), `cache-ttl 1h`/`off` and `fix --apply cache-ttl`/`fix undo` restoring `settings.json` byte for byte in a throwaway HOME, and `claude plugin validate --profile directory --strict` (Claude Code 2.1.309). The real `~/.claude/settings.json` was left without `promptCacheTtl` or `autoCompactWindow`, and no fix record was written there.
+
 ## Verified 2026-10-27
 
 - On main after N1-N5 and the QA fixes: `npm test` 677 of 677 locally, with CI on macOS, Linux and Windows (Node 20/22/24); `scripts/verify-local.sh` 57 of 57 (install now runs twice before uninstall), with new checks for the status line's cache clock and miss log (in a throwaway HOME), `cache-misses --json` on the author's real history (read-only), `overhead --mcp` on our own server, and Antigravity's install/uninstall round trip; the real `~/.gemini` left untouched.
