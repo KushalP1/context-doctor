@@ -24,6 +24,7 @@ import { describeDesktopUsage, desktopUsage } from "./desktopusage.js";
 import { withInvocation } from "./invocation.js";
 import { describeInstalls, modelSwitchReadiness, PRE_MODEL_SWITCH_SINCE } from "./modelswitch.js";
 import { describeCosts, subagentCostsPath } from "./fanout.js";
+import { claudeDir, claudeJsonPath } from "./claudedir.js";
 function claudeDesktopConfigPath() {
     switch (platform()) {
         case "darwin": return join(homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
@@ -145,7 +146,7 @@ function hookBinaryMissing(command) {
  */
 function claudeSettingsLayers() {
     const paths = [
-        join(homedir(), ".claude", "settings.json"),
+        join(claudeDir(), "settings.json"),
         join(process.cwd(), ".claude", "settings.json"),
         join(process.cwd(), ".claude", "settings.local.json"),
     ];
@@ -424,7 +425,7 @@ export async function runDoctor() {
         checks.push({ label: "Desktop chat tool use", status: "ok", detail: describeDesktopUsage(desktop, recentSurfaces(7).get("claude-desktop") ?? 0) });
     const layers = claudeSettingsLayers();
     const plugin = pluginEnabled(layers);
-    const claudeMcp = checkMcpEntry("Claude Code", join(homedir(), ".claude.json"), plugin);
+    const claudeMcp = checkMcpEntry("Claude Code", claudeJsonPath(), plugin);
     const cursorMcp = checkMcpEntry("Cursor", join(homedir(), ".cursor", "mcp.json"));
     checks.push(claudeMcp, cursorMcp);
     // A missing hook is an issue only for an app that is there to hook: when
@@ -435,8 +436,8 @@ export async function runDoctor() {
         : { label, status: "fail", detail: "not registered — run: context-doctor install" };
     // Hook registration. ~/.claude without a settings.json is Claude Code with
     // no hook registered, not Claude Code absent.
-    const settingsPath = join(homedir(), ".claude", "settings.json");
-    if (existsSync(settingsPath) || existsSync(join(homedir(), ".claude"))) {
+    const settingsPath = join(claudeDir(), "settings.json");
+    if (existsSync(settingsPath) || existsSync(claudeDir())) {
         try {
             const settings = readConfig(settingsPath) ?? {};
             const entries = settings.hooks?.UserPromptSubmit ?? [];
@@ -658,7 +659,7 @@ export async function runDoctor() {
         }
     }
     // Skill
-    const skillPath = join(homedir(), ".claude", "skills", "context-doctor", "SKILL.md");
+    const skillPath = join(claudeDir(), "skills", "context-doctor", "SKILL.md");
     checks.push(existsSync(skillPath)
         ? { label: "Agent Skill", status: "ok", detail: skillPath }
         : { label: "Agent Skill", status: "skip", detail: "not installed (run context-doctor install on a Claude Code machine)" });

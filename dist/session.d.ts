@@ -70,6 +70,10 @@ export interface ParsedSession {
     messageCount: number;
     path: string;
 }
+/** A Claude Code transcript (under Claude Code's projects folder, CLAUDE_CONFIG_DIR honoured), not a Codex or Gemini one. */
+export declare function isClaudeSession(s: {
+    path: string;
+}): boolean;
 /** All session transcripts on this machine, newest first. */
 export declare function listSessions(limit?: number): SessionInfo[];
 /** Claude Code's project folder for a working directory: every non-alphanumeric becomes "-". */

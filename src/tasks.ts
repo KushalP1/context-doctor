@@ -21,7 +21,7 @@
 
 import { realModel } from "./tokens.js";
 import { basename } from "node:path";
-import { forEachLine, listSessions, outputSettler, replyCounter } from "./session.js";
+import { forEachLine, listSessions, outputSettler, replyCounter, isClaudeSession } from "./session.js";
 import { formatUsd, pricingFor, usageCost } from "./pricing.js";
 
 export interface SessionCost {
@@ -138,7 +138,7 @@ export function commitCount(cmd: string): number {
 
 export function costPerTask(days = 30, paths?: string[]): TasksReport {
   const since = Date.now() - days * 86_400_000;
-  const list = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
+  const list = paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
   const byProject = new Map<string, { sessions: number; usd: number; commits: number; idle: number; idleUsd: number }>();
   const counted: Counted = { rows: new Set(), commits: new Set() };
   for (const p of list) {

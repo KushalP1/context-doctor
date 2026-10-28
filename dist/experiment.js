@@ -14,11 +14,11 @@
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseSessionFile } from "./session.js";
 import { formatTokens } from "./tokens.js";
 import { formatUsd } from "./pricing.js";
+import { claudeDir } from "./claudedir.js";
 /** Where a test can point at a stub instead of the real CLI. */
 function claudeBinary() {
     return process.env.CONTEXT_DOCTOR_CLAUDE_BIN ?? "claude";
@@ -44,7 +44,7 @@ export function findTranscript(sessionId, cwd) {
     // character replaced (/Users/me/.claude/x_y -> -Users-me--claude-x-y), as
     // overhead.ts does. Replacing only separators missed any cwd with a dot,
     // underscore or space, and the "live context" row silently disappeared.
-    const projectDir = join(homedir(), ".claude", "projects", cwd.replace(/[^A-Za-z0-9]/g, "-"));
+    const projectDir = join(claudeDir(), "projects", cwd.replace(/[^A-Za-z0-9]/g, "-"));
     const candidate = join(projectDir, `${sessionId}.jsonl`);
     return existsSync(candidate) ? candidate : undefined;
 }

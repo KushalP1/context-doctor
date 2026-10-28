@@ -70,7 +70,7 @@ interface Acc extends TtlReplay {
  * `sidechains`: a subagent's own transcript, whose rows are all sidechain
  * rows; a main transcript skips them. Returns the requests counted.
  */
-export declare function replayTtlTranscript(path: string, acc: Acc, since: number, until?: number, sidechains?: boolean, runRows?: Set<string>): number;
+export declare function replayTtlTranscript(path: string, acc: Acc, since: number, until?: number, sidechains?: boolean, runRows?: Set<string>, otherIds?: Set<string>): number;
 /** Subagent transcripts of the main transcripts under ~/.claude/projects written since `since`. */
 export declare function subagentTranscripts(since: number, home?: string): string[];
 export interface TtlOptions {
@@ -97,22 +97,28 @@ export interface TtlAdvice {
 export declare function adviseTtl(r: TtlReplay): TtlAdvice | undefined;
 export declare function claudeSettingsPath(home?: string): string;
 export interface CurrentTtl {
-    /** The setting in ~/.claude/settings.json. */
+    /** The lifetime Claude Code will use, as settings and environment decide it (undefined: its own default). */
     main?: Ttl;
     subagents?: Ttl;
-    /** What wins over the setting: the environment variable, in settings `env` or the process environment. */
+    /** What keeps a value in the user's settings.json from taking effect (both kinds). */
     overrides: string[];
+    mainOverrides?: string[];
+    subagentOverrides?: string[];
 }
-/** The lifetimes set in user settings, and anything that overrides them. */
-export declare function currentTtl(home?: string, env?: NodeJS.ProcessEnv): CurrentTtl;
+/**
+ * The lifetimes Claude Code will use as far as its settings and environment
+ * decide (managed, project and user settings merged, CLAUDE_CONFIG_DIR
+ * honoured), and what overrides a value in the user's settings.json.
+ */
+export declare function currentTtl(home?: string, env?: NodeJS.ProcessEnv, cwd?: string): CurrentTtl;
 export interface SetTtlResult {
     changed: boolean;
     created: boolean;
     backup?: string;
-    /** The value before the change (undefined: not set). */
-    previous?: Ttl;
+    /** The value before the change, as written (undefined: not set). */
+    previous?: unknown;
 }
-/** Set (or with undefined, remove) promptCacheTtl / subagentPromptCacheTtl in ~/.claude/settings.json. */
+/** Set (or with undefined, remove) promptCacheTtl / subagentPromptCacheTtl in the user's settings.json, editing only that key. */
 export declare function setCacheTtl(kind: TtlKind, ttl: Ttl | undefined, home?: string): SetTtlResult;
 export declare function settingKey(kind: TtlKind): string;
 /** Claude Code installs too old for the setting (it does nothing there). */

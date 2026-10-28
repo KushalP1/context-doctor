@@ -27,7 +27,7 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { forEachLine, listSessions, outputSettler, replyCounter } from "./session.js";
+import { forEachLine, listSessions, outputSettler, replyCounter, isClaudeSession } from "./session.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
 import { cacheWriteSplit, formatUsd, pricingFor, usageCost, writeMultiplier } from "./pricing.js";
 
@@ -166,7 +166,7 @@ function scanParent(path: string, ids: Set<string>): ParentView {
 
 export function subagentPayback(days = 30, paths?: string[], onProgress?: (done: number, total: number) => void): PaybackReport {
   const since = Date.now() - days * 86_400_000;
-  const sessions = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
+  const sessions = paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
   const out: SubagentPayback[] = [];
   let withSubagents = 0;
   for (const [index, parent] of sessions.entries()) {

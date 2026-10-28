@@ -20,7 +20,7 @@
  */
 import { realModel } from "./tokens.js";
 import { basename } from "node:path";
-import { forEachLine, listSessions, outputSettler, replyCounter } from "./session.js";
+import { forEachLine, listSessions, outputSettler, replyCounter, isClaudeSession } from "./session.js";
 import { formatUsd, pricingFor, usageCost } from "./pricing.js";
 /**
  * One session's bill, priced as the prompt cache bills it, from the usage the
@@ -117,7 +117,7 @@ export function commitCount(cmd) {
 }
 export function costPerTask(days = 30, paths) {
     const since = Date.now() - days * 86_400_000;
-    const list = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
+    const list = paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
     const byProject = new Map();
     const counted = { rows: new Set(), commits: new Set() };
     for (const p of list) {

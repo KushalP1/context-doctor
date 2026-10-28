@@ -19,9 +19,10 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { forEachLine, listSessions } from "./session.js";
+import { forEachLine, listSessions, isClaudeSession } from "./session.js";
 import { subagentDir } from "./subagents.js";
 import { estimateTokens } from "./tokens.js";
+import { claudeJsonPath } from "./claudedir.js";
 const CLAUDE = "claude-opus-5";
 /** The MCP resource tools (current names and their pre-rename spellings, as the 2.1.308 binary maps them): their `server` input names the server. */
 export const MCP_RESOURCE_TOOLS = /^(ListMcpResources|ReadMcpResource|ReadMcpResourceDir)(Tool)?$/;
@@ -94,7 +95,7 @@ export function claudeMcpConfigs(cwd = process.cwd(), home = homedir()) {
         }
     };
     try {
-        const cfg = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8"));
+        const cfg = JSON.parse(readFileSync(claudeJsonPath(home), "utf8"));
         addAll(cfg.mcpServers, "user");
         addAll(cfg.projects?.[resolve(cwd)]?.mcpServers, "project");
     }
@@ -127,7 +128,7 @@ export function claudeMcpConfigs(cwd = process.cwd(), home = homedir()) {
  */
 export function mcpUsage(days = 30, paths, onProgress) {
     const since = Date.now() - days * 86_400_000;
-    const files = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
+    const files = paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
     const names = new Map();
     const resources = new Map();
     const counted = new Set();

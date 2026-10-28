@@ -16,6 +16,7 @@ import { StringDecoder } from "node:string_decoder";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { isGeminiChat, listGeminiChats, parseGeminiChat } from "./gemini.js";
+import { claudeDir } from "./claudedir.js";
 
 export interface SessionInfo {
   path: string;
@@ -97,7 +98,12 @@ export interface ParsedSession {
 }
 
 function projectsDir(): string {
-  return join(homedir(), ".claude", "projects");
+  return join(claudeDir(), "projects");
+}
+
+/** A Claude Code transcript (under Claude Code's projects folder, CLAUDE_CONFIG_DIR honoured), not a Codex or Gemini one. */
+export function isClaudeSession(s: { path: string }): boolean {
+  return s.path.startsWith(projectsDir());
 }
 
 /** All session transcripts on this machine, newest first. */
@@ -153,7 +159,7 @@ export function listSessions(limit = 20): SessionInfo[] {
 
 /** Claude Code's project folder for a working directory: every non-alphanumeric becomes "-". */
 export function claudeProjectDir(cwd: string, home = homedir()): string {
-  return join(home, ".claude", "projects", cwd.replace(/[^A-Za-z0-9]/g, "-"));
+  return join(claudeDir(home), "projects", cwd.replace(/[^A-Za-z0-9]/g, "-"));
 }
 
 /** A session `session` picked by itself, and how, in words. */
@@ -173,7 +179,7 @@ export function pickCurrentSession(env: NodeJS.ProcessEnv = process.env, cwd = p
   const id = env.CLAUDE_CODE_SESSION_ID?.trim();
   const here = claudeProjectDir(cwd, home);
   if (id && /^[\w.-]+$/.test(id)) {
-    const root = join(home, ".claude", "projects");
+    const root = join(claudeDir(home), "projects");
     let dirs: string[] = [];
     try { dirs = readdirSync(root); } catch { /* no projects */ }
     const candidates = [here, ...dirs.map((d) => join(root, d))].map((d) => join(d, `${id}.jsonl`));

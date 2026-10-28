@@ -17,8 +17,8 @@
  * what it drops into a single rollup entry instead of discarding it.
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { claudeDir } from "./claudedir.js";
 const EMPTY_CARRIED = {
     optimizeSaved: 0, optimizeUsd: 0, proxySaved: 0, proxyUsd: 0,
     proxyRequests: 0, checks: 0, warnings: 0, shrinkage: 0,
@@ -79,7 +79,7 @@ export function foldTotals(entries) {
     return out;
 }
 export function statePath() {
-    return process.env.CONTEXT_DOCTOR_HOOK_STATE ?? join(homedir(), ".claude", ".context-doctor-hook-state.json");
+    return process.env.CONTEXT_DOCTOR_HOOK_STATE ?? join(claudeDir(), ".context-doctor-hook-state.json");
 }
 export function ledgerPath() {
     return join(dirname(statePath()), ".context-doctor-ledger.jsonl");

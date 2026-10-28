@@ -24,17 +24,18 @@
  *    priced);
  *  - autopilot: what the proxy recorded saving since (its own ledger).
  */
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { forEachLine, listSessions } from "./session.js";
+import { forEachLine, listSessions, isClaudeSession } from "./session.js";
 import { pricingFor } from "./pricing.js";
 import { contextWindowFor, realModel } from "./tokens.js";
-import { readJson, writeJsonWithBackup } from "./install.js";
-import { setCompactWindow } from "./compactwindow.js";
-import { adviseTtl, estimateCacheTtl, setCacheTtl } from "./cachettl.js";
+import { adviseTtl, estimateCacheTtl } from "./cachettl.js";
+import { ABSENT, getPath, readSettings, removeFile, sameJson, setJsonPath, SettingsError, withLock, writeAtomic } from "./settingsedit.js";
+import { compactWindowOverrides, settingsSources, ttlOverrides } from "./effective.js";
+import { tilde } from "./claudedir.js";
 import { applyPrune, undoPrune } from "./prune.js";
 import { readLedger } from "./ledger.js";
+import { claudeDir } from "./claudedir.js";
 /** Below this a priced fix is not worth a setting. */
 const MIN_USD = 1;
 const money = (n) => (n >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
@@ -42,6 +43,7 @@ const pct = (x) => `${Math.round(x * 100)}%`;
 const k = (n) => `${Math.round(n / 1000)}k`;
 export function planFixes(i) {
     const fixes = [];
+    const where = tilde(join(claudeDir(), "settings.json"));
     const cw = i.compactWindow;
     if (cw) {
         const applied = cw.current !== undefined;
@@ -53,7 +55,7 @@ export function planFixes(i) {
                 savedShare: applied ? undefined : cw.savedShare,
                 basis: `your sessions replayed request by request at a ${k(cw.window)} window: ${cw.compactionsPerWeek.toFixed(1)} compactions a week instead of ${cw.nowPerWeek.toFixed(1)}`,
                 quality: "each compaction replaces the history with a summary (the compaction hook tells it what to keep): detail for money",
-                change: `~/.claude/settings.json: autoCompactWindow = ${cw.window}`,
+                change: `${where}: autoCompactWindow = ${cw.window}`,
                 state: applied ? "applied" : "available",
                 note: applied ? `autoCompactWindow is ${cw.current}` : undefined,
                 value: cw.window,
@@ -77,7 +79,7 @@ export function planFixes(i) {
                 savedShare: a.savedShare,
                 basis: `the same ${r.requests.toLocaleString("en-US")} requests priced at each lifetime (${pct(r.oneHourShare)} of writes at 1 hour as billed${a.ttl === "1h" && r.keptWarmAt1h ? `; ${r.keptWarmAt1h} cold re-writes kept warm` : ""})`,
                 quality: "none: the same content is sent; only the price of keeping it cached changes",
-                change: `~/.claude/settings.json: ${key} = "${a.ttl}" (Claude Code 2.1.243+)`,
+                change: `${where}: ${key} = "${a.ttl}" (Claude Code 2.1.243+)`,
                 state: "available",
                 value: a.ttl,
             });
@@ -100,7 +102,7 @@ export function planFixes(i) {
                 savedShare: ap.reachableShare,
                 basis: `your terminal and IDE sessions replayed through the shipped autopilot code${ap.unreachableSessions ? ` (${ap.unreachableSessions} desktop-app sessions it cannot reach left out)` : ""}`,
                 quality: "clears only tool output the model has already read, only when the cache is cold, so a request never costs more; recall finds anything cleared",
-                change: "a local proxy service on 127.0.0.1:8787; ~/.claude/settings.json env.ANTHROPIC_BASE_URL",
+                change: `a local proxy service on 127.0.0.1:8787; ${where} env.ANTHROPIC_BASE_URL`,
                 state: "available",
             });
         }
@@ -114,7 +116,7 @@ export function planFixes(i) {
             title: "MCP tool search back on",
             basis: `ENABLE_TOOL_SEARCH=${i.toolSearchOff} loads every tool definition of your ${i.mcpServers} MCP server${i.mcpServers === 1 ? "" : "s"} into every request; with search on Claude Code loads one when it is needed (Anthropic: ~77k tokens to ~8.7k on a large set, tool choice more accurate, not less)`,
             quality: "none expected: Anthropic measured better tool choice with search on (Opus 4.5: 79.5% to 88.1%)",
-            change: '~/.claude/settings.json: env.ENABLE_TOOL_SEARCH = "auto"',
+            change: `${where}: env.ENABLE_TOOL_SEARCH = "auto"`,
             state: "available",
             value: "auto",
         });
@@ -130,16 +132,44 @@ export function planFixes(i) {
             state: "available",
         });
     }
+    for (const f of fixes) {
+        const o = i.overrides?.[f.id];
+        if (o?.length && f.state === "available")
+            f.overriddenBy = o;
+    }
     const rank = (f) => (f.state === "available" ? 0 : f.state === "applied" ? 2 : 3) + (f.savedUsd === undefined ? 1 : 0);
     return fixes.sort((a, b) => rank(a) - rank(b) || (b.savedUsd ?? 0) - (a.savedUsd ?? 0));
 }
-export function fixRecordPath(home = homedir()) {
-    return join(home, ".claude", ".context-doctor-fixes.json");
+export function fixRecordPath(home) {
+    return join(claudeDir(home), ".context-doctor-fixes.json");
 }
-export function readFixRecords(home = homedir()) {
+function lockPath(home) {
+    return join(claudeDir(home), ".context-doctor-fixes.lock");
+}
+/**
+ * The records, strictly: an absent file is none; a file that is not ours to
+ * read (corrupt, the wrong shape) is refused, never treated as empty and
+ * overwritten: it lists what `fix undo` would put back.
+ */
+export function loadFixRecords(home) {
+    const p = fixRecordPath(home);
+    if (!existsSync(p))
+        return [];
+    let v;
     try {
-        const v = JSON.parse(readFileSync(fixRecordPath(home), "utf8"));
-        return Array.isArray(v?.fixes) ? v.fixes.filter((f) => f && typeof f.id === "string" && typeof f.at === "number") : [];
+        v = JSON.parse(readFileSync(p, "utf8"));
+    }
+    catch (e) {
+        throw new SettingsError(`${tilde(p)} is not valid JSON (${e.message}): it lists what fix undo puts back, so nothing was changed. Repair it, or remove it to forget those fixes.`);
+    }
+    if (!v || typeof v !== "object" || !Array.isArray(v.fixes))
+        throw new SettingsError(`${tilde(p)} is not a list of fixes: nothing was changed. Repair it, or remove it to forget those fixes.`);
+    return v.fixes.filter((f) => f && typeof f.id === "string" && typeof f.at === "number");
+}
+/** The records for reporting: a damaged file reads as none (the plan says so). */
+export function readFixRecords(home) {
+    try {
+        return loadFixRecords(home);
     }
     catch {
         return [];
@@ -148,130 +178,208 @@ export function readFixRecords(home = homedir()) {
 function writeFixRecords(list, home) {
     const p = fixRecordPath(home);
     mkdirSync(dirname(p), { recursive: true });
-    writeFileSync(p, JSON.stringify({ version: 1, fixes: list }, null, 2) + "\n");
+    writeAtomic(p, JSON.stringify({ version: 2, fixes: list }, null, 2) + "\n");
 }
-function settingsFile(home) {
-    return join(home, ".claude", "settings.json");
+/** The settings key each settings fix writes. */
+const KEY_PATH = {
+    "compact-window": ["autoCompactWindow"],
+    "cache-ttl": ["promptCacheTtl"],
+    "cache-ttl-subagents": ["subagentPromptCacheTtl"],
+    "tool-search": ["env", "ENABLE_TOOL_SEARCH"],
+};
+/** What would keep this fix's value from taking effect, as Claude Code merges settings. */
+export function fixOverrides(id, deps = {}) {
+    const env = deps.env ?? process.env;
+    const sources = settingsSources({ home: deps.home, cwd: deps.cwd, env });
+    if (id === "compact-window")
+        return compactWindowOverrides(sources, env);
+    if (id === "cache-ttl")
+        return ttlOverrides("main", sources, env);
+    if (id === "cache-ttl-subagents")
+        return ttlOverrides("subagents", sources, env);
+    if (id === "tool-search") {
+        const out = [];
+        for (const s of sources)
+            if (s.name !== "user" && s.settings.env?.ENABLE_TOOL_SEARCH !== undefined)
+                out.push(`ENABLE_TOOL_SEARCH=${s.settings.env.ENABLE_TOOL_SEARCH} in ${tilde(s.path)} env`);
+        return out;
+    }
+    return [];
 }
-/** Apply one fix; record it unless it changed nothing. */
+/** Set one key of the user's settings.json, under the lock, and record it (the first record's previous value is kept). */
+function applySetting(fix, home, at, extra) {
+    const key = KEY_PATH[fix.id];
+    const file = join(claudeDir(home), "settings.json");
+    mkdirSync(dirname(file), { recursive: true });
+    return withLock(lockPath(home), () => {
+        const records = loadFixRecords(home);
+        const cur = readSettings(file);
+        const now = getPath(cur.data, key);
+        if (key.length > 1) {
+            const parent = getPath(cur.data, key.slice(0, -1));
+            if (parent !== undefined && (parent === null || typeof parent !== "object" || Array.isArray(parent)))
+                throw new SettingsError(`"${key[0]}" in ${tilde(file)} is not an object; fix it first. Nothing was changed.`);
+        }
+        if (sameJson(now, fix.value))
+            return [`${key.join(".")} is already ${JSON.stringify(fix.value)} in ${tilde(file)}: nothing to change.`];
+        const after = setJsonPath(cur.text, key, fix.value);
+        writeAtomic(file, after);
+        const old = records.find((r) => r.id === fix.id);
+        const before = cur.text ?? null;
+        const rec = {
+            ...extra,
+            id: fix.id,
+            at: old?.at ?? at,
+            value: fix.value,
+            file,
+            key,
+            // A second apply keeps the state from before context-doctor's first change.
+            previous: old ? old.previous : now,
+            hadPrevious: old ? old.hadPrevious : now !== undefined,
+            before: old ? (old.after === before ? old.before : undefined) : before,
+            after,
+            oneHourShareBefore: old?.oneHourShareBefore ?? extra.oneHourShareBefore,
+        };
+        writeFixRecords([...records.filter((r) => r.id !== fix.id), rec], home);
+        return [`✓ ${fix.change}`];
+    });
+}
+/** Apply one fix; record it unless it changed nothing. Refusals (a damaged settings file, a damaged record) change nothing. */
 export async function applyFix(fix, deps = {}, context = {}) {
-    const home = deps.home ?? homedir();
+    const home = deps.home;
     const at = deps.now ?? Date.now();
     if (fix.state !== "available")
         return { ok: false, lines: [`${fix.title}: ${fix.note ?? "nothing to apply here"}`] };
-    const record = (r) => writeFixRecords([...readFixRecords(home).filter((f) => f.id !== r.id), { ...r, at }], home);
-    switch (fix.id) {
-        case "compact-window": {
-            const before = readJson(settingsFile(home)).autoCompactWindow;
-            const r = setCompactWindow(fix.value, home);
-            if (r.changed)
-                record({ id: fix.id, value: fix.value, previous: typeof before === "number" ? before : undefined, created: r.created || undefined });
-            return { ok: true, lines: [`✓ ${fix.change}`] };
+    try {
+        if (KEY_PATH[fix.id]) {
+            const lines = applySetting(fix, home, at, { oneHourShareBefore: context.oneHourShare });
+            const over = fixOverrides(fix.id, deps);
+            if (over.length)
+                lines.push(`  ⚠ written, but it will not take effect while ${over.join("; ")} ${over.length === 1 ? "overrides" : "override"} it.`);
+            return { ok: over.length === 0, lines };
         }
-        case "cache-ttl":
-        case "cache-ttl-subagents": {
-            const kind = fix.id === "cache-ttl" ? "main" : "subagents";
-            const r = setCacheTtl(kind, fix.value, home);
-            if (r.changed)
-                record({ id: fix.id, value: fix.value, previous: r.previous, oneHourShareBefore: context.oneHourShare, created: r.created || undefined });
-            return { ok: true, lines: [`✓ ${fix.change}`] };
-        }
-        case "tool-search": {
-            const p = settingsFile(home);
-            const created = !existsSync(p);
-            const s = readJson(p);
-            const previous = s.env?.ENABLE_TOOL_SEARCH;
-            s.env = { ...(s.env ?? {}), ENABLE_TOOL_SEARCH: "auto" };
-            writeJsonWithBackup(p, s);
-            record({ id: fix.id, value: "auto", previous: typeof previous === "string" ? previous : undefined, created: created || undefined });
-            return { ok: true, lines: [`✓ ${fix.change} (new sessions)`] };
-        }
-        case "autopilot": {
+        if (fix.id === "autopilot") {
             if (!deps.autopilotOn)
                 return { ok: false, lines: ["autopilot: run context-doctor autopilot on"] };
+            loadFixRecords(home); // refuse before starting anything if the record is damaged
             const r = await deps.autopilotOn();
             if (r.ok)
-                record({ id: fix.id });
+                withLock(lockPath(home), () => writeFixRecords([...loadFixRecords(home).filter((x) => x.id !== "autopilot"), { id: "autopilot", at }], home));
             return r;
         }
-        case "prune": {
+        if (fix.id === "prune") {
             if (!context.prune)
                 return { ok: false, lines: ["prune: no plan for this folder"] };
-            const r = applyPrune(context.prune);
-            record({ id: fix.id, cwd: context.prune.cwd });
-            return { ok: true, lines: [`✓ switched off in ${r.file}: ${context.prune.unused.map((u) => u.name).join(", ")}`] };
+            const plan = context.prune;
+            return withLock(lockPath(home), () => {
+                const records = loadFixRecords(home);
+                const r = applyPrune(plan);
+                writeFixRecords([...records.filter((x) => x.id !== "prune"), { id: "prune", at, cwd: plan.cwd }], home);
+                return { ok: true, lines: [`✓ switched off in ${r.file}: ${plan.unused.map((u) => u.name).join(", ")}`] };
+            });
         }
     }
+    catch (e) {
+        if (e instanceof SettingsError)
+            return { ok: false, lines: [`✗ ${fix.id}: ${e.message}`] };
+        throw e;
+    }
+    return { ok: false, lines: [`${fix.id}: not a fix`] };
+}
+/** Undo one settings record; the line says what happened. Throws SettingsError on a damaged settings file. */
+function undoSetting(r, home) {
+    const key = r.key ?? KEY_PATH[r.id];
+    const file = r.file ?? join(claudeDir(home), "settings.json");
+    const name = key.join(".");
+    const cur = readSettings(file);
+    const text = cur.text ?? null;
+    // Nothing touched the file since fix wrote it: put back the file it found, byte for byte.
+    if (r.after !== undefined && r.before !== undefined && text === r.after) {
+        if (r.before === null)
+            removeFile(file);
+        else
+            writeAtomic(file, r.before);
+        return `✓ ${name} ${r.hadPrevious ? `back to ${JSON.stringify(r.previous)}` : "removed"}${r.before === null ? ` (and the ${tilde(file)} fix created)` : ""}`;
+    }
+    const now = getPath(cur.data, key);
+    if (!sameJson(now, r.value)) {
+        return `– ${name} was changed since fix set it (now ${now === undefined ? "not set" : JSON.stringify(now)}): left as it is`;
+    }
+    const next = setJsonPath(cur.text, key, r.hadPrevious ? r.previous : ABSENT);
+    // A file fix created and that is now an empty object goes again.
+    if (r.before === null && !r.hadPrevious) {
+        try {
+            const left = JSON.parse(next.replace(/^\uFEFF/, "") || "{}");
+            if (left && typeof left === "object" && !Array.isArray(left) && Object.keys(left).length === 0) {
+                removeFile(file);
+                return `✓ ${name} removed (and the ${tilde(file)} fix created)`;
+            }
+        }
+        catch {
+            /* keep it */
+        }
+    }
+    writeAtomic(file, next);
+    return `✓ ${name} ${r.hadPrevious ? `back to ${JSON.stringify(r.previous)}` : "removed"}`;
 }
 /** Undo what fix applied: every fix, or the ones named. Returns what it did, line by line. */
 export async function undoFixes(ids, deps = {}) {
-    const home = deps.home ?? homedir();
-    const records = readFixRecords(home);
+    const home = deps.home;
+    let records;
+    try {
+        records = loadFixRecords(home);
+    }
+    catch (e) {
+        if (e instanceof SettingsError)
+            return [`✗ ${e.message}`];
+        throw e;
+    }
     const chosen = records.filter((r) => !ids || ids.includes(r.id));
     if (chosen.length === 0)
         return [ids ? `Nothing applied by context-doctor fix under ${ids.join(", ")}.` : "Nothing applied by context-doctor fix to undo."];
     const lines = [];
-    const kept = records.filter((r) => !chosen.includes(r));
+    // Newest first, so each file's whole-file restore finds the text it left.
+    // Records are kept in the order they were (last) applied: newest first here.
     for (const r of [...chosen].reverse()) {
+        let done = true;
         try {
-            switch (r.id) {
-                case "compact-window":
-                    setCompactWindow(typeof r.previous === "number" ? r.previous : undefined, home);
-                    lines.push(typeof r.previous === "number" ? `✓ autoCompactWindow back to ${r.previous}` : "✓ autoCompactWindow removed");
-                    break;
-                case "cache-ttl":
-                case "cache-ttl-subagents": {
-                    const kind = r.id === "cache-ttl" ? "main" : "subagents";
-                    const prev = r.previous === "5m" || r.previous === "1h" ? r.previous : undefined;
-                    setCacheTtl(kind, prev, home);
-                    lines.push(`✓ ${kind === "main" ? "promptCacheTtl" : "subagentPromptCacheTtl"} ${prev ? `back to "${prev}"` : "removed"}`);
-                    break;
+            if (KEY_PATH[r.id]) {
+                lines.push(withLock(lockPath(home), () => undoSetting(r, home)));
+            }
+            else if (r.id === "autopilot") {
+                if (deps.autopilotOff)
+                    lines.push(...(await deps.autopilotOff()));
+                else {
+                    lines.push("autopilot: run context-doctor autopilot off");
+                    done = false;
                 }
-                case "tool-search": {
-                    const p = settingsFile(home);
-                    const s = readJson(p);
-                    if (s.env && s.env.ENABLE_TOOL_SEARCH === "auto") {
-                        if (typeof r.previous === "string")
-                            s.env.ENABLE_TOOL_SEARCH = r.previous;
-                        else
-                            delete s.env.ENABLE_TOOL_SEARCH;
-                        if (Object.keys(s.env).length === 0)
-                            delete s.env;
-                        writeJsonWithBackup(p, s);
-                    }
-                    lines.push(`✓ env.ENABLE_TOOL_SEARCH ${typeof r.previous === "string" ? `back to "${r.previous}"` : "removed"}`);
-                    break;
-                }
-                case "autopilot":
-                    if (deps.autopilotOff)
-                        lines.push(...(await deps.autopilotOff()));
-                    else
-                        lines.push("autopilot: run context-doctor autopilot off");
-                    break;
-                case "prune": {
-                    const u = r.cwd ? undoPrune(r.cwd) : undefined;
-                    lines.push(u ? `✓ switched back on in ${u.file}: ${u.removed.join(", ") || "nothing left to remove"}` : "✓ prune: nothing left to undo");
-                    break;
-                }
+            }
+            else if (r.id === "prune") {
+                const u = r.cwd ? undoPrune(r.cwd) : undefined;
+                lines.push(u ? `✓ switched back on in ${u.file}: ${u.removed.join(", ") || "nothing left to remove"}` : "✓ prune: nothing left to undo");
             }
         }
         catch (e) {
-            kept.push(r);
+            done = false;
             lines.push(`✗ ${r.id}: ${e.message}`);
         }
-    }
-    // A settings.json that a fix created, left as `{}` by its undo, goes again.
-    const p = settingsFile(home);
-    if (chosen.some((r) => r.created) && !kept.some((r) => r.created)) {
-        try {
-            if (Object.keys(readJson(p)).length === 0)
-                unlinkSync(p);
-        }
-        catch {
-            /* leave it */
+        if (done) {
+            try {
+                withLock(lockPath(home), () => writeFixRecords(loadFixRecords(home).filter((x) => x.id !== r.id), home));
+            }
+            catch (e) {
+                lines.push(`✗ ${r.id}: ${e.message}`);
+            }
         }
     }
-    writeFixRecords(kept, home);
+    // An empty record file goes too.
+    try {
+        if (loadFixRecords(home).length === 0)
+            removeFile(fixRecordPath(home));
+    }
+    catch {
+        /* damaged: left for the user */
+    }
     return lines;
 }
 /**
@@ -281,7 +389,7 @@ export async function undoFixes(ids, deps = {}) {
  * compaction's own request and a 20k-token summary at the output rate.
  */
 export function compactWindowSavingsSince(since, previousWindow, paths) {
-    const targets = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
+    const targets = paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
     let usd = 0, compactions = 0;
     for (const p of targets) {
         let episode;
@@ -356,7 +464,7 @@ export function savedSince(records, opts = {}) {
             }
             const share = r.previous === "1h" ? 1 : r.previous === "5m" ? 0 : r.oneHourShareBefore ?? (kind === "main" ? 1 : 0);
             const before = share * rep.at1hUsd + (1 - share) * rep.at5mUsd;
-            out.push({ id: r.id, at: r.at, savedUsd: before - rep.billedUsd, detail: `${rep.requests.toLocaleString("en-US")} requests, priced as billed against the lifetime before (${pct(share)} at 1 hour)` });
+            out.push({ id: r.id, at: r.at, savedUsd: before - rep.billedUsd, detail: `estimated: ${rep.requests.toLocaleString("en-US")} requests, priced as billed against the lifetime before (${pct(share)} at 1 hour), a cold re-write told by over 60% of the context written again` });
         }
         else if (r.id === "compact-window") {
             const c = compactWindowSavingsSince(r.at, typeof r.previous === "number" ? r.previous : undefined, opts.paths);
@@ -383,8 +491,10 @@ const LABEL = {
     "tool-search": "MCP tool search",
     prune: "Unused MCP servers and skills",
 };
-export function renderFixPlan(days, billedUsd, fixes, since, command = (s) => `context-doctor ${s}`, coldResume) {
+export function renderFixPlan(days, billedUsd, fixes, since, command = (s) => `context-doctor ${s}`, coldResume, recordProblem) {
     const out = [];
+    if (recordProblem)
+        out.push(`⚠ ${recordProblem}`);
     out.push("context-doctor fix: what to change, ranked by what it saves you");
     out.push(`Last ${days} days of your Claude Code sessions, ${money(billedUsd)} of input at list prices`);
     out.push("─".repeat(66));
@@ -398,7 +508,13 @@ export function renderFixPlan(days, billedUsd, fixes, since, command = (s) => `c
         out.push(`   measured: ${f.basis}`);
         out.push(`   quality:  ${f.quality}`);
         out.push(`   changes:  ${f.change}   [${f.id}]`);
+        if (f.overriddenBy?.length)
+            out.push(`   ⚠ would not take effect: ${f.overriddenBy.join("; ")}`);
     });
+    if (avail.filter((f) => f.savedUsd !== undefined).length > 1) {
+        out.push("   Each figure is measured alone. Do not add them up: the levers overlap (compacting earlier and");
+        out.push("   the cache lifetime both change what is written to the cache), so together they save less.");
+    }
     const applied = fixes.filter((f) => f.state === "applied");
     if (applied.length) {
         out.push("");
@@ -429,8 +545,6 @@ export function renderFixPlan(days, billedUsd, fixes, since, command = (s) => `c
     if (avail.length) {
         out.push(`Apply: ${command("fix")} in a terminal asks about each one; or ${command(`fix --apply ${avail.map((f) => f.id).join(",")}`)}`);
     }
-    if (avail.filter((f) => f.savedUsd !== undefined).length > 1)
-        out.push("Each figure is measured alone; together they save less than their sum.");
     out.push(`Undo everything fix applied: ${command("fix undo")}. Dollars at list price; on a subscription the same tokens come out of your usage limit.`);
     return out.join("\n");
 }
@@ -441,6 +555,8 @@ export function renderFixShare(days, billedUsd, fixes) {
         lines.push(`- ${LABEL[f.id]}: ${money(f.savedUsd)}${f.savedShare !== undefined ? ` (${pct(f.savedShare)})` : ""}`);
     if (avail.length === 0)
         lines.push("- nothing left to fix");
+    if (avail.length > 1)
+        lines.push("Each measured alone; they overlap, so do not add them up.");
     lines.push("Measured on my own sessions, locally: npx context-doctor fix");
     return lines.join("\n");
 }

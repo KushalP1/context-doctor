@@ -20,15 +20,16 @@
  * list price): "as now" is the same billed figure `savings` shows, over the
  * same sessions (10+ requests in the window), so the two never disagree.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
-import { forEachLine, listSessions, replyCounter } from "./session.js";
+import { forEachLine, listSessions, replyCounter, isClaudeSession } from "./session.js";
 import { cacheWriteSplit, pricingFor, usageCost, writeMultiplier } from "./pricing.js";
 import { realModel } from "./tokens.js";
-import { readJson, writeJsonWithBackup } from "./install.js";
+import { backupOnce } from "./install.js";
+import { ABSENT, readSettings, setJsonPath, writeAtomic } from "./settingsedit.js";
+import { compactWindowOverrides, effectiveCompactWindow, settingsSources } from "./effective.js";
 import { withInvocation } from "./invocation.js";
 import { idleCompactMinTokens, isIdleCompactNotice } from "./coldresume.js";
+import { claudeDir } from "./claudedir.js";
 /** Claude Code compacts at about this share of the window (970k of 1M, measured). */
 const TRIGGER_SHARE = 0.97;
 /** Context right after a compaction: system prompt, tools and the summary (median 75,447, measured). */
@@ -174,7 +175,7 @@ function replay(reqs, window, since, reread = 0, writeMult = 1.25, idleMin = idl
 }
 export function estimateCompactWindows(windows, days = 30, paths, rereadTokens = 0, onProgress) {
     const since = Date.now() - days * 86_400_000;
-    const targets = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
+    const targets = paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
     const acc = windows.map((w) => ({ window: w, billed: 0, saved: 0, replayBase: 0, extra: 0 }));
     let sessions = 0, actualCompactions = 0, idleCompactions = 0;
     // Shared by every transcript of the run, so a fork's copy counts once.
@@ -232,43 +233,41 @@ export function sessionsLabel(sessions, transcripts) {
     const s = `${sessions} session${sessions === 1 ? "" : "s"} with 10+ requests`;
     return transcripts > sessions ? `${s} (of ${transcripts} transcripts)` : s;
 }
-export function settingsPath(home = homedir()) {
-    return join(home, ".claude", "settings.json");
-}
-/** The autoCompactWindow Claude Code will use from user settings, if set. */
-export function currentCompactWindow(home = homedir()) {
-    const p = settingsPath(home);
-    if (!existsSync(p))
-        return undefined;
-    try {
-        const v = JSON.parse(readFileSync(p, "utf8"))?.autoCompactWindow;
-        return typeof v === "number" && Number.isFinite(v) ? v : undefined;
-    }
-    catch {
-        return undefined;
-    }
+export function settingsPath(home) {
+    return join(claudeDir(home), "settings.json");
 }
 /**
- * Set (or with undefined, remove) autoCompactWindow in ~/.claude/settings.json.
- * Nothing is written when nothing changes: `off` with no window set used to
- * create a settings.json of `{}`. A .backup is kept when there was a file.
+ * The auto-compact window Claude Code will use, when it is a number: managed,
+ * project and user settings merged, CLAUDE_CODE_AUTO_COMPACT_WINDOW first
+ * (CLAUDE_CONFIG_DIR honoured). Undefined when none is set or it is "auto".
  */
-export function setCompactWindow(window, home = homedir()) {
+export function currentCompactWindow(home, env = process.env, cwd = process.cwd()) {
+    const v = effectiveCompactWindow(settingsSources({ home, cwd, env }), env).value;
+    return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+/** What keeps a user-level autoCompactWindow from taking effect: environment, project or managed settings, per-model windows. */
+export function compactWindowBlockers(home, env = process.env, cwd = process.cwd()) {
+    return compactWindowOverrides(settingsSources({ home, cwd, env }), env);
+}
+/**
+ * Set (or with undefined, remove) autoCompactWindow in the user's
+ * settings.json, editing only that key. Nothing is written when nothing
+ * changes: `off` with no window set used to create a settings.json of `{}`.
+ * A .backup is kept when there was a file.
+ */
+export function setCompactWindow(window, home) {
     if (window !== undefined && (!Number.isInteger(window) || window < MIN_WINDOW || window > MAX_WINDOW)) {
         throw new Error(`window must be a whole number of tokens between ${MIN_WINDOW} and ${MAX_WINDOW}`);
     }
     const p = settingsPath(home);
-    const existed = existsSync(p);
-    const settings = readJson(p);
-    if (window === undefined ? !("autoCompactWindow" in settings) : settings.autoCompactWindow === window) {
-        return { changed: false, created: false };
-    }
-    if (window === undefined)
-        delete settings.autoCompactWindow;
-    else
-        settings.autoCompactWindow = window;
-    writeJsonWithBackup(p, settings);
-    return { changed: true, created: !existed, backup: existed ? `${p}.context-doctor.backup` : undefined };
+    const cur = readSettings(p);
+    const previous = cur.data.autoCompactWindow;
+    if (window === undefined ? previous === undefined : previous === window)
+        return { changed: false, created: false, ...(previous !== undefined ? { previous } : {}) };
+    const next = setJsonPath(cur.text, ["autoCompactWindow"], window === undefined ? ABSENT : window);
+    backupOnce(p);
+    writeAtomic(p, next);
+    return { changed: true, created: cur.text === undefined, backup: cur.text !== undefined ? `${p}.context-doctor.backup` : undefined, previous };
 }
 /** "400k" / "400000" / "0.4m" -> 400000. Undefined when unparseable. */
 export function parseWindow(raw) {

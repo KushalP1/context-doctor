@@ -20,11 +20,12 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { forEachLine, listSessions } from "./session.js";
+import { forEachLine, listSessions, isClaudeSession } from "./session.js";
 import { subagentDir } from "./subagents.js";
 import { estimateTokens } from "./tokens.js";
 // Type only: erased at compile time, so dist/ never loads the SDK at startup.
 import type { Client } from "./mcpclient.js";
+import { claudeJsonPath } from "./claudedir.js";
 
 const CLAUDE = "claude-opus-5";
 
@@ -141,7 +142,7 @@ export function claudeMcpConfigs(cwd = process.cwd(), home = homedir()): McpServ
     }
   };
   try {
-    const cfg = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8"));
+    const cfg = JSON.parse(readFileSync(claudeJsonPath(home), "utf8"));
     addAll(cfg.mcpServers, "user");
     addAll(cfg.projects?.[resolve(cwd)]?.mcpServers, "project");
   } catch {
@@ -173,7 +174,7 @@ export function claudeMcpConfigs(cwd = process.cwd(), home = homedir()): McpServ
  */
 export function mcpUsage(days = 30, paths?: string[], onProgress?: (done: number, total: number) => void): McpUsage {
   const since = Date.now() - days * 86_400_000;
-  const files = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
+  const files = paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
   const names = new Map<string, number>();
   const resources = new Map<string, number>();
   const counted = new Set<string>();

@@ -10,7 +10,7 @@
  * sessions) or not (CLAUDE.md is paid on every request, so an occasional read
  * is cheaper left as a read; `pack` can cut it to the part a question needs).
  */
-import { forEachLine, listSessions } from "./session.js";
+import { forEachLine, listSessions, isClaudeSession } from "./session.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
 import { CACHE_WRITE_5M, formatUsd, pricingFor } from "./pricing.js";
 const CLAUDE = "claude-opus-5";
@@ -113,7 +113,7 @@ function sessionReads(path, since = 0, countedReads = new Set()) {
 }
 export function repeatedReads(days = 30, paths, minSessions = 3) {
     const since = Date.now() - days * 86_400_000;
-    const list = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
+    const list = paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
     // Keyed by project AND file: the same path read from two projects is two
     // findings, each against its own project's session count ("4/1 sessions"
     // came from counting every project's readers against one project's total).

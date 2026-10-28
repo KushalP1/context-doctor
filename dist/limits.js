@@ -29,7 +29,7 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { statePath } from "./ledger.js";
-import { forEachLine, listSessions, outputSettler, replyCounter } from "./session.js";
+import { forEachLine, listSessions, outputSettler, replyCounter, isClaudeSession } from "./session.js";
 import { subagentDir } from "./subagents.js";
 import { openAIUsage, pricingFor, usageCost } from "./pricing.js";
 import { realModel } from "./tokens.js";
@@ -290,7 +290,7 @@ export function codexLimitData(since, root = codexSessionsRoot()) {
  * subagents alike (both draw on the same limits), each reply once.
  */
 export function claudeUsage(since, until = Infinity, paths) {
-    const tops = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
+    const tops = paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
     const files = [];
     for (const t of tops) {
         files.push(t);

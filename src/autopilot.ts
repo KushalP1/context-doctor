@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import { isEphemeralPath, readJson, writeJsonWithBackup } from "./install.js";
 import { formatTokens } from "./tokens.js";
 import { codexAuthMode, codexHomeIn, codexRouting, routeCodex, unrouteCodex } from "./codexroute.js";
+import { claudeDir } from "./claudedir.js";
 
 export const DEFAULT_AUTOPILOT_PORT = 8787;
 const LABEL = "com.gai-ventures.context-doctor.proxy";
@@ -40,7 +41,7 @@ export interface AutopilotPaths {
 }
 
 export function autopilotPaths(home = homedir()): AutopilotPaths {
-  const dir = join(home, ".claude");
+  const dir = claudeDir(home);
   return {
     settings: join(dir, "settings.json"),
     config: join(dir, ".context-doctor-autopilot.json"),
@@ -478,7 +479,7 @@ function readConfig(paths: AutopilotPaths): AutopilotConfig | undefined {
 /** Which Claude Code surfaces ran recent sessions: entrypoint -> count. */
 export function recentSurfaces(days = 30, home = homedir()): Map<string, number> {
   const out = new Map<string, number>();
-  const root = join(home, ".claude", "projects");
+  const root = join(claudeDir(home), "projects");
   const since = Date.now() - days * 86_400_000;
   let dirs: string[] = [];
   try { dirs = readdirSync(root); } catch { return out; }

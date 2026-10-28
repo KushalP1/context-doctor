@@ -13,7 +13,6 @@
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { ledgerPath, recordLedger, statePath } from "./ledger.js";
 import { copilotSessionStartOutput } from "./copilot.js";
@@ -28,6 +27,7 @@ import { checkBudget, loadConfig } from "./config.js";
 import { modelSwitchMessage } from "./modelswitch.js";
 import { compactFacts, compactInstructions } from "./precompact.js";
 import { fanoutHook, subagentCosts } from "./fanout.js";
+import { claudeDir } from "./claudedir.js";
 /** Default nudge threshold; a project budget or env var can lower/raise it. */
 const DEFAULT_WARN_TOKENS = 80_000;
 /**
@@ -142,7 +142,7 @@ function settingsHasOurHook(event = "UserPromptSubmit") {
         // Per event: a settings.json that has our prompt hook but not our
         // PreModelSwitch one (install skips it next to an older Claude Code)
         // must not silence the plugin's copy of the event it lacks.
-        const hooks = JSON.parse(readFileSync(join(homedir(), ".claude", "settings.json"), "utf8"))?.hooks?.[event || "UserPromptSubmit"];
+        const hooks = JSON.parse(readFileSync(join(claudeDir(), "settings.json"), "utf8"))?.hooks?.[event || "UserPromptSubmit"];
         return JSON.stringify(hooks ?? "").includes("context-doctor");
     }
     catch {

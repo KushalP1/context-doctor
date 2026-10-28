@@ -32,11 +32,12 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpat
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { statePath } from "./ledger.js";
-import { forEachLine, listSessions } from "./session.js";
+import { forEachLine, listSessions, isClaudeSession } from "./session.js";
 import { subagentDir } from "./subagents.js";
 import { claudeMcpConfigs, countMcpRow, serverUses, type McpServerConfig } from "./mcpschema.js";
 import { estimateTokens, formatTokens } from "./tokens.js";
 import { formatUsd } from "./pricing.js";
+import { claudeDir, claudeJsonPath } from "./claudedir.js";
 
 const DAY = 86_400_000;
 
@@ -65,7 +66,7 @@ export interface ProjectUse {
 /** What each project (by the `cwd` its sessions record) used in the last `days`, subagents included. */
 export function projectUsage(days = 30, paths?: string[], now = Date.now()): Map<string, ProjectUse> {
   const since = now - days * DAY;
-  const files = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
+  const files = paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
   const out = new Map<string, ProjectUse>();
   for (const path of files) {
     let cwd: string | undefined;
@@ -138,7 +139,7 @@ export interface SkillInfo {
 /** Skills Claude Code lists in `cwd`: ~/.claude/skills and <cwd>/.claude/skills (not plugins'). */
 export function installedSkills(cwd: string, home = homedir()): SkillInfo[] {
   const out: SkillInfo[] = [];
-  const dirs: Array<[string, SkillInfo["scope"]]> = [[join(home, ".claude", "skills"), "personal"], [join(cwd, ".claude", "skills"), "project"]];
+  const dirs: Array<[string, SkillInfo["scope"]]> = [[join(claudeDir(home), "skills"), "personal"], [join(cwd, ".claude", "skills"), "project"]];
   for (const [dir, scope] of dirs) {
     let names: string[];
     try { names = readdirSync(dir); } catch { continue; }
@@ -209,7 +210,7 @@ function offFor(cwd: string, home: string): { off: Set<string>; mcpjsonAllowlist
   const read = (path: string): Record<string, any> => {
     try { return readObject(path); } catch { return {}; }
   };
-  for (const settings of [read(join(home, ".claude", "settings.json")), read(join(cwd, ".claude", "settings.json")), read(localSettingsPath(cwd))]) {
+  for (const settings of [read(join(claudeDir(home), "settings.json")), read(join(cwd, ".claude", "settings.json")), read(localSettingsPath(cwd))]) {
     for (const n of list(settings.disabledMcpjsonServers)) if (typeof n === "string") off.add(`mcp:${n}`);
     for (const d of list(settings.deniedMcpServers)) if (typeof (d as any)?.serverName === "string") off.add(`mcp:${(d as any).serverName}`);
     for (const [k, v] of Object.entries(settings.skillOverrides && typeof settings.skillOverrides === "object" ? settings.skillOverrides : {})) if (v === "off") off.add(`skill:${k}`);
@@ -219,7 +220,7 @@ function offFor(cwd: string, home: string): { off: Set<string>; mcpjsonAllowlist
     }
     if (settings.enableAllProjectMcpServers === true) all = true;
   }
-  const project = read(join(home, ".claude.json")).projects;
+  const project = read(claudeJsonPath(home)).projects;
   for (const key of new Set([cwd, resolve(cwd)])) {
     const entry = project && typeof project === "object" ? project[key] : undefined;
     for (const n of list(entry?.disabledMcpServers)) if (typeof n === "string") off.add(`mcp:${n}`);

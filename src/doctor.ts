@@ -25,6 +25,7 @@ import { describeDesktopUsage, desktopUsage } from "./desktopusage.js";
 import { withInvocation } from "./invocation.js";
 import { describeInstalls, modelSwitchReadiness, PRE_MODEL_SWITCH_SINCE } from "./modelswitch.js";
 import { describeCosts, subagentCostsPath, type SubagentCosts } from "./fanout.js";
+import { claudeDir, claudeJsonPath } from "./claudedir.js";
 
 function claudeDesktopConfigPath(): string {
   switch (platform()) {
@@ -153,7 +154,7 @@ function hookBinaryMissing(command: string): string | null {
  */
 function claudeSettingsLayers(): Array<Record<string, any>> {
   const paths = [
-    join(homedir(), ".claude", "settings.json"),
+    join(claudeDir(), "settings.json"),
     join(process.cwd(), ".claude", "settings.json"),
     join(process.cwd(), ".claude", "settings.local.json"),
   ];
@@ -419,7 +420,7 @@ export async function runDoctor(): Promise<void> {
   if (desktop) checks.push({ label: "Desktop chat tool use", status: "ok", detail: describeDesktopUsage(desktop, recentSurfaces(7).get("claude-desktop") ?? 0) });
   const layers = claudeSettingsLayers();
   const plugin = pluginEnabled(layers);
-  const claudeMcp = checkMcpEntry("Claude Code", join(homedir(), ".claude.json"), plugin);
+  const claudeMcp = checkMcpEntry("Claude Code", claudeJsonPath(), plugin);
   const cursorMcp = checkMcpEntry("Cursor", join(homedir(), ".cursor", "mcp.json"));
   checks.push(claudeMcp, cursorMcp);
   // A missing hook is an issue only for an app that is there to hook: when
@@ -432,8 +433,8 @@ export async function runDoctor(): Promise<void> {
 
   // Hook registration. ~/.claude without a settings.json is Claude Code with
   // no hook registered, not Claude Code absent.
-  const settingsPath = join(homedir(), ".claude", "settings.json");
-  if (existsSync(settingsPath) || existsSync(join(homedir(), ".claude"))) {
+  const settingsPath = join(claudeDir(), "settings.json");
+  if (existsSync(settingsPath) || existsSync(claudeDir())) {
     try {
       const settings = readConfig(settingsPath) ?? {};
       const entries: Array<{ hooks?: Array<{ command?: string }> }> = settings.hooks?.UserPromptSubmit ?? [];
@@ -655,7 +656,7 @@ export async function runDoctor(): Promise<void> {
   }
 
   // Skill
-  const skillPath = join(homedir(), ".claude", "skills", "context-doctor", "SKILL.md");
+  const skillPath = join(claudeDir(), "skills", "context-doctor", "SKILL.md");
   checks.push(
     existsSync(skillPath)
       ? { label: "Agent Skill", status: "ok", detail: skillPath }

@@ -45,6 +45,8 @@ export interface Fix {
     note?: string;
     /** The value it writes. */
     value?: number | string;
+    /** What would keep it from taking effect (environment, project or managed settings, per-model values). */
+    overriddenBy?: string[];
 }
 /** The measurements a plan is made from (so the plan itself is testable without a machine's history). */
 export interface FixInputs {
@@ -74,6 +76,10 @@ export interface FixInputs {
     mcpServers?: number;
     /** This folder's project, when `overhead prune` finds unused servers or skills in it. */
     prune?: ProjectPlan;
+    /** Per fix, what would keep the value fix writes from taking effect. */
+    overrides?: Partial<Record<FixId, string[]>>;
+    /** The record of applied fixes could not be read. */
+    recordProblem?: string;
     /** The /compact offer at cold returns: advice, not a setting; `hooked` when the every-prompt hook (or the plugin) is there to make it. */
     coldResume?: {
         netUsd: number;
@@ -84,24 +90,39 @@ export interface FixInputs {
 export declare function planFixes(i: FixInputs): Fix[];
 export interface FixRecord {
     id: FixId;
-    /** When it was applied (ms). */
+    /** When it was first applied (ms). */
     at: number;
-    value?: number | string;
-    /** The setting's value before (absent: not set). */
-    previous?: number | string;
+    /** The value it wrote. */
+    value?: unknown;
+    /** The setting's value before context-doctor first changed it, as written (any JSON). */
+    previous?: unknown;
+    /** Whether the setting existed before (`previous` may itself be null). */
+    hadPrevious?: boolean;
+    /** The settings file and key path it wrote. */
+    file?: string;
+    key?: string[];
+    /** The whole file before its first change (null: there was no file), and as fix left it: undo puts `before` back when the file is still exactly `after`. */
+    before?: string | null;
+    after?: string;
     /** For cache-ttl: the share of writes at 1 hour before the change, the baseline "since" compares against. */
     oneHourShareBefore?: number;
     /** For prune: the project folder. */
     cwd?: string;
-    /** settings.json did not exist before this fix: undo removes it again when it is left empty. */
-    created?: boolean;
 }
 export declare function fixRecordPath(home?: string): string;
+/**
+ * The records, strictly: an absent file is none; a file that is not ours to
+ * read (corrupt, the wrong shape) is refused, never treated as empty and
+ * overwritten: it lists what `fix undo` would put back.
+ */
+export declare function loadFixRecords(home?: string): FixRecord[];
+/** The records for reporting: a damaged file reads as none (the plan says so). */
 export declare function readFixRecords(home?: string): FixRecord[];
 export interface FixDeps {
     home?: string;
     now?: number;
     cwd?: string;
+    env?: NodeJS.ProcessEnv;
     /** Autopilot's own commands (injected in tests: they start and stop a service). */
     autopilotOn?: () => Promise<{
         ok: boolean;
@@ -109,7 +130,13 @@ export interface FixDeps {
     }>;
     autopilotOff?: () => Promise<string[]>;
 }
-/** Apply one fix; record it unless it changed nothing. */
+/** What would keep this fix's value from taking effect, as Claude Code merges settings. */
+export declare function fixOverrides(id: FixId, deps?: {
+    home?: string;
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+}): string[];
+/** Apply one fix; record it unless it changed nothing. Refusals (a damaged settings file, a damaged record) change nothing. */
 export declare function applyFix(fix: Fix, deps?: FixDeps, context?: {
     oneHourShare?: number;
     prune?: ProjectPlan;
@@ -141,7 +168,7 @@ export declare function savedSince(records: FixRecord[], opts?: {
     subagentPaths?: string[];
     ledger?: ReturnType<typeof readLedger>;
 }): SinceResult[];
-export declare function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], since: SinceResult[], command?: (s: string) => string, coldResume?: FixInputs["coldResume"]): string;
+export declare function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], since: SinceResult[], command?: (s: string) => string, coldResume?: FixInputs["coldResume"], recordProblem?: string): string;
 export declare function renderFixShare(days: number, billedUsd: number, fixes: Fix[]): string;
 export declare function parseFixIds(raw: string, fixes: Fix[]): {
     ids: FixId[];

@@ -22,6 +22,10 @@ const files = readdirSync("dist/test")
 const env = { ...process.env, CONTEXT_DOCTOR_NO_CALIBRATION: "1", HOME: home, USERPROFILE: home };
 // GitHub Copilot's home follows COPILOT_HOME wherever HOME is: never the real one.
 delete env.COPILOT_HOME;
+// Claude Code's config folder and managed settings follow these: never the developer's own.
+delete env.CLAUDE_CONFIG_DIR;
+delete env.CLAUDE_CODE_MANAGED_SETTINGS_PATH;
+env.CONTEXT_DOCTOR_NO_MANAGED_SETTINGS = "1";
 // On GitHub Actions, failing tests also become annotations: a job's log
 // needs a signed-in reader, its annotations do not, so a failure on a runner
 // nobody here can open (Windows, an older Node) still says which test and why.

@@ -26,6 +26,7 @@ import { claudeProjectDir, forEachLine } from "./session.js";
 import { packContext, type Chunk } from "./pack.js";
 import { maskSecrets, stripControls } from "./handoff.js";
 import { formatTokens } from "./tokens.js";
+import { claudeDir } from "./claudedir.js";
 
 /** One transcript entry, flattened to text (masked, then clipped): what a chunk points back to. */
 interface Entry {
@@ -322,7 +323,7 @@ export function currentTranscript(env: NodeJS.ProcessEnv = process.env, cwd = pr
 export function findSession(idOrPath: string, home = homedir()): string | undefined {
   if ((isAbsolute(idOrPath) || idOrPath.includes("/") || idOrPath.includes("\\")) && existsSync(idOrPath)) return resolve(idOrPath);
   if (!/^[\w.-]+$/.test(idOrPath)) return undefined;
-  const root = join(home, ".claude", "projects");
+  const root = join(claudeDir(home), "projects");
   let dirs: string[] = [];
   try { dirs = readdirSync(root); } catch { /* none */ }
   for (const d of dirs) {

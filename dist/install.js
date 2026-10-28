@@ -15,6 +15,7 @@ import { claudeCodeInstalls, describeInstalls, modelSwitchReadiness, PRE_MODEL_S
 import { FANOUT_MATCHER } from "./fanout.js";
 import { antigravityAllSkillDirs, antigravityMcpConfigPath, antigravityPresent, antigravitySkillDirs } from "./antigravity.js";
 import { COPILOT_HOOK_EVENT, copilotHome, copilotHookFilePath, copilotMcpConfigPath, isOurCopilotEntry, vsCodePresent } from "./copilot.js";
+import { claudeDir, claudeJsonPath } from "./claudedir.js";
 function claudeDesktopConfigPath() {
     switch (platform()) {
         case "darwin": return join(homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
@@ -24,11 +25,11 @@ function claudeDesktopConfigPath() {
 }
 function targets() {
     const desktop = claudeDesktopConfigPath();
-    const claudeCode = join(homedir(), ".claude.json");
+    const claudeCode = claudeJsonPath();
     const cursor = join(homedir(), ".cursor", "mcp.json");
     return [
         { name: "Claude Desktop", configPath: desktop, detect: () => existsSync(dirname(desktop)) },
-        { name: "Claude Code", configPath: claudeCode, detect: () => existsSync(claudeCode) || existsSync(join(homedir(), ".claude")) },
+        { name: "Claude Code", configPath: claudeCode, detect: () => existsSync(claudeCode) || existsSync(claudeDir()) },
         { name: "Cursor", configPath: cursor, detect: () => existsSync(join(homedir(), ".cursor")) },
         { name: "Gemini CLI", configPath: geminiSettingsPath(), detect: geminiCliPresent },
         // Antigravity's MCP file has Claude Desktop's shape (see antigravity.ts).
@@ -124,7 +125,7 @@ export function isOurPluginKey(key) {
  */
 export function claudePluginEnabled(home = homedir()) {
     try {
-        const plugins = readJson(join(home, ".claude", "settings.json")).enabledPlugins ?? {};
+        const plugins = readJson(join(claudeDir(home), "settings.json")).enabledPlugins ?? {};
         return Object.entries(plugins).some(([key, on]) => isOurPluginKey(key) && on === true);
     }
     catch {
@@ -135,17 +136,17 @@ export function claudePluginEnabled(home = homedir()) {
 export function claudeInstalledCopies(home = homedir()) {
     const found = [];
     try {
-        if (readJson(join(home, ".claude.json")).mcpServers?.["context-doctor"])
+        if (readJson(claudeJsonPath(home)).mcpServers?.["context-doctor"])
             found.push("MCP server in ~/.claude.json");
     }
     catch { /* unreadable: not ours to judge here */ }
     try {
-        const hooks = readJson(join(home, ".claude", "settings.json")).hooks ?? {};
+        const hooks = readJson(join(claudeDir(home), "settings.json")).hooks ?? {};
         if (["UserPromptSubmit", "PreCompact", "SessionStart", "PreModelSwitch", "PreToolUse"].some((ev) => (hooks[ev] ?? []).some?.(isOurHookEntry)))
             found.push("hooks in ~/.claude/settings.json");
     }
     catch { /* unreadable */ }
-    if (existsSync(join(home, ".claude", "skills", "context-doctor", "SKILL.md")))
+    if (existsSync(join(claudeDir(home), "skills", "context-doctor", "SKILL.md")))
         found.push("skill in ~/.claude/skills/context-doctor");
     return found;
 }
@@ -315,8 +316,8 @@ function cliCommand(subcommand) {
  * ours. Returns what happened so install can print the truth.
  */
 export function installStatusLine() {
-    const settingsPath = join(homedir(), ".claude", "settings.json");
-    if (!existsSync(join(homedir(), ".claude")))
+    const settingsPath = join(claudeDir(), "settings.json");
+    if (!existsSync(claudeDir()))
         return "no-claude-code";
     const settings = readJson(settingsPath);
     const want = cliCommand("statusline");
@@ -333,7 +334,7 @@ function isOurStatusLine(command) {
     return /context-doctor|cli\.js"?\s+statusline\s*$/.test(command);
 }
 function uninstallStatusLine() {
-    const settingsPath = join(homedir(), ".claude", "settings.json");
+    const settingsPath = join(claudeDir(), "settings.json");
     if (!existsSync(settingsPath))
         return;
     const settings = readJson(settingsPath);
@@ -369,17 +370,17 @@ function isOurHookEntry(entry) {
  * Claude Code query gets a context-size check. Idempotent.
  */
 function installHook() {
-    const settings = join(homedir(), ".claude", "settings.json");
-    const path = installHookInto(settings, join(homedir(), ".claude"));
+    const settings = join(claudeDir(), "settings.json");
+    const path = installHookInto(settings, claudeDir());
     // The same command also answers PreCompact (what each compaction's summary
     // must keep) and SessionStart (Claude Code's verdict on a resumed cache).
     if (path) {
-        installHookInto(settings, join(homedir(), ".claude"), "PreCompact");
-        installHookInto(settings, join(homedir(), ".claude"), "SessionStart");
+        installHookInto(settings, claudeDir(), "PreCompact");
+        installHookInto(settings, claudeDir(), "SessionStart");
         // Before a subagent starts: its price. PreToolUse is in every Claude Code
         // with hooks (2.1.62's event list has it), so no version guard is needed,
         // and a timeout never blocks the call. "Task" is the tool's name before 2.1.63.
-        installHookInto(settings, join(homedir(), ".claude"), "PreToolUse", { matcher: FANOUT_MATCHER, timeout: 10 });
+        installHookInto(settings, claudeDir(), "PreToolUse", { matcher: FANOUT_MATCHER, timeout: 10 });
     }
     return path;
 }
@@ -425,7 +426,7 @@ function installHookInto(settingsPath, gateDir, event = "UserPromptSubmit", opts
 }
 /** Each hook removal on its own: a malformed file for one app must not leave the others installed. */
 function uninstallHook(attempt) {
-    const claude = join(homedir(), ".claude", "settings.json");
+    const claude = join(claudeDir(), "settings.json");
     attempt("Claude Code every-prompt hook", () => uninstallHookFrom(claude, "Claude Code every-prompt hook"));
     attempt("Claude Code compaction hook", () => uninstallHookFrom(claude, "Claude Code compaction hook", "PreCompact"));
     attempt("Claude Code session-start hook", () => uninstallHookFrom(claude, "Claude Code session-start hook", "SessionStart"));
@@ -509,7 +510,7 @@ function uninstallCursorHook() {
  * earlier install wrote is taken out again.
  */
 export function installModelSwitchHook(readiness = modelSwitchReadiness(claudeCodeInstallsFromEnv())) {
-    const dir = join(homedir(), ".claude");
+    const dir = claudeDir();
     if (!existsSync(dir))
         return "no-claude-code";
     const settingsPath = join(dir, "settings.json");
@@ -549,7 +550,7 @@ function uninstallHookFrom(settingsPath, label, event = "UserPromptSubmit") {
     }
 }
 function installSkill() {
-    return installSkillInto(join(homedir(), ".claude", "skills", "context-doctor"));
+    return installSkillInto(join(claudeDir(), "skills", "context-doctor"));
 }
 /** Agent Skills are one format across Claude Code and Codex; only the home differs. */
 function installSkillInto(skillDest) {
@@ -1067,7 +1068,7 @@ export function runInstall(options = {}) {
         console.error(`✗ Claude Code every-prompt hook: ${e.message}`);
         failures.push("Claude Code hook");
     }
-    if (!viaPlugin && existsSync(join(homedir(), ".claude"))) {
+    if (!viaPlugin && existsSync(claudeDir())) {
         try {
             const readiness = modelSwitchReadiness(claudeCodeInstallsFromEnv());
             switch (installModelSwitchHook(readiness)) {
@@ -1299,7 +1300,7 @@ function removeSkill(dir, label) {
 function configPaths() {
     return [
         ...targets().map((t) => t.configPath),
-        join(homedir(), ".claude", "settings.json"),
+        join(claudeDir(), "settings.json"),
         cursorHooksPath(),
         join(codexDir(), "config.toml"),
         join(codexDir(), "hooks.json"),
@@ -1349,7 +1350,7 @@ export async function runUninstall() {
         }
     };
     // First: if anything below fails, Claude Code must still reach the API.
-    const hadAutopilot = existsSync(join(homedir(), ".claude", ".context-doctor-autopilot.json"));
+    const hadAutopilot = existsSync(join(claudeDir(), ".context-doctor-autopilot.json"));
     try {
         await uninstallAutopilot();
         if (hadAutopilot)
@@ -1371,7 +1372,7 @@ export async function runUninstall() {
             }
         });
     }
-    attempt("Agent Skill", () => removeSkill(join(homedir(), ".claude", "skills", "context-doctor"), "Agent Skill"));
+    attempt("Agent Skill", () => removeSkill(join(claudeDir(), "skills", "context-doctor"), "Agent Skill"));
     for (const dir of antigravityAllSkillDirs())
         attempt(`Antigravity skill (${tilde(dir)})`, () => removeSkill(dir, "Antigravity skill"));
     attempt("Antigravity folders", () => uninstallAntigravityFolders());
@@ -1385,7 +1386,7 @@ export async function runUninstall() {
     // Remove our bookkeeping files too — uninstall means gone. The hook's
     // per-session state is a directory, one small file per session.
     for (const file of OUR_CLAUDE_FILES) {
-        const p = join(homedir(), ".claude", file);
+        const p = join(claudeDir(), file);
         attempt(file, () => {
             if (existsSync(p)) {
                 rmSync(p, { recursive: true, force: true });

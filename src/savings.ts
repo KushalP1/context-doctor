@@ -15,7 +15,7 @@
 import { basename, dirname } from "node:path";
 import { AutoClearer, type AutoClearOptions } from "./autoclear.js";
 import { coldResumeEvents } from "./coldresume.js";
-import { forEachLine, listSessions, replyCounter } from "./session.js";
+import { forEachLine, listSessions, replyCounter, isClaudeSession } from "./session.js";
 import { CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, pricingFor, usageCost, writeMultiplier, type ModelPricing } from "./pricing.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
 import { withInvocation } from "./invocation.js";
@@ -139,9 +139,13 @@ function arm(model: string | undefined, clearer: ReplayClearer | null) {
  * `coldRows` does the same for the cold-resume count, which reads the
  * transcript again after the replay has added its rows to `runRows`.
  */
-export function replaySession(path: string, options: AutoClearOptions = {}, since = 0, runRows?: Set<string>, coldRows?: Set<string>, makeClearer: (model?: string) => ReplayClearer = () => new AutoClearer(options)): SessionSavings | undefined {
+export function replaySession(path: string, options: AutoClearOptions = {}, since = 0, runRows?: Set<string>, coldRows?: Set<string>, makeClearer: (model?: string) => ReplayClearer = () => new AutoClearer(options), replay = true): SessionSavings | undefined {
   let model: string | undefined;
-  let base = arm(undefined, null), auto = arm(undefined, makeClearer());
+  // Without the replay (autopilot already on: `fix` needs only the bill and
+  // the cold returns) the arms do nothing, which is most of the time spent.
+  const none = (): ReturnType<typeof arm> => ({ push() {}, extend() {}, request() {}, usd: () => 0, raw: 0 });
+  const arm2 = (m: string | undefined, c: ReplayClearer | null) => (replay ? arm(m, c) : none());
+  let base = arm2(undefined, null), auto = arm2(undefined, replay ? makeClearer() : null);
   let baseUsd = 0, autoUsd = 0, baseRaw = 0, autoRaw = 0;
   let entrypoint: string | undefined;
   let billed = 0, billedUsd = 0, billedRaw = 0, requests = 0, lastId: string | undefined, lastTs: number | null = null;
@@ -160,8 +164,8 @@ export function replaySession(path: string, options: AutoClearOptions = {}, sinc
     if (e.type === "system" && e.subtype === "compact_boundary") {
       // Compaction replaces the history in both arms alike: start fresh.
       flush();
-      base = arm(model, null);
-      auto = arm(model, makeClearer(model));
+      base = arm2(model, null);
+      auto = arm2(model, replay ? makeClearer(model) : null);
       return;
     }
     if (e.type === "assistant" && e.message) {
@@ -244,15 +248,15 @@ export function replaySession(path: string, options: AutoClearOptions = {}, sinc
   };
 }
 
-export function estimateSavings(days = 30, options: AutoClearOptions = {}, paths?: string[], onProgress?: (done: number, total: number) => void): SavingsReport {
+export function estimateSavings(days = 30, options: AutoClearOptions = {}, paths?: string[], onProgress?: (done: number, total: number) => void, replay = true): SavingsReport {
   const since = Date.now() - days * 86_400_000;
-  const targets = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
+  const targets = paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
   const sessions: SessionSavings[] = [];
   const runRows = new Set<string>(), coldRows = new Set<string>();
   for (const [i, p] of targets.entries()) {
     onProgress?.(i, targets.length);
     try {
-      const s = replaySession(p, options, since, runRows, coldRows);
+      const s = replaySession(p, options, since, runRows, coldRows, undefined, replay);
       if (s) sessions.push(s);
     } catch {
       /* one unreadable transcript must not sink the report */

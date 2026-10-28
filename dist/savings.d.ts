@@ -84,8 +84,8 @@ export interface ReplayClearer {
  * `coldRows` does the same for the cold-resume count, which reads the
  * transcript again after the replay has added its rows to `runRows`.
  */
-export declare function replaySession(path: string, options?: AutoClearOptions, since?: number, runRows?: Set<string>, coldRows?: Set<string>, makeClearer?: (model?: string) => ReplayClearer): SessionSavings | undefined;
-export declare function estimateSavings(days?: number, options?: AutoClearOptions, paths?: string[], onProgress?: (done: number, total: number) => void): SavingsReport;
+export declare function replaySession(path: string, options?: AutoClearOptions, since?: number, runRows?: Set<string>, coldRows?: Set<string>, makeClearer?: (model?: string) => ReplayClearer, replay?: boolean): SessionSavings | undefined;
+export declare function estimateSavings(days?: number, options?: AutoClearOptions, paths?: string[], onProgress?: (done: number, total: number) => void, replay?: boolean): SavingsReport;
 /** Optional third lever, computed by compactwindow.ts and passed in by the CLI. */
 export interface CompactWindowLine {
     window: number;

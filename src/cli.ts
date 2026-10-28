@@ -21,14 +21,15 @@ import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
 import { startProxy } from "./proxy.js";
 import { claudeCodeInstallsFromEnv, claudePluginEnabled, runInstall, runUninstall } from "./install.js";
-import { listSessions, parseSessionFile, pickCurrentSession } from "./session.js";
+import { listSessions, parseSessionFile, pickCurrentSession, isClaudeSession } from "./session.js";
 import { runHook } from "./hook.js";
 import { abCommand } from "./ab.js";
 import { buildImpactReport } from "./impact.js";
 import { measureTokenizer, renderTokenizer } from "./tokenizer-measure.js";
 import { autopilotOff, autopilotOn, autopilotPauseResult, autopilotPaths, autopilotStatus, DEFAULT_AUTOPILOT_PORT } from "./autopilot.js";
 import { estimateSavings, renderSavings, renderShare } from "./savings.js";
-import { currentCompactWindow, estimateCompactWindows, MAX_WINDOW, MIN_WINDOW, parseWindow, renderCompactWindows, setCompactWindow } from "./compactwindow.js";
+import { currentCompactWindow, estimateCompactWindows, MAX_WINDOW, MIN_WINDOW, parseWindow, renderCompactWindows, setCompactWindow, settingsPath } from "./compactwindow.js";
+import { tilde } from "./claudedir.js";
 import { renderPreferences, copyToClipboard, CHAT_PREFERENCES } from "./preferences.js";
 import { recordLedger } from "./ledger.js";
 import { runDoctor } from "./doctor.js";
@@ -60,11 +61,14 @@ import { isHandoffId, listHandoffs, readHandoff, renderHandoffList, stripControl
 import { claudeLimitFit, limitSavingsLines, limitsReport, renderLimits } from "./limits.js";
 import { currentTranscript, findSession, recall, renderRecall } from "./recall.js";
 import { measureSubagentCosts, renderCostMedians, saveSubagentCosts } from "./fanout.js";
-import { applyPrune, canonical, planPrune, renderPrune, undoPrune } from "./prune.js";
+import { applyPrune, canonical, installedSkills, planPrune, renderPrune, undoPrune } from "./prune.js";
 import { lensOverSessions, renderLens, sessionLens } from "./lens.js";
-import { applyFix, parseFixIds, planFixes, readFixRecords, renderFixPlan, renderFixShare, savedSince, undoFixes, type FixId, type FixInputs } from "./fix.js";
+import { applyFix, fixOverrides, loadFixRecords, parseFixIds, planFixes, readFixRecords, renderFixPlan, renderFixShare, savedSince, undoFixes, type FixId, type FixInputs } from "./fix.js";
 import { claudeMcpConfigs } from "./mcpschema.js";
+import { effectiveEnv, settingsSources } from "./effective.js";
+import { SettingsError } from "./settingsedit.js";
 import { currentTtl, estimateCacheTtl, renderCacheTtl, setCacheTtl, settingKey, ttlUnsupported, CACHE_TTL_SINCE, type Ttl } from "./cachettl.js";
+import { claudeDir } from "./claudedir.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -310,42 +314,59 @@ Guide: https://github.com/KushalP1/context-doctor#readme`;
  * the same replays `savings`, `compact-window` and `cache-ttl` run.
  */
 async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prunePlan?: ReturnType<typeof planPrune>["plans"][number] }> {
-  const replaying = progressLine("Replaying your Claude Code sessions");
-  const report = estimateSavings(days, {}, undefined, replaying.tick);
+  const cwd = process.cwd();
+  const autopilotOnNow = existsSync(autopilotPaths().config);
+  // With autopilot already on, its replay (most of the time) answers nothing `fix` asks.
+  const replaying = progressLine(autopilotOnNow ? "Reading your Claude Code sessions" : "Replaying your Claude Code sessions");
+  const report = estimateSavings(days, {}, undefined, replaying.tick, !autopilotOnNow);
   replaying.clear();
   const setWindow = currentCompactWindow();
-  const measuring = progressLine("Measuring your compactions");
-  const reread = compactionQuality(60, undefined, measuring.tick).extraRereadTokensPerCompaction;
-  measuring.clear();
-  const windowing = progressLine("Replaying an earlier auto-compact window");
-  const cw = estimateCompactWindows([setWindow ?? 400_000], days, undefined, reread, windowing.tick);
-  windowing.clear();
-  const est = cw.estimates[0];
+  let compactWindow: FixInputs["compactWindow"];
+  if (setWindow !== undefined) {
+    compactWindow = { window: setWindow, savedUsd: 0, savedShare: 0, compactionsPerWeek: 0, nowPerWeek: 0, current: setWindow };
+  } else {
+    const measuring = progressLine("Measuring your compactions");
+    const reread = compactionQuality(60, undefined, measuring.tick).extraRereadTokensPerCompaction;
+    measuring.clear();
+    const windowing = progressLine("Replaying an earlier auto-compact window");
+    const cw = estimateCompactWindows([400_000], days, undefined, reread, windowing.tick);
+    windowing.clear();
+    const est = cw.estimates[0];
+    if (cw.sessions > 0 && est) compactWindow = { window: est.window, savedUsd: est.savedUsd, savedShare: est.savedPct, compactionsPerWeek: (est.compactions / cw.days) * 7, nowPerWeek: (cw.actualCompactions / cw.days) * 7 };
+  }
   const ttling = progressLine("Replaying both cache lifetimes");
   const ttl = estimateCacheTtl(days, { onProgress: ttling.tick });
   ttling.clear();
-  let settings: Record<string, any> = {};
-  try { settings = JSON.parse(readFileSync(join(homedir(), ".claude", "settings.json"), "utf8")) ?? {}; } catch { /* none */ }
-  const ts = settings.env?.ENABLE_TOOL_SEARCH;
-  const toolSearchOff = typeof ts === "string" && /^(false|0|no|off)$/i.test(ts.trim()) ? ts : undefined;
+  const sources = settingsSources({ cwd });
+  const ts = effectiveEnv("ENABLE_TOOL_SEARCH", sources);
+  const toolSearchOff = ts && /^(false|0|no|off)$/i.test(ts.value.trim()) ? ts.value : undefined;
+  const servers = claudeMcpConfigs(cwd).filter((c) => !/context-doctor/i.test(c.name));
+  // Prune reads every transcript for MCP and skill use: only when this project has something to prune.
   let prunePlan: ReturnType<typeof planPrune>["plans"][number] | undefined;
-  try { prunePlan = planPrune(days, { cwds: [process.cwd()] }).plans[0]; } catch { /* no project here */ }
+  if (servers.length > 0 || installedSkills(cwd).some((k) => !/context-doctor/i.test(k.name))) {
+    try { prunePlan = planPrune(days, { cwds: [cwd] }).plans[0]; } catch { /* no project here */ }
+  }
+  let userSettings: Record<string, any> = {};
+  try { userSettings = JSON.parse(readFileSync(join(claudeDir(), "settings.json"), "utf8")) ?? {}; } catch { /* none */ }
+  let recordProblem: string | undefined;
+  try { loadFixRecords(); } catch (e) { recordProblem = (e as Error).message; }
   const sessions = report.sessions.length;
+  const ids: FixId[] = ["compact-window", "cache-ttl", "cache-ttl-subagents", "tool-search"];
   return {
     prunePlan,
     inputs: {
       days,
       billedUsd: report.billedUsd,
-      compactWindow: cw.sessions > 0 && est
-        ? { window: est.window, savedUsd: est.savedUsd, savedShare: est.savedPct, compactionsPerWeek: (est.compactions / cw.days) * 7, nowPerWeek: (cw.actualCompactions / cw.days) * 7, current: setWindow }
-        : undefined,
+      compactWindow,
       ttl,
       currentTtl: currentTtl(),
-      autopilot: { on: existsSync(autopilotPaths().config), reachableUsd: report.reachableUsd, reachableShare: report.billedUsd > 0 ? report.reachableUsd / report.billedUsd : 0, unreachableSessions: report.unreachableSessions, sessions },
+      autopilot: { on: autopilotOnNow, reachableUsd: report.reachableUsd, reachableShare: report.billedUsd > 0 ? report.reachableUsd / report.billedUsd : 0, unreachableSessions: report.unreachableSessions, sessions },
       toolSearchOff,
-      mcpServers: toolSearchOff ? claudeMcpConfigs(process.cwd()).filter((c) => !/context-doctor/i.test(c.name)).length : 0,
+      mcpServers: toolSearchOff ? servers.length : 0,
       prune: prunePlan,
-      coldResume: { netUsd: Math.max(0, report.coldResumeNetUsd), returns: report.coldResumes, hooked: claudePluginEnabled() || /context-doctor|cli\.js"?\s+hook/.test(JSON.stringify(settings.hooks?.UserPromptSubmit ?? [])) },
+      overrides: Object.fromEntries(ids.map((id) => [id, fixOverrides(id, { cwd })])),
+      recordProblem,
+      coldResume: { netUsd: Math.max(0, report.coldResumeNetUsd), returns: report.coldResumes, hooked: claudePluginEnabled() || /context-doctor|cli\.js"?\s+hook/.test(JSON.stringify(userSettings.hooks?.UserPromptSubmit ?? [])) },
     },
   };
 }
@@ -656,7 +677,7 @@ function progressLine(label: string): { tick?: (done: number, total: number) => 
 /** Any Claude Code transcript on this machine? One directory listing, no parsing. */
 function hasClaudeSessions(): boolean {
   try {
-    return listSessions(1).some((s) => s.path.includes(".claude"));
+    return listSessions(1).some((s) => isClaudeSession(s));
   } catch {
     return false;
   }
@@ -1006,9 +1027,10 @@ async function main(): Promise<void> {
   if (args.command === "compact-window") {
     const sub = args.file ?? "status";
     if (sub === "off") {
-      const r = setCompactWindow(undefined);
+      let r: ReturnType<typeof setCompactWindow>;
+      try { r = setCompactWindow(undefined); } catch (e) { if (!(e instanceof SettingsError)) throw e; console.error(e.message); process.exitCode = 1; return; }
       console.log(r.changed
-        ? "✓ autoCompactWindow removed from ~/.claude/settings.json: Claude Code compacts near the model's full window again (new sessions)."
+        ? `✓ autoCompactWindow removed from ${tilde(settingsPath())}: Claude Code compacts near the model's full window again (new sessions).`
         : "No auto-compact window was set. Nothing changed.");
       return;
     }
@@ -1019,16 +1041,22 @@ async function main(): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      const r = setCompactWindow(w);
+      let r: ReturnType<typeof setCompactWindow>;
+      try { r = setCompactWindow(w); } catch (e) { if (!(e instanceof SettingsError)) throw e; console.error(e.message); process.exitCode = 1; return; }
       if (!r.changed) {
-        console.log(`autoCompactWindow is already ${w} in ~/.claude/settings.json. Nothing changed.`);
+        console.log(`autoCompactWindow is already ${w} in ${tilde(settingsPath())}. Nothing changed.`);
         return;
       }
       // Only claim a backup that exists: a new settings.json had nothing to back up.
       const note = r.created ? "a new file" : r.backup ? `the previous file is kept as ${r.backup.replace(homedir(), "~")}` : "";
-      console.log(`✓ autoCompactWindow = ${w} in ~/.claude/settings.json${note ? ` (${note})` : ""}.`);
+      console.log(`✓ autoCompactWindow = ${w} in ${tilde(settingsPath())}${note ? ` (${note})` : ""}.`);
       console.log("  Claude Code sessions started from now on compact as if the window were that size,");
       console.log("  in the terminal, IDEs and the desktop app. Check in a session with /context.");
+      const over = fixOverrides("compact-window");
+      if (over.length) {
+        console.log(`  ⚠ It will not take effect while ${over.join("; ")} ${over.length === 1 ? "overrides" : "override"} it.`);
+        process.exitCode = 1;
+      }
       console.log(`  Undo: ${selfCommand("compact-window off")}`);
       return;
     }
@@ -1158,31 +1186,31 @@ async function main(): Promise<void> {
     const sub = args.file;
     if (sub === "undo") {
       const named = (args.positionals ?? []).slice(1).flatMap((x) => x.split(",")).map((x) => x.trim()).filter(Boolean) as FixId[];
-      console.log((await undoFixes(named.length ? named : undefined, { autopilotOff: () => autopilotOff() })).join("\n"));
+      const lines = await undoFixes(named.length ? named : undefined, { autopilotOff: () => autopilotOff() });
+      console.log(lines.join("\n"));
+      if (lines.some((l) => l.startsWith("✗"))) process.exitCode = 1;
       return;
     }
     if (sub !== undefined && sub !== "plan") usageError(`Usage: context-doctor fix [--apply <ids|all>] [--share] [--json] | fix undo [ids]; got "${sub}".`);
+    if (args.apply !== undefined && args.share) usageError("--apply and --share do not go together: --share only prints totals.");
     const { inputs, prunePlan } = await measureFixInputs(args.days ?? 30);
     const fixes = planFixes(inputs);
     const since = savedSince(readFixRecords());
-    if (args.json) {
-      console.log(JSON.stringify({ days: inputs.days, billedUsd: inputs.billedUsd, fixes, since }, null, 2));
-      return;
-    }
     if (args.share) {
       const text = renderFixShare(inputs.days, inputs.billedUsd, fixes);
       console.log(text);
       if (args.copy) console.log(copyToClipboard(text) ? "\n(copied to the clipboard)" : "\n(no clipboard tool found; copy the lines above)");
       return;
     }
-    console.log(renderFixPlan(inputs.days, inputs.billedUsd, fixes, since, selfCommand, inputs.coldResume));
     const available = fixes.filter((f) => f.state === "available");
     let chosen: FixId[] = [];
     if (args.apply !== undefined) {
       const { ids, unknown } = parseFixIds(args.apply, fixes);
       if (unknown.length) usageError(`--apply: unknown fix ${unknown.join(", ")}. Fixes: ${available.map((f) => f.id).join(", ") || "none available"}.`);
       chosen = ids;
-    } else if (process.stdin.isTTY && process.stdout.isTTY && available.length) {
+    }
+    if (!args.json) console.log(renderFixPlan(inputs.days, inputs.billedUsd, fixes, since, selfCommand, inputs.coldResume, inputs.recordProblem));
+    if (args.apply === undefined && !args.json && process.stdin.isTTY && process.stdout.isTTY && available.length && !inputs.recordProblem) {
       const rl = (await import("node:readline/promises")).createInterface({ input: process.stdin, output: process.stdout });
       console.log("");
       for (const [n, f] of available.entries()) {
@@ -1191,20 +1219,29 @@ async function main(): Promise<void> {
       }
       rl.close();
     }
-    if (!chosen.length) return;
-    console.log("");
+    const results: Array<{ id: FixId; ok: boolean; lines: string[] }> = [];
     for (const id of chosen) {
       const f = fixes.find((x) => x.id === id);
       if (!f || f.state !== "available") {
-        console.log(`${id}: ${f?.note ?? "not available here"}; skipped.`);
+        results.push({ id, ok: false, lines: [`${id}: ${f?.note ?? "not available here"}; skipped.`] });
         continue;
       }
       const kind = id === "cache-ttl" ? "main" : id === "cache-ttl-subagents" ? "subagents" : undefined;
       const r = await applyFix(f, { autopilotOn: () => autopilotOn(args.port ?? DEFAULT_AUTOPILOT_PORT) }, { oneHourShare: kind ? inputs.ttl?.[kind].oneHourShare : undefined, prune: prunePlan });
-      console.log(r.lines.join("\n"));
-      if (!r.ok) process.exitCode = 1;
+      results.push({ id, ...r });
     }
-    console.log(`\nNew Claude Code sessions pick these up. Undo: ${selfCommand("fix undo")}; ${selfCommand("fix")} later shows what each saved since.`);
+    // Naming fixes that are not there (or nothing at all, with "all") is not a silent success.
+    if (args.apply !== undefined && (chosen.length === 0 || results.some((r) => !r.ok))) process.exitCode = 1;
+    if (args.json) {
+      console.log(JSON.stringify({ days: inputs.days, billedUsd: inputs.billedUsd, fixes, since, ...(args.apply !== undefined ? { applied: results } : {}), ...(inputs.recordProblem ? { recordProblem: inputs.recordProblem } : {}) }, null, 2));
+      if (args.apply !== undefined && chosen.length === 0) console.error("--apply: no fix available to apply.");
+      return;
+    }
+    if (args.apply !== undefined && chosen.length === 0) console.error("\n--apply: no fix available to apply.");
+    if (!results.length) return;
+    console.log("");
+    for (const r of results) console.log(r.lines.join("\n"));
+    if (results.some((r) => r.ok)) console.log(`\nNew Claude Code sessions pick these up. Undo: ${selfCommand("fix undo")}; ${selfCommand("fix")} later shows what each saved since.`);
     return;
   }
 
@@ -1213,19 +1250,32 @@ async function main(): Promise<void> {
     const kind = args.subagentsTtl ? "subagents" : "main";
     const key = settingKey(kind);
     if (sub === "1h" || sub === "5m" || sub === "off") {
-      const r = setCacheTtl(kind, sub === "off" ? undefined : (sub as Ttl));
+      let r: ReturnType<typeof setCacheTtl>;
+      try {
+        r = setCacheTtl(kind, sub === "off" ? undefined : (sub as Ttl));
+      } catch (e) {
+        if (!(e instanceof SettingsError)) throw e;
+        console.error(e.message);
+        process.exitCode = 1;
+        return;
+      }
       if (!r.changed) {
-        console.log(sub === "off" ? `${key} was not set. Nothing changed.` : `${key} is already "${sub}" in ~/.claude/settings.json. Nothing changed.`);
+        console.log(sub === "off" ? `${key} was not set. Nothing changed.` : `${key} is already "${sub}" in ${tilde(settingsPath())}. Nothing changed.`);
         return;
       }
       const note = r.created ? " (a new file)" : r.backup ? ` (the previous file is kept as ${r.backup.replace(homedir(), "~")})` : "";
       console.log(sub === "off"
-        ? `✓ ${key} removed from ~/.claude/settings.json${note}: Claude Code picks the lifetime itself again (new sessions).`
-        : `✓ ${key} = "${sub}" in ~/.claude/settings.json${note}.`);
+        ? `✓ ${key} removed from ${tilde(settingsPath())}${note}: Claude Code picks the lifetime itself again (new sessions).`
+        : `✓ ${key} = "${sub}" in ${tilde(settingsPath())}${note}.`);
       if (sub !== "off") {
         console.log(`  New ${kind === "main" ? "sessions write the main conversation's" : "subagents write their"} cache at ${sub === "1h" ? "1 hour (2x input per written token)" : "5 minutes (1.25x)"}, in every Claude Code surface.`);
         const old = ttlUnsupported(claudeCodeInstallsFromEnv());
         if (old.length) console.log(`  ${old.map((i) => "Claude Code " + i.version).join(", ")} predates the setting (${CACHE_TTL_SINCE}) and ignores it.`);
+        const over = fixOverrides(kind === "main" ? "cache-ttl" : "cache-ttl-subagents");
+        if (over.length) {
+          console.log(`  ⚠ It will not take effect while ${over.join("; ")} ${over.length === 1 ? "overrides" : "override"} it.`);
+          process.exitCode = 1;
+        }
         console.log(`  Undo: ${selfCommand(`cache-ttl off${kind === "subagents" ? " --subagents" : ""}`)}`);
       }
       return;

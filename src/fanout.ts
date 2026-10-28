@@ -25,7 +25,7 @@ import { appendFileSync, existsSync, readdirSync, readFileSync, statSync, writeF
 import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { statePath } from "./ledger.js";
-import { listSessions } from "./session.js";
+import { listSessions, isClaudeSession } from "./session.js";
 import { scanSubagent } from "./subagentpay.js";
 import { formatUsd, pricingFor } from "./pricing.js";
 import { tailUsage } from "./statusline.js";
@@ -83,7 +83,7 @@ export function measureSubagentCosts(days = 30, opts: { limit?: number; budgetMs
   const now = opts.now ?? Date.now();
   const since = now - days * DAY;
   const started = Date.now();
-  const parents = opts.sessions ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
+  const parents = opts.sessions ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
   const files: Array<{ file: string; meta: string; at: number }> = [];
   for (const parent of parents) {
     const dir = join(parent.replace(/\.jsonl$/, ""), "subagents");

@@ -32,6 +32,7 @@ import { join } from "node:path";
 import { forEachLine, replyCounter } from "./session.js";
 import { cacheWriteSplit, pricingFor, formatUsd, writeMultiplier, type ModelPricing } from "./pricing.js";
 import { contextWindowFor, formatTokens, realModel } from "./tokens.js";
+import { claudeDir } from "./claudedir.js";
 
 /**
  * Claude Code's own idle compaction (2.1.290+, account-gated by a server
@@ -78,7 +79,7 @@ export function idleCompactMinTokens(env: NodeJS.ProcessEnv = process.env): numb
 export function autoCompactsAt(model: string | undefined, home = homedir(), env: NodeJS.ProcessEnv = process.env): number | undefined {
   if (env.DISABLE_AUTO_COMPACT || env.DISABLE_COMPACT) return undefined;
   let settings: any = {};
-  try { settings = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8")) ?? {}; } catch { /* no settings */ }
+  try { settings = JSON.parse(readFileSync(join(claudeDir(home), "settings.json"), "utf8")) ?? {}; } catch { /* no settings */ }
   if (settings.autoCompactEnabled === false) return undefined;
   const window = contextWindowFor(model);
   const fromEnv = Number(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW);

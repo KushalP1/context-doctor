@@ -14,7 +14,7 @@
  *    Each repeat is a whole request that re-reads the context; it is priced
  *    at that request's billed cost.
  */
-import { forEachLine, listSessions, replyCounter } from "./session.js";
+import { forEachLine, listSessions, replyCounter, isClaudeSession } from "./session.js";
 import { openAIUsage, pricingFor, usageCost } from "./pricing.js";
 import { formatTokens, realModel } from "./tokens.js";
 const num = (v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
@@ -169,7 +169,7 @@ export function sessionLens(path, since = 0) {
 /** Every Claude Code (and, unless `claudeOnly`, Codex) session touched in the last `days`. */
 export function lensOverSessions(days = 30, opts = {}) {
     const since = (opts.now ?? Date.now()) - days * 86_400_000;
-    const files = opts.paths ?? listSessions(10_000).filter((s) => s.modifiedAt.getTime() >= since && (s.path.includes(".claude") || (!opts.claudeOnly && s.project === "codex"))).map((s) => s.path);
+    const files = opts.paths ?? listSessions(10_000).filter((s) => s.modifiedAt.getTime() >= since && (isClaudeSession(s) || (!opts.claudeOnly && s.project === "codex"))).map((s) => s.path);
     const acc = new Acc();
     const runRows = new Set();
     for (const f of files) {

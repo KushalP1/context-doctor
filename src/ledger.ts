@@ -20,6 +20,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { claudeDir } from "./claudedir.js";
 
 export interface LedgerEntry {
   ts: number;
@@ -110,7 +111,7 @@ export function foldTotals(entries: LedgerEntry[]): CarriedTotals {
 }
 
 export function statePath(): string {
-  return process.env.CONTEXT_DOCTOR_HOOK_STATE ?? join(homedir(), ".claude", ".context-doctor-hook-state.json");
+  return process.env.CONTEXT_DOCTOR_HOOK_STATE ?? join(claudeDir(), ".context-doctor-hook-state.json");
 }
 
 export function ledgerPath(): string {

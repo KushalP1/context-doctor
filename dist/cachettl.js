@@ -35,11 +35,14 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { forEachLine, listSessions, replyCounter } from "./session.js";
+import { forEachLine, listSessions, replyCounter, isClaudeSession } from "./session.js";
 import { CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, pricingFor, usageCost } from "./pricing.js";
 import { realModel } from "./tokens.js";
-import { readJson, writeJsonWithBackup } from "./install.js";
+import { backupOnce } from "./install.js";
+import { ABSENT, readSettings, setJsonPath, writeAtomic } from "./settingsedit.js";
+import { effectiveTtl, settingsSources, ttlOverrides } from "./effective.js";
 import { compareVersions, describeInstalls } from "./modelswitch.js";
+import { claudeDir } from "./claudedir.js";
 /** The first Claude Code with the promptCacheTtl and subagentPromptCacheTtl settings (CHANGELOG). */
 export const CACHE_TTL_SINCE = "2.1.243";
 const FIVE_MIN = 300_000;
@@ -56,12 +59,13 @@ const num = (v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0
  * `sidechains`: a subagent's own transcript, whose rows are all sidechain
  * rows; a main transcript skips them. Returns the requests counted.
  */
-export function replayTtlTranscript(path, acc, since, until = Infinity, sidechains = false, runRows) {
+export function replayTtlTranscript(path, acc, since, until = Infinity, sidechains = false, runRows, otherIds) {
     let prev;
     let lastTtl = FIVE_MIN;
     let compacted = false;
     let counted = 0;
     const sighting = replyCounter(runRows);
+    const mine = new Set();
     forEachLine(path, (line) => {
         if (!line.includes('"usage"') && !line.includes("compact_boundary"))
             return;
@@ -81,9 +85,16 @@ export function replayTtlTranscript(path, acc, since, until = Infinity, sidechai
         const msg = e.message;
         if (e.type !== "assistant" || !msg?.usage)
             return;
-        const seen = sighting(e);
+        let seen = sighting(e);
         if (seen === "repeat")
             return;
+        // The same reply in another transcript (a subagent's file copied or resumed): billed once.
+        const id = typeof msg.id === "string" ? msg.id : undefined;
+        if (id && otherIds) {
+            if (otherIds.has(id) && !mine.has(id))
+                seen = "copy";
+            mine.add(id);
+        }
         const model = realModel(msg.model);
         if (!model)
             return;
@@ -146,6 +157,9 @@ export function replayTtlTranscript(path, acc, since, until = Infinity, sidechai
         prev = { at, ttl: lastTtl, total, model };
         compacted = false;
     });
+    if (otherIds)
+        for (const id of mine)
+            otherIds.add(id);
     return counted;
 }
 function finish(acc) {
@@ -154,7 +168,7 @@ function finish(acc) {
 }
 /** Subagent transcripts of the main transcripts under ~/.claude/projects written since `since`. */
 export function subagentTranscripts(since, home = homedir()) {
-    const root = join(home, ".claude", "projects");
+    const root = join(claudeDir(home), "projects");
     const out = [];
     let projects;
     try {
@@ -203,7 +217,7 @@ export function subagentTranscripts(since, home = homedir()) {
 export function estimateCacheTtl(days = 30, opts = {}) {
     const since = opts.since ?? Date.now() - days * 86_400_000;
     const until = opts.until ?? Infinity;
-    const mains = opts.paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
+    const mains = opts.paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
     const subs = opts.subagentPaths ?? subagentTranscripts(since);
     const minRequests = opts.minRequests ?? 10;
     const main = { ...empty(), writes: 0, writes1h: 0 };
@@ -225,10 +239,11 @@ export function estimateCacheTtl(days = 30, opts = {}) {
         for (const k of ["requests", "billedUsd", "at5mUsd", "at1hUsd", "keptWarmAt1h", "wentColdAt5m", "unpriced", "writes", "writes1h"])
             main[k] += one[k];
     }
+    const subIds = new Set();
     for (const [i, p] of subs.entries()) {
         opts.onProgress?.(mains.length + i, total);
         try {
-            if (replayTtlTranscript(p, sub, since, until, true) > 0)
+            if (replayTtlTranscript(p, sub, since, until, true, undefined, subIds) > 0)
                 sub.transcripts++;
         }
         catch {
@@ -250,43 +265,34 @@ export function adviseTtl(r) {
 }
 // -- The settings ---------------------------------------------------------------
 const KEY = { main: "promptCacheTtl", subagents: "subagentPromptCacheTtl" };
-const ENV = { main: "CLAUDE_CODE_PROMPT_CACHE_TTL", subagents: "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL" };
-export function claudeSettingsPath(home = homedir()) {
-    return join(home, ".claude", "settings.json");
+export function claudeSettingsPath(home) {
+    return join(claudeDir(home), "settings.json");
 }
 const asTtl = (v) => (v === "5m" || v === "1h" ? v : undefined);
-/** The lifetimes set in user settings, and anything that overrides them. */
-export function currentTtl(home = homedir(), env = process.env) {
-    let s = {};
-    try {
-        s = readJson(claudeSettingsPath(home));
-    }
-    catch {
-        /* unreadable settings: nothing known */
-    }
-    const senv = s.env && typeof s.env === "object" ? s.env : {};
-    const overrides = [];
-    for (const name of [ENV.main, ENV.subagents, "FORCE_PROMPT_CACHING_5M", "ENABLE_PROMPT_CACHING_1H"]) {
-        const v = senv[name] ?? env[name];
-        if (v !== undefined && v !== "" && v !== "0")
-            overrides.push(`${name}=${String(v)}${senv[name] !== undefined ? " (settings env)" : ""}`);
-    }
-    return { main: asTtl(s[KEY.main]), subagents: asTtl(s[KEY.subagents]), overrides };
+/**
+ * The lifetimes Claude Code will use as far as its settings and environment
+ * decide (managed, project and user settings merged, CLAUDE_CONFIG_DIR
+ * honoured), and what overrides a value in the user's settings.json.
+ */
+export function currentTtl(home, env = process.env, cwd = process.cwd()) {
+    const sources = settingsSources({ home, cwd, env });
+    const main = effectiveTtl("main", sources, env);
+    const sub = effectiveTtl("subagents", sources, env);
+    const mainOverrides = ttlOverrides("main", sources, env);
+    const subagentOverrides = ttlOverrides("subagents", sources, env);
+    return { main: asTtl(main.value), subagents: asTtl(sub.value), overrides: [...new Set([...mainOverrides, ...subagentOverrides])], mainOverrides, subagentOverrides };
 }
-/** Set (or with undefined, remove) promptCacheTtl / subagentPromptCacheTtl in ~/.claude/settings.json. */
-export function setCacheTtl(kind, ttl, home = homedir()) {
+/** Set (or with undefined, remove) promptCacheTtl / subagentPromptCacheTtl in the user's settings.json, editing only that key. */
+export function setCacheTtl(kind, ttl, home) {
     const p = claudeSettingsPath(home);
-    const existed = existsSync(p);
-    const settings = readJson(p);
-    const previous = asTtl(settings[KEY[kind]]);
-    if (ttl === undefined ? !(KEY[kind] in settings) : settings[KEY[kind]] === ttl)
-        return { changed: false, created: false, previous };
-    if (ttl === undefined)
-        delete settings[KEY[kind]];
-    else
-        settings[KEY[kind]] = ttl;
-    writeJsonWithBackup(p, settings);
-    return { changed: true, created: !existed, backup: existed ? `${p}.context-doctor.backup` : undefined, previous };
+    const cur = readSettings(p);
+    const previous = cur.data[KEY[kind]];
+    if (ttl === undefined ? previous === undefined : previous === ttl)
+        return { changed: false, created: false, ...(previous !== undefined ? { previous } : {}) };
+    const next = setJsonPath(cur.text, [KEY[kind]], ttl === undefined ? ABSENT : ttl);
+    backupOnce(p);
+    writeAtomic(p, next);
+    return { changed: true, created: cur.text === undefined, backup: cur.text !== undefined ? `${p}.context-doctor.backup` : undefined, previous };
 }
 export function settingKey(kind) {
     return KEY[kind];

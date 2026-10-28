@@ -23,6 +23,7 @@ import { estimateTokens, formatTokens, providerFor, realModel } from "./tokens.j
 import { cacheWriteSplit, formatUsd, pricingFor, writeMultiplier as ttlWriteMultiplier } from "./pricing.js";
 import { isGeminiChat, readGeminiMessages } from "./gemini.js";
 import { claudeMcpConfigs, mcpUsage, measureServer, otherServerUses, serverUses, type McpServerConfig, type McpServerSize, type McpUsage } from "./mcpschema.js";
+import { claudeDir } from "./claudedir.js";
 
 export type Agent = "Claude Code" | "Codex" | "Cursor" | "Gemini CLI";
 
@@ -130,7 +131,7 @@ function imports(text: string, from: string, home: string): string[] {
 
 /** Claude Code's auto-memory index for a directory (it loads MEMORY.md, first 200 lines). */
 function autoMemoryPath(cwd: string, home: string): string {
-  return join(home, ".claude", "projects", resolve(cwd).replace(/[^A-Za-z0-9]/g, "-"), "memory", "MEMORY.md");
+  return join(claudeDir(home), "projects", resolve(cwd).replace(/[^A-Za-z0-9]/g, "-"), "memory", "MEMORY.md");
 }
 
 /** Every memory file the four agents load for a session started in `cwd`. */
@@ -153,8 +154,8 @@ export function findMemoryFiles(cwd = process.cwd(), home = homedir()): MemoryFi
   };
 
   // Claude Code: user memory and rules, then each directory from the root down.
-  addClaude(join(home, ".claude", "CLAUDE.md"), "user");
-  for (const p of mdFiles(join(home, ".claude", "rules"))) addClaude(p, "rules");
+  addClaude(join(claudeDir(home), "CLAUDE.md"), "user");
+  for (const p of mdFiles(join(claudeDir(home), "rules"))) addClaude(p, "rules");
   for (const d of ancestors(cwd).reverse()) {
     addClaude(join(d, "CLAUDE.md"), "project");
     addClaude(join(d, ".claude", "CLAUDE.md"), "project");

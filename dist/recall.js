@@ -25,6 +25,7 @@ import { claudeProjectDir, forEachLine } from "./session.js";
 import { packContext } from "./pack.js";
 import { maskSecrets, stripControls } from "./handoff.js";
 import { formatTokens } from "./tokens.js";
+import { claudeDir } from "./claudedir.js";
 /** A tool output longer than this keeps its head and tail: the middle of a 5 MB log rarely answers a question. */
 const ENTRY_MAX_CHARS = 200_000;
 /** Beyond this much text the oldest entries are left out (and said to be): ~3M tokens, three full 1M windows. */
@@ -311,7 +312,7 @@ export function findSession(idOrPath, home = homedir()) {
         return resolve(idOrPath);
     if (!/^[\w.-]+$/.test(idOrPath))
         return undefined;
-    const root = join(home, ".claude", "projects");
+    const root = join(claudeDir(home), "projects");
     let dirs = [];
     try {
         dirs = readdirSync(root);

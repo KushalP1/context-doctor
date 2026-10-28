@@ -35,7 +35,7 @@
  * with the interval that keeps the cache warm.
  */
 
-import { forEachLine, listSessions } from "./session.js";
+import { forEachLine, listSessions, isClaudeSession } from "./session.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
 import { CACHE_WRITE_1H, CACHE_WRITE_5M, pricingFor } from "./pricing.js";
 import { compareVersions } from "./modelswitch.js";
@@ -424,7 +424,7 @@ function recommend(byModel: CacheMissReport["byModel"], bySize: CacheMissReport[
 export function cacheMisses(days = 30, paths?: string[], onProgress?: (done: number, total: number) => void, missLog = missLogPath()): CacheMissReport {
   const since = Date.now() - days * 86_400_000;
   // Claude Code transcripts: they record the API's cache usage per request.
-  const targets = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
+  const targets = paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
   const models = new Map<string, MissStats>();
   const sizes = new Map<string, MissStats>();
   const causes: Record<MissCause, number> = { "model switch": 0, "context edited": 0, "after an API error": 0, "over 20 new blocks": 0, "nothing visible": 0 };

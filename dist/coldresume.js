@@ -31,6 +31,7 @@ import { join } from "node:path";
 import { forEachLine, replyCounter } from "./session.js";
 import { cacheWriteSplit, pricingFor, formatUsd, writeMultiplier } from "./pricing.js";
 import { contextWindowFor, formatTokens, realModel } from "./tokens.js";
+import { claudeDir } from "./claudedir.js";
 /**
  * Claude Code's own idle compaction (2.1.290+, account-gated by a server
  * flag; the `idleCompaction` setting can only turn it off). Read from the
@@ -75,7 +76,7 @@ export function autoCompactsAt(model, home = homedir(), env = process.env) {
         return undefined;
     let settings = {};
     try {
-        settings = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8")) ?? {};
+        settings = JSON.parse(readFileSync(join(claudeDir(home), "settings.json"), "utf8")) ?? {};
     }
     catch { /* no settings */ }
     if (settings.autoCompactEnabled === false)

@@ -16,7 +16,7 @@
  * so its effect can be seen as it accumulates.
  */
 
-import { forEachLine, listSessions, queuedUserPrompt } from "./session.js";
+import { forEachLine, listSessions, queuedUserPrompt, isClaudeSession } from "./session.js";
 import { readLedger } from "./ledger.js";
 import { estimateTokens, formatTokens } from "./tokens.js";
 import { isIdleCompactNotice } from "./coldresume.js";
@@ -81,7 +81,7 @@ function add(s: Signals, reqs: Req[], readBefore: Set<string>): void {
 
 export function compactionQuality(days = 60, paths?: string[], onProgress?: (done: number, total: number) => void): CompactionQuality {
   const since = Date.now() - days * 86_400_000;
-  const files = paths ?? listSessions(10_000).filter((s) => s.path.includes(".claude") && s.modifiedAt.getTime() >= since).map((s) => s.path);
+  const files = paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
   const shapedAt = readLedger().filter((e) => e.ev === "precompact").map((e) => e.ts);
   const q: CompactionQuality = { compactions: 0, idle: 0, extraRereadTokensPerCompaction: 0, sessions: 0, before: empty(), after: empty() };
   const shaped = { compactions: 0, before: empty(), after: empty() };

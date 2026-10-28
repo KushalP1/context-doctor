@@ -52,8 +52,14 @@ export declare function estimateCompactWindows(windows: number[], days?: number,
 /** "37 sessions with 10+ requests (of 85 transcripts)": what the replayed reports count, said the same way. */
 export declare function sessionsLabel(sessions: number, transcripts: number): string;
 export declare function settingsPath(home?: string): string;
-/** The autoCompactWindow Claude Code will use from user settings, if set. */
-export declare function currentCompactWindow(home?: string): number | undefined;
+/**
+ * The auto-compact window Claude Code will use, when it is a number: managed,
+ * project and user settings merged, CLAUDE_CODE_AUTO_COMPACT_WINDOW first
+ * (CLAUDE_CONFIG_DIR honoured). Undefined when none is set or it is "auto".
+ */
+export declare function currentCompactWindow(home?: string, env?: NodeJS.ProcessEnv, cwd?: string): number | undefined;
+/** What keeps a user-level autoCompactWindow from taking effect: environment, project or managed settings, per-model windows. */
+export declare function compactWindowBlockers(home?: string, env?: NodeJS.ProcessEnv, cwd?: string): string[];
 /** What setCompactWindow did, so the CLI can say exactly that. */
 export interface SetWindowResult {
     /** False when the setting already was what was asked (or, for off, was never set). */
@@ -62,11 +68,14 @@ export interface SetWindowResult {
     created: boolean;
     /** The copy of the previous settings.json, when there was one to copy. */
     backup?: string;
+    /** The value before, as written (undefined: not set). */
+    previous?: unknown;
 }
 /**
- * Set (or with undefined, remove) autoCompactWindow in ~/.claude/settings.json.
- * Nothing is written when nothing changes: `off` with no window set used to
- * create a settings.json of `{}`. A .backup is kept when there was a file.
+ * Set (or with undefined, remove) autoCompactWindow in the user's
+ * settings.json, editing only that key. Nothing is written when nothing
+ * changes: `off` with no window set used to create a settings.json of `{}`.
+ * A .backup is kept when there was a file.
  */
 export declare function setCompactWindow(window: number | undefined, home?: string): SetWindowResult;
 /** "400k" / "400000" / "0.4m" -> 400000. Undefined when unparseable. */

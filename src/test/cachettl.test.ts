@@ -115,9 +115,11 @@ test("setCacheTtl round trip leaves settings.json as it was; currentTtl reads ov
   assert.ok(r.changed && !r.created && r.backup);
   assert.equal(r.previous, undefined);
   assert.equal(JSON.parse(readFileSync(settings, "utf8")).promptCacheTtl, "1h");
-  const cur = currentTtl(home, {});
-  assert.equal(cur.main, "1h");
-  assert.deepEqual(cur.overrides, ["FORCE_PROMPT_CACHING_5M=1 (settings env)"]);
+  const cur = currentTtl(home, {}, home);
+  // FORCE_PROMPT_CACHING_5M wins over the setting: Claude Code will use 5 minutes, and the reason is named.
+  assert.equal(cur.main, "5m");
+  assert.equal(cur.overrides.length, 1);
+  assert.match(cur.overrides[0], /^FORCE_PROMPT_CACHING_5M=1 in .*settings\.json env$/);
   assert.equal(setCacheTtl("main", "1h", home).changed, false);
   r = setCacheTtl("subagents", "5m", home);
   assert.equal(JSON.parse(readFileSync(settings, "utf8")).subagentPromptCacheTtl, "5m");
