@@ -17,6 +17,7 @@ import { ledgerPath, readLedger } from "./ledger.js";
 import { loadConfig } from "./config.js";
 import { codexRouting } from "./codexroute.js";
 import { CURSOR_HOOK_EVENTS } from "./install.js";
+import { CACHE_TTL_SINCE, currentTtl, ttlUnsupported } from "./cachettl.js";
 import { binOnPath, claudeCodeInstallsFromEnv, claudeInstalledCopies, codexMcpEntry, copilotPresent, geminiCliPresent, geminiSettingsPath, isEmptyStub, isOurPluginKey, launcherNamesMissingPackage } from "./install.js";
 import { antigravityMcpConfigPath, antigravityPresent, antigravitySkillDirs } from "./antigravity.js";
 import { COPILOT_HOOK_EVENT, copilotHookFilePath, copilotLegacyConfigPath, copilotMcpConfigPath, copilotSettingsPath, isOurCopilotEntry, vsCodeUserDirs } from "./copilot.js";
@@ -231,6 +232,22 @@ function modelSwitchCheck(settings: Record<string, any>, plugin: boolean): Check
   if (readiness.old.length > 0) return { label, status: "skip", detail: `not installed: ${describeInstalls(readiness.old)} predates PreModelSwitch (${PRE_MODEL_SWITCH_SINCE}); update it, then run context-doctor install` };
   if (!readiness.ok) return { label, status: "skip", detail: `not installed: no Claude Code version found to check (needs ${PRE_MODEL_SWITCH_SINCE})` };
   return { label, status: "warn", detail: "not registered: model switches re-write the whole context into the new model's cache unannounced; run context-doctor install" };
+}
+
+/**
+ * The prompt cache lifetime (`cache-ttl`), only when one is set: the value,
+ * an environment variable that overrides it, and a Claude Code too old to
+ * read it (it ignores the key; nothing else in the file is affected).
+ */
+export function cacheTtlCheck(home = homedir(), env: NodeJS.ProcessEnv = process.env): Check | undefined {
+  const cur = currentTtl(home, env);
+  if (!cur.main && !cur.subagents) return undefined;
+  const label = "Prompt cache lifetime";
+  const set = [cur.main && `main conversation ${cur.main}`, cur.subagents && `subagents ${cur.subagents}`].filter(Boolean).join(", ");
+  if (cur.overrides.length) return { label, status: "warn", detail: `${set} in ~/.claude/settings.json, but ${cur.overrides.join(", ")} overrides it` };
+  const old = ttlUnsupported(claudeCodeInstallsFromEnv());
+  if (old.length) return { label, status: "warn", detail: `${set}; ${describeInstalls(old)} predates the setting (${CACHE_TTL_SINCE}) and ignores it` };
+  return { label, status: "ok", detail: `${set} (context-doctor cache-ttl; off removes it)` };
 }
 
 /**
@@ -454,6 +471,8 @@ export async function runDoctor(): Promise<void> {
         checks.push(fanoutCheck(settings, plugin));
       }
       checks.push(modelSwitchCheck(settings, plugin));
+      const ttl = cacheTtlCheck();
+      if (ttl) checks.push(ttl);
     } catch (e) {
       checks.push({ label: "Every-prompt hook", status: "fail", detail: `settings.json unreadable (${(e as Error).message})` });
     }

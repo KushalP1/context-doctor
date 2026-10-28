@@ -20,7 +20,7 @@ import { selfCommand, withInvocation } from "./invocation.js";
 import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
 import { startProxy } from "./proxy.js";
-import { runInstall, runUninstall } from "./install.js";
+import { claudeCodeInstallsFromEnv, runInstall, runUninstall } from "./install.js";
 import { listSessions, parseSessionFile, pickCurrentSession } from "./session.js";
 import { runHook } from "./hook.js";
 import { abCommand } from "./ab.js";
@@ -62,6 +62,7 @@ import { currentTranscript, findSession, recall, renderRecall } from "./recall.j
 import { measureSubagentCosts, renderCostMedians, saveSubagentCosts } from "./fanout.js";
 import { applyPrune, canonical, planPrune, renderPrune, undoPrune } from "./prune.js";
 import { lensOverSessions, renderLens, sessionLens } from "./lens.js";
+import { currentTtl, estimateCacheTtl, renderCacheTtl, setCacheTtl, settingKey, ttlUnsupported, CACHE_TTL_SINCE, type Ttl } from "./cachettl.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -141,6 +142,12 @@ Fix automatically:
                                                 Claude Code's own auto-compact window (e.g. 400k):
                                                 what each size would have saved on your sessions,
                                                 and set or remove it. Works in the desktop app too
+  context-doctor cache-ttl [status|1h|5m|off] [--subagents]
+                                                How long Claude Code's prompt cache lives (5 minutes
+                                                or 1 hour), replayed on your own pauses: what each
+                                                would have cost, then set or remove promptCacheTtl
+                                                (--subagents: subagentPromptCacheTtl). Same content
+                                                either way: price only. Desktop app too
   context-doctor proxy --autopilot  [options]   Local proxy for your own API apps (Anthropic, OpenAI,
                                                 Gemini): clears stale tool output only when the
                                                 prompt cache is cold, so it never costs more.
@@ -227,8 +234,8 @@ Options:
   --max-tool-tokens <n>   (optimize) Token budget for trimmed tool results (default 300)
   --limit <n>             (accuracy, session --list, reads, tasks, subagents) How many to sample
                           or list
-  --days <n>              (savings, compact-window, overhead, reads, tasks, subagents, compactions,
-                          cache-misses, limits)
+  --days <n>              (savings, compact-window, cache-ttl, overhead, reads, tasks, subagents,
+                          compactions, cache-misses, limits)
                           Days of history to read (default 30; compactions 60)
   -q, --query <text>      (pack) The question to rank chunks against
   --max-tokens <n>        (pack) Token budget (default 4000); (recall) default 2000; (ci) fail over
@@ -337,6 +344,8 @@ interface Args {
   query?: string;
   session?: string;
   undo?: boolean;
+  /** (cache-ttl) The subagents' setting instead of the main conversation's. */
+  subagentsTtl?: boolean;
   maxTokens?: number;
   chunkTokens?: number;
   ids?: string[];
@@ -368,7 +377,7 @@ function usageError(message: string): never {
 const COMMANDS = [
   "analyze", "optimize", "proxy", "install", "uninstall", "savings", "compact-window", "autopilot", "mcp",
   "instructions", "session", "cursor", "statusline", "hook", "report", "doctor", "dashboard", "init",
-  "experiment", "diff", "accuracy", "overhead", "ci", "cache-plan", "compactions", "cache-misses", "limits", "subagents", "tasks",
+  "experiment", "diff", "accuracy", "overhead", "ci", "cache-plan", "compactions", "cache-misses", "cache-ttl", "limits", "subagents", "tasks",
   "reads", "pack", "watch", "ab", "handoff", "recall", "help", "version",
 ];
 
@@ -434,6 +443,7 @@ const FLAGS: FlagSpec[] = [
   { names: ["--mcp"], set: (a) => { a.mcp = true; } },
   { names: ["--write"], set: (a) => { a.write = true; } },
   { names: ["--undo"], set: (a) => { a.undo = true; } },
+  { names: ["--subagents"], set: (a) => { a.subagentsTtl = true; } },
   { names: ["--calls"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.calls = v; } },
   { names: ["--explicit"], set: (a) => { a.explicit = true; } },
   { names: ["--semantic"], set: (a) => { a.semantic = a.semantic || true; } },
@@ -1085,6 +1095,37 @@ async function main(): Promise<void> {
       trimBoundaryStep: loadedRc.config.trimBoundaryStep,
     });
     return; // server keeps the process alive
+  }
+
+  if (args.command === "cache-ttl") {
+    const sub = args.file ?? "status";
+    const kind = args.subagentsTtl ? "subagents" : "main";
+    const key = settingKey(kind);
+    if (sub === "1h" || sub === "5m" || sub === "off") {
+      const r = setCacheTtl(kind, sub === "off" ? undefined : (sub as Ttl));
+      if (!r.changed) {
+        console.log(sub === "off" ? `${key} was not set. Nothing changed.` : `${key} is already "${sub}" in ~/.claude/settings.json. Nothing changed.`);
+        return;
+      }
+      const note = r.created ? " (a new file)" : r.backup ? ` (the previous file is kept as ${r.backup.replace(homedir(), "~")})` : "";
+      console.log(sub === "off"
+        ? `✓ ${key} removed from ~/.claude/settings.json${note}: Claude Code picks the lifetime itself again (new sessions).`
+        : `✓ ${key} = "${sub}" in ~/.claude/settings.json${note}.`);
+      if (sub !== "off") {
+        console.log(`  New ${kind === "main" ? "sessions write the main conversation's" : "subagents write their"} cache at ${sub === "1h" ? "1 hour (2x input per written token)" : "5 minutes (1.25x)"}, in every Claude Code surface.`);
+        const old = ttlUnsupported(claudeCodeInstallsFromEnv());
+        if (old.length) console.log(`  ${old.map((i) => "Claude Code " + i.version).join(", ")} predates the setting (${CACHE_TTL_SINCE}) and ignores it.`);
+        console.log(`  Undo: ${selfCommand(`cache-ttl off${kind === "subagents" ? " --subagents" : ""}`)}`);
+      }
+      return;
+    }
+    if (sub !== "status") usageError(`Usage: context-doctor cache-ttl [status | 1h | 5m | off] [--subagents]; got "${sub}".`);
+    const reading = progressLine("Replaying your sessions at both cache lifetimes");
+    const report = estimateCacheTtl(args.days ?? 30, { onProgress: reading.tick });
+    reading.clear();
+    const current = currentTtl();
+    console.log(args.json ? JSON.stringify({ ...report, current }, null, 2) : renderCacheTtl(report, current, claudeCodeInstallsFromEnv(), selfCommand));
+    return;
   }
 
   if (args.command === "cache-misses") {

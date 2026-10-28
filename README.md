@@ -51,6 +51,7 @@ Pick where you work. Each takes about a minute and is fully reversible.
 - A compaction hook (`PreCompact`) tells each Claude Code compaction what the session cannot lose (files changed, open tasks, your instructions, failing tests), so compacting saves tokens without losing the thread.
 - An every-prompt hook (Claude Code, Codex, Gemini CLI; Cursor after each tool call) tells the model its real context size and the largest waste, and offers `/compact` when you return to a big session after the cache expired.
 - `compact-window`: sets Claude Code's own auto-compact window, measured on your history first. Works in the desktop app too.
+- `cache-ttl`: replays your own pauses at a 5-minute and a 1-hour prompt cache and sets Claude Code's `promptCacheTtl` to the cheaper one (the author's: 7% less main-conversation input at 1 hour; 22% less than the 5-minute default an API key gets). Same content either way, so no quality cost ([fixes](./docs/fix.md)).
 - [Autopilot](./docs/autopilot.md): a local proxy (or SDK wrapper) that clears stale tool output only when the prompt cache is cold, so a request never costs more.
 
 ## What it saves
@@ -132,6 +133,7 @@ Rules 1-4 end exactly at character 512, the part ChatGPT's guide says must stand
 | `context-doctor autopilot on\|off\|pause\|resume\|status` | Every new Claude Code session started in a terminal or IDE goes through the local proxy, which clears stale tool output only when the prompt cache is cold: measured 12.7% less input cost, no session worse ([details](./docs/autopilot.md)) |
 | `context-doctor proxy --autopilot` | Local proxy for your own Anthropic, OpenAI and Gemini API apps: clears stale tool output only when the prompt cache is cold, so it never costs more. Plain `proxy` runs the optimizing strategies (dedupe, trim, strip base64), which can cost more on cached traffic. `--token` for a public URL; `/stats` for cumulative savings ([details](./docs/proxy.md)) |
 | `context-doctor compact-window [status\|off\|<size>]` | Replay your last 30 days at auto-compact windows from 200k to 800k: input cost, saving, and how many more compactions each means. `400k` (or `250000`, `0.4m`) sets Claude Code's `autoCompactWindow`, with a backup; `off` removes it. Works in every Claude Code surface, the desktop app included |
+| `context-doctor cache-ttl [status\|1h\|5m\|off] [--subagents]` | The main conversation's (or subagents') prompt cache lifetime: what 5 minutes and 1 hour would each have cost on your last 30 days, then set or remove `promptCacheTtl` / `subagentPromptCacheTtl` (Claude Code 2.1.243+, every surface). Price only: the same content is sent ([details](./docs/fix.md)) |
 | `context-doctor instructions [--copy]` | The ~190-token standing rules (~130 on GPT) for claude.ai / ChatGPT preferences, for web and phones where no server runs |
 | `context-doctor handoff [list\|show <id>\|latest] [--copy]` | Handoffs saved from chat apps (the `handoff` prompt or `save_handoff`): list them, print one, or copy it to paste as a new chat's first message ([handoff](./docs/handoff.md)) |
 | `context-doctor mcp [--http]` | The MCP server as a subcommand, for clients and registries that launch `npx -y context-doctor mcp` |
@@ -179,6 +181,7 @@ Every release, with the details: [docs/whats-new.md](./docs/whats-new.md).
 
 - [What `install` does](./docs/install.md): every file it writes, what runs in each session after, and when you need MCP
 - [Autopilot](./docs/autopilot.md): how it clears stale tool output, and why it never costs more
+- [Fixes that change a setting](./docs/fix.md): `cache-ttl`, measured first, undone in one command
 - [The proxy](./docs/proxy.md): autopilot and the optimizing mode for your API apps, `/stats`, cache advice, a public URL for Cursor
 - [Chat apps](./docs/chat-apps.md): Claude Desktop, ChatGPT, claude.ai and the phone apps; what acts by itself and what only nudges; the MCP tools, prompts and resources
 - [Handoff](./docs/handoff.md): continue a long chat in a new one from a ≤400-token brief
