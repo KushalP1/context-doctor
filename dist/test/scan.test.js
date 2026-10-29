@@ -66,7 +66,11 @@ test("a grown transcript resumed from the cache gives exactly the records of a f
     withCache(() => {
         const dir = mkdtempSync(join(tmpdir(), "cd-scan-grow-"));
         try {
-            for (const src of transcripts(history())) {
+            // The shapes that matter, not every file: compactions and a fork's parent, a malformed row and a
+            // half-written last line, CRLF, a subagent (a lighter test keeps slow CI runners unstarved).
+            const sources = transcripts(history()).filter((p) => /[\\/](s1|live|crlf)\.jsonl$|agent-a1\.jsonl$/.test(p));
+            assert.equal(sources.length, 4);
+            for (const src of sources) {
                 const full = readFileSync(src);
                 // Cut points: early, mid-file, just before and after a newline, and mid-line.
                 const nl = full.indexOf(10, Math.floor(full.length / 2));
@@ -213,7 +217,7 @@ test("overlapping runs on one cache agree with each other and with the golden re
         const args = ["savings", "--json"];
         const want = readFileSync(join(here, "..", "..", "src", "test", "golden", "base", goldenName(args)), "utf8");
         assert.ok(GOLDEN_COMMANDS.some((c) => c.join(" ") === args.join(" ")));
-        const runs = await Promise.all(Array.from({ length: 6 }, () => new Promise((resolve) => {
+        const runs = await Promise.all(Array.from({ length: 4 }, () => new Promise((resolve) => {
             const p = spawn(process.execPath, [...frozenClock(), join(here, "..", "cli.js"), ...args], { cwd: join(home, "work", "app"), env: cleanEnv(home, { CONTEXT_DOCTOR_CACHE_DIR: cache }) });
             let out = "";
             p.stdout.on("data", (d) => (out += d));

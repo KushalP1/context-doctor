@@ -21,6 +21,10 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 | Your own API apps (Anthropic, OpenAI, Gemini) | autopilot or the optimizing proxy; `withContextDoctor(client)` without a proxy (Anthropic, OpenAI and Google Gen AI SDKs) | library: profile, optimize, pack | — |
 | CI | `analyze --fail-over-budget`; the GitHub Action (`uses: KushalP1/context-doctor@<tag>`) comments memory-file growth on PRs and gates on a budget | `ci` locally | Not listed in the GitHub Marketplace: it lists only repositories with no workflow files, and the owner chose to keep context-doctor one repository (no separate Marketplace copy) |
 
+## Verified 2026-10-29
+
+- After B4 (the shared scan): `npm test` 721 of 721 locally, CI green on all 9 jobs (macOS, Linux, Windows; Node 20/22/24) for the B4 commit; `scripts/verify-local.sh` 71 of 71, now with the transcript cache in a throwaway folder for every run, `savings`, `fix`, `cache-ttl`, `cache-misses`, `compact-window` and `overhead` printing the same with no cache, a cold and a warm cache on a copy of the real history, and a warm `fix` under 5 s. Every report's text and JSON byte-identical to the code before B4 on a frozen-clock copy of the author's history and on the live one (read-only); no `~/.cache/context-doctor` written.
+
 ## Verified 2026-10-28
 
 - After the QA fixes of B1-B3: `npm test` 701 of 701 locally, with CI on macOS, Linux and Windows (Node 20/22/24); `scripts/verify-local.sh` 64 of 64, now also checking that `cache-ttl` writes into `CLAUDE_CONFIG_DIR` and leaves a CRLF, tab-indented settings file byte for byte after `1h` and `off`; the QA's own repros (`roundtrip.mjs`) all pass, and 16 concurrent applies kept every key in 5 of 5 runs. The real `~/.claude` again left without a fix record, lock or new key.
