@@ -7,7 +7,7 @@
  * `context-doctor uninstall` reverses it.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, copyFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, copyFileSync, rmdirSync, rmSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { delimiter, dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +17,7 @@ import { FANOUT_MATCHER } from "./fanout.js";
 import { antigravityAllSkillDirs, antigravityMcpConfigPath, antigravityPresent, antigravitySkillDirs } from "./antigravity.js";
 import { COPILOT_HOOK_EVENT, copilotHome, copilotHookFilePath, copilotMcpConfigPath, isOurCopilotEntry, vsCodePresent } from "./copilot.js";
 import { claudeDir, claudeJsonPath } from "./claudedir.js";
+import { scanCacheDir } from "./scan.js";
 import { editJsonText, parseSettingsText, sameJson } from "./settingsedit.js";
 
 interface Target {
@@ -1431,6 +1432,15 @@ export async function runUninstall(): Promise<void> {
       }
     });
   }
+  // The reports' transcript cache (scan.ts): records taken from your transcripts, rebuilt by the next report.
+  attempt("transcript cache", () => {
+    const dir = join(scanCacheDir(), "transcripts");
+    if (existsSync(dir)) {
+      rmSync(dir, { recursive: true, force: true });
+      done(`✓ Removed the transcript cache (${tilde(dir)})`);
+    }
+    try { rmdirSync(scanCacheDir()); } catch { /* not empty (someone else's files too), or never made */ }
+  });
   // Last: the folders install made for the skill, now empty.
   attempt("Claude Code skill folders", () => removeSkillFolders(claudeDir()));
   if (deletedStubs.length > 0) {

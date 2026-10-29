@@ -1,0 +1,26 @@
+context-doctor fix: what to change, ranked by what it saves you
+Last 30 days of your Claude Code sessions, $127 of input at list prices
+──────────────────────────────────────────────────────────────────
+1. Compact earlier: auto-compact window 400k          $13.31 (11%)
+   measured: your sessions replayed request by request at a 400k window: 1.2 compactions a week instead of 0.7
+   quality:  each compaction replaces the history with a summary (the compaction hook tells it what to keep): detail for money
+   changes:  ~/.claude/settings.json: autoCompactWindow = 400000   [compact-window]
+2. Autopilot: clear stale tool output when the cache is cold   $3.64 (3%)
+   measured: your terminal and IDE sessions replayed through the shipped autopilot code (1 desktop-app sessions it cannot reach left out)
+   quality:  clears only tool output the model has already read, only when the cache is cold, so a request never costs more; recall finds anything cleared
+   changes:  a local proxy service on 127.0.0.1:8787; ~/.claude/settings.json env.ANTHROPIC_BASE_URL   [autopilot]
+3. Switch off 1 unused MCP server or skill in this project   not priced
+   measured: none used in 8 sessions of this project in 30 days: unused
+   quality:  none while they stay unused; undo brings them back
+   changes:  ~/work/app/.claude/settings.local.json   [prune]
+   Each figure is measured alone. Do not add them up: the levers overlap (compacting earlier and
+   the cache lifetime both change what is written to the cache), so together they save less.
+
+Advice you act on
+  /compact when you come back to a big session after the cache expired: $3.05 over 13 returns.
+  Nothing points those moments out yet: context-doctor install (or the Claude Code plugin) adds the hook that does.
+
+Apply: context-doctor fix in a terminal asks about each one; or context-doctor fix --apply compact-window,autopilot,prune
+Undo everything fix applied: context-doctor fix undo. Dollars at list price; on a subscription the same tokens come out of your usage limit.
+
+[exit 0]

@@ -1,0 +1,55 @@
+{
+  "days": 30,
+  "now": 1790856000000,
+  "claudeLog": "~/.claude/.context-doctor-limits.jsonl",
+  "claudeReadings": 40,
+  "codexReadings": 0,
+  "windows": [
+    {
+      "window": "five_hour",
+      "label": "Claude 5-hour",
+      "app": "claude",
+      "pct": 73,
+      "at": 1790791200000,
+      "resetsAt": 1790870400000,
+      "resetSince": false,
+      "readings": 38
+    }
+  ],
+  "fits": [
+    {
+      "window": "five_hour",
+      "label": "Claude 5-hour",
+      "app": "claude",
+      "segments": 5,
+      "totalPct": 35,
+      "elsewhere": 13,
+      "elsewherePct": 91,
+      "resolution": 1,
+      "requests": 63,
+      "usd": 21.8730744,
+      "usable": false,
+      "mainModel": "claude-opus-5-5",
+      "byType": {
+        "r2": 0,
+        "looRmse": 7.705020339846487,
+        "relError": 1.100717191406641
+      },
+      "perMillion": {
+        "cache read": 0,
+        "cache write": 6.864870355382601
+      },
+      "pctPerUsd": 0.9875417983452742,
+      "byPrice": {
+        "r2": 0,
+        "looRmse": 5.707806725589679,
+        "relError": 0.8154009607985255,
+        "relSe": 0.39380427230177045
+      },
+      "slopeRelSe": null,
+      "why": "5 stretches of readings with usage beside them; 8 make a fit worth quoting"
+    }
+  ]
+}
+
+[exit 0]

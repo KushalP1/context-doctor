@@ -34,6 +34,7 @@
  * session, at the same interval (within 90 s or 2%), are named as a loop,
  * with the interval that keeps the cache warm.
  */
+import { type Extractor } from "./scan.js";
 import { type DiagnosedMisses } from "./missledger.js";
 export type MissCause = "model switch" | "context edited" | "after an API error" | "over 20 new blocks" | "nothing visible";
 export interface CacheMiss {
@@ -166,6 +167,10 @@ export interface Regression {
     /** In words, with the numbers. */
     text: string;
 }
+export declare const MISS_ROWS: Extractor<{
+    lastId?: string;
+    user: boolean;
+}>;
 /** Misses in one transcript; `since` drops requests before it. */
 /** What `onRequest` is told about each main-chain request in the period. */
 export interface RequestInfo {

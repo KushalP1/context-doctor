@@ -18,12 +18,14 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { forEachLine, listSessions, replyCounter } from "./session.js";
-import { estimateTokens, formatTokens, providerFor, realModel } from "./tokens.js";
+import { forEachLine, listSessions, replyCounter, textOf } from "./session.js";
+import { estimateTokens, formatTokens, providerFor, realModel, tokensForLength } from "./tokens.js";
 import { cacheWriteSplit, formatUsd, pricingFor, writeMultiplier as ttlWriteMultiplier } from "./pricing.js";
 import { isGeminiChat, readGeminiMessages } from "./gemini.js";
 import { claudeMcpConfigs, mcpUsage, measureServer, otherServerUses, serverUses, type McpServerConfig, type McpServerSize, type McpUsage } from "./mcpschema.js";
 import { claudeDir } from "./claudedir.js";
+import { REQUEST_ROWS } from "./coldresume.js";
+import { rowsOf } from "./scan.js";
 
 export type Agent = "Claude Code" | "Codex" | "Cursor" | "Gemini CLI";
 
@@ -201,12 +203,6 @@ interface SessionUsage {
   writes1h?: number;
 }
 
-function textOf(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content.map((b: any) => (typeof b === "string" ? b : typeof b?.text === "string" ? b.text : "")).filter(Boolean).join("\n");
-}
-
 /**
  * Claude Code: usage rows on assistant messages (one per API reply id).
  * `runRows` is shared by every transcript of one report: a forked session
@@ -215,16 +211,13 @@ function textOf(content: unknown): string {
  */
 function claudeUsage(path: string, runRows?: Set<string>): SessionUsage {
   const out: SessionUsage = { agent: "Claude Code", reqs: [], writes5m: 0, writes1h: 0 };
-  let firstUser: string | undefined;
+  let firstUser: { len: number; code: boolean } | undefined;
   let started = false;
   const sighting = replyCounter(runRows);
-  forEachLine(path, (line) => {
-    let e: any;
-    try { e = JSON.parse(line); } catch { return; }
+  rowsOf(path, REQUEST_ROWS).forEach((e) => {
     if (!e || e.isSidechain) return;
     if (e.type === "user" && !started && firstUser === undefined && !e.isMeta) {
-      const text = textOf(e.message?.content);
-      if (text) firstUser = text;
+      if (e.text) firstUser = e.text;
       return;
     }
     if (e.type !== "assistant" || !e.message?.usage) return;
@@ -235,7 +228,7 @@ function claudeUsage(path: string, runRows?: Set<string>): SessionUsage {
     const at = Date.parse(e.timestamp);
     if (!(prompt > 0) || !Number.isFinite(at)) return;
     // A fork's first request is its parent's: not a second session start.
-    if (!started && seen === "new") out.first = Math.max(0, prompt - estimateTokens(firstUser ?? "", CLAUDE));
+    if (!started && seen === "new") out.first = Math.max(0, prompt - (firstUser ? tokensForLength(firstUser.len, firstUser.code, CLAUDE) : 0));
     started = true;
     if (seen === "copy") return;
     const w = cacheWriteSplit(u);

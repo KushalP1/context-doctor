@@ -1,0 +1,38 @@
+{
+  "days": 30,
+  "billedUsd": 136.01985770000002,
+  "fixes": [
+    {
+      "id": "compact-window",
+      "title": "Compact earlier: auto-compact window 400k",
+      "savedUsd": 13.31069224498873,
+      "savedShare": 0.09785844853878808,
+      "basis": "your sessions replayed request by request at a 400k window: 1.2 compactions a week instead of 0.7",
+      "quality": "each compaction replaces the history with a summary (the compaction hook tells it what to keep): detail for money",
+      "change": "~/.claude/settings.json: autoCompactWindow = 400000",
+      "state": "available",
+      "value": 400000
+    },
+    {
+      "id": "autopilot",
+      "title": "Autopilot: clear stale tool output when the cache is cold",
+      "savedUsd": 3.639038450321738,
+      "savedShare": 0.026753729285233164,
+      "basis": "your terminal and IDE sessions replayed through the shipped autopilot code (1 desktop-app sessions it cannot reach left out)",
+      "quality": "clears only tool output the model has already read, only when the cache is cold, so a request never costs more; recall finds anything cleared",
+      "change": "a local proxy service on 127.0.0.1:8787; ~/.claude/settings.json env.ANTHROPIC_BASE_URL",
+      "state": "available"
+    },
+    {
+      "id": "prune",
+      "title": "Switch off 1 unused MCP server or skill in this project",
+      "basis": "none used in 8 sessions of this project in 30 days: unused",
+      "quality": "none while they stay unused; undo brings them back",
+      "change": "~/work/app/.claude/settings.local.json",
+      "state": "available"
+    }
+  ],
+  "since": []
+}
+
+[exit 0]

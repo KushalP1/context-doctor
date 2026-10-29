@@ -7,7 +7,7 @@
  *
  * `-` reads from stdin, so you can pipe: `cat chat.json | context-doctor analyze -`
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
@@ -26,7 +26,9 @@ import { abCommand } from "./ab.js";
 import { buildImpactReport } from "./impact.js";
 import { measureTokenizer, renderTokenizer } from "./tokenizer-measure.js";
 import { autopilotOff, autopilotOn, autopilotPauseResult, autopilotPaths, autopilotStatus, DEFAULT_AUTOPILOT_PORT } from "./autopilot.js";
-import { estimateSavings, renderSavings, renderShare } from "./savings.js";
+import { estimateSavings, renderSavings, renderShare, savingsRows } from "./savings.js";
+import { prescan } from "./scan.js";
+import { REQUEST_ROWS } from "./coldresume.js";
 import { currentCompactWindow, estimateCompactWindows, MAX_WINDOW, MIN_WINDOW, parseWindow, renderCompactWindows, setCompactWindow, settingsPath } from "./compactwindow.js";
 import { tilde } from "./claudedir.js";
 import { renderPreferences, copyToClipboard, CHAT_PREFERENCES } from "./preferences.js";
@@ -36,7 +38,7 @@ import { measureAccuracy, renderAccuracy } from "./accuracy.js";
 import { renderDiff } from "./diff.js";
 import { renderExperiment, runExperiment } from "./experiment.js";
 import { runStatusLine } from "./statusline.js";
-import { renderSubagents, subagentReport } from "./subagents.js";
+import { renderSubagents, subagentDir, subagentReport } from "./subagents.js";
 import { findPreset, PRESETS, RC_FILENAME } from "./config.js";
 import { runWatch } from "./watch.js";
 import { exactTokenCount } from "./exact.js";
@@ -53,20 +55,20 @@ import { ciReport, renderCiMarkdown, renderCiText } from "./ci.js";
 import { renderReads, repeatedReads } from "./reads.js";
 import { costPerTask, renderTasks } from "./tasks.js";
 import { planCache, renderCachePlan } from "./cacheplan.js";
-import { cacheMisses, cacheMissesLine, cacheMissesSignificant, renderCacheMisses } from "./cachemisses.js";
+import { cacheMisses, cacheMissesLine, cacheMissesSignificant, renderCacheMisses, MISS_ROWS } from "./cachemisses.js";
 import { renderPayback, subagentPayback } from "./subagentpay.js";
-import { compactionQuality, renderCompactionQuality } from "./compactquality.js";
+import { compactionQuality, renderCompactionQuality, QUALITY_ROWS } from "./compactquality.js";
 import { isHandoffId, listHandoffs, readHandoff, renderHandoffList, stripControls } from "./handoff.js";
 import { claudeLimitFit, limitSavingsLines, limitsReport, renderLimits } from "./limits.js";
 import { currentTranscript, findSession, recall, renderRecall } from "./recall.js";
 import { measureSubagentCosts, renderCostMedians, saveSubagentCosts } from "./fanout.js";
 import { applyPrune, canonical, installedSkills, planPrune, renderPrune, undoPrune } from "./prune.js";
-import { lensOverSessions, renderLens, sessionLens } from "./lens.js";
+import { lensOverSessions, renderLens, sessionLens, LENS_ROWS } from "./lens.js";
 import { applyFix, fixOverrides, loadFixRecords, parseFixIds, planFixes, readFixRecords, renderFixPlan, renderFixShare, savedSince, undoFixes } from "./fix.js";
-import { claudeMcpConfigs } from "./mcpschema.js";
+import { claudeMcpConfigs, MCP_ROWS } from "./mcpschema.js";
 import { effectiveEnv, settingsSources } from "./effective.js";
 import { SettingsError } from "./settingsedit.js";
-import { currentTtl, estimateCacheTtl, renderCacheTtl, setCacheTtl, settingKey, ttlUnsupported, CACHE_TTL_SINCE } from "./cachettl.js";
+import { currentTtl, estimateCacheTtl, renderCacheTtl, setCacheTtl, settingKey, subagentTranscripts, ttlUnsupported, CACHE_TTL_SINCE } from "./cachettl.js";
 import { claudeDir } from "./claudedir.js";
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -306,6 +308,11 @@ Start here
 
 All commands: context-doctor --help
 Guide: https://github.com/KushalP1/context-doctor#readme`;
+/** Claude Code transcripts written in the last `days`: the ones the replays read. */
+function claudeTranscripts(days) {
+    const since = Date.now() - days * 86_400_000;
+    return listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
+}
 /**
  * Everything `fix` ranks, measured on this machine's history (read-only):
  * the same replays `savings`, `compact-window` and `cache-ttl` run.
@@ -315,9 +322,15 @@ async function measureFixInputs(days) {
     const autopilotOnNow = existsSync(autopilotPaths().config);
     // With autopilot already on, its replay (most of the time) answers nothing `fix` asks.
     const replaying = progressLine(autopilotOnNow ? "Reading your Claude Code sessions" : "Replaying your Claude Code sessions");
+    const setWindow = currentCompactWindow();
+    // Each transcript read once for every replay below; what an earlier run kept is not read again (scan.ts).
+    prescan([
+        { paths: claudeTranscripts(days), extractors: [savingsRows(!autopilotOnNow), REQUEST_ROWS] },
+        { paths: subagentTranscripts(Date.now() - days * 86_400_000), extractors: [REQUEST_ROWS] },
+        ...(setWindow === undefined ? [{ paths: claudeTranscripts(60), extractors: [QUALITY_ROWS] }] : []),
+    ], replaying.tick);
     const report = estimateSavings(days, {}, undefined, replaying.tick, !autopilotOnNow);
     replaying.clear();
-    const setWindow = currentCompactWindow();
     let compactWindow;
     if (setWindow !== undefined) {
         compactWindow = { window: setWindow, savedUsd: 0, savedShare: 0, compactionsPerWeek: 0, nowPerWeek: 0, current: setWindow };
@@ -882,6 +895,11 @@ async function main() {
         // machine, answers the question people install this for: what would it
         // save me? Scripts and pipes still get the help text.
         const replaying = progressLine("Replaying your Claude Code sessions through autopilot");
+        // Each transcript read once for every report below; what an earlier run kept is not read again (scan.ts).
+        prescan([
+            { paths: claudeTranscripts(args.days ?? 30), extractors: [savingsRows(), REQUEST_ROWS, MISS_ROWS, LENS_ROWS] },
+            { paths: claudeTranscripts(60), extractors: [QUALITY_ROWS] },
+        ], replaying.tick);
         const report = estimateSavings(args.days ?? 30, {}, undefined, replaying.tick);
         replaying.clear();
         const setWindow = currentCompactWindow();
@@ -995,6 +1013,10 @@ async function main() {
         if (current && !windows.includes(current))
             windows.push(current);
         const measuring = progressLine("Measuring your compactions");
+        prescan([
+            { paths: claudeTranscripts(args.days ?? 30), extractors: [REQUEST_ROWS] },
+            { paths: claudeTranscripts(60), extractors: [QUALITY_ROWS] },
+        ], measuring.tick);
         const reread = compactionQuality(60, undefined, measuring.tick).extraRereadTokensPerCompaction;
         measuring.clear();
         const replaying = progressLine("Replaying your sessions at each window");
@@ -1401,6 +1423,17 @@ async function main() {
     if (args.command === "overhead") {
         const sessions = progressLine("Measuring each session's first request");
         const tools = progressLine("Counting MCP tool calls");
+        // One read of each Claude Code transcript for both counts (scan.ts); subagents hold MCP calls too.
+        const mains = claudeTranscripts(args.days ?? 30);
+        prescan([
+            { paths: mains, extractors: [REQUEST_ROWS, MCP_ROWS] },
+            { paths: mains.flatMap((p) => { try {
+                    return readdirSync(subagentDir(p)).filter((f) => f.endsWith(".jsonl")).map((f) => join(subagentDir(p), f));
+                }
+                catch {
+                    return [];
+                } }), extractors: [MCP_ROWS] },
+        ], sessions.tick);
         const report = overheadReport({
             days: args.days,
             onProgress: (done, total, stage) => (stage === "sessions" ? sessions : tools).tick?.(done, total),

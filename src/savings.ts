@@ -15,7 +15,8 @@
 import { basename, dirname } from "node:path";
 import { AutoClearer, type AutoClearOptions } from "./autoclear.js";
 import { coldResumeEvents } from "./coldresume.js";
-import { forEachLine, listSessions, replyCounter, isClaudeSession } from "./session.js";
+import { listSessions, replyCounter, isClaudeSession } from "./session.js";
+import { rowsOf, type Extractor } from "./scan.js";
 import { CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, pricingFor, usageCost, writeMultiplier, type ModelPricing } from "./pricing.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
 import { withInvocation } from "./invocation.js";
@@ -86,20 +87,19 @@ type Msg = { role: string; content: Array<Record<string, unknown>> };
 /** Without a price on file the arms still need relative weights: Claude's usual 10% read rate. */
 const UNPRICED: ModelPricing = { inputPerM: 1, outputPerM: 5, cacheReadPerM: 0.1 };
 
-/**
- * One arm of the replay: the history as sent, priced incrementally at each
- * request's own model. Reads are priced as they go; writes are kept at the
- * input price and multiplied by the session's write TTL mix at the end
- * (`usd(writeMult)`), since the mix is only known once the whole transcript
- * has been read.
- */
 /** What an arm needs from a clearer: autopilot's AutoClearer, or the simulated server-side rule (serverclear.ts). */
 export interface ReplayClearer { apply(body: Record<string, unknown>, now: number): { firstChanged: number } }
 
+/**
+ * One arm of the replay: the history as sent, each request's prompt split
+ * into what the cache would serve and what is written. `settleReplay` prices
+ * them at each request's own model, writes at the session's TTL mix, known
+ * once the whole transcript has been read.
+ */
 function arm(model: string | undefined, clearer: ReplayClearer | null) {
   const msgs: Msg[] = [];
   const tok: number[] = [];
-  let total = 0, prevLen = 0, readUsd = 0, writeAtInput = 0, raw = 0;
+  let total = 0, prevLen = 0;
   const size = (m: Msg) => estimateTokens(JSON.stringify(m), model);
   return {
     push(m: Msg) { msgs.push(structuredClone(m)); const k = size(m); tok.push(k); total += k; },
@@ -108,7 +108,8 @@ function arm(model: string | undefined, clearer: ReplayClearer | null) {
       msgs[i].content.push(...structuredClone(blocks));
       total -= tok[i]; tok[i] = size(msgs[i]); total += tok[i];
     },
-    request(now: number, cold: boolean, counted = true, price: ModelPricing = UNPRICED) {
+    /** One request: what the cache would have served (read), what is written, and the whole prompt. */
+    request(now: number, cold: boolean): ArmRequest | undefined {
       let first = -1;
       if (clearer) {
         const body = { model, messages: msgs, system: [{ type: "text", text: "", cache_control: { type: "ephemeral", ttl: "1h" } }] };
@@ -118,18 +119,129 @@ function arm(model: string | undefined, clearer: ReplayClearer | null) {
       const k = cold ? 0 : Math.min(prevLen, first >= 0 ? first : prevLen);
       let read = 0;
       for (let i = 0; i < k; i++) read += tok[i];
-      const write = total - read;
-      if (counted) {
-        readUsd += ((cold ? 0 : FIXED_TOKENS) + read) * price.cacheReadPerM;
-        writeAtInput += ((cold ? FIXED_TOKENS : 0) + write) * price.inputPerM;
-        raw += FIXED_TOKENS + total;
-      }
       prevLen = msgs.length;
+      return { read, write: total - read, total };
     },
-    usd(writeMult: number) { return (readUsd + writeAtInput * writeMult) / 1e6; },
-    get raw() { return raw; },
   };
 }
+
+/**
+ * A transcript, replayed once into the records the report prices: per
+ * request its time, uuid, model and recorded bill, and what each arm read
+ * and wrote; the compactions; the uuids of replies with no usage. What
+ * depends on the period or on other transcripts (which requests count, a
+ * fork's copied history) is settled afterwards, by `settleReplay`, so the
+ * records can be kept and the replay (most of the time `savings` takes)
+ * runs once per transcript, not once per run.
+ */
+type ReplayRow =
+  | { k: "r"; now: number; uuid?: string; pm?: string; bw: number; usd: number; raw: number; cold: boolean; b?: number[]; a?: number[] }
+  | { k: "s"; uuid?: string }
+  | { k: "c" }
+  | { k: "end"; model?: string; entrypoint?: string; w5: number; w1: number };
+
+/** One arm's request, as the arm left it: tokens read from the cache, written, and the total sent. */
+type ArmRequest = { read: number; write: number; total: number };
+
+function replayExtractor(id: string, options: AutoClearOptions, makeClearer: (model?: string) => ReplayClearer, replay: boolean): Extractor<any> {
+  return {
+    id,
+    resumable: false,
+    init() {
+      const st = {
+        model: undefined as string | undefined,
+        entrypoint: undefined as string | undefined,
+        lastId: undefined as string | undefined,
+        lastTs: null as number | null,
+        writes5m: 0,
+        writes1h: 0,
+        sighting: replyCounter(),
+        base: undefined as ReturnType<typeof arm> | undefined,
+        auto: undefined as ReturnType<typeof arm> | undefined,
+      };
+      st.base = armOf(undefined, null);
+      st.auto = armOf(undefined, replay ? makeClearer() : null);
+      return st;
+    },
+    line(_raw, row, out, st) {
+      let e: any;
+      try { e = row(); } catch { return; }
+      if (!e || e.isSidechain) return;
+      if (!st.entrypoint && typeof e.entrypoint === "string") st.entrypoint = e.entrypoint;
+      if (e.type === "system" && e.subtype === "compact_boundary") {
+        // Compaction replaces the history in both arms alike: start fresh.
+        out.push({ k: "c" });
+        st.base = armOf(st.model, null);
+        st.auto = armOf(st.model, replay ? makeClearer(st.model) : null);
+        return;
+      }
+      if (e.type === "assistant" && e.message) {
+        const m = e.message;
+        // "<synthetic>" placeholders are not a model: a session that opened
+        // with one was priced at nothing.
+        st.model = st.model ?? realModel(m.model);
+        const blocks = (Array.isArray(m.content) ? m.content : []).filter((b: any) => b?.type !== "thinking" && b?.type !== "redacted_thinking");
+        if (m.id !== st.lastId) {
+          st.lastId = m.id;
+          const u = m.usage ?? {};
+          const read = u.cache_read_input_tokens ?? 0, write = u.cache_creation_input_tokens ?? 0, fresh = u.input_tokens ?? 0;
+          const seen = st.sighting(e);
+          const uuid = typeof e.uuid === "string" ? e.uuid : undefined;
+          if (seen !== "repeat" && read + write + fresh > 0) {
+            const now = Date.parse(e.timestamp) || 0;
+            // Each request at its own model: a session that switched from a
+            // $4 to a $10 model was priced at the first one throughout.
+            const pm = realModel(m.model) ?? st.model;
+            const price = pricingFor(pm);
+            const ttl = cacheWriteSplit(u);
+            st.writes5m += ttl.fiveMinute;
+            st.writes1h += ttl.oneHour;
+            const cold = st.lastTs === null || now - st.lastTs > CLAUDE_CODE_TTL_MS;
+            const r: ReplayRow = {
+              k: "r", now, cold,
+              bw: fresh + read * 0.1 + ttl.fiveMinute * CACHE_WRITE_5M + ttl.oneHour * CACHE_WRITE_1H,
+              usd: price ? usageCost(u, price).promptUsd : 0,
+              raw: fresh + read + write,
+            };
+            // Only what is set: a record read back from the cache must equal this one.
+            if (uuid !== undefined) r.uuid = uuid;
+            if (pm !== undefined) r.pm = pm;
+            const b = st.base!.request(now, cold), a = st.auto!.request(now, cold);
+            if (b && a) Object.assign(r, { b: [b.read, b.write, b.total], a: [a.read, a.write, a.total] });
+            out.push(r);
+            st.lastTs = now;
+          } else if (seen !== "repeat") {
+            out.push(uuid === undefined ? { k: "s" } : { k: "s", uuid });
+          }
+          st.base!.push({ role: "assistant", content: blocks });
+          st.auto!.push({ role: "assistant", content: blocks });
+        } else {
+          st.base!.extend(blocks);
+          st.auto!.extend(blocks);
+        }
+      } else if (e.type === "user" && e.message) {
+        const c = e.message.content;
+        const msg: Msg = { role: "user", content: Array.isArray(c) ? c : [{ type: "text", text: String(c ?? "") }] };
+        st.base!.push(msg);
+        st.auto!.push(msg);
+      }
+    },
+    end(out, st) {
+      out.push({ k: "end", ...(st.model !== undefined ? { model: st.model } : {}), ...(st.entrypoint !== undefined ? { entrypoint: st.entrypoint } : {}), w5: st.writes5m, w1: st.writes1h });
+    },
+  };
+
+  // Without the replay (autopilot already on: `fix` needs only the bill and
+  // the cold returns) the arms do nothing, which is most of the time spent.
+  function armOf(m: string | undefined, c: ReplayClearer | null): ReturnType<typeof arm> {
+    return replay ? arm(m, c) : { push() {}, extend() {}, request: () => undefined };
+  }
+}
+
+const REPLAY = replayExtractor("replay.1", {}, () => new AutoClearer({}), true);
+const BILL = replayExtractor("bill.1", {}, () => new AutoClearer({}), false);
+/** What `estimateSavings` reads from each transcript, with or without autopilot's replay (for `prescan`). */
+export const savingsRows = (replay = true): Extractor<any> => (replay ? REPLAY : BILL);
 
 /**
  * Replay one Claude Code transcript. Undefined when it holds too few requests
@@ -139,82 +251,58 @@ function arm(model: string | undefined, clearer: ReplayClearer | null) {
  * `coldRows` does the same for the cold-resume count, which reads the
  * transcript again after the replay has added its rows to `runRows`.
  */
-export function replaySession(path: string, options: AutoClearOptions = {}, since = 0, runRows?: Set<string>, coldRows?: Set<string>, makeClearer: (model?: string) => ReplayClearer = () => new AutoClearer(options), replay = true): SessionSavings | undefined {
-  let model: string | undefined;
-  // Without the replay (autopilot already on: `fix` needs only the bill and
-  // the cold returns) the arms do nothing, which is most of the time spent.
-  const none = (): ReturnType<typeof arm> => ({ push() {}, extend() {}, request() {}, usd: () => 0, raw: 0 });
-  const arm2 = (m: string | undefined, c: ReplayClearer | null) => (replay ? arm(m, c) : none());
-  let base = arm2(undefined, null), auto = arm2(undefined, replay ? makeClearer() : null);
+export function replaySession(path: string, options: AutoClearOptions = {}, since = 0, runRows?: Set<string>, coldRows?: Set<string>, makeClearer?: (model?: string) => ReplayClearer, replay = true): SessionSavings | undefined {
+  // The default replay is kept between runs; another clearer or options are replayed afresh.
+  const custom = makeClearer !== undefined || Object.keys(options).length > 0;
+  const ex = custom ? replayExtractor(`replay.custom`, options, makeClearer ?? (() => new AutoClearer(options)), replay) : replay ? REPLAY : BILL;
+  return settleReplay(path, custom ? rowsOf<ReplayRow>(path, ex, { keep: false }) : rowsOf<ReplayRow>(path, ex), since, runRows, coldRows, replay);
+}
+
+/** The report's figures for one transcript from its replay records: the period and the forks applied. */
+function settleReplay(path: string, rows: ReplayRow[], since: number, runRows: Set<string> | undefined, coldRows: Set<string> | undefined, replay: boolean): SessionSavings | undefined {
+  // A reply first met in an earlier transcript (a fork's copy) is a copy here.
+  const sighting = (uuid: string | undefined): "new" | "copy" => {
+    if (!runRows || uuid === undefined) return "new";
+    if (runRows.has(uuid)) return "copy";
+    runRows.add(uuid);
+    return "new";
+  };
+  const fresh = () => ({ readUsd: 0, writeAtInput: 0, raw: 0 });
+  let base = fresh(), auto = fresh();
   let baseUsd = 0, autoUsd = 0, baseRaw = 0, autoRaw = 0;
-  let entrypoint: string | undefined;
-  let billed = 0, billedUsd = 0, billedRaw = 0, requests = 0, lastId: string | undefined, lastTs: number | null = null;
-  let writes5m = 0, writes1h = 0;
-  const sighting = replyCounter(runRows);
+  let billed = 0, billedUsd = 0, billedRaw = 0, requests = 0;
+  let end: Extract<ReplayRow, { k: "end" }> | undefined;
   // Arms are closed out at each compaction and at the end, priced at the
   // session's write mix (known by the end, so the closed arms wait for it).
-  const closed: Array<ReturnType<typeof arm>> = [];
+  const closed: Array<ReturnType<typeof fresh>> = [];
   const flush = () => { closed.push(base, auto); baseRaw += base.raw; autoRaw += auto.raw; };
-
-  forEachLine(path, (line) => {
-    let e: any;
-    try { e = JSON.parse(line); } catch { return; }
-    if (!e || e.isSidechain) return;
-    if (!entrypoint && typeof e.entrypoint === "string") entrypoint = e.entrypoint;
-    if (e.type === "system" && e.subtype === "compact_boundary") {
-      // Compaction replaces the history in both arms alike: start fresh.
-      flush();
-      base = arm2(model, null);
-      auto = arm2(model, replay ? makeClearer(model) : null);
-      return;
+  const charge = (acc: ReturnType<typeof fresh>, r: number[] | undefined, cold: boolean, price: ModelPricing) => {
+    if (!replay || !r) return;
+    const [read, write, total] = r;
+    acc.readUsd += ((cold ? 0 : FIXED_TOKENS) + read) * price.cacheReadPerM;
+    acc.writeAtInput += ((cold ? FIXED_TOKENS : 0) + write) * price.inputPerM;
+    acc.raw += FIXED_TOKENS + total;
+  };
+  for (const r of rows) {
+    if (r.k === "s") sighting(r.uuid);
+    else if (r.k === "c") { flush(); base = fresh(); auto = fresh(); }
+    else if (r.k === "end") end = r;
+    else {
+      // History before the window, or already billed under the session it
+      // was forked from, still shapes the replay's state; only the rest is
+      // billed and counted.
+      const seen = sighting(r.uuid);
+      const inWindow = r.now >= since && seen === "new";
+      if (!inWindow) continue;
+      billed += r.bw;
+      billedUsd += r.usd;
+      billedRaw += r.raw;
+      requests++;
+      const price = pricingFor(r.pm) ?? UNPRICED;
+      charge(base, r.b, r.cold, price);
+      charge(auto, r.a, r.cold, price);
     }
-    if (e.type === "assistant" && e.message) {
-      const m = e.message;
-      // "<synthetic>" placeholders are not a model: a session that opened
-      // with one was priced at nothing.
-      model = model ?? realModel(m.model);
-      const blocks = (Array.isArray(m.content) ? m.content : []).filter((b: any) => b?.type !== "thinking" && b?.type !== "redacted_thinking");
-      if (m.id !== lastId) {
-        lastId = m.id;
-        const u = m.usage ?? {};
-        const read = u.cache_read_input_tokens ?? 0, write = u.cache_creation_input_tokens ?? 0, fresh = u.input_tokens ?? 0;
-        const seen = sighting(e);
-        if (seen !== "repeat" && read + write + fresh > 0) {
-          const now = Date.parse(e.timestamp) || 0;
-          // History before the window, or already billed under the session
-          // it was forked from, still shapes the replay's state; only the
-          // rest is billed and counted.
-          const inWindow = now >= since && seen === "new";
-          // Each request at its own model: a session that switched from a
-          // $4 to a $10 model was priced at the first one throughout.
-          const price = pricingFor(realModel(m.model) ?? model);
-          const ttl = cacheWriteSplit(u);
-          writes5m += ttl.fiveMinute;
-          writes1h += ttl.oneHour;
-          if (inWindow) {
-            billed += fresh + read * 0.1 + ttl.fiveMinute * CACHE_WRITE_5M + ttl.oneHour * CACHE_WRITE_1H;
-            billedUsd += price ? usageCost(u, price).promptUsd : 0;
-            billedRaw += fresh + read + write;
-            requests++;
-          }
-          const cold = lastTs === null || now - lastTs > CLAUDE_CODE_TTL_MS;
-          base.request(now, cold, inWindow, price);
-          auto.request(now, cold, inWindow, price);
-          lastTs = now;
-        }
-        base.push({ role: "assistant", content: blocks });
-        auto.push({ role: "assistant", content: blocks });
-      } else {
-        base.extend(blocks);
-        auto.extend(blocks);
-      }
-    } else if (e.type === "user" && e.message) {
-      const c = e.message.content;
-      const msg: Msg = { role: "user", content: Array.isArray(c) ? c : [{ type: "text", text: String(c ?? "") }] };
-      base.push(msg);
-      auto.push(msg);
-    }
-  });
+  }
   flush();
   if (requests < 10 || billed <= 0) return undefined;
 
@@ -224,16 +312,18 @@ export function replaySession(path: string, options: AutoClearOptions = {}, sinc
   // arms write at this session's own TTL mix: the replay charges writes that
   // never happened (a cold re-read after clearing), and Claude Code would
   // have written those at the TTL it wrote everything else at.
-  const mix = writeMultiplier(writes5m, writes1h);
-  for (let i = 0; i < closed.length; i += 2) { baseUsd += closed[i].usd(mix); autoUsd += closed[i + 1].usd(mix); }
+  const mix = writeMultiplier(end?.w5 ?? 0, end?.w1 ?? 0);
+  const usd = (a: ReturnType<typeof fresh>) => (a.readUsd + a.writeAtInput * mix) / 1e6;
+  for (let i = 0; i < closed.length; i += 2) { baseUsd += usd(closed[i]); autoUsd += usd(closed[i + 1]); }
   const cold = coldResumeEvents(path, undefined, undefined, coldRows).filter((c) => c.at >= since);
   const pct = baseUsd > 0 ? (baseUsd - autoUsd) / baseUsd : 0;
   const rawPct = baseRaw > 0 ? (baseRaw - autoRaw) / baseRaw : 0;
   const dir = basename(dirname(path));
+  const entrypoint = end?.entrypoint;
   return {
     path,
     project: dir.replace(/^-Users-[^-]+-/, "").replace(/^-/, "") || dir,
-    model,
+    model: end?.model,
     requests,
     billedWeighted: billed,
     billedUsd,

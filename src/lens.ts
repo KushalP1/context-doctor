@@ -15,7 +15,9 @@
  *    at that request's billed cost.
  */
 
+import { createHash } from "node:crypto";
 import { forEachLine, listSessions, replyCounter, isClaudeSession } from "./session.js";
+import { rowsOf, slimUsage, type Extractor } from "./scan.js";
 import { openAIUsage, pricingFor, usageCost, type RecordedUsage } from "./pricing.js";
 import { formatTokens, realModel } from "./tokens.js";
 
@@ -91,47 +93,79 @@ class Acc {
 /** A call's identity: its tool and its exact input. */
 const callKey = (name: string, input: unknown): string => `${name}\u0000${typeof input === "string" ? input : JSON.stringify(input ?? null)}`;
 
-function scanClaude(path: string, acc: Acc, since: number, runRows?: Set<string>): void {
-  const sighting = replyCounter(runRows);
-  const costOf = new Map<string, { usd: number; context: number }>();
-  let prevCall: string | undefined;
-  forEachLine(path, (line) => {
+/**
+ * What the lens takes from a Claude Code transcript, in order: prompts the
+ * user typed ("p": the next call is a new request, not a poll), and
+ * main-thread assistant rows that bill a reply (model and usage) or call
+ * tools (each call's tool and identity), with time, id and uuid.
+ */
+type LensRow =
+  | { k: "p" }
+  | { k: "a"; ts?: unknown; mid?: string; uuid?: string; model?: string; u?: Record<string, any>; calls?: Array<[name: string, id: string]> };
+
+/** A call's identity, as a hash: equal calls stay equal, and the cache keeps no command or input. */
+const callId = (key: string): string => createHash("sha1").update(key).digest("base64");
+
+export const LENS_ROWS: Extractor<null> = {
+  id: "lens.1",
+  init: () => null,
+  line(line, row, out) {
     const prompt = line.includes('"type":"user"') && !line.includes('"tool_result"');
     if (!prompt && !line.includes('"usage"') && !line.includes('"tool_use"')) return;
     let e: Record<string, any>;
-    try { e = JSON.parse(line); } catch { return; }
+    try { e = row(); } catch { return; }
     // A prompt the user typed between two identical calls makes the second a
     // new request, not a poll (the same check, asked for again).
     if (e?.type === "user" && !e.isSidechain && !e.isMeta && !(Array.isArray(e.message?.content) && e.message.content.some((b: any) => b?.type === "tool_result"))) {
-      prevCall = undefined;
+      out.push({ k: "p" });
       return;
     }
     if (e?.type !== "assistant" || e.isSidechain || !e.message) return;
     const m = e.message;
-    const at = Date.parse(String(e.timestamp ?? ""));
+    const r: Extract<LensRow, { k: "a" }> = { k: "a" };
+    if (m.usage && realModel(m.model)) Object.assign(r, { model: realModel(m.model), u: slimUsage(m.usage) });
+    if (Array.isArray(m.content)) {
+      const calls = m.content.filter((b: any) => b?.type === "tool_use" && typeof b.name === "string").map((b: any): [string, string] => [b.name, callId(callKey(b.name, b.input))]);
+      if (calls.length) r.calls = calls;
+    }
+    if (!r.model && !r.calls) return;
+    if (e.timestamp !== undefined) r.ts = e.timestamp;
+    if (typeof m.id === "string") r.mid = m.id;
+    if (typeof e.uuid === "string") r.uuid = e.uuid;
+    out.push(r);
+  },
+};
+
+function scanClaude(path: string, acc: Acc, since: number, runRows?: Set<string>): void {
+  const sighting = replyCounter(runRows);
+  const costOf = new Map<string, { usd: number; context: number }>();
+  let prevCall: string | undefined;
+  for (const r of rowsOf<LensRow>(path, LENS_ROWS)) {
+    if (r.k === "p") {
+      prevCall = undefined;
+      continue;
+    }
+    const at = Date.parse(String(r.ts ?? ""));
     const inPeriod = !(Number.isFinite(at) && at < since);
-    const id = typeof m.id === "string" ? m.id : undefined;
-    if (m.usage && realModel(m.model)) {
-      const seen = sighting(e);
+    const id = r.mid;
+    if (r.model && r.u) {
+      const seen = sighting({ message: { id }, uuid: r.uuid });
       if (seen === "new" && inPeriod) {
-        const u = m.usage as RecordedUsage & { output_tokens_details?: { thinking_tokens?: unknown } };
-        const usd = acc.request(realModel(m.model), u, num(u.output_tokens_details?.thinking_tokens));
-        if (id) costOf.set(id, { usd, context: num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.cache_creation_input_tokens) });
+        const u = r.u as RecordedUsage & { output_tokens_details?: { thinking_tokens?: unknown } };
+        const usd = acc.request(r.model, u, num(u.output_tokens_details?.thinking_tokens));
+        if (id) costOf.set(id, { usd, context: num(r.u.input_tokens) + num(r.u.cache_read_input_tokens) + num(r.u.cache_creation_input_tokens) });
       }
     }
-    if (!Array.isArray(m.content)) return;
-    for (const b of m.content) {
-      if (b?.type !== "tool_use" || typeof b.name !== "string") continue;
-      const key = callKey(b.name, b.input);
+    for (const [name, key] of r.calls ?? []) {
       if (key === prevCall && inPeriod) {
         // One reply's cost once, however many identical calls it holds.
         const c = id ? costOf.get(id) : undefined;
-        acc.poll(b.name, c?.usd ?? 0, c?.context ?? 0);
+        acc.poll(name, c?.usd ?? 0, c?.context ?? 0);
         if (id && c) costOf.set(id, { usd: 0, context: 0 });
       }
       prevCall = key;
     }
-  });
+  }
 }
 
 function scanCodex(path: string, acc: Acc, since: number): void {

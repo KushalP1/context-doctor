@@ -1,0 +1,413 @@
+{
+  "days": 30,
+  "transcripts": 8,
+  "requests": 243,
+  "eligible": 194,
+  "misses": 17,
+  "missWriteTokens": 3661093,
+  "extraUsd": 27.829398600000005,
+  "cacheWriteUsd": 127.46009149999999,
+  "unpricedMisses": 0,
+  "byModel": [
+    {
+      "model": "claude-fable-5-1",
+      "eligible": 22,
+      "misses": 2,
+      "rate": 0.09090909090909091,
+      "extraUsd": 8.563679
+    },
+    {
+      "model": "claude-opus-5-5",
+      "eligible": 160,
+      "misses": 14,
+      "rate": 0.0875,
+      "extraUsd": 18.2803812
+    },
+    {
+      "model": "claude-sonnet-5",
+      "eligible": 12,
+      "misses": 1,
+      "rate": 0.08333333333333333,
+      "extraUsd": 0.9853384
+    }
+  ],
+  "bySize": [
+    {
+      "bucket": "<100k",
+      "eligible": 31,
+      "misses": 4,
+      "rate": 0.12903225806451613,
+      "extraUsd": 2.59606005
+    },
+    {
+      "bucket": "100-300k",
+      "eligible": 120,
+      "misses": 9,
+      "rate": 0.075,
+      "extraUsd": 11.759426399999999
+    },
+    {
+      "bucket": "300-600k",
+      "eligible": 42,
+      "misses": 4,
+      "rate": 0.09523809523809523,
+      "extraUsd": 13.47391215
+    },
+    {
+      "bucket": "600k+",
+      "eligible": 1,
+      "misses": 0,
+      "rate": 0,
+      "extraUsd": 0
+    }
+  ],
+  "causes": {
+    "model switch": 0,
+    "context edited": 1,
+    "after an API error": 0,
+    "over 20 new blocks": 0,
+    "nothing visible": 16
+  },
+  "recommendations": [],
+  "largest": [
+    {
+      "path": "~/.claude/projects/-work-app/s4.jsonl",
+      "at": "2026-09-28T18:05:08.598Z",
+      "model": "claude-fable-5-1",
+      "previousModel": "claude-fable-5-1",
+      "contextTokens": 344969,
+      "writeTokens": 348483,
+      "readShare": 0,
+      "gapSeconds": 119,
+      "cause": "nothing visible",
+      "extraUsd": 6.81313775
+    },
+    {
+      "path": "~/.claude/projects/-work-app/s1.jsonl",
+      "at": "2026-09-11T17:41:51.963Z",
+      "model": "claude-opus-5-5",
+      "previousModel": "claude-opus-5-5",
+      "contextTokens": 386628,
+      "writeTokens": 393087,
+      "readShare": 0,
+      "gapSeconds": 99,
+      "cause": "nothing visible",
+      "extraUsd": 3.0156984
+    },
+    {
+      "path": "~/.claude/projects/-work-app/s1.jsonl",
+      "at": "2026-09-11T23:34:56.605Z",
+      "model": "claude-opus-5-5",
+      "previousModel": "claude-opus-5-5",
+      "contextTokens": 340992,
+      "writeTokens": 359785,
+      "readShare": 0,
+      "gapSeconds": 58,
+      "cause": "nothing visible",
+      "extraUsd": 2.6597376
+    },
+    {
+      "path": "~/.claude/projects/-work-app/fork.jsonl",
+      "at": "2026-09-12T14:34:24.595Z",
+      "model": "claude-opus-5-5",
+      "previousModel": "claude-opus-5-5",
+      "contextTokens": 233322,
+      "writeTokens": 254972,
+      "readShare": 0,
+      "gapSeconds": 26,
+      "cause": "nothing visible",
+      "extraUsd": 1.8199116
+    },
+    {
+      "path": "~/.claude/projects/-work-app/s4.jsonl",
+      "at": "2026-09-28T12:08:21.758Z",
+      "model": "claude-fable-5-1",
+      "previousModel": "claude-fable-5-1",
+      "contextTokens": 88635,
+      "writeTokens": 104280,
+      "readShare": 0,
+      "gapSeconds": 363,
+      "cause": "nothing visible",
+      "extraUsd": 1.75054125
+    },
+    {
+      "path": "~/.claude/projects/-work-app/s3.jsonl",
+      "at": "2026-09-25T12:40:42.361Z",
+      "model": "claude-opus-5-5",
+      "previousModel": "claude-opus-5-5",
+      "contextTokens": 211911,
+      "writeTokens": 215994,
+      "readShare": 0,
+      "gapSeconds": 80,
+      "cause": "nothing visible",
+      "extraUsd": 1.6529058
+    },
+    {
+      "path": "~/.claude/projects/-work-app/fork.jsonl",
+      "at": "2026-09-11T13:23:57.339Z",
+      "model": "claude-opus-5-5",
+      "previousModel": "claude-opus-5-5",
+      "contextTokens": 194000,
+      "writeTokens": 212996,
+      "readShare": 0,
+      "gapSeconds": 87,
+      "cause": "nothing visible",
+      "extraUsd": 1.5132
+    },
+    {
+      "path": "~/.claude/projects/-work-app/s1.jsonl",
+      "at": "2026-09-11T13:23:57.339Z",
+      "model": "claude-opus-5-5",
+      "previousModel": "claude-opus-5-5",
+      "contextTokens": 194000,
+      "writeTokens": 212996,
+      "readShare": 0,
+      "gapSeconds": 87,
+      "cause": "nothing visible",
+      "extraUsd": 1.5132
+    },
+    {
+      "path": "~/.claude/projects/-work-app/live.jsonl",
+      "at": "2026-09-30T16:39:22.956Z",
+      "model": "claude-opus-5-5",
+      "previousModel": "claude-opus-5-5",
+      "contextTokens": 180292,
+      "writeTokens": 204479,
+      "readShare": 0,
+      "gapSeconds": 82,
+      "cause": "nothing visible",
+      "extraUsd": 1.4062776
+    },
+    {
+      "path": "~/.claude/projects/-work-app/s2.jsonl",
+      "at": "2026-09-19T14:04:49.608Z",
+      "model": "claude-opus-5-5",
+      "previousModel": "claude-opus-5-5",
+      "contextTokens": 258314,
+      "writeTokens": 271563,
+      "readShare": 0,
+      "gapSeconds": 55,
+      "cause": "nothing visible",
+      "extraUsd": 1.2399072
+    }
+  ],
+  "byVersion": [
+    {
+      "version": "2.1.300",
+      "requests": 172,
+      "sessions": 6,
+      "firstRequests": 5,
+      "firstMedian": 50451,
+      "writesPerRequest": 48399.28488372093,
+      "oneHourShare": 0.9618232635332278,
+      "eligible": 144,
+      "misses": 12,
+      "missRate": 0.08333333333333333,
+      "byModel": [
+        {
+          "model": "claude-opus-5-5",
+          "eligible": 144,
+          "misses": 12
+        }
+      ],
+      "ttlBy": [
+        {
+          "key": "claude-opus-5-5 in cli",
+          "requests": 142,
+          "oneHourShare": 0.9545294691630397
+        },
+        {
+          "key": "claude-opus-5-5 in claude-desktop",
+          "requests": 30,
+          "oneHourShare": 1
+        }
+      ],
+      "from": "2026-09-11T12:01:12.745Z",
+      "to": "2026-09-30T20:54:54.104Z"
+    },
+    {
+      "version": "2.1.309",
+      "requests": 71,
+      "sessions": 2,
+      "firstRequests": 2,
+      "firstMedian": 74834,
+      "writesPerRequest": 130138.8309859155,
+      "oneHourShare": 0.20159889920374308,
+      "eligible": 50,
+      "misses": 5,
+      "missRate": 0.1,
+      "byModel": [
+        {
+          "model": "claude-fable-5-1",
+          "eligible": 22,
+          "misses": 2
+        },
+        {
+          "model": "claude-opus-5-5",
+          "eligible": 16,
+          "misses": 2
+        },
+        {
+          "model": "claude-sonnet-5",
+          "eligible": 12,
+          "misses": 1
+        }
+      ],
+      "ttlBy": [
+        {
+          "key": "claude-fable-5-1 in cli",
+          "requests": 26,
+          "oneHourShare": 1
+        },
+        {
+          "key": "claude-opus-5-5 in cli",
+          "requests": 25,
+          "oneHourShare": 0
+        },
+        {
+          "key": "claude-sonnet-5 in cli",
+          "requests": 20,
+          "oneHourShare": 0
+        }
+      ],
+      "from": "2026-09-19T12:00:48.530Z",
+      "to": "2026-09-28T22:16:25.416Z"
+    }
+  ],
+  "regressions": [],
+  "diagnosed": {
+    "misses": 0,
+    "sessions": 0,
+    "tokens": 0,
+    "extraUsd": 0,
+    "byCause": []
+  },
+  "late": {
+    "rewrites": 20,
+    "tokens": 4839933,
+    "extraUsd": 27.36308785,
+    "loops": [
+      {
+        "path": "~/.claude/projects/-work-app/s2.jsonl",
+        "rewrites": 3,
+        "medianGapSeconds": 363,
+        "ttlSeconds": 300,
+        "extraUsd": 3.1290239999999994
+      }
+    ],
+    "largest": [
+      {
+        "path": "~/.claude/projects/-work-app/s4.jsonl",
+        "at": "2026-09-28T14:22:17.396Z",
+        "model": "claude-fable-5-1",
+        "ttlSeconds": 3600,
+        "gapSeconds": 3665,
+        "contextTokens": 213883,
+        "writeTokens": 233782,
+        "extraUsd": 4.22418925,
+        "cold": 1
+      },
+      {
+        "path": "~/.claude/projects/-work-app/s1.jsonl",
+        "at": "2026-09-11T18:43:11.406Z",
+        "model": "claude-opus-5-5",
+        "ttlSeconds": 3600,
+        "gapSeconds": 3679,
+        "contextTokens": 393097,
+        "writeTokens": 407875,
+        "extraUsd": 3.0661566000000002,
+        "cold": 4
+      },
+      {
+        "path": "~/.claude/projects/-work-app/s1.jsonl",
+        "at": "2026-09-11T17:37:36.186Z",
+        "model": "claude-opus-5-5",
+        "ttlSeconds": 3600,
+        "gapSeconds": 3693,
+        "contextTokens": 307250,
+        "writeTokens": 325188,
+        "extraUsd": 2.39655,
+        "cold": 3
+      },
+      {
+        "path": "~/.claude/projects/-work-app/s3.jsonl",
+        "at": "2026-09-25T13:46:04.424Z",
+        "model": "claude-opus-5-5",
+        "ttlSeconds": 3600,
+        "gapSeconds": 3689,
+        "contextTokens": 246387,
+        "writeTokens": 249861,
+        "extraUsd": 1.9218186,
+        "cold": 1
+      },
+      {
+        "path": "~/.claude/projects/-work-app/live.jsonl",
+        "at": "2026-09-30T17:40:49.473Z",
+        "model": "claude-opus-5-5",
+        "ttlSeconds": 3600,
+        "gapSeconds": 3687,
+        "contextTokens": 204491,
+        "writeTokens": 229149,
+        "extraUsd": 1.5950298,
+        "cold": 3
+      },
+      {
+        "path": "~/.claude/projects/-work-app/s1.jsonl",
+        "at": "2026-09-11T23:05:49.999Z",
+        "model": "claude-opus-5-5",
+        "ttlSeconds": 3600,
+        "gapSeconds": 3683,
+        "contextTokens": 193168,
+        "writeTokens": 199494,
+        "extraUsd": 1.5067104,
+        "cold": 6
+      },
+      {
+        "path": "~/.claude/projects/-work-app/s2.jsonl",
+        "at": "2026-09-19T21:23:44.321Z",
+        "model": "claude-sonnet-5",
+        "ttlSeconds": 300,
+        "gapSeconds": 363,
+        "contextTokens": 650339,
+        "writeTokens": 659310,
+        "extraUsd": 1.4957797,
+        "cold": 16
+      },
+      {
+        "path": "~/.claude/projects/-work-app/fork.jsonl",
+        "at": "2026-09-11T13:21:24.274Z",
+        "model": "claude-opus-5-5",
+        "ttlSeconds": 3600,
+        "gapSeconds": 3679,
+        "contextTokens": 172426,
+        "writeTokens": 183005,
+        "extraUsd": 1.3449228,
+        "cold": 1
+      },
+      {
+        "path": "~/.claude/projects/-work-app/s1.jsonl",
+        "at": "2026-09-11T13:21:24.274Z",
+        "model": "claude-opus-5-5",
+        "ttlSeconds": 3600,
+        "gapSeconds": 3679,
+        "contextTokens": 172426,
+        "writeTokens": 183005,
+        "extraUsd": 1.3449228,
+        "cold": 1
+      },
+      {
+        "path": "~/.claude/projects/-work-app/s2.jsonl",
+        "at": "2026-09-19T14:10:52.608Z",
+        "model": "claude-opus-5-5",
+        "ttlSeconds": 300,
+        "gapSeconds": 363,
+        "contextTokens": 271569,
+        "writeTokens": 294090,
+        "extraUsd": 1.3035312,
+        "cold": 6
+      }
+    ]
+  }
+}
+
+[exit 0]

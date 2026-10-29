@@ -1,0 +1,22 @@
+Auto-compact window: compact earlier, automatically (Claude Code's own setting)
+Last 30 days, 7 sessions with 10+ requests (of 8 transcripts), at list prices
+──────────────────────────────────────────────────────────────────
+Now: not set: Claude Code compacts near the model's full window
+
+  window   input cost   saved            compactions
+    200k         $107   $19.95 (16%)       21 (4.9/week)
+    300k         $104   $22.43 (18%)        8 (1.9/week)
+    400k         $113   $13.31 (11%)        5 (1.2/week)
+    600k         $124   $2.47 (2%)          4 (0.9/week)
+    800k         $127   $0.00 (0%)          3 (0.7/week)
+  as now         $127                       3 (0.7/week; 1 while idle)
+
+"as now" is what you were billed (transcript usage at list price, as in
+`context-doctor savings`); each window saves the replay's share of it.
+Each simulated compaction also pays for ~3.6k tokens of files read again afterwards
+(measured on your compactions: context-doctor compactions).
+Each compaction replaces the session's history with a summary, so a smaller
+window trades detail for cost. Set one with:  context-doctor compact-window 400k
+Undo with:  context-doctor compact-window off
+
+[exit 0]

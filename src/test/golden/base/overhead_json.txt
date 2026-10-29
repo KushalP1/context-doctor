@@ -1,0 +1,62 @@
+{
+  "cwd": "~/work/app",
+  "baseline": {
+    "agent": "Claude Code",
+    "sessions": 7,
+    "transcripts": 8,
+    "median": 55642,
+    "p90": 74834,
+    "requests": 231,
+    "coldStarts": 37,
+    "days": 30,
+    "model": "claude-opus-5-5",
+    "usdPerKPerMonth": 0.312176405489962
+  },
+  "baselines": [
+    {
+      "agent": "Claude Code",
+      "sessions": 7,
+      "transcripts": 8,
+      "median": 55642,
+      "p90": 74834,
+      "requests": 231,
+      "coldStarts": 37,
+      "days": 30,
+      "model": "claude-opus-5-5",
+      "usdPerKPerMonth": 0.312176405489962
+    }
+  ],
+  "files": [],
+  "findings": [],
+  "mcp": {
+    "configs": [
+      {
+        "name": "github",
+        "scope": "user",
+        "command": "github-mcp",
+        "args": []
+      },
+      {
+        "name": "unused",
+        "scope": "user",
+        "command": "unused-mcp"
+      }
+    ],
+    "usage": {
+      "calls": {
+        "github": 26
+      },
+      "names": {
+        "mcp__github__get_issue": 23,
+        "mcp__github__pr": 3
+      },
+      "resources": {
+        "github": 2
+      },
+      "sessions": 8,
+      "toolSearchSessions": 8
+    }
+  }
+}
+
+[exit 0]

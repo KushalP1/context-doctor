@@ -17,12 +17,14 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { forEachLine, listSessions, replyCounter } from "./session.js";
-import { estimateTokens, formatTokens, providerFor, realModel } from "./tokens.js";
+import { forEachLine, listSessions, replyCounter, textOf } from "./session.js";
+import { estimateTokens, formatTokens, providerFor, realModel, tokensForLength } from "./tokens.js";
 import { cacheWriteSplit, formatUsd, pricingFor, writeMultiplier as ttlWriteMultiplier } from "./pricing.js";
 import { isGeminiChat, readGeminiMessages } from "./gemini.js";
 import { claudeMcpConfigs, mcpUsage, measureServer, otherServerUses, serverUses } from "./mcpschema.js";
 import { claudeDir } from "./claudedir.js";
+import { REQUEST_ROWS } from "./coldresume.js";
+import { rowsOf } from "./scan.js";
 const TTL_MS = 3_600_000;
 const CLAUDE = "claude-opus-5"; // Claude's tokenizer ratios; the model only picks the provider here.
 function readText(path) {
@@ -141,13 +143,6 @@ export function findMemoryFiles(cwd = process.cwd(), home = homedir()) {
             add("Gemini CLI", join(d, "GEMINI.md"), "project");
     return files;
 }
-function textOf(content) {
-    if (typeof content === "string")
-        return content;
-    if (!Array.isArray(content))
-        return "";
-    return content.map((b) => (typeof b === "string" ? b : typeof b?.text === "string" ? b.text : "")).filter(Boolean).join("\n");
-}
 /**
  * Claude Code: usage rows on assistant messages (one per API reply id).
  * `runRows` is shared by every transcript of one report: a forked session
@@ -159,20 +154,12 @@ function claudeUsage(path, runRows) {
     let firstUser;
     let started = false;
     const sighting = replyCounter(runRows);
-    forEachLine(path, (line) => {
-        let e;
-        try {
-            e = JSON.parse(line);
-        }
-        catch {
-            return;
-        }
+    rowsOf(path, REQUEST_ROWS).forEach((e) => {
         if (!e || e.isSidechain)
             return;
         if (e.type === "user" && !started && firstUser === undefined && !e.isMeta) {
-            const text = textOf(e.message?.content);
-            if (text)
-                firstUser = text;
+            if (e.text)
+                firstUser = e.text;
             return;
         }
         if (e.type !== "assistant" || !e.message?.usage)
@@ -187,7 +174,7 @@ function claudeUsage(path, runRows) {
             return;
         // A fork's first request is its parent's: not a second session start.
         if (!started && seen === "new")
-            out.first = Math.max(0, prompt - estimateTokens(firstUser ?? "", CLAUDE));
+            out.first = Math.max(0, prompt - (firstUser ? tokensForLength(firstUser.len, firstUser.code, CLAUDE) : 0));
         started = true;
         if (seen === "copy")
             return;

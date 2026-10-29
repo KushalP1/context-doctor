@@ -16,7 +16,8 @@
  * so its effect can be seen as it accumulates.
  */
 
-import { forEachLine, listSessions, queuedUserPrompt, isClaudeSession } from "./session.js";
+import { listSessions, queuedUserPrompt, isClaudeSession } from "./session.js";
+import { rowsOf, type Extractor } from "./scan.js";
 import { readLedger } from "./ledger.js";
 import { estimateTokens, formatTokens } from "./tokens.js";
 import { isIdleCompactNotice } from "./coldresume.js";
@@ -62,6 +63,80 @@ export interface CompactionQuality {
 
 const empty = (): Signals => ({ requests: 0, rereads: 0, rereadTokens: 0, reads: 0, calls: 0, errors: 0, userMsgs: 0, corrections: 0 });
 
+/**
+ * What the check takes from a transcript, main thread only, in order:
+ * compactions ("b", with the uuid a fork copies, "i" for an idle one), user
+ * messages with whether each pushes back ("u"; typed while the agent worked
+ * too), assistant rows that start a request ("n") or call tools (their
+ * count and the files Read), and tool results: errors, and the tokens of
+ * each result of a Read.
+ */
+type QualityRow =
+  | { k: "b"; uuid?: string; ts?: unknown }
+  | { k: "i" }
+  | { k: "u"; corr: number }
+  | { k: "a"; n?: 1; ts?: unknown; calls: number; reads: Array<[unknown, string]> }
+  | { k: "t"; err: number; r: Array<[unknown, number]> };
+
+export const QUALITY_ROWS: Extractor<{ lastId?: unknown; reads: Record<string, 1> }> = {
+  id: "quality.1",
+  init: () => ({ reads: {} }),
+  line(_raw, row, out, st) {
+    let e: any;
+    try { e = row(); } catch { return; }
+    if (!e || e.isSidechain) return;
+    if (e.type === "system" && e.subtype === "compact_boundary") {
+      out.push({ k: "b", ...(typeof e.uuid === "string" ? { uuid: e.uuid } : {}), ...(e.timestamp !== undefined ? { ts: e.timestamp } : {}) });
+      return;
+    }
+    if (isIdleCompactNotice(e)) { out.push({ k: "i" }); return; }
+    // Typed while the agent worked: a user message recorded only as an
+    // attachment, and the likeliest moment for a "no, stop" to arrive.
+    const queued = queuedUserPrompt(e);
+    if (queued !== undefined) {
+      const text = typeof queued === "string" ? queued : queued.map((b: any) => (typeof b?.text === "string" ? b.text : "")).join(" ");
+      out.push({ k: "u", corr: CORRECTION.test(text.trim()) ? 1 : 0 });
+      return;
+    }
+    const c = e.message?.content;
+    if (e.type === "assistant") {
+      // A request starts at a reply with usage whose id differs from the last request's.
+      const n = e.message?.id !== st.lastId && e.message?.usage;
+      if (n) st.lastId = e.message.id;
+      let calls = 0;
+      const reads: Array<[unknown, string]> = [];
+      if (Array.isArray(c)) {
+        for (const b of c) {
+          if (b?.type !== "tool_use") continue;
+          calls++;
+          if (b.name === "Read" && typeof b.input?.file_path === "string") {
+            reads.push([b.id, b.input.file_path]);
+            st.reads[String(b.id)] = 1;
+          }
+        }
+      }
+      if (n) out.push({ k: "a", n: 1, ...(e.timestamp !== undefined ? { ts: e.timestamp } : {}), calls, reads });
+      else if (calls) out.push({ k: "a", calls, reads });
+    } else if (e.type === "user") {
+      if (typeof c === "string" && !e.isMeta && !e.isCompactSummary) {
+        out.push({ k: "u", corr: CORRECTION.test(c.trim()) ? 1 : 0 });
+      } else if (Array.isArray(c)) {
+        let err = 0;
+        const r: Array<[unknown, number]> = [];
+        for (const b of c) {
+          if (b?.type !== "tool_result") continue;
+          if (b.is_error) { err++; continue; }
+          // Only a Read's result is ever counted: the rest are not sized.
+          if (!st.reads[String(b.tool_use_id)]) continue;
+          const text = typeof b.content === "string" ? b.content : JSON.stringify(b.content ?? "");
+          r.push([b.tool_use_id, estimateTokens(text, "claude-opus-5")]);
+        }
+        if (err || r.length) out.push({ k: "t", err, r });
+      }
+    }
+  },
+};
+
 function add(s: Signals, reqs: Req[], readBefore: Set<string>): void {
   for (const r of reqs) {
     s.requests++;
@@ -95,69 +170,43 @@ export function compactionQuality(days = 60, paths?: string[], onProgress?: (don
     let cur: Req | undefined;
     // User messages between a compaction and the next request belong to the "after" side.
     let pendingUser = 0, pendingCorrections = 0;
-    const userMessage = (text: string) => {
-      const corr = CORRECTION.test(text.trim()) ? 1 : 0;
+    const userMessage = (corr: number) => {
       if (cur) { cur.userMsgs++; cur.corrections += corr; } else { pendingUser++; pendingCorrections += corr; }
     };
-    const readIds = new Map<string, string>();
-    let lastId: string | undefined;
-    forEachLine(path, (line) => {
-      let e: any;
-      try { e = JSON.parse(line); } catch { return; }
-      if (!e || e.isSidechain) return;
-      const at = Date.parse(e.timestamp);
-      if (e.type === "system" && e.subtype === "compact_boundary") {
-        const copy = typeof e.uuid === "string" && countedBoundaries.has(e.uuid);
-        if (typeof e.uuid === "string") countedBoundaries.add(e.uuid);
-        if (!copy) boundaries.push({ index: reqs.length, at });
+    const readIds = new Map<unknown, string>();
+    for (const r of rowsOf<QualityRow>(path, QUALITY_ROWS)) {
+      if (r.k === "b") {
+        const copy = r.uuid !== undefined && countedBoundaries.has(r.uuid);
+        if (r.uuid !== undefined) countedBoundaries.add(r.uuid);
+        if (!copy) boundaries.push({ index: reqs.length, at: Date.parse(r.ts as string) });
         cur = undefined;
-        return;
-      }
-      // Claude Code's idle compaction writes this right after its boundary.
-      if (isIdleCompactNotice(e)) {
+      } else if (r.k === "i") {
+        // Claude Code's idle compaction writes this right after its boundary.
         const last = boundaries[boundaries.length - 1];
         if (last && last.index === reqs.length) last.idle = true;
-        return;
-      }
-      // Typed while the agent worked: a user message recorded only as an
-      // attachment, and the likeliest moment for a "no, stop" to arrive.
-      const queued = queuedUserPrompt(e);
-      if (queued !== undefined) {
-        userMessage(typeof queued === "string" ? queued : queued.map((b: any) => (typeof b?.text === "string" ? b.text : "")).join(" "));
-        return;
-      }
-      const c = e.message?.content;
-      if (e.type === "assistant") {
-        if (e.message?.id !== lastId && e.message?.usage) {
-          lastId = e.message.id;
-          cur = { at, reads: [], readTokens: [], calls: 0, errors: 0, userMsgs: pendingUser, corrections: pendingCorrections };
+      } else if (r.k === "u") {
+        userMessage(r.corr);
+      } else if (r.k === "a") {
+        if (r.n) {
+          cur = { at: Date.parse(r.ts as string), reads: [], readTokens: [], calls: 0, errors: 0, userMsgs: pendingUser, corrections: pendingCorrections };
           pendingUser = pendingCorrections = 0;
           reqs.push(cur);
         }
-        if (cur && Array.isArray(c)) {
-          for (const b of c) {
-            if (b?.type !== "tool_use") continue;
-            cur.calls++;
-            if (b.name === "Read" && typeof b.input?.file_path === "string") readIds.set(b.id, b.input.file_path);
-          }
+        if (cur) {
+          cur.calls += r.calls;
+          for (const [id, file] of r.reads) readIds.set(id, file);
         }
-      } else if (e.type === "user") {
-        if (typeof c === "string" && !e.isMeta && !e.isCompactSummary) {
-          userMessage(c);
-        } else if (cur && Array.isArray(c)) {
-          for (const b of c) {
-            if (b?.type !== "tool_result") continue;
-            if (b.is_error) cur.errors++;
-            const p = readIds.get(b.tool_use_id);
-            if (p && !b.is_error) {
-              cur.reads.push(p);
-              const text = typeof b.content === "string" ? b.content : JSON.stringify(b.content ?? "");
-              cur.readTokens.push(estimateTokens(text, "claude-opus-5"));
-            }
+      } else if (cur) {
+        cur.errors += r.err;
+        for (const [id, tokens] of r.r) {
+          const p = readIds.get(id);
+          if (p) {
+            cur.reads.push(p);
+            cur.readTokens.push(tokens);
           }
         }
       }
-    });
+    }
     let counted = false;
     for (const b of boundaries) {
       // Each compaction by its own time: a session touched in the window

@@ -31,7 +31,8 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpat
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { statePath } from "./ledger.js";
-import { forEachLine, listSessions, isClaudeSession } from "./session.js";
+import { listSessions, isClaudeSession } from "./session.js";
+import { rowsOf } from "./scan.js";
 import { subagentDir } from "./subagents.js";
 import { claudeMcpConfigs, countMcpRow, serverUses } from "./mcpschema.js";
 import { estimateTokens, formatTokens } from "./tokens.js";
@@ -49,6 +50,67 @@ export function canonical(p) {
 }
 /** Fewer sessions than this in the period say too little about what a project uses. */
 export const MIN_SESSIONS = 3;
+export const PRUNE_ROWS = {
+    id: "prune.1",
+    init: () => ({ cwd: false }),
+    line(line, row, out, st) {
+        if (!st.cwd && line.includes('"cwd"')) {
+            // An empty cwd is kept, and the search goes on, as the count's own `!cwd` does.
+            try {
+                const e = row();
+                if (typeof e?.cwd === "string") {
+                    st.cwd = e.cwd !== "";
+                    out.push({ k: "cwd", cwd: e.cwd });
+                }
+            }
+            catch { /* not a row */ }
+        }
+        const tool = line.includes('"tool_use"') && (line.includes('"name":"mcp__') || line.includes('"name":"Skill"') || line.includes("McpResource"));
+        const slash = line.includes("<command-name>/");
+        if (!tool && !slash) {
+            if (line.includes('"timestamp"')) {
+                try {
+                    const at = Date.parse(row()?.timestamp);
+                    // Only the newest time matters (is any row in the period?): one record per run of them.
+                    if (Number.isFinite(at)) {
+                        const last = out[out.length - 1];
+                        if (last?.k === "t") {
+                            if (at > last.at)
+                                out[out.length - 1] = { k: "t", at };
+                        }
+                        else
+                            out.push({ k: "t", at });
+                    }
+                }
+                catch { /* skip */ }
+            }
+            return;
+        }
+        let e;
+        try {
+            e = row();
+        }
+        catch {
+            return;
+        }
+        const names = new Map(), resources = new Map(), skills = [];
+        countMcpRow(e, names, resources);
+        const content = e?.message?.content;
+        if (slash) {
+            const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((b) => b?.text ?? "").join("\n") : "";
+            for (const m of text.matchAll(/<command-name>\/([\w:.-]+)<\/command-name>/g))
+                if (!m[1].startsWith("mcp__"))
+                    skills.push(m[1]);
+        }
+        if (Array.isArray(content)) {
+            for (const b of content) {
+                if (b?.type === "tool_use" && b.name === "Skill" && typeof b.input?.skill === "string")
+                    skills.push(b.input.skill);
+            }
+        }
+        out.push({ k: "u", ...(e?.timestamp !== undefined ? { ts: e.timestamp } : {}), names: [...names], resources: [...resources], skills });
+    },
+};
 /** What each project (by the `cwd` its sessions record) used in the last `days`, subagents included. */
 export function projectUsage(days = 30, paths, now = Date.now()) {
     const since = now - days * DAY;
@@ -60,53 +122,30 @@ export function projectUsage(days = 30, paths, now = Date.now()) {
         const resources = new Map();
         const skills = new Map();
         let active = false;
-        const scan = (file) => forEachLine(file, (line) => {
-            if (!cwd && line.includes('"cwd"')) {
-                try {
-                    const e = JSON.parse(line);
-                    if (typeof e?.cwd === "string")
-                        cwd = e.cwd;
+        const scan = (file) => {
+            for (const r of rowsOf(file, PRUNE_ROWS)) {
+                if (r.k === "cwd") {
+                    if (!cwd)
+                        cwd = r.cwd;
+                    continue;
                 }
-                catch { /* not a row */ }
-            }
-            const tool = line.includes('"tool_use"') && (line.includes('"name":"mcp__') || line.includes('"name":"Skill"') || line.includes("McpResource"));
-            const slash = line.includes("<command-name>/");
-            if (!tool && !slash) {
-                if (!active && line.includes('"timestamp"')) {
-                    try {
-                        if (Date.parse(JSON.parse(line)?.timestamp) >= since)
-                            active = true;
-                    }
-                    catch { /* skip */ }
+                if (r.k === "t") {
+                    if (r.at >= since)
+                        active = true;
+                    continue;
                 }
-                return;
+                if (Date.parse(r.ts) < since)
+                    continue;
+                active = true;
+                // Tools, prompts run as /mcp__server__prompt, and resource reads by server.
+                for (const [k, n] of r.names)
+                    names.set(k, (names.get(k) ?? 0) + n);
+                for (const [k, n] of r.resources)
+                    resources.set(k, (resources.get(k) ?? 0) + n);
+                for (const k of r.skills)
+                    bump(skills, k);
             }
-            let e;
-            try {
-                e = JSON.parse(line);
-            }
-            catch {
-                return;
-            }
-            if (Date.parse(e?.timestamp) < since)
-                return;
-            active = true;
-            // Tools, prompts run as /mcp__server__prompt, and resource reads by server.
-            countMcpRow(e, names, resources);
-            const content = e?.message?.content;
-            if (slash) {
-                const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((b) => b?.text ?? "").join("\n") : "";
-                for (const m of text.matchAll(/<command-name>\/([\w:.-]+)<\/command-name>/g))
-                    if (!m[1].startsWith("mcp__"))
-                        bump(skills, m[1]);
-            }
-            if (!Array.isArray(content))
-                return;
-            for (const b of content) {
-                if (b?.type === "tool_use" && b.name === "Skill" && typeof b.input?.skill === "string")
-                    bump(skills, b.input.skill);
-            }
-        });
+        };
         try {
             scan(path);
             let agents = [];

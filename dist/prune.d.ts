@@ -27,6 +27,7 @@
  * the 2.1.308 binary (disabledMcpjsonServers, deniedMcpServers merged from
  * every settings file, skillOverrides).
  */
+import { type Extractor } from "./scan.js";
 import { type McpServerConfig } from "./mcpschema.js";
 /** A folder as one spelling: /var and /private/var (macOS) or a symlinked checkout are the same project. */
 export declare function canonical(p: string): string;
@@ -42,6 +43,9 @@ export interface ProjectUse {
     /** Skill uses by name (the part after a plugin's "plugin:" prefix too). */
     skillUses: Map<string, number>;
 }
+export declare const PRUNE_ROWS: Extractor<{
+    cwd: boolean;
+}>;
 /** What each project (by the `cwd` its sessions record) used in the last `days`, subagents included. */
 export declare function projectUsage(days?: number, paths?: string[], now?: number): Map<string, ProjectUse>;
 export interface SkillInfo {

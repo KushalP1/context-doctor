@@ -25,6 +25,7 @@
  * host-orchestrated and drops a settings-file ANTHROPIC_BASE_URL, but it runs
  * the every-prompt hook, which is where this is called from.
  */
+import { type Extractor } from "./scan.js";
 /**
  * Claude Code's own idle compaction (2.1.290+, account-gated by a server
  * flag; the `idleCompaction` setting can only turn it off). Read from the
@@ -47,6 +48,20 @@ export declare const IDLE_COMPACT_NOTICE = "Compacted while idle";
 export declare const IDLE_COMPACT_MIN_TOKENS = 200000;
 /** The row Claude Code writes after an idle compaction's boundary. */
 export declare function isIdleCompactNotice(e: any): boolean;
+/**
+ * What the request replays (`cache-ttl`, `compact-window`, the cold returns
+ * of `savings`, `overhead`'s session starts) take from a Claude Code
+ * transcript, as rows of the same shape, cut to what they read: assistant
+ * rows (id, model, usage, time, uuid, thread), compaction boundaries, idle
+ * compaction notices, and the first user message with text (its length and
+ * whether it reads as code: what the token estimate needs of it). A later row of a
+ * reply already kept, in the same thread and with usage, is left out: every
+ * reader meets it as a repeat of that reply and skips it.
+ */
+export declare const REQUEST_ROWS: Extractor<{
+    ids: Record<string, number>;
+    user: boolean;
+}>;
 /** The context at which Claude Code's idle compaction acts, as it reads the environment. */
 export declare function idleCompactMinTokens(env?: NodeJS.ProcessEnv): number;
 /**

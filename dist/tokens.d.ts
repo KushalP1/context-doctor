@@ -44,6 +44,11 @@ export declare function charsPerTokenFor(text: string, model?: string): number;
  * tokenizer produces ~40% more tokens than the provider-neutral default.
  */
 export declare function estimateTokens(text: string, model?: string): number;
+/**
+ * `estimateTokens` from what it reads of a text: its length and whether it
+ * is code-like. What a cache keeps instead of the text itself (scan.ts).
+ */
+export declare function tokensForLength(length: number, codeLike: boolean, model?: string): number;
 /** Per-message structural overhead (role markers, delimiters) is roughly constant. */
 export declare const MESSAGE_OVERHEAD_TOKENS = 4;
 export declare function formatTokens(n: number): string;

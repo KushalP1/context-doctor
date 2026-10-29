@@ -14,7 +14,9 @@
  *    Each repeat is a whole request that re-reads the context; it is priced
  *    at that request's billed cost.
  */
+import { createHash } from "node:crypto";
 import { forEachLine, listSessions, replyCounter, isClaudeSession } from "./session.js";
+import { rowsOf, slimUsage } from "./scan.js";
 import { openAIUsage, pricingFor, usageCost } from "./pricing.js";
 import { formatTokens, realModel } from "./tokens.js";
 const num = (v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
@@ -56,17 +58,18 @@ class Acc {
 }
 /** A call's identity: its tool and its exact input. */
 const callKey = (name, input) => `${name}\u0000${typeof input === "string" ? input : JSON.stringify(input ?? null)}`;
-function scanClaude(path, acc, since, runRows) {
-    const sighting = replyCounter(runRows);
-    const costOf = new Map();
-    let prevCall;
-    forEachLine(path, (line) => {
+/** A call's identity, as a hash: equal calls stay equal, and the cache keeps no command or input. */
+const callId = (key) => createHash("sha1").update(key).digest("base64");
+export const LENS_ROWS = {
+    id: "lens.1",
+    init: () => null,
+    line(line, row, out) {
         const prompt = line.includes('"type":"user"') && !line.includes('"tool_result"');
         if (!prompt && !line.includes('"usage"') && !line.includes('"tool_use"'))
             return;
         let e;
         try {
-            e = JSON.parse(line);
+            e = row();
         }
         catch {
             return;
@@ -74,40 +77,63 @@ function scanClaude(path, acc, since, runRows) {
         // A prompt the user typed between two identical calls makes the second a
         // new request, not a poll (the same check, asked for again).
         if (e?.type === "user" && !e.isSidechain && !e.isMeta && !(Array.isArray(e.message?.content) && e.message.content.some((b) => b?.type === "tool_result"))) {
-            prevCall = undefined;
+            out.push({ k: "p" });
             return;
         }
         if (e?.type !== "assistant" || e.isSidechain || !e.message)
             return;
         const m = e.message;
-        const at = Date.parse(String(e.timestamp ?? ""));
+        const r = { k: "a" };
+        if (m.usage && realModel(m.model))
+            Object.assign(r, { model: realModel(m.model), u: slimUsage(m.usage) });
+        if (Array.isArray(m.content)) {
+            const calls = m.content.filter((b) => b?.type === "tool_use" && typeof b.name === "string").map((b) => [b.name, callId(callKey(b.name, b.input))]);
+            if (calls.length)
+                r.calls = calls;
+        }
+        if (!r.model && !r.calls)
+            return;
+        if (e.timestamp !== undefined)
+            r.ts = e.timestamp;
+        if (typeof m.id === "string")
+            r.mid = m.id;
+        if (typeof e.uuid === "string")
+            r.uuid = e.uuid;
+        out.push(r);
+    },
+};
+function scanClaude(path, acc, since, runRows) {
+    const sighting = replyCounter(runRows);
+    const costOf = new Map();
+    let prevCall;
+    for (const r of rowsOf(path, LENS_ROWS)) {
+        if (r.k === "p") {
+            prevCall = undefined;
+            continue;
+        }
+        const at = Date.parse(String(r.ts ?? ""));
         const inPeriod = !(Number.isFinite(at) && at < since);
-        const id = typeof m.id === "string" ? m.id : undefined;
-        if (m.usage && realModel(m.model)) {
-            const seen = sighting(e);
+        const id = r.mid;
+        if (r.model && r.u) {
+            const seen = sighting({ message: { id }, uuid: r.uuid });
             if (seen === "new" && inPeriod) {
-                const u = m.usage;
-                const usd = acc.request(realModel(m.model), u, num(u.output_tokens_details?.thinking_tokens));
+                const u = r.u;
+                const usd = acc.request(r.model, u, num(u.output_tokens_details?.thinking_tokens));
                 if (id)
-                    costOf.set(id, { usd, context: num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.cache_creation_input_tokens) });
+                    costOf.set(id, { usd, context: num(r.u.input_tokens) + num(r.u.cache_read_input_tokens) + num(r.u.cache_creation_input_tokens) });
             }
         }
-        if (!Array.isArray(m.content))
-            return;
-        for (const b of m.content) {
-            if (b?.type !== "tool_use" || typeof b.name !== "string")
-                continue;
-            const key = callKey(b.name, b.input);
+        for (const [name, key] of r.calls ?? []) {
             if (key === prevCall && inPeriod) {
                 // One reply's cost once, however many identical calls it holds.
                 const c = id ? costOf.get(id) : undefined;
-                acc.poll(b.name, c?.usd ?? 0, c?.context ?? 0);
+                acc.poll(name, c?.usd ?? 0, c?.context ?? 0);
                 if (id && c)
                     costOf.set(id, { usd: 0, context: 0 });
             }
             prevCall = key;
         }
-    });
+    }
 }
 function scanCodex(path, acc, since) {
     let model;

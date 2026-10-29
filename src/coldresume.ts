@@ -29,9 +29,10 @@
 import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { forEachLine, replyCounter } from "./session.js";
+import { forEachLine, replyCounter, textOf } from "./session.js";
+import { pick, rowsOf, slimUsage, type Extractor } from "./scan.js";
 import { cacheWriteSplit, pricingFor, formatUsd, writeMultiplier, type ModelPricing } from "./pricing.js";
-import { contextWindowFor, formatTokens, realModel } from "./tokens.js";
+import { contextWindowFor, formatTokens, isCodeLike, realModel } from "./tokens.js";
 import { claudeDir } from "./claudedir.js";
 
 /**
@@ -59,6 +60,48 @@ export const IDLE_COMPACT_MIN_TOKENS = 200_000;
 export function isIdleCompactNotice(e: any): boolean {
   return e?.type === "system" && typeof e.content === "string" && e.content.startsWith(IDLE_COMPACT_NOTICE);
 }
+
+/**
+ * What the request replays (`cache-ttl`, `compact-window`, the cold returns
+ * of `savings`, `overhead`'s session starts) take from a Claude Code
+ * transcript, as rows of the same shape, cut to what they read: assistant
+ * rows (id, model, usage, time, uuid, thread), compaction boundaries, idle
+ * compaction notices, and the first user message with text (its length and
+ * whether it reads as code: what the token estimate needs of it). A later row of a
+ * reply already kept, in the same thread and with usage, is left out: every
+ * reader meets it as a repeat of that reply and skips it.
+ */
+export const REQUEST_ROWS: Extractor<{ ids: Record<string, number>; user: boolean }> = {
+  id: "requests.1",
+  init: () => ({ ids: {}, user: false }),
+  line(raw, row, out, st) {
+    let e: any;
+    try { e = row(); } catch { return; }
+    if (!e || typeof e !== "object") return;
+    if (e.type === "system") {
+      if (e.subtype === "compact_boundary") out.push(pick(e, ["type", "subtype", "isSidechain", "uuid", "timestamp"]));
+      else if (isIdleCompactNotice(e)) out.push(pick({ ...e, content: IDLE_COMPACT_NOTICE }, ["type", "subtype", "content", "isSidechain", "uuid", "timestamp"]));
+      return;
+    }
+    if (e.type === "user") {
+      if (st.user || e.isSidechain || e.isMeta) return;
+      const text = textOf(e.message?.content);
+      if (!text) return;
+      st.user = true;
+      // What the estimate reads of it, not the message itself: the cache keeps no message text.
+      out.push({ type: "user", text: { len: text.length, code: isCodeLike(text) } });
+      return;
+    }
+    if (e.type !== "assistant") return;
+    const m = e.message;
+    const thread = e.isSidechain ? 2 : 1;
+    if (m && typeof m === "object" && typeof m.id === "string") {
+      if ((st.ids[m.id] ?? 0) & thread) return;
+      if (m.usage) st.ids[m.id] = (st.ids[m.id] ?? 0) | thread;
+    }
+    out.push(pick({ ...e, message: m && typeof m === "object" && !Array.isArray(m) ? pick({ ...m, usage: slimUsage(m.usage) }, ["id", "model", "usage"]) : m }, ["type", "isSidechain", "uuid", "timestamp", "message"]));
+  },
+};
 
 /** The context at which Claude Code's idle compaction acts, as it reads the environment. */
 export function idleCompactMinTokens(env: NodeJS.ProcessEnv = process.env): number {
@@ -339,9 +382,7 @@ export function coldResumeEvents(path: string, idleMs?: number, minTokens = COLD
   const reqs: Req[] = [];
   let model: string | undefined, writes5m = 0, writes1h = 0;
   const sighting = replyCounter(runRows);
-  forEachLine(path, (line) => {
-    let e: any;
-    try { e = JSON.parse(line); } catch { return; }
+  rowsOf(path, REQUEST_ROWS).forEach((e) => {
     if (!e || e.isSidechain) return;
     if (e.type === "system" && e.subtype === "compact_boundary") { reqs.push("compact"); return; }
     if (e.type !== "assistant" || !e.message) return;

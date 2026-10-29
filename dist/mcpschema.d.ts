@@ -16,6 +16,7 @@
  * up; with it on, an unused server costs about its tool names, not its
  * schemas. Usage of ToolSearch in the transcripts says whether that is so.
  */
+import { type Extractor } from "./scan.js";
 export interface McpServerConfig {
     name: string;
     scope: "user" | "project" | ".mcp.json";
@@ -78,6 +79,7 @@ export declare function countMcpRow(e: any, names: Map<string, number>, resource
 export declare function toolPrefixName(server: string): string;
 /** MCP servers Claude Code starts in `cwd`, with their launch configs. */
 export declare function claudeMcpConfigs(cwd?: string, home?: string): McpServerConfig[];
+export declare const MCP_ROWS: Extractor<null>;
 /**
  * MCP calls per server over the last `days`, from Claude Code transcripts
  * and their subagents' (`<session>/subagents/agent-*.jsonl`). Only lines

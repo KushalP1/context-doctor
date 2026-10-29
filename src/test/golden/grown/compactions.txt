@@ -1,0 +1,14 @@
+DO SESSIONS WORK WORSE AFTER COMPACTING?
+════════════════════════════════════════════════════════
+5 compactions in 3 sessions, last 60 days; 15 requests before vs after each. 1 of them were Claude Code's idle compactions (a quiet session compacted before its cache expired).
+Sample: 21 file reads before, 18 after; 62 and 57 tool calls; 20 and 22 of your messages. Few reads: the re-read figure is a weak signal.
+
+                                        before    after   change
+  files re-read (forgotten)              42.9%    83.3%   +40.5%
+  tool calls that errored                14.5%    19.3%   +4.8%
+  your messages correcting course        40.0%    27.3%   −12.7%
+
+Compacting forgets files: each compaction is followed by ~3.6k tokens of extra re-reads. compact-window charges that to every compaction it simulates.
+Sessions also work worse after compacting (more tool errors or corrections): compact less often, and let the PreCompact hook tell each summary what to keep.
+
+[exit 0]

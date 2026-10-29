@@ -1,0 +1,15 @@
+UNUSED MCP SERVERS AND SKILLS, BY PROJECT
+════════════════════════════════════════════════════════════
+Last 30 days of Claude Code sessions (subagents included).
+
+~/work/app  (this folder): 8 sessions
+  used    server github (29)
+  unused  server unused (user): deniedMcpServers
+
+Switch off the 1 unused here, for this project only: context-doctor overhead prune --write
+It writes .claude/settings.local.json (a backup kept, every entry recorded);
+--undo takes exactly those entries out again. For another project, run it there.
+A server's size: context-doctor overhead --mcp. Never touched: the app's connectors,
+plugin servers and skills, and context-doctor's own server.
+
+[exit 0]

@@ -171,6 +171,8 @@ Rules 1-4 end exactly at character 512, the part ChatGPT's guide says must stand
 
 **Privacy:** everything runs on your machine. No API key is needed for anything core, nothing is sent anywhere, and no telemetry is collected; the proxy forwards your app's own credentials untouched and holds none of its own.
 
+**Speed:** the history reports read each transcript once per run and keep what they took from it (token counts, times, ids, no message text) in `~/.cache/context-doctor`, so a second `fix` or `savings` answers in under a second and later runs read only what was appended. `CONTEXT_DOCTOR_NO_CACHE=1` keeps nothing; `uninstall` removes it ([details](./docs/performance.md#the-transcript-cache)).
+
 ## What's new
 
 - **0.39 `fix`, the cache lifetime, the cache clock, and Antigravity**: `context-doctor fix` turns the measurements into changes: every lever ranked by what it would have saved on your own sessions, with what each costs in quality, applied only on a yes, undone with `fix undo`, and re-measured afterwards (`/context-doctor:fix` in the plugin). `cache-ttl` replays your pauses at a 5-minute and a 1-hour prompt cache and sets Claude Code's `promptCacheTtl` to the cheaper one, a price-only change. On Claude Code 2.1.251+ the status line says until when the cache is warm and what going cold costs, `cache-misses` explains misses in Claude Code's own words, and `install` wires Google Antigravity.

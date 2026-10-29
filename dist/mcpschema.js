@@ -19,7 +19,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { forEachLine, listSessions, isClaudeSession } from "./session.js";
+import { listSessions, isClaudeSession } from "./session.js";
+import { rowsOf } from "./scan.js";
 import { subagentDir } from "./subagents.js";
 import { estimateTokens } from "./tokens.js";
 import { claudeJsonPath } from "./claudedir.js";
@@ -110,6 +111,33 @@ export function claudeMcpConfigs(cwd = process.cwd(), home = homedir()) {
     }
     return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
+export const MCP_ROWS = {
+    id: "mcp.1",
+    init: () => null,
+    line(line, row, out) {
+        const tool = line.includes('"tool_use"') && (line.includes('"name":"mcp__') || line.includes('"name":"ToolSearch"') || line.includes('McpResource'));
+        if (!tool && !line.includes("<command-name>/mcp__"))
+            return;
+        let e;
+        try {
+            e = row();
+        }
+        catch {
+            return;
+        }
+        const content = e?.message?.content;
+        const names = new Map(), resources = new Map();
+        countMcpRow(e, names, resources);
+        const r = { names: [...names], resources: [...resources] };
+        if (Array.isArray(content) && content.some((b) => b?.type === "tool_use" && b.name === "ToolSearch"))
+            r.searched = 1;
+        if (e?.timestamp !== undefined)
+            r.ts = e.timestamp;
+        if (typeof e?.uuid === "string")
+            r.uuid = e.uuid;
+        out.push(r);
+    },
+};
 /**
  * MCP calls per server over the last `days`, from Claude Code transcripts
  * and their subagents' (`<session>/subagents/agent-*.jsonl`). Only lines
@@ -136,32 +164,26 @@ export function mcpUsage(days = 30, paths, onProgress) {
     for (const [index, path] of files.entries()) {
         onProgress?.(index, files.length);
         let searched = false;
-        const scan = (file) => forEachLine(file, (line) => {
-            const tool = line.includes('"tool_use"') && (line.includes('"name":"mcp__') || line.includes('"name":"ToolSearch"') || line.includes('McpResource'));
-            if (!tool && !line.includes("<command-name>/mcp__"))
-                return;
-            let e;
-            try {
-                e = JSON.parse(line);
+        const scan = (file) => {
+            for (const r of rowsOf(file, MCP_ROWS)) {
+                // Whether a session defers MCP definitions is a property of the
+                // session, so ToolSearch counts whenever it was used; calls are dated.
+                if (r.searched)
+                    searched = true;
+                if (Date.parse(r.ts) < since)
+                    continue;
+                // A fork's copied rows (same uuid) were counted in the parent.
+                if (r.uuid !== undefined) {
+                    if (counted.has(r.uuid))
+                        continue;
+                    counted.add(r.uuid);
+                }
+                for (const [k, n] of r.names)
+                    names.set(k, (names.get(k) ?? 0) + n);
+                for (const [k, n] of r.resources)
+                    resources.set(k, (resources.get(k) ?? 0) + n);
             }
-            catch {
-                return;
-            }
-            const content = e?.message?.content;
-            // Whether a session defers MCP definitions is a property of the
-            // session, so ToolSearch counts whenever it was used; calls are dated.
-            if (Array.isArray(content) && content.some((b) => b?.type === "tool_use" && b.name === "ToolSearch"))
-                searched = true;
-            if (Date.parse(e?.timestamp) < since)
-                return;
-            // A fork's copied rows (same uuid) were counted in the parent.
-            if (typeof e.uuid === "string") {
-                if (counted.has(e.uuid))
-                    return;
-                counted.add(e.uuid);
-            }
-            countMcpRow(e, names, resources);
-        });
+        };
         scan(path);
         let agents = [];
         try {

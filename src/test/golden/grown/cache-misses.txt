@@ -1,0 +1,55 @@
+CACHE MISSES WITHIN THE CACHE LIFETIME
+════════════════════════════════════════════════════════════
+Last 30 days, 8 transcripts, 259 requests.
+17 of 207 warm requests (8.2%) re-wrote the cache instead of reading it:
+~3.7M tokens written again, $27.83 above cache-read price (21% of your $133 of cache writes).
+
+  model                            misses    rate      cost
+  claude-fable-5-1                   2/22    9.1%     $8.56
+  claude-sonnet-5                    1/12    8.3%     $0.99
+  claude-opus-5-5                  14/173    8.1%    $18.28
+
+  context before                   misses    rate      cost
+  <100k                              4/37   10.8%     $2.60
+  100-300k                          9/126    7.1%    $11.76
+  300-600k                           4/43    9.3%    $13.47
+  600k+                               0/1   0.00%        $0
+
+Cause, where the transcript shows one:
+     16  nothing visible
+      1  context edited
+  "Nothing visible": no model switch, compaction, context edit, API error or
+  long tool run before it. The system prompt, tools or memory changing, or the
+  provider evicting the cache early, would look like this from the client.
+
+Just too late: 21 requests came less than 25% past the cache's lifetime and wrote it
+again (~5.0M tokens, $28.70 above cache-read price). A few minutes
+sooner and they would have read it; the status line shows until when it is warm.
+  • A loop: 3 wake-ups every ~6 min on a 5-minute cache, $3.13 (s2.jsonl).
+    Wake every 4:30 (270s) instead: the delay counts from the end of a turn, the TTL from its last request.
+
+Why, in Claude Code's words: nothing recorded yet. Claude Code 2.1.260+ diagnoses
+each miss (tools changed, system prompt changed, idle past the TTL...) and tells
+the status line; `context-doctor install --statusline` records it for this report.
+
+By Claude Code version (versions with 50+ requests):
+  version   requests  1st req writes/req  1h share  miss rate
+  2.1.300        188     ~50k       ~48k       96%       7.6%
+  2.1.309         71     ~75k      ~130k       20%      10.0%
+
+No step change between versions that the numbers support.
+
+Costliest:
+  2026-09-28 18:05  claude-fable-5-1   ~ 345k ctx, 119s gap, nothing visible, $6.81  s4.jsonl
+  2026-09-11 17:41  claude-opus-5-5    ~ 387k ctx, 99s gap, nothing visible, $3.02  s1.jsonl
+  2026-09-11 23:34  claude-opus-5-5    ~ 341k ctx, 58s gap, nothing visible, $2.66  s1.jsonl
+  2026-09-12 14:34  claude-opus-5-5    ~ 233k ctx, 26s gap, nothing visible, $1.82  fork.jsonl
+  2026-09-28 12:08  claude-fable-5-1   ~  89k ctx, 363s gap, nothing visible, $1.75  s4.jsonl
+
+A miss: within the cache lifetime of both requests (5 min, or 1 h when written at
+the 1-hour TTL), no compaction between, previous context over 20k, and the request
+wrote over 60% of that context again. Model switches always miss: each model has
+its own cache. On Claude Code 2.1.251+, `context-doctor install` (or the plugin)
+shows that price before a /model switch.
+
+[exit 0]

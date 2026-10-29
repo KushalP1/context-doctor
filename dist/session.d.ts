@@ -140,4 +140,6 @@ export declare function outputSettler(): (entry: Record<string, any>, first: boo
  * were human). Undefined for anything else.
  */
 export declare function queuedUserPrompt(entry: Record<string, any>): string | unknown[] | undefined;
+/** A message's text: a string as it is, text blocks joined by newlines. */
+export declare function textOf(content: unknown): string;
 export declare function parseSessionFile(path: string): ParsedSession;

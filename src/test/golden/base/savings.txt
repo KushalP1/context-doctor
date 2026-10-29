@@ -1,0 +1,43 @@
+What context-doctor finds in your Claude Code sessions
+Last 30 days, 7 sessions with 10+ requests (of 8 transcripts), at list prices
+────────────────────────────────────────────────────────────
+Input you were billed for              $127   from your transcripts' usage
+
+1. Compact when you come back         $3.05 (2%)
+   13 returns to a session over 150k tokens after the prompt cache
+   expired. Running /compact then, net of the compaction itself, would
+   have saved this. The every-prompt hook points these moments out, in
+   every Claude Code surface, the desktop app included.
+
+2. Autopilot                          $3.64 (3%)
+   Stale tool output cleared only when the cache is cold, so it never
+   costs more (0 sessions made more expensive); 2.2M tokens not sent.
+   Terminal and IDE sessions only; 1 desktop-app session not reachable.
+   Turn it on:  context-doctor autopilot on
+
+3. Compact earlier (400k window)     $13.31 (11%)
+   Claude Code's own auto-compact window: automatic in every surface,
+   1.2 compactions a week instead of 0.7. Each keeps a summary, not the
+   full history. Compare sizes: context-doctor compact-window
+   Set it with: context-doctor compact-window 400k
+
+Output and polling (at list price; shown, not a lever)
+  Output: 2% of $133; reasoning 6% of output tokens.
+    claude-opus-5-5        2% of  $80.65, reasoning 6%
+    claude-fable-5-1       2% of  $39.15, reasoning 4%
+    claude-sonnet-5        1% of  $13.54, reasoning 7%
+  10 repeated identical tool calls (polling) re-read
+  ~2.4M tokens: $2.07. Most: Bash 5, Read 4, ToolSearch 1.
+  Does shorter output keep quality? context-doctor ab
+
+Also: 17 cache misses within the cache lifetime cost $27.83
+above cache-read price (22% of cache writes). By model and
+context size: context-doctor cache-misses
+
+Replayed request by request through the shipped code and priced as the
+prompt cache bills. On a subscription the same tokens come out of your
+usage limit instead. Share yours: context-doctor savings --share
+
+Next: context-doctor fix ranks every fix by what it saves you and applies only the ones you say yes to (context-doctor fix undo reverts them).
+
+[exit 0]

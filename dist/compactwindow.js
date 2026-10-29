@@ -21,14 +21,15 @@
  * same sessions (10+ requests in the window), so the two never disagree.
  */
 import { join } from "node:path";
-import { forEachLine, listSessions, replyCounter, isClaudeSession } from "./session.js";
+import { listSessions, replyCounter, isClaudeSession } from "./session.js";
 import { cacheWriteSplit, pricingFor, usageCost, writeMultiplier } from "./pricing.js";
 import { realModel } from "./tokens.js";
 import { backupOnce } from "./install.js";
 import { ABSENT, readSettings, setJsonPath, writeAtomic } from "./settingsedit.js";
 import { compactWindowOverrides, effectiveCompactWindow, settingsSources } from "./effective.js";
 import { withInvocation } from "./invocation.js";
-import { idleCompactMinTokens, isIdleCompactNotice } from "./coldresume.js";
+import { idleCompactMinTokens, isIdleCompactNotice, REQUEST_ROWS } from "./coldresume.js";
+import { rowsOf } from "./scan.js";
 import { claudeDir } from "./claudedir.js";
 /** Claude Code compacts at about this share of the window (970k of 1M, measured). */
 const TRIGGER_SHARE = 0.97;
@@ -51,14 +52,7 @@ function readRequests(path, runRows) {
     const reqs = [];
     let model, writes5m = 0, writes1h = 0, priced = false;
     const sighting = replyCounter(runRows);
-    forEachLine(path, (line) => {
-        let e;
-        try {
-            e = JSON.parse(line);
-        }
-        catch {
-            return;
-        }
+    rowsOf(path, REQUEST_ROWS).forEach((e) => {
         if (!e || e.isSidechain)
             return;
         if (e.type === "system" && e.subtype === "compact_boundary") {

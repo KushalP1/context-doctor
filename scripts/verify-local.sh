@@ -11,6 +11,8 @@ ok(){ echo "✓ $1"; pass=$((pass+1)); }
 bad(){ echo "✗ $1"; fail=$((fail+1)); FAILS+=("$1"); }
 run(){ local name="$1"; shift; local out; out=$("$@" 2>&1); local st=$?; if [ $st -eq 0 ]; then ok "$name"; else bad "$name (exit $st)"; echo "$out" | tail -8 | sed 's/^/    /'; fi; }
 sb(){ mktemp -d; }
+# The transcript cache (scan.ts) is a write: every run here, the real-history ones included, keeps it in a throwaway folder.
+export CONTEXT_DOCTOR_CACHE_DIR=$(sb)
 
 echo "== 1. Build and unit tests"
 run "npm ci (clean install)" npm ci --silent
@@ -77,6 +79,14 @@ printf '{\n  "model": "opus"\n}\n' > $S/.claude/settings.json; cp $S/.claude/set
 run "cli: cache-ttl recommends 1 hour on 20-minute pauses; 1h then off restores settings.json" bash -c "env HOME=$S node dist/cli.js cache-ttl | grep -q 'Main conversation: 1h would have saved' && env HOME=$S node dist/cli.js cache-ttl 1h >/dev/null && grep -q '\"promptCacheTtl\": \"1h\"' $S/.claude/settings.json && env HOME=$S node dist/cli.js cache-ttl off >/dev/null && cmp -s $S/orig.json $S/.claude/settings.json"
 run "cli: fix plans without writing; --apply then undo restores settings.json" bash -c "env HOME=$S node dist/cli.js fix </dev/null | grep -q 'Cache lifetime, main conversation: 1 hour' && cmp -s $S/orig.json $S/.claude/settings.json && env HOME=$S node dist/cli.js fix --apply cache-ttl </dev/null | grep -q '✓' && grep -q promptCacheTtl $S/.claude/settings.json && env HOME=$S node dist/cli.js fix undo | grep -q 'promptCacheTtl removed' && cmp -s $S/orig.json $S/.claude/settings.json"
 run "cli: fix and cache-ttl honour CLAUDE_CONFIG_DIR and keep a hand-formatted settings.json byte for byte" bash -c "mkdir -p $S/cfg && printf '{\\r\\n\\t\"a\": [1, 2],\\r\\n\\t\"b\": \"\\\\u00e9\"\\r\\n}\\r\\n' > $S/cfg/settings.json && cp $S/cfg/settings.json $S/cfg-orig.json && env HOME=$S CLAUDE_CONFIG_DIR=$S/cfg node dist/cli.js cache-ttl 1h >/dev/null && grep -q promptCacheTtl $S/cfg/settings.json && env HOME=$S CLAUDE_CONFIG_DIR=$S/cfg node dist/cli.js cache-ttl off >/dev/null && cmp -s $S/cfg-orig.json $S/cfg/settings.json && cmp -s $S/orig.json $S/.claude/settings.json"
+# B4: the shared scan's cache changes no figure. On a copy of the real history (cloned, so sessions being
+# written now cannot move the numbers between runs), clock frozen: no cache, a cold cache, a warm one.
+S=$(sb); mkdir -p $S/.claude; cp -cR "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects" $S/.claude/ 2>/dev/null || cp -R "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects" $S/.claude/
+CLOCK=$S/clock.mjs; echo "const T=$(date +%s)000;const R=Date;class D extends R{constructor(...a){if(a.length===0)super(T);else super(...a)}static now(){return T}}globalThis.Date=D;" > $CLOCK; FROZEN="--import $CLOCK"
+for c in "savings --json" "fix --json" "cache-ttl --json" "cache-misses --json" "compact-window" "overhead --json"; do
+  run "cli: $c on a copy of the real history: the same with no cache, a cold and a warm cache" bash -c "cd $S && a=\$(env -u CLAUDE_CONFIG_DIR HOME=$S CONTEXT_DOCTOR_NO_CACHE=1 node $FROZEN $R/dist/cli.js $c) && b=\$(env -u CLAUDE_CONFIG_DIR HOME=$S CONTEXT_DOCTOR_CACHE_DIR=$S/cache node $FROZEN $R/dist/cli.js $c) && w=\$(env -u CLAUDE_CONFIG_DIR HOME=$S CONTEXT_DOCTOR_CACHE_DIR=$S/cache node $FROZEN $R/dist/cli.js $c) && [ \"\$a\" = \"\$b\" ] && [ \"\$a\" = \"\$w\" ] && [ -n \"\$a\" ]"
+done
+run "cli: fix on a warm cache answers in under 5 s" bash -c "cd $S && t0=\$(date +%s) && env -u CLAUDE_CONFIG_DIR HOME=$S CONTEXT_DOCTOR_CACHE_DIR=$S/cache node $R/dist/cli.js fix </dev/null >/dev/null && [ \$(( \$(date +%s) - t0 )) -lt 5 ]"
 # B3: the plugin passes Claude Code's own validation, the plugin directory's checks too where this Claude Code has them.
 CC=$(ls -d "$HOME/Library/Application Support/Claude/claude-code/"*/*/claude.app/Contents/MacOS/claude 2>/dev/null | sort -V | tail -1); [ -x "$CC" ] || CC=$(command -v claude)
 if [ -n "$CC" ]; then

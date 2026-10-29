@@ -1,0 +1,23 @@
+FIXED OVERHEAD: what every request re-reads before your message
+════════════════════════════════════════════════════════
+Claude Code, last 30 days: 7 of 8 sessions (any length; the rest had no first request to measure) start at a median ~56k tokens (p90 ~75k) before the first message.
+Memory files loaded here are ~0 of that; the rest is Claude Code's system prompt, tools, skills and MCP schemas.
+At your usage (231 requests, 37 cold starts, claude-opus-5-5 list prices) every 1k tokens of it costs ~$0.312 a month;
+the whole overhead ~$17.37 a month.
+
+MCP servers
+────────────────────────────────────────────────────────
+Tool search was used in 8 of 8 sessions: Claude Code defers MCP definitions, so a server costs about its tool names until the model looks one up.
+  github                 user          28 calls  size: run with --mcp
+  unused                 user           0 calls  size: run with --mcp
+  `context-doctor overhead --mcp` launches the 2 configured server(s) once to size their definitions.
+
+Memory files loaded in this directory
+────────────────────────────────────────────────────────
+  none
+
+Findings (0)
+────────────────────────────────────────────────────────
+  Nothing to trim. The memory files are lean.
+
+[exit 0]

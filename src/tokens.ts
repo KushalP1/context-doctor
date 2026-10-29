@@ -100,7 +100,17 @@ export function estimateTokens(text: string, model?: string): number {
   // TypeError from a token estimator is never the useful answer.
   if (typeof text !== "string") text = String(text ?? "");
   if (!text) return 0;
-  return Math.ceil(text.length / charsPerTokenFor(text, model));
+  return tokensForLength(text.length, isCodeLike(text), model);
+}
+
+/**
+ * `estimateTokens` from what it reads of a text: its length and whether it
+ * is code-like. What a cache keeps instead of the text itself (scan.ts).
+ */
+export function tokensForLength(length: number, codeLike: boolean, model?: string): number {
+  if (!(length > 0)) return 0;
+  const ratios = CHARS_PER_TOKEN[providerFor(model)];
+  return Math.ceil(length / (codeLike ? ratios.code : ratios.prose));
 }
 
 /** Per-message structural overhead (role markers, delimiters) is roughly constant. */

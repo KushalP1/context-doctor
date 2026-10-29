@@ -1,0 +1,20 @@
+Prompt cache lifetime: 5 minutes or 1 hour (Claude Code's own setting)
+Last 30 days, at list prices; the same content is sent either way
+──────────────────────────────────────────────────────────────────
+Main conversation: 223 requests in 7 sessions, 53% of cache writes at 1 hour
+  as billed                   $127
+  all at 5 minutes            $136   costs $9.54 (8%)
+  all at 1 hour               $128   costs $1.21 (1%); 9 cold re-writes kept warm
+
+Subagents: 24 requests in 2 subagent transcripts, 0% of cache writes at 1 hour
+  as billed                  $3.36
+  all at 5 minutes           $3.36   saves $0 (0%)
+  all at 1 hour              $2.94   saves $0.41 (12%); 4 cold re-writes kept warm
+
+No change pays: the lifetimes as billed are within 2% of the cheaper one.
+
+A 1-hour write costs 2x input, a 5-minute one 1.25x; a pause longer than the
+lifetime makes the next message write the whole context again. On a subscription
+the same tokens come out of your usage limit instead of a bill.
+
+[exit 0]

@@ -1,0 +1,32 @@
+{
+  "days": 30,
+  "main": {
+    "transcripts": 7,
+    "requests": 223,
+    "billedUsd": 126.7684725,
+    "at5mUsd": 136.31024085,
+    "at1hUsd": 127.9833798,
+    "oneHourShare": 0.5339789743931687,
+    "keptWarmAt1h": 9,
+    "wentColdAt5m": 26,
+    "unpriced": 0
+  },
+  "subagents": {
+    "transcripts": 2,
+    "requests": 24,
+    "billedUsd": 3.3573448000000004,
+    "at5mUsd": 3.3573448,
+    "at1hUsd": 2.9441588000000003,
+    "oneHourShare": 0,
+    "keptWarmAt1h": 4,
+    "wentColdAt5m": 0,
+    "unpriced": 0
+  },
+  "current": {
+    "overrides": [],
+    "mainOverrides": [],
+    "subagentOverrides": []
+  }
+}
+
+[exit 0]

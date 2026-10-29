@@ -32,7 +32,8 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpat
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { statePath } from "./ledger.js";
-import { forEachLine, listSessions, isClaudeSession } from "./session.js";
+import { listSessions, isClaudeSession } from "./session.js";
+import { rowsOf, type Extractor } from "./scan.js";
 import { subagentDir } from "./subagents.js";
 import { claudeMcpConfigs, countMcpRow, serverUses, type McpServerConfig } from "./mcpschema.js";
 import { estimateTokens, formatTokens } from "./tokens.js";
@@ -63,6 +64,59 @@ export interface ProjectUse {
   skillUses: Map<string, number>;
 }
 
+/**
+ * What the per-project use count takes from a transcript: its first `cwd`,
+ * the newest time on a row that uses nothing ("t", for whether the session
+ * was active in the period), and each row that may use an MCP tool, prompt
+ * or resource, or a skill, with its time and those uses in order.
+ */
+type PruneRow =
+  | { k: "cwd"; cwd: string }
+  | { k: "t"; at: number }
+  | { k: "u"; ts?: unknown; names: Array<[string, number]>; resources: Array<[string, number]>; skills: string[] };
+
+export const PRUNE_ROWS: Extractor<{ cwd: boolean }> = {
+  id: "prune.1",
+  init: () => ({ cwd: false }),
+  line(line, row, out, st) {
+    if (!st.cwd && line.includes('"cwd"')) {
+      // An empty cwd is kept, and the search goes on, as the count's own `!cwd` does.
+      try { const e = row(); if (typeof e?.cwd === "string") { st.cwd = e.cwd !== ""; out.push({ k: "cwd", cwd: e.cwd }); } } catch { /* not a row */ }
+    }
+    const tool = line.includes('"tool_use"') && (line.includes('"name":"mcp__') || line.includes('"name":"Skill"') || line.includes("McpResource"));
+    const slash = line.includes("<command-name>/");
+    if (!tool && !slash) {
+      if (line.includes('"timestamp"')) {
+        try {
+          const at = Date.parse(row()?.timestamp);
+          // Only the newest time matters (is any row in the period?): one record per run of them.
+          if (Number.isFinite(at)) {
+            const last = out[out.length - 1] as PruneRow | undefined;
+            if (last?.k === "t") { if (at > last.at) out[out.length - 1] = { k: "t", at }; }
+            else out.push({ k: "t", at });
+          }
+        } catch { /* skip */ }
+      }
+      return;
+    }
+    let e: any;
+    try { e = row(); } catch { return; }
+    const names = new Map<string, number>(), resources = new Map<string, number>(), skills: string[] = [];
+    countMcpRow(e, names, resources);
+    const content = e?.message?.content;
+    if (slash) {
+      const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((b: any) => b?.text ?? "").join("\n") : "";
+      for (const m of text.matchAll(/<command-name>\/([\w:.-]+)<\/command-name>/g)) if (!m[1].startsWith("mcp__")) skills.push(m[1]);
+    }
+    if (Array.isArray(content)) {
+      for (const b of content) {
+        if (b?.type === "tool_use" && b.name === "Skill" && typeof b.input?.skill === "string") skills.push(b.input.skill);
+      }
+    }
+    out.push({ k: "u", ...(e?.timestamp !== undefined ? { ts: e.timestamp } : {}), names: [...names], resources: [...resources], skills });
+  },
+};
+
 /** What each project (by the `cwd` its sessions record) used in the last `days`, subagents included. */
 export function projectUsage(days = 30, paths?: string[], now = Date.now()): Map<string, ProjectUse> {
   const since = now - days * DAY;
@@ -74,34 +128,18 @@ export function projectUsage(days = 30, paths?: string[], now = Date.now()): Map
     const resources = new Map<string, number>();
     const skills = new Map<string, number>();
     let active = false;
-    const scan = (file: string) => forEachLine(file, (line) => {
-      if (!cwd && line.includes('"cwd"')) {
-        try { const e = JSON.parse(line); if (typeof e?.cwd === "string") cwd = e.cwd; } catch { /* not a row */ }
+    const scan = (file: string) => {
+      for (const r of rowsOf<PruneRow>(file, PRUNE_ROWS)) {
+        if (r.k === "cwd") { if (!cwd) cwd = r.cwd; continue; }
+        if (r.k === "t") { if (r.at >= since) active = true; continue; }
+        if (Date.parse(r.ts as string) < since) continue;
+        active = true;
+        // Tools, prompts run as /mcp__server__prompt, and resource reads by server.
+        for (const [k, n] of r.names) names.set(k, (names.get(k) ?? 0) + n);
+        for (const [k, n] of r.resources) resources.set(k, (resources.get(k) ?? 0) + n);
+        for (const k of r.skills) bump(skills, k);
       }
-      const tool = line.includes('"tool_use"') && (line.includes('"name":"mcp__') || line.includes('"name":"Skill"') || line.includes("McpResource"));
-      const slash = line.includes("<command-name>/");
-      if (!tool && !slash) {
-        if (!active && line.includes('"timestamp"')) {
-          try { if (Date.parse(JSON.parse(line)?.timestamp) >= since) active = true; } catch { /* skip */ }
-        }
-        return;
-      }
-      let e: any;
-      try { e = JSON.parse(line); } catch { return; }
-      if (Date.parse(e?.timestamp) < since) return;
-      active = true;
-      // Tools, prompts run as /mcp__server__prompt, and resource reads by server.
-      countMcpRow(e, names, resources);
-      const content = e?.message?.content;
-      if (slash) {
-        const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((b: any) => b?.text ?? "").join("\n") : "";
-        for (const m of text.matchAll(/<command-name>\/([\w:.-]+)<\/command-name>/g)) if (!m[1].startsWith("mcp__")) bump(skills, m[1]);
-      }
-      if (!Array.isArray(content)) return;
-      for (const b of content) {
-        if (b?.type === "tool_use" && b.name === "Skill" && typeof b.input?.skill === "string") bump(skills, b.input.skill);
-      }
-    });
+    };
     try {
       scan(path);
       let agents: string[] = [];

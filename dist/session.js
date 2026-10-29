@@ -310,6 +310,14 @@ export function queuedUserPrompt(entry) {
         return a.prompt.trim() ? a.prompt : undefined;
     return Array.isArray(a.prompt) && a.prompt.length ? a.prompt : undefined;
 }
+/** A message's text: a string as it is, text blocks joined by newlines. */
+export function textOf(content) {
+    if (typeof content === "string")
+        return content;
+    if (!Array.isArray(content))
+        return "";
+    return content.map((b) => (typeof b === "string" ? b : typeof b?.text === "string" ? b.text : "")).filter(Boolean).join("\n");
+}
 /** Peek at the first bytes to tell a ChatGPT export (JSON array) from JSONL. */
 function startsWithArray(path) {
     const fd = openSync(path, "r");

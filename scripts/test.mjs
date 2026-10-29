@@ -22,6 +22,10 @@ const files = readdirSync("dist/test")
 const env = { ...process.env, CONTEXT_DOCTOR_NO_CALIBRATION: "1", HOME: home, USERPROFILE: home };
 // GitHub Copilot's home follows COPILOT_HOME wherever HOME is: never the real one.
 delete env.COPILOT_HOME;
+// The transcript cache follows these: never the developer's own (it lands in the throwaway home).
+delete env.CONTEXT_DOCTOR_CACHE_DIR;
+delete env.XDG_CACHE_HOME;
+delete env.CONTEXT_DOCTOR_NO_CACHE;
 // Claude Code's config folder and managed settings follow these: never the developer's own.
 delete env.CLAUDE_CONFIG_DIR;
 delete env.CLAUDE_CODE_MANAGED_SETTINGS_PATH;

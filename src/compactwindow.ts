@@ -31,7 +31,8 @@ import { backupOnce } from "./install.js";
 import { ABSENT, readSettings, setJsonPath, writeAtomic } from "./settingsedit.js";
 import { compactWindowOverrides, effectiveCompactWindow, settingsSources } from "./effective.js";
 import { withInvocation } from "./invocation.js";
-import { idleCompactMinTokens, isIdleCompactNotice } from "./coldresume.js";
+import { idleCompactMinTokens, isIdleCompactNotice, REQUEST_ROWS } from "./coldresume.js";
+import { rowsOf } from "./scan.js";
 import { claudeDir } from "./claudedir.js";
 
 /** Claude Code compacts at about this share of the window (970k of 1M, measured). */
@@ -95,9 +96,7 @@ function readRequests(path: string, runRows?: Set<string>): { reqs: Req[]; write
   const reqs: Req[] = [];
   let model: string | undefined, writes5m = 0, writes1h = 0, priced = false;
   const sighting = replyCounter(runRows);
-  forEachLine(path, (line) => {
-    let e: any;
-    try { e = JSON.parse(line); } catch { return; }
+  rowsOf(path, REQUEST_ROWS).forEach((e) => {
     if (!e || e.isSidechain) return;
     if (e.type === "system" && e.subtype === "compact_boundary") {
       const copy = typeof e.uuid === "string" && !!runRows?.has(e.uuid);

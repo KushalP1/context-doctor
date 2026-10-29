@@ -36,7 +36,9 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { forEachLine, listSessions, replyCounter, isClaudeSession } from "./session.js";
+import { listSessions, replyCounter, isClaudeSession } from "./session.js";
+import { REQUEST_ROWS } from "./coldresume.js";
+import { rowsOf } from "./scan.js";
 import { CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, pricingFor, usageCost } from "./pricing.js";
 import { realModel } from "./tokens.js";
 import { backupOnce } from "./install.js";
@@ -106,14 +108,7 @@ export function replayTtlTranscript(path: string, acc: Acc, since: number, until
   let counted = 0;
   const sighting = replyCounter(runRows);
   const mine = new Set<string>();
-  forEachLine(path, (line) => {
-    if (!line.includes('"usage"') && !line.includes("compact_boundary")) return;
-    let e: any;
-    try {
-      e = JSON.parse(line);
-    } catch {
-      return;
-    }
+  rowsOf(path, REQUEST_ROWS).forEach((e) => {
     if (!e || typeof e !== "object" || (!sidechains && e.isSidechain)) return;
     if (e.type === "system" && e.subtype === "compact_boundary") {
       compacted = true;

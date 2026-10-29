@@ -12,6 +12,7 @@
  * the usage every transcript records, each request at its own model's price.
  */
 import { type AutoClearOptions } from "./autoclear.js";
+import { type Extractor } from "./scan.js";
 export interface SessionSavings {
     path: string;
     project: string;
@@ -63,19 +64,14 @@ export interface SavingsReport {
     coldResumes: number;
     coldResumeNetUsd: number;
 }
-/**
- * One arm of the replay: the history as sent, priced incrementally at each
- * request's own model. Reads are priced as they go; writes are kept at the
- * input price and multiplied by the session's write TTL mix at the end
- * (`usd(writeMult)`), since the mix is only known once the whole transcript
- * has been read.
- */
 /** What an arm needs from a clearer: autopilot's AutoClearer, or the simulated server-side rule (serverclear.ts). */
 export interface ReplayClearer {
     apply(body: Record<string, unknown>, now: number): {
         firstChanged: number;
     };
 }
+/** What `estimateSavings` reads from each transcript, with or without autopilot's replay (for `prescan`). */
+export declare const savingsRows: (replay?: boolean) => Extractor<any>;
 /**
  * Replay one Claude Code transcript. Undefined when it holds too few requests
  * to mean anything. `runRows` is shared by every transcript of one report: a

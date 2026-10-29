@@ -20,7 +20,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { forEachLine, listSessions, isClaudeSession } from "./session.js";
+import { listSessions, isClaudeSession } from "./session.js";
+import { rowsOf, type Extractor } from "./scan.js";
 import { subagentDir } from "./subagents.js";
 import { estimateTokens } from "./tokens.js";
 // Type only: erased at compile time, so dist/ never loads the SDK at startup.
@@ -157,6 +158,32 @@ export function claudeMcpConfigs(cwd = process.cwd(), home = homedir()): McpServ
 }
 
 /**
+ * What the MCP count takes from a transcript: each row that calls an MCP
+ * tool, ToolSearch or a resource tool, or runs an MCP prompt, with its time,
+ * uuid, whether it searched for tools, and its uses (`countMcpRow`'s counts).
+ */
+interface McpRow { ts?: unknown; uuid?: string; searched?: 1; names: Array<[string, number]>; resources: Array<[string, number]> }
+
+export const MCP_ROWS: Extractor<null> = {
+  id: "mcp.1",
+  init: () => null,
+  line(line, row, out) {
+    const tool = line.includes('"tool_use"') && (line.includes('"name":"mcp__') || line.includes('"name":"ToolSearch"') || line.includes('McpResource'));
+    if (!tool && !line.includes("<command-name>/mcp__")) return;
+    let e: any;
+    try { e = row(); } catch { return; }
+    const content = e?.message?.content;
+    const names = new Map<string, number>(), resources = new Map<string, number>();
+    countMcpRow(e, names, resources);
+    const r: McpRow = { names: [...names], resources: [...resources] };
+    if (Array.isArray(content) && content.some((b: any) => b?.type === "tool_use" && b.name === "ToolSearch")) r.searched = 1;
+    if (e?.timestamp !== undefined) r.ts = e.timestamp;
+    if (typeof e?.uuid === "string") r.uuid = e.uuid;
+    out.push(r);
+  },
+};
+
+/**
  * MCP calls per server over the last `days`, from Claude Code transcripts
  * and their subagents' (`<session>/subagents/agent-*.jsonl`). Only lines
  * naming an MCP tool or ToolSearch are parsed.
@@ -182,23 +209,21 @@ export function mcpUsage(days = 30, paths?: string[], onProgress?: (done: number
   for (const [index, path] of files.entries()) {
     onProgress?.(index, files.length);
     let searched = false;
-    const scan = (file: string): void => forEachLine(file, (line) => {
-      const tool = line.includes('"tool_use"') && (line.includes('"name":"mcp__') || line.includes('"name":"ToolSearch"') || line.includes('McpResource'));
-      if (!tool && !line.includes("<command-name>/mcp__")) return;
-      let e: any;
-      try { e = JSON.parse(line); } catch { return; }
-      const content = e?.message?.content;
-      // Whether a session defers MCP definitions is a property of the
-      // session, so ToolSearch counts whenever it was used; calls are dated.
-      if (Array.isArray(content) && content.some((b: any) => b?.type === "tool_use" && b.name === "ToolSearch")) searched = true;
-      if (Date.parse(e?.timestamp) < since) return;
-      // A fork's copied rows (same uuid) were counted in the parent.
-      if (typeof e.uuid === "string") {
-        if (counted.has(e.uuid)) return;
-        counted.add(e.uuid);
+    const scan = (file: string): void => {
+      for (const r of rowsOf<McpRow>(file, MCP_ROWS)) {
+        // Whether a session defers MCP definitions is a property of the
+        // session, so ToolSearch counts whenever it was used; calls are dated.
+        if (r.searched) searched = true;
+        if (Date.parse(r.ts as string) < since) continue;
+        // A fork's copied rows (same uuid) were counted in the parent.
+        if (r.uuid !== undefined) {
+          if (counted.has(r.uuid)) continue;
+          counted.add(r.uuid);
+        }
+        for (const [k, n] of r.names) names.set(k, (names.get(k) ?? 0) + n);
+        for (const [k, n] of r.resources) resources.set(k, (resources.get(k) ?? 0) + n);
       }
-      countMcpRow(e, names, resources);
-    });
+    };
     scan(path);
     let agents: string[] = [];
     try { agents = readdirSync(subagentDir(path)).filter((f) => f.endsWith(".jsonl")); } catch { /* no subagents */ }

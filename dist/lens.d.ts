@@ -14,6 +14,7 @@
  *    Each repeat is a whole request that re-reads the context; it is priced
  *    at that request's billed cost.
  */
+import { type Extractor } from "./scan.js";
 export interface ModelOutput {
     model: string;
     requests: number;
@@ -42,6 +43,7 @@ export interface Lens {
     polls: PollStats;
     totalUsd: number;
 }
+export declare const LENS_ROWS: Extractor<null>;
 /** One session transcript (Claude Code or Codex). */
 export declare function sessionLens(path: string, since?: number): Lens;
 /** Every Claude Code (and, unless `claudeOnly`, Codex) session touched in the last `days`. */

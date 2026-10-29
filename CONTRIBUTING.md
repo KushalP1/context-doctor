@@ -43,6 +43,13 @@ change, however good the feature is.
 - CI runs the suite on Linux, macOS and Windows across Node 20, 22 and 24. Avoid
   shell-isms and path assumptions that only hold on one OS.
 - Keep comments about *why*, not *what*.
+- The history reports read transcripts through `src/scan.ts`: an analysis
+  that reads a transcript adds an extractor there, not its own read. A
+  change to what an extractor records gets a new id (`"ttl.2"`), so caches
+  written before it are not trusted. `src/test/golden` holds every report's
+  output on a fixture history, made by the code before the cache; a change
+  meant to move a figure regenerates them with
+  `node scripts/gen-scan-golden.mjs dist/cli.js` and says why in the PR.
 
 ## Checks beyond `npm test`
 

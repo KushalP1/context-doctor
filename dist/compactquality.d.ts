@@ -15,6 +15,7 @@
  * Compactions shaped by context-doctor's PreCompact hook are reported apart,
  * so its effect can be seen as it accumulates.
  */
+import { type Extractor } from "./scan.js";
 interface Signals {
     requests: number;
     rereads: number;
@@ -42,6 +43,10 @@ export interface CompactionQuality {
         after: Signals;
     };
 }
+export declare const QUALITY_ROWS: Extractor<{
+    lastId?: unknown;
+    reads: Record<string, 1>;
+}>;
 export declare function compactionQuality(days?: number, paths?: string[], onProgress?: (done: number, total: number) => void): CompactionQuality;
 export declare function renderCompactionQuality(q: CompactionQuality, days?: number): string;
 export {};

@@ -1,0 +1,488 @@
+{
+  "days": 30,
+  "sessions": [
+    {
+      "path": "~/.claude/projects/-work-app/s2.jsonl",
+      "project": "work-app",
+      "model": "claude-opus-5-5",
+      "requests": 45,
+      "billedWeighted": 10043300.2,
+      "billedUsd": 26.20619690000001,
+      "savedWeighted": 949621.4275273392,
+      "savedUsd": 2.4778673956435693,
+      "savedTokens": 1789894.6480642639,
+      "savedPct": 0.09455272755138189,
+      "entrypoint": "cli",
+      "autopilotReachable": true,
+      "coldResumes": 7,
+      "coldResumeNetUsd": 2.1057319000000003
+    },
+    {
+      "path": "~/.claude/projects/-work-app/s1.jsonl",
+      "project": "work-app",
+      "model": "claude-opus-5-5",
+      "requests": 58,
+      "billedWeighted": 7636375.9,
+      "billedUsd": 28.1863918,
+      "savedWeighted": 314589.3493796517,
+      "savedUsd": 1.1611710546781686,
+      "savedTokens": 431088.69213814195,
+      "savedPct": 0.04119615816445753,
+      "entrypoint": "cli",
+      "autopilotReachable": true,
+      "coldResumes": 2,
+      "coldResumeNetUsd": 4.331262199999999
+    },
+    {
+      "path": "~/.claude/projects/-work-app/live.jsonl",
+      "project": "work-app",
+      "model": "claude-opus-5-5",
+      "requests": 31,
+      "billedWeighted": 3903161.5,
+      "billedUsd": 14.810716999999999,
+      "savedWeighted": 0,
+      "savedUsd": 0,
+      "savedTokens": 0,
+      "savedPct": 0,
+      "entrypoint": "cli",
+      "autopilotReachable": true,
+      "coldResumes": 1,
+      "coldResumeNetUsd": 4.959795200000001
+    },
+    {
+      "path": "~/.claude/projects/-work-app/s5.jsonl",
+      "project": "work-app",
+      "model": "claude-opus-5-5",
+      "requests": 15,
+      "billedWeighted": 1360765.8000000003,
+      "billedUsd": 5.2366176,
+      "savedWeighted": 0,
+      "savedUsd": 0,
+      "savedTokens": 0,
+      "savedPct": 0,
+      "entrypoint": "cli",
+      "autopilotReachable": true,
+      "coldResumes": 0,
+      "coldResumeNetUsd": 0
+    },
+    {
+      "path": "~/.claude/projects/-work-app/s4.jsonl",
+      "project": "work-app",
+      "model": "claude-fable-5-1",
+      "requests": 26,
+      "billedWeighted": 4223981.399999999,
+      "billedUsd": 38.505860999999996,
+      "savedWeighted": 0,
+      "savedUsd": 0,
+      "savedTokens": 0,
+      "savedPct": 0,
+      "entrypoint": "cli",
+      "autopilotReachable": true,
+      "coldResumes": 2,
+      "coldResumeNetUsd": -2.27327225
+    },
+    {
+      "path": "~/.claude/projects/-work-app/s3.jsonl",
+      "project": "work-app",
+      "model": "claude-opus-5-5",
+      "requests": 30,
+      "billedWeighted": 3070237.5999999996,
+      "billedUsd": 11.483107200000001,
+      "savedWeighted": 0,
+      "savedUsd": 0,
+      "savedTokens": 0,
+      "savedPct": 0,
+      "entrypoint": "claude-desktop",
+      "autopilotReachable": false,
+      "coldResumes": 1,
+      "coldResumeNetUsd": -0.58594
+    },
+    {
+      "path": "~/.claude/projects/-work-app/crlf.jsonl",
+      "project": "work-app",
+      "model": "claude-opus-5-5",
+      "requests": 14,
+      "billedWeighted": 582243.4500000001,
+      "billedUsd": 1.9596193999999998,
+      "savedWeighted": 0,
+      "savedUsd": 0,
+      "savedTokens": 0,
+      "savedPct": 0,
+      "entrypoint": "cli",
+      "autopilotReachable": true,
+      "coldResumes": 0,
+      "coldResumeNetUsd": 0
+    },
+    {
+      "path": "~/.claude/projects/-work-app/fork.jsonl",
+      "project": "work-app",
+      "model": "claude-opus-5-5",
+      "requests": 28,
+      "billedWeighted": 2561883.4000000004,
+      "billedUsd": 9.631346800000001,
+      "savedWeighted": 0,
+      "savedUsd": 0,
+      "savedTokens": 0,
+      "savedPct": 0,
+      "entrypoint": "cli",
+      "autopilotReachable": true,
+      "coldResumes": 0,
+      "coldResumeNetUsd": 0
+    }
+  ],
+  "transcripts": 8,
+  "billedUsd": 136.01985770000002,
+  "savedUsd": 3.639038450321738,
+  "savedTokens": 2220983.340202406,
+  "billedTokens": 33381949.25,
+  "savedPct": 0.026753729285233164,
+  "worse": 0,
+  "reachableUsd": 3.639038450321738,
+  "unreachableSessions": 1,
+  "coldResumes": 13,
+  "coldResumeNetUsd": 8.537577050000001,
+  "cacheMisses": {
+    "days": 30,
+    "transcripts": 8,
+    "requests": 259,
+    "eligible": 207,
+    "misses": 17,
+    "missWriteTokens": 3661093,
+    "extraUsd": 27.829398600000005,
+    "cacheWriteUsd": 132.59237950000005,
+    "unpricedMisses": 0,
+    "byModel": [
+      {
+        "model": "claude-fable-5-1",
+        "eligible": 22,
+        "misses": 2,
+        "rate": 0.09090909090909091,
+        "extraUsd": 8.563679
+      },
+      {
+        "model": "claude-sonnet-5",
+        "eligible": 12,
+        "misses": 1,
+        "rate": 0.08333333333333333,
+        "extraUsd": 0.9853384
+      },
+      {
+        "model": "claude-opus-5-5",
+        "eligible": 173,
+        "misses": 14,
+        "rate": 0.08092485549132948,
+        "extraUsd": 18.2803812
+      }
+    ],
+    "bySize": [
+      {
+        "bucket": "<100k",
+        "eligible": 37,
+        "misses": 4,
+        "rate": 0.10810810810810811,
+        "extraUsd": 2.59606005
+      },
+      {
+        "bucket": "100-300k",
+        "eligible": 126,
+        "misses": 9,
+        "rate": 0.07142857142857142,
+        "extraUsd": 11.759426399999999
+      },
+      {
+        "bucket": "300-600k",
+        "eligible": 43,
+        "misses": 4,
+        "rate": 0.09302325581395349,
+        "extraUsd": 13.47391215
+      },
+      {
+        "bucket": "600k+",
+        "eligible": 1,
+        "misses": 0,
+        "rate": 0,
+        "extraUsd": 0
+      }
+    ],
+    "causes": {
+      "model switch": 0,
+      "context edited": 1,
+      "after an API error": 0,
+      "over 20 new blocks": 0,
+      "nothing visible": 16
+    },
+    "recommendations": [],
+    "byVersion": [
+      {
+        "version": "2.1.300",
+        "requests": 188,
+        "sessions": 6,
+        "firstRequests": 5,
+        "firstMedian": 50451,
+        "writesPerRequest": 47692.62234042553,
+        "oneHourShare": 0.964554823758927,
+        "eligible": 157,
+        "misses": 12,
+        "missRate": 0.07643312101910828,
+        "byModel": [
+          {
+            "model": "claude-opus-5-5",
+            "eligible": 157,
+            "misses": 12
+          }
+        ],
+        "ttlBy": [
+          {
+            "key": "claude-opus-5-5 in cli",
+            "requests": 158,
+            "oneHourShare": 0.9583522258781298
+          },
+          {
+            "key": "claude-opus-5-5 in claude-desktop",
+            "requests": 30,
+            "oneHourShare": 1
+          }
+        ],
+        "from": "2026-09-11T12:01:12.745Z",
+        "to": "2026-10-01T01:23:56.601Z"
+      },
+      {
+        "version": "2.1.309",
+        "requests": 71,
+        "sessions": 2,
+        "firstRequests": 2,
+        "firstMedian": 74834,
+        "writesPerRequest": 130138.8309859155,
+        "oneHourShare": 0.20159889920374308,
+        "eligible": 50,
+        "misses": 5,
+        "missRate": 0.1,
+        "byModel": [
+          {
+            "model": "claude-fable-5-1",
+            "eligible": 22,
+            "misses": 2
+          },
+          {
+            "model": "claude-opus-5-5",
+            "eligible": 16,
+            "misses": 2
+          },
+          {
+            "model": "claude-sonnet-5",
+            "eligible": 12,
+            "misses": 1
+          }
+        ],
+        "ttlBy": [
+          {
+            "key": "claude-fable-5-1 in cli",
+            "requests": 26,
+            "oneHourShare": 1
+          },
+          {
+            "key": "claude-opus-5-5 in cli",
+            "requests": 25,
+            "oneHourShare": 0
+          },
+          {
+            "key": "claude-sonnet-5 in cli",
+            "requests": 20,
+            "oneHourShare": 0
+          }
+        ],
+        "from": "2026-09-19T12:00:48.530Z",
+        "to": "2026-09-28T22:16:25.416Z"
+      }
+    ],
+    "regressions": [],
+    "diagnosed": {
+      "misses": 0,
+      "sessions": 0,
+      "tokens": 0,
+      "extraUsd": 0,
+      "byCause": []
+    },
+    "late": {
+      "rewrites": 21,
+      "tokens": 5024714,
+      "extraUsd": 28.70157565,
+      "loops": [
+        {
+          "path": "~/.claude/projects/-work-app/s2.jsonl",
+          "rewrites": 3,
+          "medianGapSeconds": 363,
+          "ttlSeconds": 300,
+          "extraUsd": 3.1290239999999994
+        }
+      ],
+      "largest": [
+        {
+          "path": "~/.claude/projects/-work-app/s4.jsonl",
+          "at": "2026-09-28T14:22:17.396Z",
+          "model": "claude-fable-5-1",
+          "ttlSeconds": 3600,
+          "gapSeconds": 3665,
+          "contextTokens": 213883,
+          "writeTokens": 233782,
+          "extraUsd": 4.22418925,
+          "cold": 1
+        },
+        {
+          "path": "~/.claude/projects/-work-app/s1.jsonl",
+          "at": "2026-09-11T18:43:11.406Z",
+          "model": "claude-opus-5-5",
+          "ttlSeconds": 3600,
+          "gapSeconds": 3679,
+          "contextTokens": 393097,
+          "writeTokens": 407875,
+          "extraUsd": 3.0661566000000002,
+          "cold": 4
+        },
+        {
+          "path": "~/.claude/projects/-work-app/s1.jsonl",
+          "at": "2026-09-11T17:37:36.186Z",
+          "model": "claude-opus-5-5",
+          "ttlSeconds": 3600,
+          "gapSeconds": 3693,
+          "contextTokens": 307250,
+          "writeTokens": 325188,
+          "extraUsd": 2.39655,
+          "cold": 3
+        },
+        {
+          "path": "~/.claude/projects/-work-app/s3.jsonl",
+          "at": "2026-09-25T13:46:04.424Z",
+          "model": "claude-opus-5-5",
+          "ttlSeconds": 3600,
+          "gapSeconds": 3689,
+          "contextTokens": 246387,
+          "writeTokens": 249861,
+          "extraUsd": 1.9218186,
+          "cold": 1
+        },
+        {
+          "path": "~/.claude/projects/-work-app/live.jsonl",
+          "at": "2026-09-30T17:40:49.473Z",
+          "model": "claude-opus-5-5",
+          "ttlSeconds": 3600,
+          "gapSeconds": 3687,
+          "contextTokens": 204491,
+          "writeTokens": 229149,
+          "extraUsd": 1.5950298,
+          "cold": 3
+        },
+        {
+          "path": "~/.claude/projects/-work-app/s1.jsonl",
+          "at": "2026-09-11T23:05:49.999Z",
+          "model": "claude-opus-5-5",
+          "ttlSeconds": 3600,
+          "gapSeconds": 3683,
+          "contextTokens": 193168,
+          "writeTokens": 199494,
+          "extraUsd": 1.5067104,
+          "cold": 6
+        },
+        {
+          "path": "~/.claude/projects/-work-app/s2.jsonl",
+          "at": "2026-09-19T21:23:44.321Z",
+          "model": "claude-sonnet-5",
+          "ttlSeconds": 300,
+          "gapSeconds": 363,
+          "contextTokens": 650339,
+          "writeTokens": 659310,
+          "extraUsd": 1.4957797,
+          "cold": 16
+        },
+        {
+          "path": "~/.claude/projects/-work-app/fork.jsonl",
+          "at": "2026-09-11T13:21:24.274Z",
+          "model": "claude-opus-5-5",
+          "ttlSeconds": 3600,
+          "gapSeconds": 3679,
+          "contextTokens": 172426,
+          "writeTokens": 183005,
+          "extraUsd": 1.3449228,
+          "cold": 1
+        },
+        {
+          "path": "~/.claude/projects/-work-app/s1.jsonl",
+          "at": "2026-09-11T13:21:24.274Z",
+          "model": "claude-opus-5-5",
+          "ttlSeconds": 3600,
+          "gapSeconds": 3679,
+          "contextTokens": 172426,
+          "writeTokens": 183005,
+          "extraUsd": 1.3449228,
+          "cold": 1
+        },
+        {
+          "path": "~/.claude/projects/-work-app/live.jsonl",
+          "at": "2026-10-01T01:23:56.601Z",
+          "model": "claude-opus-5-5",
+          "ttlSeconds": 3600,
+          "gapSeconds": 3692,
+          "contextTokens": 171601,
+          "writeTokens": 184781,
+          "extraUsd": 1.3384878,
+          "cold": 6
+        }
+      ]
+    }
+  },
+  "limitFit": null,
+  "outputAndPolling": {
+    "sessions": 8,
+    "byModel": [
+      {
+        "model": "claude-opus-5-5",
+        "requests": 201,
+        "outputTokens": 103707,
+        "reasoningTokens": 6696,
+        "outputUsd": 2.07414,
+        "totalUsd": 86.16806720000002
+      },
+      {
+        "model": "claude-fable-5-1",
+        "requests": 26,
+        "outputTokens": 12979,
+        "reasoningTokens": 512,
+        "outputUsd": 0.64895,
+        "totalUsd": 39.154811
+      },
+      {
+        "model": "claude-sonnet-5",
+        "requests": 20,
+        "outputTokens": 12345,
+        "reasoningTokens": 848,
+        "outputUsd": 0.12345,
+        "totalUsd": 13.543519500000002
+      }
+    ],
+    "polls": {
+      "repeats": 10,
+      "usd": 2.07493165,
+      "contextTokens": 2368723,
+      "byTool": [
+        {
+          "tool": "Bash",
+          "repeats": 5,
+          "usd": 1.57035975
+        },
+        {
+          "tool": "Read",
+          "repeats": 4,
+          "usd": 0.37339350000000004
+        },
+        {
+          "tool": "ToolSearch",
+          "repeats": 1,
+          "usd": 0.1311784
+        }
+      ]
+    },
+    "totalUsd": 138.86639770000002
+  }
+}
+
+[exit 0]

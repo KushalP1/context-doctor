@@ -35,8 +35,9 @@
  * with the interval that keeps the cache warm.
  */
 
-import { forEachLine, listSessions, isClaudeSession } from "./session.js";
-import { estimateTokens, formatTokens, realModel } from "./tokens.js";
+import { listSessions, isClaudeSession } from "./session.js";
+import { rowsOf, slimUsage, type Extractor } from "./scan.js";
+import { formatTokens, isCodeLike, realModel, tokensForLength } from "./tokens.js";
 import { CACHE_WRITE_1H, CACHE_WRITE_5M, pricingFor } from "./pricing.js";
 import { compareVersions } from "./modelswitch.js";
 import { diagnosedMisses, missLogPath, type DiagnosedMisses } from "./missledger.js";
@@ -195,6 +196,87 @@ interface Prev {
   ttl: number;
 }
 
+/**
+ * What the miss check takes from a transcript, in order: main-thread rows
+ * counted as content blocks ("b", a run of them), the first user message
+ * with text ("f", also a block; its length and whether it reads as code), compactions ("c"), API errors ("e"), and
+ * each request ("r": a reply's first row with usage, a known model and a
+ * time; also a block) with its usage, whether its context was edited, its
+ * version, uuid and surface.
+ */
+type MissRow =
+  | { k: "b"; n: number }
+  | { k: "f"; len: number; code: boolean }
+  | { k: "c" }
+  | { k: "e" }
+  | { k: "r"; model: string; at: number; u: Record<string, any>; ed?: 1; version?: string; uuid?: string; ep?: string };
+
+export const MISS_ROWS: Extractor<{ lastId?: string; user: boolean }> = {
+  id: "misses.1",
+  init: () => ({ user: false }),
+  line(line, row, out, st) {
+    const block = () => {
+      const last = out[out.length - 1] as MissRow | undefined;
+      // A new object, not last.n++: a resumed read starts from the cached records, which stay as they were.
+      if (last?.k === "b") out[out.length - 1] = { k: "b", n: last.n + 1 };
+      else out.push({ k: "b", n: 1 });
+    };
+    // Cheap row counting without a parse: Claude Code writes one row per
+    // content block, so main-chain rows since the last request are the blocks
+    // it added (what the 20-block lookback counts).
+    const usage = line.includes('"usage"');
+    if (!usage && !line.includes("compact_boundary") && !line.includes("api_error")) {
+      if ((line.includes('"type":"user"') || line.includes('"type":"assistant"')) && !line.includes('"isSidechain":true')) {
+        // The first thing the user typed (the check takes it only before the first request).
+        if (!st.user && line.includes('"type":"user"') && !line.includes('"isMeta":true')) {
+          try {
+            const e = row();
+            const c = e?.message?.content;
+            const text = typeof c === "string" ? c : Array.isArray(c) ? c.map((b: any) => (typeof b?.text === "string" ? b.text : "")).join("\n") : "";
+            if (text) {
+              st.user = true;
+              // What the estimate reads of it, not the prompt itself: the cache keeps no message text.
+              out.push({ k: "f", len: text.length, code: isCodeLike(text) });
+              return;
+            }
+          } catch {
+            /* not a row */
+          }
+        }
+        block();
+      }
+      return;
+    }
+    let e: any;
+    try {
+      e = row();
+    } catch {
+      return;
+    }
+    if (!e || typeof e !== "object" || e.isSidechain) return;
+    if (e.type === "system" && e.subtype === "compact_boundary") { out.push({ k: "c" }); return; }
+    if (e.type === "system" && e.subtype === "api_error") { out.push({ k: "e" }); return; }
+    if (e.type !== "user" && e.type !== "assistant") return;
+    const msg = e.message;
+    if (e.type !== "assistant" || !msg?.usage) { block(); return; }
+    // One reply is written as several rows sharing its id and usage: count it once.
+    if (typeof msg.id === "string" && msg.id === st.lastId) { block(); return; }
+    st.lastId = typeof msg.id === "string" ? msg.id : undefined;
+    const model = realModel(msg.model);
+    const at = Date.parse(String(e.timestamp ?? ""));
+    if (!model || !Number.isFinite(at)) { block(); return; }
+    const u = msg.usage;
+    const cm = u.context_management ?? msg.context_management;
+    const cmText = cm ? JSON.stringify(cm) : "";
+    const r: MissRow = { k: "r", model, at, u: slimUsage(u) as Record<string, any> };
+    if (cmText.includes("applied") && !/"applied_edits"\s*:\s*\[\s*\]/.test(cmText)) r.ed = 1;
+    if (typeof e.version === "string" && /^\d+\.\d+\.\d+$/.test(e.version)) r.version = e.version;
+    if (typeof e.uuid === "string") r.uuid = e.uuid;
+    if (typeof e.entrypoint === "string") r.ep = e.entrypoint.slice(0, 40);
+    out.push(r);
+  },
+};
+
 /** Misses in one transcript; `since` drops requests before it. */
 /** What `onRequest` is told about each main-chain request in the period. */
 export interface RequestInfo {
@@ -221,87 +303,48 @@ export function missesInTranscript(
   onLate: (late: LateRewrite) => void = () => {}
 ): void {
   let prev: Prev | undefined;
-  let lastId: string | undefined;
   let compacted = false;
   let apiError = false;
   let blocks = 0;
   let edited = false;
-  let firstUser: string | undefined;
+  let firstUser: { len: number; code: boolean } | undefined;
   let started = false;
   // Requests that found the cache past its lifetime, numbered in order: two
   // late re-writes are consecutive when no other cold start came between.
   let colds = 0;
-  forEachLine(path, (line) => {
-    // Cheap row counting without a parse: Claude Code writes one row per
-    // content block, so main-chain rows since the last request are the blocks
-    // it added (what the 20-block lookback counts).
-    const usage = line.includes('"usage"');
-    if (!usage && !line.includes("compact_boundary") && !line.includes("api_error")) {
-      if ((line.includes('"type":"user"') || line.includes('"type":"assistant"')) && !line.includes('"isSidechain":true')) {
-        blocks++;
-        // The first thing the user typed: part of the first request, not of the overhead.
-        if (!started && firstUser === undefined && line.includes('"type":"user"') && !line.includes('"isMeta":true')) {
-          try {
-            const e = JSON.parse(line);
-            const c = e?.message?.content;
-            const text = typeof c === "string" ? c : Array.isArray(c) ? c.map((b: any) => (typeof b?.text === "string" ? b.text : "")).join("\n") : "";
-            if (text) firstUser = text;
-          } catch {
-            /* not a row */
-          }
-        }
-      }
-      return;
+  for (const r of rowsOf<MissRow>(path, MISS_ROWS)) {
+    if (r.k === "b") { blocks += r.n; continue; }
+    if (r.k === "f") {
+      blocks++;
+      // The first thing the user typed: part of the first request, not of the overhead.
+      if (!started && firstUser === undefined) firstUser = r;
+      continue;
     }
-    let e: any;
-    try {
-      e = JSON.parse(line);
-    } catch {
-      return;
-    }
-    if (!e || typeof e !== "object" || e.isSidechain) return;
-    if (e.type === "system" && e.subtype === "compact_boundary") {
-      compacted = true;
-      return;
-    }
-    if (e.type === "system" && e.subtype === "api_error") {
-      apiError = true;
-      return;
-    }
-    if (e.type === "user" || e.type === "assistant") blocks++;
-    const msg = e.message;
-    if (e.type !== "assistant" || !msg?.usage) return;
-    // One reply is written as several rows sharing its id and usage: count it once.
-    if (typeof msg.id === "string" && msg.id === lastId) return;
-    lastId = typeof msg.id === "string" ? msg.id : undefined;
-    const model = realModel(msg.model);
-    if (!model) return;
-    const at = Date.parse(String(e.timestamp ?? ""));
-    if (!Number.isFinite(at)) return;
-    const u = msg.usage;
+    if (r.k === "c") { compacted = true; continue; }
+    if (r.k === "e") { apiError = true; continue; }
+    blocks++;
+    const { model, at, u } = r;
     const write = num(u.cache_creation_input_tokens);
     const read = num(u.cache_read_input_tokens);
     const total = write + read + num(u.input_tokens);
     const oneHour = num(u.cache_creation?.ephemeral_1h_input_tokens) > 0;
     const ttl = oneHour ? HOUR : FIVE_MIN;
-    const cm = u.context_management ?? msg.context_management;
-    const cmText = cm ? JSON.stringify(cm) : "";
-    if (cmText.includes("applied") && !/"applied_edits"\s*:\s*\[\s*\]/.test(cmText)) edited = true;
+    if (r.ed) edited = true;
 
-    const version = typeof e.version === "string" && /^\d+\.\d+\.\d+$/.test(e.version) ? e.version : undefined;
+    const version = r.version;
     // A transcript that opens with a parent's copied rows (a fork) has no
     // first request of its own: the parent's file holds the same uuid.
-    const uuid = typeof e.uuid === "string" ? e.uuid : undefined;
+    const uuid = r.uuid;
     const copied = uuid !== undefined && runRows !== undefined && runRows.has(uuid);
     if (uuid !== undefined) runRows?.add(uuid);
-    const first = !started && !copied ? Math.max(0, total - estimateTokens(firstUser ?? "", model)) : undefined;
+    const first = !started && !copied ? Math.max(0, total - (firstUser ? tokensForLength(firstUser.len, firstUser.code, model) : 0)) : undefined;
     started = true;
     if (prev && at - prev.at >= prev.ttl) colds++;
     if (at >= since) {
       const price = pricingFor(model);
       const w1h = Math.min(write, num(u.cache_creation?.ephemeral_1h_input_tokens));
       const w5m = u.cache_creation ? Math.min(write - w1h, num(u.cache_creation?.ephemeral_5m_input_tokens)) : write - w1h;
-      onRequest(price ? (write * price.inputPerM * (oneHour ? CACHE_WRITE_1H : CACHE_WRITE_5M)) / 1e6 : 0, { at, version, write, oneHour: w1h, fiveMinute: w5m, first, model, entrypoint: typeof e.entrypoint === "string" ? e.entrypoint.slice(0, 40) : undefined });
+      onRequest(price ? (write * price.inputPerM * (oneHour ? CACHE_WRITE_1H : CACHE_WRITE_5M)) / 1e6 : 0, { at, version, write, oneHour: w1h, fiveMinute: w5m, first, model, entrypoint: r.ep });
       if (prev && !compacted && at - prev.at < Math.min(ttl, prev.ttl) && prev.total > MIN_CONTEXT) {
         const isMiss = write > MISS_SHARE * prev.total;
         let miss: CacheMiss | undefined;
@@ -346,7 +389,7 @@ export function missesInTranscript(
     apiError = false;
     edited = false;
     blocks = 0;
-  });
+  }
 }
 
 /** Two rates differ beyond chance (two-proportion z-test, 99%). */
