@@ -551,7 +551,8 @@ export function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], sin
   out.push(`Last ${days} days of your Claude Code sessions, ${money(billedUsd)} of input at list prices`);
   out.push("─".repeat(66));
   const avail = fixes.filter((f) => f.state === "available");
-  if (avail.length === 0) out.push("Nothing left to fix here: every lever that pays on your history is applied.");
+  // No input billed: there is no history to measure, which is not "all applied".
+  if (avail.length === 0) out.push(...(billedUsd > 0 ? ["Nothing left to fix here: every lever that pays on your history is applied."] : noHistory(days, command)));
   avail.forEach((f, n) => {
     const usd = f.savedUsd !== undefined ? `${money(f.savedUsd)}${f.savedShare !== undefined ? ` (${pct(f.savedShare)})` : ""}` : "not priced";
     const head = `${n + 1}. ${f.title}`;
@@ -598,11 +599,16 @@ export function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], sin
   return out.join("\n");
 }
 
+/** What `fix` says on a machine with no Claude Code sessions in the period: savings' wording, and what to do. */
+function noHistory(days: number, command: (s: string) => string): string[] {
+  return [`No Claude Code sessions in the last ${days} days to measure yet, so no fix can be priced.`, `Use Claude Code for a while, then run this again: ${command("fix")}.`];
+}
+
 export function renderFixShare(days: number, billedUsd: number, fixes: Fix[]): string {
   const avail = fixes.filter((f) => f.state === "available" && f.savedUsd !== undefined);
   const lines = [`context-doctor fix on my last ${days} days of Claude Code (${money(billedUsd)} of input at list price):`];
   for (const f of avail) lines.push(`- ${LABEL[f.id]}: ${money(f.savedUsd!)}${f.savedShare !== undefined ? ` (${pct(f.savedShare)})` : ""}`);
-  if (avail.length === 0) lines.push("- nothing left to fix");
+  if (avail.length === 0) lines.push(billedUsd > 0 ? "- nothing left to fix" : "- no Claude Code sessions to measure yet");
   if (avail.length > 1) lines.push("Each measured alone; they overlap, so do not add them up.");
   lines.push("Measured on my own sessions, locally: npx context-doctor fix");
   return lines.join("\n");

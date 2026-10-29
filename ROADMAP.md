@@ -239,6 +239,18 @@ the estimator to noise. Calibration needs a real tokenizer, not this data.
 
 Each release with the measurements behind it. Dollar figures are as measured when the release shipped, with the prices and counting of the time; the 0.32 audit fixed both, and the README's headline figures are the re-measured ones.
 
+## Shipped on main, not yet released
+
+### Fixed on main since 0.39.0
+
+From an end-to-end QA pass on 0.39.0 (2026-10-29), each with a regression test:
+
+- **`install` then `uninstall` gives every config back byte for byte.** Install parsed each config and wrote it back whole, so a minified file came back indented, inline arrays one item a line, CRLF as LF, `"\u00e9"` as `"é"`, `30.0` as `30`: 9 of 11 configs differed after a round trip. Install, uninstall and autopilot now edit the text key by key and list item by list item (the editing `fix` and `cache-ttl` already used); the round trip is tested on all 11 config kinds, hand-written (CRLF, tabs, inline arrays, escapes, comments) and minified. The `~/.claude/skills` and `~/.codex/skills` folders install created are removed again once empty; a folder that was there before, or holds anything else, stays.
+- **Gemini CLI's `settings.json` with comments** was refused as "not valid JSON". Gemini CLI reads it through `strip-json-comments`, so comments are valid there: install, uninstall and `doctor` now read past them and keep them.
+- **`doctor` marked an out-of-date skill ✓.** The installed SKILL.md (Claude Code, Codex, Antigravity) is now compared with the one the version ships; a copy that differs (old, or edited by hand) is a warning that says `context-doctor install` replaces it. `install` no longer creates `~/.claude` for the skill on a machine without Claude Code.
+- **`fix` with no history** said "Nothing left to fix here: every lever that pays on your history is applied" (and `--share`: "nothing left to fix"). It now says there are no Claude Code sessions to measure yet, and to use Claude Code for a while and run it again.
+- Profile findings printed raw counts such as `~4050912 tokens`; they use the `4.1M` form like the rest. The status line printed `ctx 279k/-5 … -5571760%` on a non-positive `context_window_size`; such a size is now unknown. The README and `docs/ci.md` pinned the Action at v0.38.0; `npm version` now updates the pin (`scripts/sync-versions.mjs`) and a test holds it to `package.json`. `install --help` names Antigravity; the proxy's start banner gives `GOOGLE_GEMINI_BASE_URL` beside the Anthropic and OpenAI base URLs.
+
 ## Shipped in 0.39.0: one plan (`fix`), the cache lifetime and clock, and Antigravity
 
 From the research of 2026-10-27 ([above](#research-2026-10-27-what-changed-since-2026-10-20)): items N1-N5; from the research of 2026-10-28 ([above](#research-2026-10-28-from-reports-to-fixes)): items B1-B3.

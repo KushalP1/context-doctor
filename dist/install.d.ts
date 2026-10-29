@@ -8,6 +8,12 @@
  */
 import { type ClaudeCodeInstall, type ModelSwitchReadiness } from "./modelswitch.js";
 export declare function geminiSettingsPath(): string;
+/**
+ * Gemini CLI reads its settings.json through strip-json-comments
+ * (packages/cli/src/config/settings.ts), so `//` and block comments are
+ * valid there: read past them, and keep them when editing.
+ */
+export declare function allowsComments(path: string): boolean;
 export declare function geminiCliPresent(): boolean;
 /**
  * How to invoke the published package as an MCP server on a given platform.
@@ -78,11 +84,13 @@ export declare function readJson(path: string): Record<string, any>;
  */
 export declare function backupOnce(path: string): void;
 /**
- * JSON as the file already writes it: its indentation (spaces or a tab, from
- * its first indented line) and its trailing newline. A file with no
- * indented line, or a new one, gets two spaces and no newline, as before.
+ * Write `data` into a JSON config the way a person would edit it: only the
+ * keys and list items that differ are changed in the text (settingsedit.ts),
+ * so indentation, one-line objects, minified files, CRLF, escapes, number
+ * spelling and (Gemini CLI) comments stay as they were, and uninstall's
+ * removal of the same entries gives the file back byte for byte.
+ * Re-serialising the whole file used to expand a minified or inline config.
  */
-export declare function jsonLike(text: string | undefined, data: unknown): string;
 export declare function writeJsonWithBackup(path: string, data: Record<string, any>): void;
 /**
  * Find an executable on PATH without shelling out (works on Windows too).
@@ -133,6 +141,8 @@ export declare function installModelSwitchHook(readiness?: ModelSwitchReadiness)
  * claudeCodeInstalls finds.
  */
 export declare function claudeCodeInstallsFromEnv(): ClaudeCodeInstall[];
+/** The SKILL.md this package ships, the one install copies. */
+export declare function shippedSkillPath(): string;
 export declare function codexDir(): string;
 /**
  * Add or replace our [mcp_servers.context-doctor] table in config.toml without

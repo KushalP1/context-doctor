@@ -780,6 +780,7 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
     // port on :: or ::1 beside this one, and `localhost` may resolve there.
     console.error(`  Anthropic apps/SDKs: export ANTHROPIC_BASE_URL=http://127.0.0.1:${port}${prefix}`);
     console.error(`  OpenAI apps/SDKs:    export OPENAI_BASE_URL=http://127.0.0.1:${port}${prefix}/v1`);
+    console.error(`  Gemini apps/SDKs:    export GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:${port}${prefix}`);
     console.error(opts.autopilot
       ? `  Autopilot: stale re-runnable tool output is cleared only when the prompt cache is cold; savings are logged here.`
       : `  Every request's context is optimized in flight; savings are logged here.`);

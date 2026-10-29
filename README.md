@@ -27,7 +27,7 @@ Pick where you work. Each takes about a minute and is fully reversible.
 | **claude.ai, ChatGPT, phone apps** | `npx context-doctor instructions --copy`, then paste into the app's personal preferences (it tells you where). ChatGPT can also reach the MCP server at a URL ([how](./docs/chat-apps.md#chatgpt)) |
 | **Your own app on an LLM API** | Run `npx context-doctor proxy --autopilot` and point `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` (add `/v1`) or `GOOGLE_GEMINI_BASE_URL` at the proxy on `127.0.0.1:8787`, plain HTTP ([exact values](./docs/proxy.md)). No proxy possible? Wrap the SDK client: `withContextDoctor(new Anthropic())` ([library](./docs/library.md)) |
 | **Python / RAG pipelines** | `pip install "git+https://github.com/KushalP1/context-doctor#subdirectory=python"` (PyPI release coming), then `pack_documents(retrieved_docs, question, budget=4000)` trims LangChain or LlamaIndex results to the chunks that matter. [Python README](./python/README.md) |
-| **GitHub pull requests** | `uses: KushalP1/context-doctor@v0.38.0` comments how much a PR grows CLAUDE.md, AGENTS.md and rules, and can fail over a budget ([setup](./docs/ci.md)) |
+| **GitHub pull requests** | `uses: KushalP1/context-doctor@v0.39.0` comments how much a PR grows CLAUDE.md, AGENTS.md and rules, and can fail over a budget ([setup](./docs/ci.md)) |
 
 ## What it does
 

@@ -16,6 +16,7 @@ import { FANOUT_MATCHER } from "./fanout.js";
 import { antigravityAllSkillDirs, antigravityMcpConfigPath, antigravityPresent, antigravitySkillDirs } from "./antigravity.js";
 import { COPILOT_HOOK_EVENT, copilotHome, copilotHookFilePath, copilotMcpConfigPath, isOurCopilotEntry, vsCodePresent } from "./copilot.js";
 import { claudeDir, claudeJsonPath } from "./claudedir.js";
+import { editJsonText, parseSettingsText, sameJson } from "./settingsedit.js";
 function claudeDesktopConfigPath() {
     switch (platform()) {
         case "darwin": return join(homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
@@ -42,6 +43,14 @@ function targets() {
 // creates it too, without the CLI.
 export function geminiSettingsPath() {
     return join(homedir(), ".gemini", "settings.json");
+}
+/**
+ * Gemini CLI reads its settings.json through strip-json-comments
+ * (packages/cli/src/config/settings.ts), so `//` and block comments are
+ * valid there: read past them, and keep them when editing.
+ */
+export function allowsComments(path) {
+    return path === geminiSettingsPath();
 }
 export function geminiCliPresent() {
     return existsSync(geminiSettingsPath()) || existsSync(join(homedir(), ".gemini", "tmp")) || binOnPath("gemini") !== null;
@@ -169,9 +178,9 @@ export function readJson(path) {
         const text = readFileSync(path, "utf8");
         // An empty file configures nothing, like an absent one: Antigravity
         // creates its mcp_config.json empty.
-        if (text.trim() === "")
+        if (text.replace(/^\ufeff/, "").trim() === "")
             return {};
-        return JSON.parse(text);
+        return parseSettingsText(text, allowsComments(path));
     }
     catch (e) {
         throw new Error(`${path} exists but is not valid JSON — fix or remove it first (${e.message})`);
@@ -201,7 +210,7 @@ function holdsOurs(path) {
     if (path.endsWith(".toml"))
         return codexMcpEntry(text) !== undefined;
     try {
-        const raw = JSON.parse(text);
+        const raw = parseSettingsText(text, allowsComments(path));
         return isPlainObject(raw) && JSON.stringify(withoutOurs(raw)) !== JSON.stringify(raw);
     }
     catch {
@@ -230,16 +239,6 @@ export function backupOnce(path) {
         return;
     copyFileSync(path, backup);
 }
-/**
- * JSON as the file already writes it: its indentation (spaces or a tab, from
- * its first indented line) and its trailing newline. A file with no
- * indented line, or a new one, gets two spaces and no newline, as before.
- */
-export function jsonLike(text, data) {
-    const indent = text?.match(/^[{\[][ \t]*\r?\n([ \t]+)\S/)?.[1] ?? "  ";
-    const body = JSON.stringify(data, null, indent);
-    return text && /\n$/.test(text) ? body + (text.endsWith("\r\n") ? "\r\n" : "\n") : body;
-}
 function readText(path) {
     try {
         return readFileSync(path, "utf8");
@@ -248,10 +247,18 @@ function readText(path) {
         return undefined;
     }
 }
+/**
+ * Write `data` into a JSON config the way a person would edit it: only the
+ * keys and list items that differ are changed in the text (settingsedit.ts),
+ * so indentation, one-line objects, minified files, CRLF, escapes, number
+ * spelling and (Gemini CLI) comments stay as they were, and uninstall's
+ * removal of the same entries gives the file back byte for byte.
+ * Re-serialising the whole file used to expand a minified or inline config.
+ */
 export function writeJsonWithBackup(path, data) {
     mkdirSync(dirname(path), { recursive: true });
     backupOnce(path);
-    writeFileSync(path, jsonLike(readText(path), data));
+    writeFileSync(path, editJsonText(readText(path), data, allowsComments(path)));
 }
 /**
  * Find an executable on PATH without shelling out (works on Windows too).
@@ -550,18 +557,62 @@ function uninstallHookFrom(settingsPath, label, event = "UserPromptSubmit") {
     }
 }
 function installSkill() {
-    return installSkillInto(join(claudeDir(), "skills", "context-doctor"));
+    // Only where Claude Code is: making ~/.claude makes it look installed.
+    if (!existsSync(claudeDir()) && !existsSync(claudeJsonPath()))
+        return null;
+    return installSkillInto(join(claudeDir(), "skills", "context-doctor"), claudeDir());
 }
-/** Agent Skills are one format across Claude Code and Codex; only the home differs. */
-function installSkillInto(skillDest) {
-    const selfDir = dirname(fileURLToPath(import.meta.url));
+/** The SKILL.md this package ships, the one install copies. */
+export function shippedSkillPath() {
     // dist/install.js → package root is one level up; skills/ ships in the package.
-    const skillSource = join(selfDir, "..", "skills", "context-doctor", "SKILL.md");
+    return join(dirname(fileURLToPath(import.meta.url)), "..", "skills", "context-doctor", "SKILL.md");
+}
+/**
+ * Agent Skills are one format across Claude Code and Codex; only the home
+ * differs. With `appHome`, the folders this makes there (the skills folder,
+ * and for Claude Code the home itself) are recorded, so uninstall can take
+ * them out again once empty; a folder that was already there is the user's.
+ */
+function installSkillInto(skillDest, appHome) {
+    const skillSource = shippedSkillPath();
     if (!existsSync(skillSource))
         return null;
+    const missing = appHome ? skillFolders(appHome).filter((d) => !existsSync(d)) : [];
     mkdirSync(skillDest, { recursive: true });
     copyFileSync(skillSource, join(skillDest, "SKILL.md"));
+    if (appHome && missing.length > 0) {
+        const all = [...new Set([...createdSkillFolders(appHome), ...missing])];
+        writeFileSync(join(appHome, CREATED_MARKER), JSON.stringify({ created: all }) + "\n");
+    }
     return join(skillDest, "SKILL.md");
+}
+/** The marker naming the folders install created in an app's home (Claude Code's, Codex's). */
+const CREATED_MARKER = ".context-doctor-created.json";
+/** The only folders a skill install can create, deepest first: a marker naming anything else is ignored. */
+function skillFolders(appHome) {
+    return [join(appHome, "skills", "context-doctor"), join(appHome, "skills"), appHome];
+}
+function createdSkillFolders(appHome) {
+    try {
+        const raw = JSON.parse(readFileSync(join(appHome, CREATED_MARKER), "utf8"));
+        const allowed = skillFolders(appHome);
+        return Array.isArray(raw?.created) ? raw.created.filter((d) => typeof d === "string" && allowed.includes(d)) : [];
+    }
+    catch {
+        return [];
+    }
+}
+/** The folders install created for the skill, once nothing is left in them; then the marker. */
+function removeSkillFolders(appHome) {
+    const marker = join(appHome, CREATED_MARKER);
+    if (!existsSync(marker))
+        return;
+    const created = createdSkillFolders(appHome);
+    rmSync(marker, { force: true });
+    for (const dir of skillFolders(appHome).filter((d) => created.includes(d))) {
+        if (existsSync(dir) && readdirSync(dir).length === 0)
+            rmSync(dir, { recursive: true });
+    }
 }
 // -- Codex (OpenAI's agent: the Codex tab in ChatGPT.app, the IDE extension, the CLI)
 //
@@ -719,7 +770,7 @@ function installCodex(entry, failures) {
         failures.push("Codex MCP");
     }
     try {
-        const skill = installSkillInto(join(dir, "skills", "context-doctor"));
+        const skill = installSkillInto(join(dir, "skills", "context-doctor"), dir);
         if (skill)
             console.log(`✓ Agent Skill installed for Codex (${skill})`);
     }
@@ -759,9 +810,15 @@ function uninstallCodex() {
                     }
                     catch { /* unreadable backup: the file was the user's */ }
                 }
+                // The file from before install when only its final newline differs:
+                // install had to add one to a file that ended without it.
+                const original = readText(backup);
                 if (created && next.trim() === "") {
                     rmSync(configPath);
                     deletedStubs.push(configPath);
+                }
+                else if (original !== undefined && codexMcpEntry(original) === undefined && original.trimEnd() === next.trimEnd()) {
+                    writeFileSync(configPath, original);
                 }
                 else {
                     writeFileSync(configPath, next);
@@ -774,6 +831,7 @@ function uninstallCodex() {
         console.error(`✗ Codex MCP: ${e.message}`);
     }
     removeSkill(join(dir, "skills", "context-doctor"), "Codex skill");
+    removeSkillFolders(dir);
 }
 // -- GitHub Copilot: the Copilot CLI, the GitHub Copilot app, and VS Code's
 // agent sessions (see copilot.ts for what was verified and where). Two files:
@@ -1240,7 +1298,7 @@ function installOrigin(path, extraKeys) {
         const text = readFileSync(backup, "utf8");
         if (text.trim() === "")
             return { created: false, before: {}, empty: true };
-        const raw = JSON.parse(text);
+        const raw = parseSettingsText(text, allowsComments(path));
         if (!raw || typeof raw !== "object" || Array.isArray(raw))
             return { created: false, before: {} };
         const before = withoutOurs(raw);
@@ -1279,9 +1337,18 @@ function writeUninstalled(path, config, extraKeys = []) {
         writeFileSync(path, "");
         return;
     }
-    // The user's own formatting, from before install when the backup has it.
+    // Exactly the file from before install when that is what is left (also
+    // for a file an older version re-serialised); else our entries are taken
+    // out of the text, everything else as it is now.
     const backup = readText(path + BACKUP_SUFFIX);
-    writeFileSync(path, jsonLike(backup?.trim() ? backup : readText(path), config));
+    try {
+        if (backup?.trim() && sameJson(parseSettingsText(backup, allowsComments(path)), config)) {
+            writeFileSync(path, backup);
+            return;
+        }
+    }
+    catch { /* an unreadable backup: edit the file as it is */ }
+    writeFileSync(path, editJsonText(readText(path), config, allowsComments(path)));
 }
 /** Remove the SKILL.md install copied, and its folder once nothing else is in it. */
 function removeSkill(dir, label) {
@@ -1394,6 +1461,8 @@ export async function runUninstall() {
             }
         });
     }
+    // Last: the folders install made for the skill, now empty.
+    attempt("Claude Code skill folders", () => removeSkillFolders(claudeDir()));
     if (deletedStubs.length > 0) {
         console.log(`✓ Deleted ${deletedStubs.length === 1 ? "a file" : "files"} install had created, now empty: ${deletedStubs.map(tilde).join(", ")}`);
     }

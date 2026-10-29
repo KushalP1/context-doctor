@@ -17,7 +17,8 @@ import { loadConfig } from "./config.js";
 import { codexRouting } from "./codexroute.js";
 import { CURSOR_HOOK_EVENTS } from "./install.js";
 import { CACHE_TTL_SINCE, currentTtl, ttlUnsupported } from "./cachettl.js";
-import { binOnPath, claudeCodeInstallsFromEnv, claudeInstalledCopies, codexMcpEntry, copilotPresent, geminiCliPresent, geminiSettingsPath, isEmptyStub, isOurPluginKey, launcherNamesMissingPackage } from "./install.js";
+import { allowsComments, binOnPath, claudeCodeInstallsFromEnv, claudeInstalledCopies, codexMcpEntry, copilotPresent, geminiCliPresent, geminiSettingsPath, isEmptyStub, isOurPluginKey, launcherNamesMissingPackage, shippedSkillPath } from "./install.js";
+import { parseSettingsText } from "./settingsedit.js";
 import { antigravityMcpConfigPath, antigravityPresent, antigravitySkillDirs } from "./antigravity.js";
 import { COPILOT_HOOK_EVENT, copilotHookFilePath, copilotLegacyConfigPath, copilotMcpConfigPath, copilotSettingsPath, isOurCopilotEntry, vsCodeUserDirs } from "./copilot.js";
 import { describeDesktopUsage, desktopUsage } from "./desktopusage.js";
@@ -64,7 +65,7 @@ function antigravityChecks() {
     if (mcp.status === "ok") {
         const skills = antigravitySkillDirs().filter((d) => existsSync(join(d, "SKILL.md")));
         out.push(skills.length > 0
-            ? { label: "Antigravity skill", status: "ok", detail: `in ${skills.map(tilde).join(", ")}; no hooks (Antigravity's transcript format is undocumented)` }
+            ? skillCheck("Antigravity skill", skills.map((d) => join(d, "SKILL.md")), `in ${skills.map(tilde).join(", ")}; no hooks (Antigravity's transcript format is undocumented)`)
             : { label: "Antigravity skill", status: "warn", detail: "not installed — re-run: context-doctor install" });
     }
     return out;
@@ -83,8 +84,36 @@ function readConfig(path, extraKeys = []) {
     const text = readFileSync(path, "utf8");
     if (text.trim() === "")
         return undefined; // Antigravity creates its MCP file empty
-    const config = JSON.parse(text);
+    const config = parseSettingsText(text, allowsComments(path));
     return isEmptyStub(config, extraKeys) ? undefined : config;
+}
+/**
+ * Installed copies of the Agent Skill against the SKILL.md this version
+ * ships. Install copies the file once and nothing updates it, so after an
+ * upgrade the model kept reading the old instructions under a ✓. A copy
+ * that differs is out of date or was edited by hand; either way install
+ * replaces it with the current one. Line ends are not a difference.
+ */
+export function skillCheck(label, files, okDetail = files.map(tilde).join(", ")) {
+    let shipped;
+    try {
+        shipped = readFileSync(shippedSkillPath(), "utf8").replace(/\r\n/g, "\n");
+    }
+    catch {
+        /* no shipped copy to compare with (a bare build) */
+    }
+    const differs = files.filter((f) => {
+        try {
+            return shipped !== undefined && readFileSync(f, "utf8").replace(/\r\n/g, "\n") !== shipped;
+        }
+        catch {
+            return false;
+        }
+    });
+    if (differs.length > 0) {
+        return { label, status: "warn", detail: `${differs.map(tilde).join(", ")} differs from the skill this version ships (out of date, or edited by hand) — re-run \`context-doctor install\` to replace it with the current one` };
+    }
+    return { label, status: "ok", detail: okDetail };
 }
 function checkMcpEntry(appName, configPath, plugin = false) {
     const viaPlugin = { label: appName, status: "ok", detail: "MCP server provided by the context-doctor plugin" };
@@ -512,6 +541,9 @@ export async function runDoctor() {
                 ? missingPackageCheck("Codex MCP")
                 : { label: "Codex MCP", status: "ok", detail: "wired in ~/.codex/config.toml" };
         checks.push(codexMcp);
+        const codexSkill = join(codexHome, "skills", "context-doctor", "SKILL.md");
+        if (existsSync(codexSkill))
+            checks.push(skillCheck("Codex skill", [codexSkill]));
         try {
             const hooksPath = join(codexHome, "hooks.json");
             const hooks = readConfig(hooksPath) ?? {};
@@ -661,7 +693,7 @@ export async function runDoctor() {
     // Skill
     const skillPath = join(claudeDir(), "skills", "context-doctor", "SKILL.md");
     checks.push(existsSync(skillPath)
-        ? { label: "Agent Skill", status: "ok", detail: skillPath }
+        ? skillCheck("Agent Skill", [skillPath])
         : { label: "Agent Skill", status: "skip", detail: "not installed (run context-doctor install on a Claude Code machine)" });
     // Ledger writable. Tested without writing an entry: recordLedger swallows
     // errors (so this could never fail), and the entry it wrote counted as a

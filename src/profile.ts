@@ -261,7 +261,7 @@ export function profileConversation(conv: NormalizedConversation, model?: string
         id: "large_tool_result",
         severity: p.tokens > 8000 ? "high" : "warn",
         estSavings: Math.round(p.tokens * 0.8),
-        message: `Tool result at message #${p.msg.index}${p.msg.toolName ? ` (${p.msg.toolName})` : ""} is ~${p.tokens} tokens.`,
+        message: `Tool result at message #${p.msg.index}${p.msg.toolName ? ` (${p.msg.toolName})` : ""} is ~${formatTokens(p.tokens)} tokens.`,
         suggestion: "Truncate or summarize large tool outputs before they enter history; keep only the fields the model actually used.",
         messages: [p.msg.index],
       });
@@ -280,7 +280,7 @@ export function profileConversation(conv: NormalizedConversation, model?: string
         id: "large_tool_call",
         severity: p.tokens > 8000 ? "high" : "warn",
         estSavings: Math.round(p.tokens * 0.8),
-        message: `Tool call at message #${p.msg.index}${p.msg.toolName ? ` (${p.msg.toolName})` : ""} carries ~${p.tokens} tokens of arguments.`,
+        message: `Tool call at message #${p.msg.index}${p.msg.toolName ? ` (${p.msg.toolName})` : ""} carries ~${formatTokens(p.tokens)} tokens of arguments.`,
         suggestion: "Usually a whole file being written inline. Once it has run, replace the arguments with a reference (\"wrote <path>\") — or write files in smaller pieces so no single call carries the entire content.",
         messages: [p.msg.index],
       });
@@ -298,7 +298,7 @@ export function profileConversation(conv: NormalizedConversation, model?: string
         id: "duplicate_content",
         severity: "warn",
         estSavings: p.tokens - MESSAGE_OVERHEAD_TOKENS,
-        message: `Message #${p.msg.index} duplicates the content of message #${first} (~${p.tokens} tokens).`,
+        message: `Message #${p.msg.index} duplicates the content of message #${first} (~${formatTokens(p.tokens)} tokens).`,
         suggestion: "Replace repeated content with a short reference to the first occurrence.",
         messages: [first, p.msg.index],
       });
@@ -374,7 +374,7 @@ export function profileConversation(conv: NormalizedConversation, model?: string
         estSavings: saving,
         message:
           members.length === 2
-            ? `Messages #${indexes[0]} and #${indexes[1]} are ${pct} similar (~${Math.min(candidates[members[0]].tokens, candidates[members[1]].tokens)} tokens repeated with different framing).`
+            ? `Messages #${indexes[0]} and #${indexes[1]} are ${pct} similar (~${formatTokens(Math.min(candidates[members[0]].tokens, candidates[members[1]].tokens))} tokens repeated with different framing).`
             : `${members.length} messages are ${pct} similar to each other (${indexes.slice(0, 6).map((n) => `#${n}`).join(", ")}${indexes.length > 6 ? ", …" : ""}): ~${formatTokens(repeated)} tokens in the ${later.length} later copies repeat the first with different framing.`,
         suggestion: "Replace the later copies with a short reference to the first — repeats survive even when the surrounding words differ.",
         messages: indexes,
@@ -472,7 +472,7 @@ export function profileConversation(conv: NormalizedConversation, model?: string
       id: "retained_error_output",
       severity: "warn",
       estSavings: Math.round(p.tokens * 0.85),
-      message: `Message #${p.msg.index} holds ~${p.tokens} tokens of failed tool output (errors, stack trace or non-zero exit).`,
+      message: `Message #${p.msg.index} holds ~${formatTokens(p.tokens)} tokens of failed tool output (errors, stack trace or non-zero exit).`,
       suggestion: "Keep the one line that identifies the failure and drop the rest — a full trace has no value once the fix is understood.",
       messages: [p.msg.index],
     });
@@ -485,7 +485,7 @@ export function profileConversation(conv: NormalizedConversation, model?: string
         id: "base64_blob",
         severity: "high",
         estSavings: Math.round(p.tokens * 0.9),
-        message: `Message #${p.msg.index} contains a base64/binary blob (~${p.tokens} tokens of mostly meaningless characters).`,
+        message: `Message #${p.msg.index} contains a base64/binary blob (~${formatTokens(p.tokens)} tokens of mostly meaningless characters).`,
         suggestion: "Never put base64 in text content — use the provider's file/image APIs or replace with a file reference.",
         messages: [p.msg.index],
       });
@@ -501,7 +501,7 @@ export function profileConversation(conv: NormalizedConversation, model?: string
       id: "long_history",
       severity: "warn",
       estSavings: Math.round(olderTokens * 0.7),
-      message: `Conversation has ${turnCount} turns; the older half holds ~${olderTokens} tokens.`,
+      message: `Conversation has ${turnCount} turns; the older half holds ~${formatTokens(olderTokens)} tokens.`,
       suggestion: "Summarize the older half of the conversation into a compact recap and drop the raw turns (context-doctor optimize --strategy prune-history).",
       messages: [],
     });
@@ -513,7 +513,7 @@ export function profileConversation(conv: NormalizedConversation, model?: string
       id: "large_system_prompt",
       severity: "info",
       estSavings: 0,
-      message: `System prompt is ~${categories.system} tokens (${Math.round((categories.system / totalTokens) * 100)}% of the context).`,
+      message: `System prompt is ~${formatTokens(categories.system)} tokens (${Math.round((categories.system / totalTokens) * 100)}% of the context).`,
       suggestion: "A big system prompt is fine IF it is stable — put it first and use prompt caching (Anthropic: cache_control; OpenAI: automatic prefix caching) so you stop paying full price for it every call.",
       messages: [],
     });

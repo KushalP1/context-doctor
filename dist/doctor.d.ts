@@ -12,6 +12,14 @@ interface Check {
     detail: string;
 }
 /**
+ * Installed copies of the Agent Skill against the SKILL.md this version
+ * ships. Install copies the file once and nothing updates it, so after an
+ * upgrade the model kept reading the old instructions under a ✓. A copy
+ * that differs is out of date or was edited by hand; either way install
+ * replaces it with the current one. Line ends are not a difference.
+ */
+export declare function skillCheck(label: string, files: string[], okDetail?: string): Check;
+/**
  * The prompt cache lifetime (`cache-ttl`), only when one is set: the value,
  * an environment variable that overrides it, and a Claude Code too old to
  * read it (it ignores the key; nothing else in the file is affected).

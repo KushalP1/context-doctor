@@ -20,8 +20,23 @@ export interface SettingsText {
     text?: string;
     data: Record<string, unknown>;
 }
-/** Read a JSON settings file that must hold an object; absent or blank reads as {}. Anything else is refused. */
-export declare function readSettings(path: string): SettingsText;
+/**
+ * The text with `//` and `/* *\/` comments blanked to spaces (newlines kept),
+ * strings untouched: what strip-json-comments does before Gemini CLI parses
+ * its settings.json, so positions in the result are positions in the text.
+ */
+export declare function stripJsonComments(text: string): string;
+/**
+ * Parse settings text as JSON (with comments when `comments`), BOM allowed.
+ * Throws the parser's error.
+ */
+export declare function parseSettingsText(text: string, comments?: boolean): unknown;
+/**
+ * Read a JSON settings file that must hold an object; absent or blank reads
+ * as {}. Anything else is refused. `comments` accepts // and /* *\/ comments,
+ * for an app that reads its file that way (Gemini CLI).
+ */
+export declare function readSettings(path: string, comments?: boolean): SettingsText;
 /** The value at a key path, or undefined. */
 export declare function getPath(data: unknown, path: string[]): unknown;
 /** Deep equality of JSON values. */
@@ -32,6 +47,19 @@ export declare function sameJson(a: unknown, b: unknown): boolean;
  * missing or blank file becomes a new two-space object.
  */
 export declare function setJsonPath(text: string | undefined, path: string[], value: unknown): string;
+/** The text with `value` added as the last item of the array at `path`, laid out like the items before it. */
+export declare function appendJsonItem(text: string, path: string[], value: unknown): string;
+/** The text with item `index` of the array at `path` taken out: the exact inverse of appendJsonItem. */
+export declare function removeJsonItem(text: string, path: string[], index: number): string;
+/**
+ * The text changed so it reads as `after`, touching only what differs from
+ * what it reads as now: keys set, added or removed one by one, list items
+ * added at the end or taken out. Everything else (indentation, one-line
+ * objects, minified files, CRLF, escapes, `1.0`, comments where `comments`)
+ * stays byte for byte, so an install and its uninstall give back the file
+ * exactly. A missing or blank file becomes a new two-space object.
+ */
+export declare function editJsonText(text: string | undefined, after: Record<string, unknown>, comments?: boolean): string;
 /** Write `text` to `path` atomically (temporary file + rename), through a symbolic link, keeping the file's mode. */
 export declare function writeAtomic(path: string, text: string): void;
 /** Remove a file through a symbolic link: the target goes, the link would dangle, so the link goes too. */

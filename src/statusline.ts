@@ -176,7 +176,9 @@ export function renderStatusLine(input: StatusInput, nowMs = Date.now()): string
 
   const parts: string[] = [];
   if (live) {
-    const window = cw?.context_window_size ?? contextWindowFor(live.model ?? input.model?.id);
+    // A size that is not a positive number (a negative one printed "ctx 279k/-5 -5571760%") is unknown: the model's own window, if known.
+    const given = cw?.context_window_size;
+    const window = typeof given === "number" && Number.isFinite(given) && given > 0 ? given : contextWindowFor(live.model ?? input.model?.id);
     if (window) {
       const pct = (live.tokens / window) * 100;
       parts.push(`ctx ${formatTokens(live.tokens)}/${formatTokens(window)} ${bar(pct)} ${pct.toFixed(0)}%${pct >= 70 ? " ⚠" : ""}`);
