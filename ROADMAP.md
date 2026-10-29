@@ -238,7 +238,7 @@ the estimator to noise. Calibration needs a real tokenizer, not this data.
 
 Each release with the measurements behind it. Dollar figures are as measured when the release shipped, with the prices and counting of the time; the 0.32 audit fixed both, and the README's headline figures are the re-measured ones.
 
-## Shipped on main, not yet released
+## Shipped in 0.39.0: one plan (`fix`), the cache lifetime and clock, and Antigravity
 
 From the research of 2026-10-27 ([above](#research-2026-10-27-what-changed-since-2026-10-20)): items N1-N5; from the research of 2026-10-28 ([above](#research-2026-10-28-from-reports-to-fixes)): items B1-B3.
 
