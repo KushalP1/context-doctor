@@ -109,6 +109,13 @@ interface Found {
     content: unknown;
     set: (note: string) => void;
 }
+/** An AutoClearer's state as JSON (see AutoClearer.snapshot). */
+export interface AutoClearSnapshot {
+    cleared: Array<[string, number]>;
+    sizes: Array<[string, number]>;
+    convs: Array<[string, number, number]>;
+    rejecting: string[];
+}
 /**
  * One request, whatever its API: the units that make up history, tool names
  * by call id, the tool results in order, and the cache lifetime to assume.
@@ -190,6 +197,14 @@ export declare class AutoClearer {
      * without them.
      */
     forget(ids: string[], conversation?: string): void;
+    /**
+     * Everything a later `apply` depends on, as plain JSON, in insertion order
+     * (the size caps evict the oldest): what a replay keeps to resume where it
+     * stopped (savings.ts). Not the state file, which drops sizes and shifts times.
+     */
+    snapshot(): AutoClearSnapshot;
+    /** A clearer in exactly the state `snapshot` recorded (options as given; no state file). */
+    static fromSnapshot(snap: AutoClearSnapshot, options?: AutoClearOptions): AutoClearer;
     private load;
     private save;
 }

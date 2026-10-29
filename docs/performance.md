@@ -20,7 +20,7 @@ Net effect is strongly negative overhead: the tokens these touchpoints save on e
 
 `fix`, `savings` (a bare `context-doctor`), `compact-window`, `cache-ttl`, `cache-misses`, `compactions` and `overhead` replay your history. Each used to read and parse every transcript on its own, so `fix` and `savings`, which run up to six of those replays, read 2.7 GB five or six times on the author's machine. Now each transcript is read once per run, each row parsed once for every replay that needs it, and the records each replay takes from it (a request's usage, time and ids, a compaction, a file read, a tool call's name) are kept, one file per transcript and replay, keyed by the transcript's path, size, modification time and inode:
 
-- A transcript that only grew, as Claude Code writes them, is read from where the last run stopped. Autopilot's replay keeps the whole conversation as it goes, so a transcript it has seen change is replayed again in full (2 s for the author's largest, 360 MB).
+- A transcript that only grew, as Claude Code writes them, is read from where the last run stopped. Autopilot's replay carries the conversation since its last compaction and the clearer's state; that is kept in a file of its own for transcripts written in the last 3 days (20 of them, 62 MB on the author's machine), so a session you are working in is replayed only from where the last run stopped: `savings` with six transcripts grown by 4.8 MB since the last run takes 0.6 s, the same output as a full replay.
 - The figures do not change: golden tests run every report, text and JSON, on a fixture history with no cache, a cold cache, a warm one and after the history grew, against what the code before the cache printed, byte for byte; `scripts/verify-local.sh` does the same with and without the cache on a copy of your real history.
 - No message text is kept: a prompt only as its length, a tool call's input only as a hash. The files are yours alone (0600, folders 0700), like the transcripts.
 - Where: `~/.cache/context-doctor`, or `$XDG_CACHE_HOME/context-doctor`, or `CONTEXT_DOCTOR_CACHE_DIR`. `CONTEXT_DOCTOR_NO_CACHE=1` keeps nothing on disk (each run still reads every transcript only once). A new version starts empty; once a day, entries of transcripts gone or untouched for 120 days go, and the oldest go while the cache is over 256 MB (`CONTEXT_DOCTOR_CACHE_MAX_MB`). `context-doctor uninstall` removes it.
@@ -29,7 +29,7 @@ Net effect is strongly negative overhead: the tokens these touchpoints save on e
 | On the author's history (2.7 GB, 1,422 transcripts; a busy machine) | Before | First run | Later runs |
 |---|---|---|---|
 | `fix` | 23.5 s | 5.2 s | 0.4 s |
-| `savings` (and a bare `context-doctor`) | 41.1 s | 17.6 s | 0.5 s |
+| `savings` (and a bare `context-doctor`) | 41.1 s | 17.6 s | 0.5 s (0.6 s with sessions growing) |
 | `cache-misses` | 4.9 s | 3.6 s | 0.2 s |
 | `compact-window` | 9.6 s | 3.1 s | 0.3 s |
 | `overhead` | 9.3 s | 4.9 s | 0.3 s |

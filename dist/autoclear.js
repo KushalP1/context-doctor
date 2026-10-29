@@ -489,6 +489,23 @@ export class AutoClearer {
             this.save();
         }
     }
+    /**
+     * Everything a later `apply` depends on, as plain JSON, in insertion order
+     * (the size caps evict the oldest): what a replay keeps to resume where it
+     * stopped (savings.ts). Not the state file, which drops sizes and shifts times.
+     */
+    snapshot() {
+        return { cleared: [...this.cleared], sizes: [...this.sizes], convs: [...this.convs].map(([k, c]) => [k, c.last, c.requests]), rejecting: [...this.rejecting] };
+    }
+    /** A clearer in exactly the state `snapshot` recorded (options as given; no state file). */
+    static fromSnapshot(snap, options = {}) {
+        const c = new AutoClearer({ ...options, statePath: undefined });
+        c.cleared = new Map(snap.cleared);
+        c.sizes = new Map(snap.sizes);
+        c.convs = new Map(snap.convs.map(([k, last, requests]) => [k, { last, requests }]));
+        c.rejecting = new Set(snap.rejecting);
+        return c;
+    }
     load() {
         if (!this.opts.statePath || !existsSync(this.opts.statePath))
             return;

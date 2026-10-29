@@ -19,8 +19,9 @@
  *   file per transcript and extractor, keyed by the transcript's path, size,
  *   modification time and inode. A transcript that only grew (Claude Code
  *   appends) is read from where the last run stopped, the extractor's state
- *   carried over; the replay, whose state is the whole conversation, reads a
- *   changed file again in full.
+ *   carried over. A bulky state (the replay's conversation since its last
+ *   compaction, `Extractor.save`) is kept in a file of its own, only for
+ *   transcripts written in the last 3 days: the ones that grow.
  * - Safe when runs overlap: every write is a whole file renamed into place;
  *   a damaged or foreign file reads as a miss.
  * - Bounded: entries for transcripts gone or untouched for 120 days, other
@@ -53,6 +54,8 @@ const ANCHOR = 64 * 1024;
  * size and time alone would not tell. Claude Code only appends.
  */
 const SMALL = 64 * 1024;
+/** A transcript written this recently may grow again: a bulky state (`Extractor.save`) is kept for it. */
+const RECENT = 3 * DAY;
 const memo = new Map();
 const key = (path, id) => `${id}\u0000${path}`;
 /** Where the cache lives (created only when something is written). */
@@ -65,6 +68,23 @@ export function scanCacheDir(env = process.env) {
 const disabled = () => process.env.CONTEXT_DOCTOR_NO_CACHE === "1";
 const versionDir = () => join(scanCacheDir(), "transcripts", `v${SCHEMA}-${PROXY_VERSION}`);
 const entryFile = (path, id) => join(versionDir(), id.replace(/[^\w.-]/g, "_"), `${createHash("sha1").update(path).digest("hex")}.json`);
+const stateFile = (path, id) => entryFile(path, id).replace(/\.json$/, ".state.json");
+/** A copy of a state that shares nothing with it. */
+const copyState = (ex, st) => (ex.save ? ex.load(JSON.parse(JSON.stringify(ex.save(st)))) : structuredClone(st));
+/** A bulky state kept for `e` (same cut, same bytes before it), or undefined. */
+function loadState(ex, e) {
+    if (disabled())
+        return undefined;
+    try {
+        const v = JSON.parse(readFileSync(stateFile(e.path, e.id), "utf8"));
+        if (v?.path === e.path && v.off === e.off && v.anchor === e.anchor)
+            return ex.load(v.state);
+    }
+    catch {
+        /* none kept, or damaged: read in full */
+    }
+    return undefined;
+}
 function statOf(path) {
     try {
         const s = statSync(path);
@@ -111,10 +131,9 @@ function load(path, id) {
     return undefined;
 }
 let wrote = false;
-function persist(e) {
+function persist(e, file = entryFile(e.path, e.id)) {
     if (disabled())
         return;
-    const file = entryFile(e.path, e.id);
     const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     try {
         // Yours only, like the transcripts: file paths and project folders are in it.
@@ -210,7 +229,8 @@ function ensure(path, exs, transient = false) {
         }
         const prior = [d, m].find((p) => p && ex.resumable !== false && p.ino === st.ino && st.size > p.size && p.off <= st.size);
         // Grown in place (Claude Code appends): carry on from where the cached part ended.
-        jobs.push(prior ? { ex, from: prior.off, state: prior.state, rows: prior.rows, tail: [], prior } : { ex, from: 0, state: ex.init(), rows: [], tail: [] });
+        const kept = prior && ex.save ? loadState(ex, prior) : prior?.state;
+        jobs.push(prior && kept !== undefined ? { ex, from: prior.off, state: kept, rows: prior.rows, tail: [], prior } : { ex, from: 0, state: ex.init(), rows: [], tail: [] });
     }
     if (jobs.length === 0)
         return made;
@@ -226,9 +246,9 @@ function ensure(path, exs, transient = false) {
             // Its start no longer matches what was read before: a rewritten file, read again in full.
             if (j.prior && (j.prior.off === 0 || anchorOf(fd, j.prior.off) !== j.prior.anchor))
                 Object.assign(j, { from: 0, state: j.ex.init(), rows: [], prior: undefined });
-            // Never extend the cached arrays themselves: another reader may hold them.
+            // Never extend the cached arrays themselves: another reader may hold them (a bulky state was just read from its file).
             if (j.prior)
-                Object.assign(j, { state: structuredClone(j.state), rows: j.rows.slice() });
+                Object.assign(j, { state: j.ex.save ? j.state : structuredClone(j.state), rows: j.rows.slice() });
         }
         const start = Math.min(...jobs.map((j) => j.from));
         let tailStates;
@@ -256,7 +276,7 @@ function ensure(path, exs, transient = false) {
             }
             // The last line has no newline yet: a resumable extractor reads it from a
             // copy of its state, into the tail, so the next run can resume before it.
-            tailStates = jobs.map((j) => (j.ex.resumable === false ? j.state : structuredClone(j.state)));
+            tailStates = jobs.map((j) => (j.ex.resumable === false ? j.state : copyState(j.ex, j.state)));
             jobs.forEach((j, i) => { if (at >= j.from)
                 j.ex.line(raw, row, j.ex.resumable === false ? j.rows : j.tail, tailStates[i]); });
         });
@@ -272,21 +292,24 @@ function ensure(path, exs, transient = false) {
         const small = settled && end <= SMALL ? fingerprint(path, end) : undefined;
         jobs.forEach((j, i) => {
             const resumable = j.ex.resumable !== false;
-            if (j.ex.end) {
-                const endState = tailStates ? tailStates[i] : resumable ? structuredClone(j.state) : j.state;
-                j.ex.end(resumable ? j.tail : j.rows, endState);
-            }
+            // `end` reads the state as it stands after the last line (it does not change it).
+            if (j.ex.end)
+                j.ex.end(resumable ? j.tail : j.rows, tailStates ? tailStates[i] : j.state);
             const e = {
                 path, id: j.ex.id, size: end, mtimeMs: settled ? after.mtimeMs : -1, ino: after?.ino ?? st.ino,
-                off: resumable ? off : end, anchor: resumable ? anchor : "", state: resumable ? j.state : null, rows: j.rows, tail: j.tail,
+                off: resumable ? off : end, anchor: resumable ? anchor : "", state: resumable && !j.ex.save ? j.state : null, rows: j.rows, tail: j.tail,
                 ...(small !== undefined ? { fp: small } : {}),
             };
             made.push(e);
             if (transient)
                 return;
             memo.set(key(path, j.ex.id), e);
-            if (settled)
-                persist(e);
+            if (!settled)
+                return;
+            persist(e);
+            // A bulky state is kept only for a transcript still being written (it is what lets the next run resume).
+            if (resumable && j.ex.save && Date.now() - after.mtimeMs < RECENT)
+                persist({ path, off, anchor, state: j.ex.save(j.state) }, stateFile(path, j.ex.id));
         });
     }
     finally {
@@ -393,6 +416,11 @@ export function pruneScanCache(now = Date.now(), force = false) {
                 if (name.endsWith(".tmp")) {
                     if (now - s.mtimeMs > 3_600_000)
                         drop();
+                    continue;
+                }
+                // A kept state outlives its use once its transcript stops growing.
+                if (name.endsWith(".state.json") && now - s.mtimeMs > RECENT) {
+                    drop();
                     continue;
                 }
                 const path = pathOf(file);

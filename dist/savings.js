@@ -14,7 +14,7 @@
 import { basename, dirname } from "node:path";
 import { AutoClearer } from "./autoclear.js";
 import { coldResumeEvents } from "./coldresume.js";
-import { listSessions, replyCounter, isClaudeSession } from "./session.js";
+import { listSessions, isClaudeSession } from "./session.js";
 import { rowsOf } from "./scan.js";
 import { CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, pricingFor, usageCost, writeMultiplier } from "./pricing.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
@@ -34,68 +34,64 @@ export function autopilotReaches(entrypoint) {
 }
 /** Without a price on file the arms still need relative weights: Claude's usual 10% read rate. */
 const UNPRICED = { inputPerM: 1, outputPerM: 5, cacheReadPerM: 0.1 };
-/**
- * One arm of the replay: the history as sent, each request's prompt split
- * into what the cache would serve and what is written. `settleReplay` prices
- * them at each request's own model, writes at the session's TTL mix, known
- * once the whole transcript has been read.
- */
-function arm(model, clearer) {
-    const msgs = [];
-    const tok = [];
-    let total = 0, prevLen = 0;
-    const size = (m) => estimateTokens(JSON.stringify(m), model);
-    return {
-        push(m) { msgs.push(structuredClone(m)); const k = size(m); tok.push(k); total += k; },
-        extend(blocks) {
-            const i = msgs.length - 1;
-            msgs[i].content.push(...structuredClone(blocks));
-            total -= tok[i];
-            tok[i] = size(msgs[i]);
-            total += tok[i];
-        },
-        /** One request: what the cache would have served (read), what is written, and the whole prompt. */
-        request(now, cold) {
-            let first = -1;
-            if (clearer) {
-                const body = { model, messages: msgs, system: [{ type: "text", text: "", cache_control: { type: "ephemeral", ttl: "1h" } }] };
-                first = clearer.apply(body, now).firstChanged;
-            }
-            if (first >= 0)
-                for (let i = first; i < msgs.length; i++) {
-                    total -= tok[i];
-                    tok[i] = size(msgs[i]);
-                    total += tok[i];
-                }
-            const k = cold ? 0 : Math.min(prevLen, first >= 0 ? first : prevLen);
-            let read = 0;
-            for (let i = 0; i < k; i++)
-                read += tok[i];
-            prevLen = msgs.length;
-            return { read, write: total - read, total };
-        },
-    };
+const newArm = (model, clear) => ({ ...(model !== undefined ? { model } : {}), clear, msgs: [], drop: 0, tok: [], total: 0, prevLen: 0 });
+const sizeOf = (a, m) => estimateTokens(JSON.stringify(m), a.model);
+function armPush(a, m) {
+    a.msgs.push(structuredClone(m));
+    const k = sizeOf(a, m);
+    a.tok.push(k);
+    a.total += k;
+    if (!a.clear && a.msgs.length > 1) {
+        a.drop += a.msgs.length - 1;
+        a.msgs = a.msgs.slice(-1);
+    }
 }
+function armExtend(a, blocks) {
+    const i = a.msgs.length - 1;
+    a.msgs[i].content.push(...structuredClone(blocks));
+    const t = a.drop + i;
+    a.total -= a.tok[t];
+    a.tok[t] = sizeOf(a, a.msgs[i]);
+    a.total += a.tok[t];
+}
+/** One request: what the cache would have served (read), what is written, and the whole prompt. */
+function armRequest(a, now, cold) {
+    let first = -1;
+    if (a.clear) {
+        const body = { model: a.model, messages: a.msgs, system: [{ type: "text", text: "", cache_control: { type: "ephemeral", ttl: "1h" } }] };
+        first = a.clear.apply(body, now).firstChanged;
+    }
+    const n = a.drop + a.msgs.length;
+    if (first >= 0)
+        for (let i = first; i < n; i++) {
+            a.total -= a.tok[i];
+            a.tok[i] = sizeOf(a, a.msgs[i - a.drop]);
+            a.total += a.tok[i];
+        }
+    const k = cold ? 0 : Math.min(a.prevLen, first >= 0 ? first : a.prevLen);
+    let read = 0;
+    for (let i = 0; i < k; i++)
+        read += a.tok[i];
+    a.prevLen = n;
+    return { read, write: a.total - read, total: a.total };
+}
+/** An arm as JSON (its clearer as AutoClearer.snapshot), and back. */
+const saveArm = (a) => (a ? { ...a, clear: a.clear ? a.clear.snapshot() : null } : null);
+const loadArm = (v, options) => (v ? { ...v, clear: v.clear ? AutoClearer.fromSnapshot(v.clear, options) : null } : null);
+/**
+ * The replay as an extractor. Resumable: its state (both arms, the clearer,
+ * the counters) is plain data, kept beside the records for a transcript that
+ * is still being written, so a run after Claude Code appended replays only
+ * the new lines. Another clearer (`makeClearer`) is replayed afresh each time.
+ */
 function replayExtractor(id, options, makeClearer, replay) {
-    return {
+    const clearer = (model) => (makeClearer ? makeClearer(model) : new AutoClearer(options));
+    // Without the replay (autopilot already on: `fix` needs only the bill and
+    // the cold returns) there are no arms, which is most of the time saved.
+    const armOf = (m, c) => (replay ? newArm(m, c) : null);
+    const ex = {
         id,
-        resumable: false,
-        init() {
-            const st = {
-                model: undefined,
-                entrypoint: undefined,
-                lastId: undefined,
-                lastTs: null,
-                writes5m: 0,
-                writes1h: 0,
-                sighting: replyCounter(),
-                base: undefined,
-                auto: undefined,
-            };
-            st.base = armOf(undefined, null);
-            st.auto = armOf(undefined, replay ? makeClearer() : null);
-            return st;
-        },
+        init: () => ({ lastTs: null, writes5m: 0, writes1h: 0, ids: new Set(), base: armOf(undefined, null), auto: armOf(undefined, replay ? clearer() : null) }),
         line(_raw, row, out, st) {
             let e;
             try {
@@ -112,7 +108,7 @@ function replayExtractor(id, options, makeClearer, replay) {
                 // Compaction replaces the history in both arms alike: start fresh.
                 out.push({ k: "c" });
                 st.base = armOf(st.model, null);
-                st.auto = armOf(st.model, replay ? makeClearer(st.model) : null);
+                st.auto = armOf(st.model, replay ? clearer(st.model) : null);
                 return;
             }
             if (e.type === "assistant" && e.message) {
@@ -125,9 +121,14 @@ function replayExtractor(id, options, makeClearer, replay) {
                     st.lastId = m.id;
                     const u = m.usage ?? {};
                     const read = u.cache_read_input_tokens ?? 0, write = u.cache_creation_input_tokens ?? 0, fresh = u.input_tokens ?? 0;
-                    const seen = st.sighting(e);
+                    // A reply met earlier in this transcript is a repeat (replyCounter, within one file).
+                    let repeat = false;
+                    if (typeof m.id === "string") {
+                        repeat = st.ids.has(m.id);
+                        st.ids.add(m.id);
+                    }
                     const uuid = typeof e.uuid === "string" ? e.uuid : undefined;
-                    if (seen !== "repeat" && read + write + fresh > 0) {
+                    if (!repeat && read + write + fresh > 0) {
                         const now = Date.parse(e.timestamp) || 0;
                         // Each request at its own model: a session that switched from a
                         // $4 to a $10 model was priced at the first one throughout.
@@ -148,42 +149,49 @@ function replayExtractor(id, options, makeClearer, replay) {
                             r.uuid = uuid;
                         if (pm !== undefined)
                             r.pm = pm;
-                        const b = st.base.request(now, cold), a = st.auto.request(now, cold);
-                        if (b && a)
+                        if (st.base && st.auto) {
+                            const b = armRequest(st.base, now, cold), a = armRequest(st.auto, now, cold);
                             Object.assign(r, { b: [b.read, b.write, b.total], a: [a.read, a.write, a.total] });
+                        }
                         out.push(r);
                         st.lastTs = now;
                     }
-                    else if (seen !== "repeat") {
+                    else if (!repeat) {
                         out.push(uuid === undefined ? { k: "s" } : { k: "s", uuid });
                     }
-                    st.base.push({ role: "assistant", content: blocks });
-                    st.auto.push({ role: "assistant", content: blocks });
+                    if (st.base && st.auto) {
+                        armPush(st.base, { role: "assistant", content: blocks });
+                        armPush(st.auto, { role: "assistant", content: blocks });
+                    }
                 }
-                else {
-                    st.base.extend(blocks);
-                    st.auto.extend(blocks);
+                else if (st.base && st.auto) {
+                    armExtend(st.base, blocks);
+                    armExtend(st.auto, blocks);
                 }
             }
             else if (e.type === "user" && e.message) {
                 const c = e.message.content;
                 const msg = { role: "user", content: Array.isArray(c) ? c : [{ type: "text", text: String(c ?? "") }] };
-                st.base.push(msg);
-                st.auto.push(msg);
+                if (st.base && st.auto) {
+                    armPush(st.base, msg);
+                    armPush(st.auto, msg);
+                }
             }
         },
         end(out, st) {
             out.push({ k: "end", ...(st.model !== undefined ? { model: st.model } : {}), ...(st.entrypoint !== undefined ? { entrypoint: st.entrypoint } : {}), w5: st.writes5m, w1: st.writes1h });
         },
     };
-    // Without the replay (autopilot already on: `fix` needs only the bill and
-    // the cold returns) the arms do nothing, which is most of the time spent.
-    function armOf(m, c) {
-        return replay ? arm(m, c) : { push() { }, extend() { }, request: () => undefined };
-    }
+    if (makeClearer)
+        return { ...ex, resumable: false };
+    return {
+        ...ex,
+        save: (st) => ({ ...st, ids: [...st.ids], base: saveArm(st.base), auto: saveArm(st.auto) }),
+        load: (v) => ({ ...v, ids: new Set(v.ids), base: loadArm(v.base, options), auto: loadArm(v.auto, options) }),
+    };
 }
-const REPLAY = replayExtractor("replay.1", {}, () => new AutoClearer({}), true);
-const BILL = replayExtractor("bill.1", {}, () => new AutoClearer({}), false);
+const REPLAY = replayExtractor("replay.2", {}, undefined, true);
+const BILL = replayExtractor("bill.2", {}, undefined, false);
 /** What `estimateSavings` reads from each transcript, with or without autopilot's replay (for `prescan`). */
 export const savingsRows = (replay = true) => (replay ? REPLAY : BILL);
 /**

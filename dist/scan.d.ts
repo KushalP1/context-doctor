@@ -19,8 +19,9 @@
  *   file per transcript and extractor, keyed by the transcript's path, size,
  *   modification time and inode. A transcript that only grew (Claude Code
  *   appends) is read from where the last run stopped, the extractor's state
- *   carried over; the replay, whose state is the whole conversation, reads a
- *   changed file again in full.
+ *   carried over. A bulky state (the replay's conversation since its last
+ *   compaction, `Extractor.save`) is kept in a file of its own, only for
+ *   transcripts written in the last 3 days: the ones that grow.
  * - Safe when runs overlap: every write is a whole file renamed into place;
  *   a damaged or foreign file reads as a miss.
  * - Bounded: entries for transcripts gone or untouched for 120 days, other
@@ -50,8 +51,16 @@ export interface Extractor<S = unknown> {
     line(raw: string, row: () => any, out: unknown[], state: S): void;
     /** After the last line (for a resumable extractor, run again after each append). */
     end?(out: unknown[], state: S): void;
-    /** False when the state is too large to keep (a replay): a grown file is then read again in full. Default true. */
+    /** False when the state cannot be kept: a grown file is then read again in full. Default true. */
     resumable?: boolean;
+    /**
+     * For a state too large to keep with the records (a replay's conversation):
+     * the state as JSON and back. It is then kept in a file of its own, only
+     * for transcripts written in the last RECENT days (the ones that grow), and
+     * read only to resume. `end` must not change the state.
+     */
+    save?(state: S): unknown;
+    load?(saved: any): S;
 }
 /** Where the cache lives (created only when something is written). */
 export declare function scanCacheDir(env?: NodeJS.ProcessEnv): string;

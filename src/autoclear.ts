@@ -148,6 +148,14 @@ interface ConvState {
   requests: number;
 }
 
+/** An AutoClearer's state as JSON (see AutoClearer.snapshot). */
+export interface AutoClearSnapshot {
+  cleared: Array<[string, number]>;
+  sizes: Array<[string, number]>;
+  convs: Array<[string, number, number]>;
+  rejecting: string[];
+}
+
 /**
  * One request, whatever its API: the units that make up history, tool names
  * by call id, the tool results in order, and the cache lifetime to assume.
@@ -565,6 +573,25 @@ export class AutoClearer {
       this.dirty = true;
       this.save();
     }
+  }
+
+  /**
+   * Everything a later `apply` depends on, as plain JSON, in insertion order
+   * (the size caps evict the oldest): what a replay keeps to resume where it
+   * stopped (savings.ts). Not the state file, which drops sizes and shifts times.
+   */
+  snapshot(): AutoClearSnapshot {
+    return { cleared: [...this.cleared], sizes: [...this.sizes], convs: [...this.convs].map(([k, c]) => [k, c.last, c.requests]), rejecting: [...this.rejecting] };
+  }
+
+  /** A clearer in exactly the state `snapshot` recorded (options as given; no state file). */
+  static fromSnapshot(snap: AutoClearSnapshot, options: AutoClearOptions = {}): AutoClearer {
+    const c = new AutoClearer({ ...options, statePath: undefined });
+    c.cleared = new Map(snap.cleared);
+    c.sizes = new Map(snap.sizes);
+    c.convs = new Map(snap.convs.map(([k, last, requests]) => [k, { last, requests }]));
+    c.rejecting = new Set(snap.rejecting);
+    return c;
   }
 
   private load(): void {

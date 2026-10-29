@@ -245,3 +245,33 @@ test("uninstall removes the transcript cache, and the cache folder once empty", 
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("autopilot's replay resumes from its kept state when a transcript grows, equal to a fresh replay; a missing or mismatched state means a full replay", () => {
+  withCache((cache) => {
+    const dir = mkdtempSync(join(tmpdir(), "cd-scan-replay-"));
+    try {
+      const ex = savingsRows(true);
+      const full = readFileSync(transcripts(history()).find((p) => /[\\/]s1\.jsonl$/.test(p))!);
+      const lines = full.toString("utf8").split("\n").length;
+      for (const [label, spoil] of [["kept", () => {}], ["missing", (f: string) => rmSync(f)], ["mismatched", (f: string) => writeFileSync(f, JSON.stringify({ ...JSON.parse(readFileSync(f, "utf8")), off: 1 }))]] as const) {
+        const path = join(dir, `${label}.jsonl`);
+        const cut = full.indexOf(10, Math.floor(full.length * 0.8)) + 1;
+        writeFileSync(path, full.subarray(0, cut));
+        rowsOf(path, ex);
+        const states = readdirSync(cache, { recursive: true }).map(String).filter((f) => f.endsWith(".state.json"));
+        const state = states.map((f) => join(cache, f)).find((f) => JSON.parse(readFileSync(f, "utf8")).path === path)!;
+        assert.ok(state, "a recently written transcript keeps the replay's state");
+        spoil(state);
+        appendFileSync(path, full.subarray(cut));
+        clearScanMemo();
+        const c = counting(ex);
+        const resumed = rowsOf(path, c);
+        assert.deepEqual(resumed, rowsOf(path, ex, { keep: false }), label);
+        if (label === "kept") assert.ok(c.lines < lines / 4, `resumed: ${c.lines} of ${lines} lines replayed`);
+        else assert.ok(c.lines >= lines - 1, `${label}: replayed in full (${c.lines} of ${lines})`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
