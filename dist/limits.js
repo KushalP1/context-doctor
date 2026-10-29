@@ -31,6 +31,7 @@ import { dirname, join } from "node:path";
 import { statePath } from "./ledger.js";
 import { forEachLine, listSessions, outputSettler, replyCounter, isClaudeSession } from "./session.js";
 import { subagentDir } from "./subagents.js";
+import { pick, rowsOf, slimUsage } from "./scan.js";
 import { openAIUsage, pricingFor, usageCost } from "./pricing.js";
 import { realModel } from "./tokens.js";
 const MIN = 60_000;
@@ -289,6 +290,38 @@ export function codexLimitData(since, root = codexSessionsRoot()) {
  * Every Claude Code request between `since` and `until`, main threads and
  * subagents alike (both draw on the same limits), each reply once.
  */
+/**
+ * What the usage fit takes from a Claude Code transcript (subagents' too):
+ * every assistant row with usage, in order. A later row of a reply already
+ * met keeps only its id and output tokens: it is a repeat, read only for the
+ * output a streamed reply settles on its last row.
+ */
+export const USAGE_ROWS = {
+    id: "usage.1",
+    init: () => ({ ids: {} }),
+    line(line, row, out, st) {
+        if (!line.includes('"usage"'))
+            return;
+        let e;
+        try {
+            e = row();
+        }
+        catch {
+            return;
+        }
+        const m = e?.message;
+        if (e?.type !== "assistant" || !m?.usage)
+            return;
+        if (typeof m.id === "string") {
+            if (st.ids[m.id]) {
+                out.push({ type: "assistant", message: { id: m.id, usage: pick(m.usage, ["output_tokens"]) } });
+                return;
+            }
+            st.ids[m.id] = 1;
+        }
+        out.push(pick({ ...e, message: pick({ ...m, usage: slimUsage(m.usage) }, ["id", "model", "usage"]) }, ["type", "uuid", "timestamp", "message"]));
+    },
+};
 export function claudeUsage(since, until = Infinity, paths) {
     const tops = paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
     const files = [];
@@ -311,16 +344,7 @@ export function claudeUsage(since, until = Infinity, paths) {
         const settle = outputSettler();
         const byId = new Map();
         try {
-            forEachLine(file, (line) => {
-                if (!line.includes('"usage"'))
-                    return;
-                let e;
-                try {
-                    e = JSON.parse(line);
-                }
-                catch {
-                    return;
-                }
+            rowsOf(file, USAGE_ROWS).forEach((e) => {
                 const m = e?.message;
                 if (e?.type !== "assistant" || !m?.usage)
                     return;

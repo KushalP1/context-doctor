@@ -20,11 +20,12 @@ import { LENS_ROWS } from "../lens.js";
 import { MCP_ROWS } from "../mcpschema.js";
 import { PRUNE_ROWS } from "../prune.js";
 import { savingsRows } from "../savings.js";
+import { USAGE_ROWS } from "../limits.js";
 import { buildHistory, frozenClock, GOLDEN_COMMANDS } from "./history-fixture.js";
 import { cleanEnv, goldenName } from "./golden-run.js";
 import { normalizeOutput } from "./history-fixture.js";
 const here = dirname(fileURLToPath(import.meta.url));
-const EXTRACTORS = [REQUEST_ROWS, QUALITY_ROWS, MISS_ROWS, LENS_ROWS, MCP_ROWS, PRUNE_ROWS, savingsRows(true), savingsRows(false)];
+const EXTRACTORS = [REQUEST_ROWS, QUALITY_ROWS, MISS_ROWS, LENS_ROWS, MCP_ROWS, PRUNE_ROWS, USAGE_ROWS, savingsRows(true), savingsRows(false)];
 function withCache(fn) {
     const saved = process.env.CONTEXT_DOCTOR_CACHE_DIR;
     const cache = mkdtempSync(join(tmpdir(), "cd-scan-unit-"));

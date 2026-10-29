@@ -24,7 +24,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { forEachLine, listSessions, replyCounter, isClaudeSession } from "./session.js";
+import { listSessions, replyCounter, isClaudeSession } from "./session.js";
 import { cacheWriteSplit, pricingFor, usageCost, writeMultiplier } from "./pricing.js";
 import { realModel } from "./tokens.js";
 import { backupOnce } from "./install.js";

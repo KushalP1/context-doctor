@@ -21,12 +21,13 @@ import { LENS_ROWS } from "../lens.js";
 import { MCP_ROWS } from "../mcpschema.js";
 import { PRUNE_ROWS } from "../prune.js";
 import { savingsRows } from "../savings.js";
+import { USAGE_ROWS } from "../limits.js";
 import { buildHistory, frozenClock, GOLDEN_COMMANDS } from "./history-fixture.js";
 import { cleanEnv, goldenName } from "./golden-run.js";
 import { normalizeOutput } from "./history-fixture.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const EXTRACTORS: Extractor<any>[] = [REQUEST_ROWS, QUALITY_ROWS, MISS_ROWS, LENS_ROWS, MCP_ROWS, PRUNE_ROWS, savingsRows(true), savingsRows(false)];
+const EXTRACTORS: Extractor<any>[] = [REQUEST_ROWS, QUALITY_ROWS, MISS_ROWS, LENS_ROWS, MCP_ROWS, PRUNE_ROWS, USAGE_ROWS, savingsRows(true), savingsRows(false)];
 
 function withCache<T>(fn: (cache: string) => T): T {
   const saved = process.env.CONTEXT_DOCTOR_CACHE_DIR;

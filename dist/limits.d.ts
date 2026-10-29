@@ -25,6 +25,7 @@
  * counted apart. When the fit is too thin to trust, the report says so
  * instead of printing a number.
  */
+import { type Extractor } from "./scan.js";
 /** Claude Code's two windows, as its status line input names them. */
 export declare const CLAUDE_WINDOWS: readonly ["five_hour", "seven_day"];
 /** One reading of one window: how much of it was used at `ts`. */
@@ -82,6 +83,15 @@ export declare function codexLimitData(since: number, root?: string): {
  * Every Claude Code request between `since` and `until`, main threads and
  * subagents alike (both draw on the same limits), each reply once.
  */
+/**
+ * What the usage fit takes from a Claude Code transcript (subagents' too):
+ * every assistant row with usage, in order. A later row of a reply already
+ * met keeps only its id and output tokens: it is a repeat, read only for the
+ * output a streamed reply settles on its last row.
+ */
+export declare const USAGE_ROWS: Extractor<{
+    ids: Record<string, 1>;
+}>;
 export declare function claudeUsage(since: number, until?: number, paths?: string[]): UsagePoint[];
 export interface WindowStatus {
     window: string;
