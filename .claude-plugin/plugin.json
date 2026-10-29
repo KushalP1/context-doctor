@@ -1,6 +1,6 @@
 {
   "name": "context-doctor",
-  "version": "0.39.0",
+  "version": "0.40.0",
   "description": "Cut your Claude Code bill, measured on your own sessions: /context-doctor:fix ranks every fix by what it would have saved you and applies the ones you choose (reversibly), /context-doctor:savings shows the dollars, and an every-prompt check names the waste.",
   "author": {
     "name": "gAI Ventures",

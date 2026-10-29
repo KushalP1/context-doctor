@@ -78,7 +78,7 @@ export interface ProxyOptions extends OptimizeOptions {
 export const DEFAULT_MAX_BODY_BYTES = 100 * 1024 * 1024;
 
 /** Reported by /health so `autopilot status` can tell an outdated service from a current one. */
-export const PROXY_VERSION = "0.39.0";
+export const PROXY_VERSION = "0.40.0";
 
 /** Connection-level headers that must not be forwarded. */
 const SKIP_REQUEST_HEADERS = new Set(["host", "content-length", "connection", "transfer-encoding", "accept-encoding", "expect"]);

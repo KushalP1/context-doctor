@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: KushalP1/context-doctor@v0.39.0
+      - uses: KushalP1/context-doctor@v0.40.0
         with:
           max-increase: "2000"        # fail a PR that adds more than 2k tokens
           requests-per-day: "5000"    # optional: price the change
