@@ -29,7 +29,7 @@ Claude Code shows the first line a `statusLine` command prints, on every refresh
 ctx 801k/1.0M ▮▮▮▮▮▮▮▮░░ 80% ⚠ · cache 100% · $12.34
 ```
 
-Live context against the model's window, a warning mark from 70%, the share served from cache, and the session's cost.
+Live context against the model's window, a warning mark from 70%, the share served from cache, and the session's cost. With a spend budget set (`context-doctor budget 50/day`, [spend](./spend.md#a-budget-the-hook-applies-context-doctor-budget)) the cost gives way to the period's across tools: `$12/$50 today`.
 
 On Claude Code 2.1.251 and later it also says until when the prompt cache is warm, and what letting it go cold costs:
 

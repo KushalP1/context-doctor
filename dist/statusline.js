@@ -18,6 +18,10 @@
  * (Pro and Max), each new 5-hour and weekly reading is appended to
  * ~/.claude/.context-doctor-limits.jsonl for `context-doctor limits`.
  *
+ * With a spend budget set (`context-doctor budget`), the session's cost gives
+ * way to the period's across tools, "$12/$50 today", from the same ledger
+ * the every-prompt hook keeps (budget.ts).
+ *
  * It has to be fast and silent. Fast: the status payload on stdin carries the
  * live context size in recent versions; when it does not, only the tail of the
  * transcript is read (last 256KB, ~1ms on a 20MB file). Silent: any failure
@@ -29,6 +33,7 @@ import { contextWindowFor, formatTokens } from "./tokens.js";
 import { CACHE_WRITE_1H, CACHE_WRITE_5M, formatUsd, pricingFor } from "./pricing.js";
 import { recordLimits } from "./limits.js";
 import { recordMiss } from "./missledger.js";
+import { budgetStatus } from "./budget.js";
 /** Newest assistant usage from the END of a transcript, without reading the file. */
 export function tailUsage(path, tailBytes = 256 * 1024) {
     try {
@@ -119,8 +124,11 @@ export function cacheClock(pc, model, nowMs = Date.now()) {
     }
     return undefined;
 }
-/** Build the status line, or null when there is nothing trustworthy to show. */
-export function renderStatusLine(input, nowMs = Date.now()) {
+/**
+ * Build the status line, or null when there is nothing trustworthy to show.
+ * `budget`: the spend budget's part ("$12/$50 today"), when one is set.
+ */
+export function renderStatusLine(input, nowMs = Date.now(), budget) {
     let live;
     const cw = input.context_window;
     // Only current_usage is the context. total_input_tokens is a running total
@@ -156,7 +164,10 @@ export function renderStatusLine(input, nowMs = Date.now()) {
     if (warmth)
         parts.push(warmth);
     // The session's cost is true whatever the context is; show it on its own.
-    if (input.cost?.total_cost_usd && input.cost.total_cost_usd > 0)
+    // With a budget set, the period's spend across tools takes the session's cost's place: it includes it.
+    if (budget)
+        parts.push(budget);
+    else if (input.cost?.total_cost_usd && input.cost.total_cost_usd > 0)
         parts.push(formatUsd(input.cost.total_cost_usd));
     return parts.length > 0 ? parts.join(" · ") : null;
 }
@@ -169,7 +180,12 @@ async function readStdin() {
 export async function runStatusLine() {
     try {
         const input = JSON.parse(await readStdin());
-        const line = renderStatusLine(input);
+        let budget;
+        try {
+            budget = budgetStatus();
+        }
+        catch { /* the line goes out without it */ }
+        const line = renderStatusLine(input, Date.now(), budget);
         if (line)
             console.log(line);
         // After the line is out: the limit readings `context-doctor limits` fits

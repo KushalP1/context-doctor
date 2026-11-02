@@ -96,6 +96,8 @@ export declare const USAGE_ROWS: Extractor<{
 export interface ClaudeRequest extends UsagePoint {
     /** The row's uuid: what tells a fork's copy of a reply from the reply itself. */
     uuid?: string;
+    /** The reply's message id, which its later rows share. */
+    id?: string;
     /** Written as a subagent's, inline in the main transcript (older Claude Code). */
     sidechain?: boolean;
     /** The prompt's part of `usd` (input, cache writes, cache reads): what `savings` bills. */

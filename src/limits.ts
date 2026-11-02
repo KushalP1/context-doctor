@@ -345,6 +345,8 @@ export const USAGE_ROWS: Extractor<{ ids: Record<string, 1> }> = {
 export interface ClaudeRequest extends UsagePoint {
   /** The row's uuid: what tells a fork's copy of a reply from the reply itself. */
   uuid?: string;
+  /** The reply's message id, which its later rows share. */
+  id?: string;
   /** Written as a subagent's, inline in the main transcript (older Claude Code). */
   sidechain?: boolean;
   /** The prompt's part of `usd` (input, cache writes, cache reads): what `savings` bills. */
@@ -384,6 +386,7 @@ export function claudeFileUsage(file: string, since: number, until = Infinity, r
     const point: ClaudeRequest = { ts, app: "claude", model: realModel(m.model), input: num(u.input_tokens), read: num(u.cache_read_input_tokens), write: num(u.cache_creation_input_tokens), output: num(u.output_tokens), usd: 0, promptUsd: 0 };
     if (point.input + point.read + point.write === 0) return;
     if (typeof e.uuid === "string") point.uuid = e.uuid;
+    if (typeof m.id === "string") point.id = m.id;
     if (e.isSidechain === true) point.sidechain = true;
     const price = pricingFor(point.model);
     if (price) {

@@ -360,6 +360,8 @@ export function claudeFileUsage(file, since, until = Infinity, runRows) {
             return;
         if (typeof e.uuid === "string")
             point.uuid = e.uuid;
+        if (typeof m.id === "string")
+            point.id = m.id;
         if (e.isSidechain === true)
             point.sidechain = true;
         const price = pricingFor(point.model);

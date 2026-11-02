@@ -72,6 +72,7 @@ import { SettingsError } from "./settingsedit.js";
 import { currentTtl, estimateCacheTtl, renderCacheTtl, setCacheTtl, settingKey, subagentTranscripts, ttlUnsupported, CACHE_TTL_SINCE } from "./cachettl.js";
 import { claudeDir } from "./claudedir.js";
 import { renderSpend, renderSpendShare, spendReport } from "./spend.js";
+import { clearBudget, parseBudget, periodSpend, promptHookInstalled, readBudget, renderBudgetStatus, writeBudget } from "./budget.js";
 const HELP = `context-doctor — profile and optimize LLM context windows
 
 Start here:
@@ -175,6 +176,12 @@ Fix automatically:
                                                 prompt cache is cold, so it never costs more.
                                                 Plain \`proxy\` is the optimizing mode (dedupe, trim,
                                                 strip base64), which can cost more on cached traffic
+  context-doctor budget [<usd>/day|<usd>/week|off] [--block]
+                                                A spend budget across Claude Code, Codex and Gemini
+                                                CLI: the every-prompt hook says what today (or this
+                                                week) has cost at 50%, 80% and 100% of it; --block
+                                                holds prompts over it until you raise it or turn it
+                                                off. Bare \`budget\`: where the period stands
 
 Fix on request:
   context-doctor optimize <file|->  [options]   Apply safe fixes, print slimmed conversation
@@ -258,7 +265,10 @@ Options:
                           sample or list
   --days <n>              (savings, compact-window, cache-ttl, overhead, reads, tasks, subagents,
                           compactions, cache-misses, limits, spend)
-                          Days of history to read (default 30; compactions 60)  -q, --query <text>      (pack) The question to rank chunks against
+                          Days of history to read (default 30; compactions 60)
+  --block                 (budget) Over the budget, the every-prompt hook holds the prompt and
+                          says how to lift it, instead of only saying so
+  -q, --query <text>      (pack) The question to rank chunks against
   --max-tokens <n>        (pack) Token budget (default 4000); (recall) default 2000; (ci) fail over
                           this many tokens
   --session <id|path>     (recall) Search this session instead of the current one
@@ -423,7 +433,7 @@ const COMMANDS = [
     "analyze", "optimize", "proxy", "install", "uninstall", "savings", "compact-window", "autopilot", "mcp",
     "instructions", "session", "cursor", "statusline", "hook", "report", "doctor", "dashboard", "init",
     "experiment", "diff", "accuracy", "overhead", "ci", "cache-plan", "compactions", "cache-misses", "cache-ttl", "fix", "limits", "subagents", "tasks",
-    "spend", "reads", "pack", "watch", "ab", "handoff", "recall", "help", "version",
+    "spend", "budget", "reads", "pack", "watch", "ab", "handoff", "recall", "help", "version",
 ];
 /** --strategy takes one of the optimizer's ids; a typo used to run nothing and report success. */
 function strategyArg(v) {
@@ -458,6 +468,7 @@ const FLAGS = [
     { names: ["--dry-run"], set: (a) => { a.dryRun = true; } },
     { names: ["--copy"], set: (a) => { a.copy = true; } },
     { names: ["--share"], set: (a) => { a.share = true; } },
+    { names: ["--block"], set: (a) => { a.block = true; } },
     { names: ["--allow-dirty"], set: (a) => { a.allowDirty = true; } },
     { names: ["--statusline"], set: (a) => { a.statusLine = true; } },
     { names: ["--host"], value: "text", set: (a, v) => { a.host = v; } },
@@ -1327,6 +1338,34 @@ async function main() {
         }
         else
             console.log(renderSpend(report, args.limit ?? 8));
+        return;
+    }
+    if (args.command === "budget") {
+        const sub = args.file;
+        const usage = "Usage: context-doctor budget [<usd>/day | <usd>/week] [--block] | budget off | budget [--json]";
+        if ((args.positionals?.length ?? 0) > 1)
+            usageError(`${usage}; got "${args.positionals.slice(1).join(" ")}" too.`);
+        if (sub === "off") {
+            if (args.block)
+                usageError("--block goes with a budget: context-doctor budget 50/day --block.");
+            console.log(clearBudget() ? "Budget off: the every-prompt hook no longer counts spend." : "No budget was set.");
+            return;
+        }
+        if (sub !== undefined) {
+            const parsed = parseBudget(sub);
+            if ("error" in parsed)
+                usageError(`${parsed.error}${didYouMean(sub, ["off"])} ${usage}.`);
+            writeBudget({ ...parsed, block: Boolean(args.block), at: Date.now() });
+        }
+        else if (args.block) {
+            usageError("--block goes with a budget: context-doctor budget 50/day --block.");
+        }
+        const b = readBudget();
+        const s = b ? periodSpend(b.period) : undefined;
+        if (args.json)
+            console.log(JSON.stringify(b && s ? { ...b, spent: s.usd, byTool: s.byTool, periodStart: s.start, periodEnd: s.end } : null, null, 2));
+        else
+            console.log(withInvocation(renderBudgetStatus(b, s, promptHookInstalled())));
         return;
     }
     if (args.command === "compactions") {

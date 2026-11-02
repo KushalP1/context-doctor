@@ -297,6 +297,10 @@ test("spend's flags: an unknown one is refused with a suggestion; --share and --
         assert.match(bad, /\[exit 1\]/);
         assert.match(runReport(cli, home, ["spend", "--share", "--json"]), /\[exit 1\]/);
         assert.match(runReport(cli, home, ["spend", "extra"]), /\[exit 1\]/);
+        // Each option on a line of its own (D1 once joined -q to the --days entry).
+        const help = runReport(cli, home, ["--help"]);
+        for (const opt of ["--days <n>", "-q, --query <text>", "--block", "--limit <n>"])
+            assert.match(help, new RegExp(`^ {2}${opt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} `, "m"), opt);
     }
     finally {
         rmSync(home, { recursive: true, force: true });

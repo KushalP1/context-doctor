@@ -18,6 +18,10 @@
  * (Pro and Max), each new 5-hour and weekly reading is appended to
  * ~/.claude/.context-doctor-limits.jsonl for `context-doctor limits`.
  *
+ * With a spend budget set (`context-doctor budget`), the session's cost gives
+ * way to the period's across tools, "$12/$50 today", from the same ledger
+ * the every-prompt hook keeps (budget.ts).
+ *
  * It has to be fast and silent. Fast: the status payload on stdin carries the
  * live context size in recent versions; when it does not, only the tail of the
  * transcript is read (last 256KB, ~1ms on a 20MB file). Silent: any failure
@@ -82,7 +86,10 @@ export declare function tailUsage(path: string, tailBytes?: number): LiveUsage |
  * while the cache is cold).
  */
 export declare function cacheClock(pc: PromptCache | null | undefined, model: string | undefined, nowMs?: number): string | undefined;
-/** Build the status line, or null when there is nothing trustworthy to show. */
-export declare function renderStatusLine(input: StatusInput, nowMs?: number): string | null;
+/**
+ * Build the status line, or null when there is nothing trustworthy to show.
+ * `budget`: the spend budget's part ("$12/$50 today"), when one is set.
+ */
+export declare function renderStatusLine(input: StatusInput, nowMs?: number, budget?: string): string | null;
 export declare function runStatusLine(): Promise<void>;
 export {};

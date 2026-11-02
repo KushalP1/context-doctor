@@ -1369,6 +1369,8 @@ const OUR_CLAUDE_FILES = [
   ".context-doctor-limits.jsonl",
   ".context-doctor-misses.jsonl",
   ".context-doctor-subagent-costs.json",
+  ".context-doctor-budget.json",
+  ".context-doctor-budget-state.json",
 ];
 
 export async function runUninstall(): Promise<void> {

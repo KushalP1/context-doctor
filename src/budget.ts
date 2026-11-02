@@ -1,0 +1,427 @@
+/**
+ * `context-doctor budget`: a spend budget the every-prompt hook enforces.
+ *
+ * `budget 50/day` (or `200/week`) is kept in ~/.claude/.context-doctor-budget.json.
+ * Before each prompt the hook (Claude Code's UserPromptSubmit, Codex's
+ * UserPromptSubmit, Gemini CLI's BeforeAgent) adds up what today (or this
+ * week, from Monday) has cost across Claude Code, Codex and Gemini CLI, as
+ * `spend` prices it, and says so to the user once per threshold: at 50%, 80%
+ * and 100%. With `--block`, over the budget it holds the prompt in each
+ * host's documented way (`decision: "block"` with a reason in Claude Code and
+ * Codex, `decision: "deny"` in Gemini CLI), saying how to lift it. Cursor is
+ * not counted: its history is a database too slow to read on every prompt,
+ * and its prompt hook cannot add a line.
+ *
+ * The hook must stay fast, so the period's spend is a ledger
+ * (~/.claude/.context-doctor-budget-state.json): per transcript, its size,
+ * time and inode when last read, and the period's requests in it (a short
+ * key and the dollars). A transcript met for the first time in a period is
+ * read through the shared scan (scan.ts), as `spend` reads it; after that a
+ * prompt reads only what was appended to the transcripts that changed, a
+ * few kilobytes, without loading the scan's records for a whole transcript
+ * (megabytes for a long one). The keys let a fork's copy of its parent's
+ * replies count once. Measured on the author's history: docs/spend.md.
+ */
+
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { statePath } from "./ledger.js";
+import { claudeDir } from "./claudedir.js";
+import { claudeFileUsage, claudeUsageFiles } from "./limits.js";
+import { codexFileSpend, codexFiles, geminiFileSpend, geminiFiles, TOOL_NAME, type Tool } from "./spend.js";
+import { pricingFor, usageCost, type RecordedUsage } from "./pricing.js";
+import { realModel } from "./tokens.js";
+
+export type Period = "day" | "week";
+
+export interface Budget {
+  usd: number;
+  period: Period;
+  /** Over the budget, hold the prompt instead of only saying so. */
+  block: boolean;
+  /** When it was set, ms. */
+  at: number;
+}
+
+/** Beside the hook state and the ledger: ~/.claude/.context-doctor-budget.json. */
+export function budgetPath(): string {
+  return join(dirname(statePath()), ".context-doctor-budget.json");
+}
+
+/** The period's spend ledger and what was said: ~/.claude/.context-doctor-budget-state.json. */
+export function budgetStatePath(): string {
+  return join(dirname(statePath()), ".context-doctor-budget-state.json");
+}
+
+/** "50/day", "$200/week", "7.5/d", "100/wk": a budget, or an error to show. */
+export function parseBudget(arg: string): { usd: number; period: Period } | { error: string } {
+  const m = /^\$?(\d+(?:\.\d+)?)\s*\/\s*(day|d|daily|week|w|wk|weekly)$/i.exec(arg.trim());
+  const usd = m ? Number(m[1]) : Number.NaN;
+  if (!m || !(usd > 0) || usd > 1_000_000) return { error: `"${arg}" is not a budget: give dollars per day or per week, e.g. 50/day or 200/week.` };
+  return { usd, period: /^d/i.test(m[2]) ? "day" : "week" };
+}
+
+export function readBudget(): Budget | undefined {
+  try {
+    const b = JSON.parse(readFileSync(budgetPath(), "utf8"));
+    if (typeof b?.usd === "number" && b.usd > 0 && (b.period === "day" || b.period === "week")) return { usd: b.usd, period: b.period, block: b.block === true, at: Number(b.at) || 0 };
+  } catch {
+    /* none set, or damaged: no budget */
+  }
+  return undefined;
+}
+
+/** A whole file renamed into place, so two prompts at once never read half of one. */
+function writeWhole(path: string, value: unknown): void {
+  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(tmp, JSON.stringify(value), { mode: 0o600 });
+    renameSync(tmp, path);
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* never written */ }
+    throw e;
+  }
+}
+
+export function writeBudget(b: Budget): void {
+  writeWhole(budgetPath(), b);
+  // A new budget starts its thresholds afresh; the ledger stays (same period, same spend).
+  const st = readState();
+  if (st) writeWhole(budgetStatePath(), { ...st, warned: 0 });
+}
+
+/** Remove the budget and its ledger. True when there was one. */
+export function clearBudget(): boolean {
+  const had = existsSync(budgetPath());
+  rmSync(budgetPath(), { force: true });
+  rmSync(budgetStatePath(), { force: true });
+  return had;
+}
+
+/** The start of the period holding `now`: local midnight, or Monday's for a week. */
+export function periodStart(period: Period, now = Date.now()): number {
+  const d = new Date(now);
+  const start = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  if (period === "week") start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+  return start.getTime();
+}
+
+/** When the period holding `now` ends (the next one starts). */
+export function periodEnd(period: Period, now = Date.now()): number {
+  const s = new Date(periodStart(period, now));
+  s.setDate(s.getDate() + (period === "week" ? 7 : 1));
+  return s.getTime();
+}
+
+// ---------------------------------------------------------------------------
+// The period's spend, kept as a ledger
+// ---------------------------------------------------------------------------
+
+/**
+ * One transcript as last read: size, time, inode; the period's requests in
+ * it as keys ("" for none) and dollars. A Claude Code transcript also keeps
+ * where reading stopped (`o`, after the last whole line) and its last
+ * replies (`r`: message id, index into k/d or -1, output so far, output
+ * price per 1M), so an append is read from there: a reply's later rows are
+ * met within its last few, and only settle its output.
+ */
+interface FileEntry { t: Tool; s: number; m: number; i: number; k: string[]; d: number[]; o?: number; r?: Array<[string, number, number, number]> }
+
+/** Replies remembered per transcript, to tell a later row of one from a new reply. */
+const RECENT_REPLIES = 64;
+
+interface BudgetState {
+  start: number;
+  files: Record<string, FileEntry>;
+  /** The highest threshold already said this period (0, 50, 80, 100). */
+  warned: number;
+  usd: number;
+  byTool: Partial<Record<Tool, number>>;
+}
+
+function readState(): BudgetState | undefined {
+  try {
+    const s = JSON.parse(readFileSync(budgetStatePath(), "utf8"));
+    if (typeof s?.start === "number" && s.files && typeof s.files === "object") return { start: s.start, files: s.files, warned: Number(s.warned) || 0, usd: Number(s.usd) || 0, byTool: s.byTool ?? {} };
+  } catch {
+    /* none yet, or damaged: start afresh */
+  }
+  return undefined;
+}
+
+/**
+ * Write the ledger. Another prompt or the status line may have written it
+ * meanwhile: a threshold it already said stays said.
+ */
+function saveState(st: BudgetState): void {
+  const disk = readState();
+  if (disk?.start === st.start) st.warned = Math.max(st.warned, disk.warned);
+  try { writeWhole(budgetStatePath(), st); } catch { /* a read-only folder: worked out again next time */ }
+}
+
+/** Claude Code's main transcripts written since `since`, without listing Codex's or Gemini's too. */
+function claudeTops(since: number): string[] {
+  const root = join(claudeDir(), "projects");
+  const out: string[] = [];
+  let dirs: string[];
+  try { dirs = readdirSync(root); } catch { return out; }
+  for (const d of dirs) {
+    let names: string[];
+    try { names = readdirSync(join(root, d)); } catch { continue; }
+    for (const n of names) {
+      if (!n.endsWith(".jsonl")) continue;
+      try { if (statSync(join(root, d, n)).mtimeMs >= since) out.push(join(root, d, n)); } catch { /* vanished */ }
+    }
+  }
+  return out;
+}
+
+/** 12 hex digits of a row's uuid: enough to tell a fork's copy, a third of the bytes. */
+const keyOf = (uuid: string | undefined) => (uuid ? uuid.slice(0, 13) : "");
+
+/** The offset just after the last newline before `size`: where a whole-line read resumes. */
+function lineStart(fd: number, size: number): number {
+  const buf = Buffer.alloc(64 * 1024);
+  for (let end = size; end > 0;) {
+    const from = Math.max(0, end - buf.length);
+    const n = readSync(fd, buf, 0, end - from, from);
+    const nl = buf.subarray(0, n).lastIndexOf(10);
+    if (nl >= 0) return from + nl + 1;
+    end = from;
+  }
+  return 0;
+}
+
+/**
+ * The requests of one transcript in the period, read in full (through the
+ * shared scan, so only what it has not cached), as the ledger keeps them.
+ */
+function readFile(tool: Tool, file: string, since: number, size: number): Omit<FileEntry, "t" | "s" | "m" | "i"> {
+  const k: string[] = [], d: number[] = [];
+  if (tool !== "claude") {
+    for (const r of tool === "codex" ? codexFileSpend(file, since) : geminiFileSpend(file, since)) { k.push(""); d.push(r.usd); }
+    return { k, d };
+  }
+  const reqs = claudeFileUsage(file, since);
+  const r: NonNullable<FileEntry["r"]> = [];
+  reqs.forEach((q, i) => {
+    k.push(keyOf(q.uuid));
+    d.push(q.usd);
+    if (q.id) r.push([q.id, i, q.output, pricingFor(q.model)?.outputPerM ?? 0]);
+  });
+  const fd = openSync(file, "r");
+  try {
+    return { k, d, o: lineStart(fd, size), r: r.slice(-RECENT_REPLIES) };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * A Claude Code transcript that grew: the whole lines after `e.o`, each
+ * reply counted as claudeFileUsage counts it (once, its output settled on
+ * its later rows, priced with usageCost), into `e`.
+ */
+function readAppended(e: FileEntry, file: string, since: number): void {
+  const fd = openSync(file, "r");
+  try {
+    const size = fstatSync(fd).size;
+    const from = e.o ?? 0;
+    const buf = Buffer.alloc(size - from);
+    const n = readSync(fd, buf, 0, buf.length, from);
+    const end = buf.subarray(0, n).lastIndexOf(10);
+    if (end < 0) return;
+    const recent = e.r ?? [];
+    for (const line of buf.subarray(0, end).toString("utf8").split("\n")) {
+      if (!line.includes('"usage"')) continue;
+      let row: Record<string, any>;
+      try { row = JSON.parse(line); } catch { continue; }
+      const m = row?.message;
+      if (row?.type !== "assistant" || !m?.usage) continue;
+      const u = m.usage as RecordedUsage;
+      const out = Number(u.output_tokens) > 0 ? Number(u.output_tokens) : 0;
+      const known = typeof m.id === "string" ? recent.find((x) => x[0] === m.id) : undefined;
+      if (known) {
+        // A later row of a reply already met: only output it settles on is new.
+        if (out > known[2]) {
+          if (known[1] >= 0) e.d[known[1]] += ((out - known[2]) * known[3]) / 1e6;
+          known[2] = out;
+        }
+        continue;
+      }
+      const ts = Date.parse(String(row.timestamp ?? ""));
+      const tokens = [u.input_tokens, u.cache_read_input_tokens, u.cache_creation_input_tokens].reduce((t: number, v) => t + (Number(v) > 0 ? Number(v) : 0), 0);
+      const price = pricingFor(realModel(m.model));
+      let index = -1;
+      if (Number.isFinite(ts) && ts >= since && tokens > 0) {
+        index = e.k.length;
+        e.k.push(keyOf(typeof row.uuid === "string" ? row.uuid : undefined));
+        e.d.push(price ? usageCost(u, price).totalUsd : 0);
+      }
+      if (typeof m.id === "string") recent.push([m.id, index, out, price?.outputPerM ?? 0]);
+    }
+    e.r = recent.slice(-RECENT_REPLIES);
+    e.o = from + end + 1;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export interface PeriodSpend { start: number; end: number; usd: number; byTool: Partial<Record<Tool, number>> }
+
+/**
+ * What the period holding `now` has cost so far, across Claude Code, Codex
+ * and Gemini CLI. Re-reads only the transcripts that changed since the last
+ * call (any process's), then writes the ledger back. `warn` (the hook's) is
+ * the threshold reached, recorded as said, when it is one not said yet.
+ */
+export function periodSpend(period: Period, now = Date.now(), home = homedir(), warnAt?: (usd: number, warned: number) => number): PeriodSpend & { warn?: number } {
+  const start = periodStart(period, now);
+  const prev = readState();
+  const fresh = !prev || prev.start !== start;
+  const st: BudgetState = fresh ? { start, files: {}, warned: 0, usd: 0, byTool: {} } : prev;
+  const files: Array<[Tool, string]> = [
+    ...claudeUsageFiles(start, claudeTops(start)).map((f) => ["claude", f.file] as [Tool, string]),
+    ...codexFiles(start, home).map((f) => ["codex", f] as [Tool, string]),
+    ...geminiFiles(start, home).map((f) => ["gemini", f] as [Tool, string]),
+  ];
+  let changed = fresh;
+  const kept: Record<string, FileEntry> = {};
+  for (const [tool, file] of files) {
+    let s;
+    try { s = statSync(file); } catch { continue; }
+    const e = st.files[file];
+    if (e && e.t === tool && e.s === s.size && e.m === s.mtimeMs && e.i === s.ino) { kept[file] = e; continue; }
+    try {
+      // Claude Code appends: a transcript that only grew is read from where the last read stopped.
+      if (e && tool === "claude" && e.o !== undefined && e.i === s.ino && s.size >= e.s) {
+        readAppended(e, file, start);
+        kept[file] = { ...e, s: s.size, m: s.mtimeMs };
+      } else kept[file] = { t: tool, s: s.size, m: s.mtimeMs, i: s.ino, ...readFile(tool, file, start, s.size) };
+    } catch {
+      continue; // unreadable now: left out, read again next time
+    }
+    changed = true;
+  }
+  if (Object.keys(st.files).some((f) => !(f in kept))) changed = true;
+  // Each reply once: a fork's copy shares its key with the reply it copied.
+  const seen = new Set<string>();
+  let usd = 0;
+  const byTool: Partial<Record<Tool, number>> = {};
+  for (const file of Object.keys(kept).sort()) {
+    const e = kept[file];
+    e.k.forEach((key, i) => {
+      if (key) { if (seen.has(key)) return; seen.add(key); }
+      usd += e.d[i];
+      byTool[e.t] = (byTool[e.t] ?? 0) + e.d[i];
+    });
+  }
+  const level = warnAt ? warnAt(usd, st.warned) : 0;
+  const warn = level > st.warned ? level : undefined;
+  if (warn) { st.warned = warn; changed = true; }
+  if (changed) saveState({ ...st, files: kept, usd, byTool });
+  return { start, end: periodEnd(period, now), usd, byTool, ...(warn ? { warn } : {}) };
+}
+
+// ---------------------------------------------------------------------------
+// What the hook, the status line and `budget` say
+// ---------------------------------------------------------------------------
+
+/** "$12.30", "$1,234": dollars as the budget lines show them. */
+const money = (n: number) => (n >= 1000 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
+/** "$50", "$7.50": the budget itself. */
+const amount = (n: number) => (Number.isInteger(n) ? `$${n.toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
+const per = (p: Period) => (p === "day" ? "day" : "week");
+const span = (p: Period) => (p === "day" ? "today" : "this week");
+
+/** The thresholds the hook speaks at. */
+export const THRESHOLDS = [50, 80, 100] as const;
+
+/** The highest threshold `usd` has reached of `budget` (0 below the first). */
+export function levelOf(usd: number, budget: number): number {
+  const pct = (usd / budget) * 100;
+  return [...THRESHOLDS].reverse().find((t) => pct >= t) ?? 0;
+}
+
+function byToolText(byTool: Partial<Record<Tool, number>>): string {
+  const parts = (Object.keys(byTool) as Tool[]).filter((t) => (byTool[t] ?? 0) >= 0.005).sort((a, b) => byTool[b]! - byTool[a]!).map((t) => `${TOOL_NAME[t]} ${money(byTool[t]!)}`);
+  return parts.length > 1 ? ` (${parts.join(", ")})` : "";
+}
+
+/** When the period resets, in words. */
+function resets(p: Period): string {
+  return p === "day" ? "It resets at midnight." : "It resets on Monday.";
+}
+
+/** A higher budget to suggest: half again, or a fifth over what was spent, rounded up to $5. */
+function raised(b: Budget, spent: number): number {
+  return Math.ceil(Math.max(b.usd * 1.5, spent * 1.2) / 5) * 5;
+}
+
+export interface BudgetVerdict {
+  /** A line for the user, once per threshold per period. */
+  message?: string;
+  /** Over the budget with --block: why the prompt is held, and how to lift it. */
+  block?: string;
+  spend: PeriodSpend;
+  budget: Budget;
+}
+
+/**
+ * The hook's check: undefined with no budget set (one failed read: the hot
+ * path stays a stat), otherwise the spend so far and what to say or do.
+ */
+export function budgetVerdict(now = Date.now(), home = homedir()): BudgetVerdict | undefined {
+  const b = readBudget();
+  if (!b) return undefined;
+  const spend = periodSpend(b.period, now, home, (usd) => levelOf(usd, b.usd));
+  const pct = Math.round((spend.usd / b.usd) * 100);
+  const head = `context-doctor: ${money(spend.usd)} spent ${span(b.period)}`;
+  if (b.block && spend.usd >= b.usd) {
+    return {
+      spend, budget: b,
+      block: `${head}${byToolText(spend.byTool)}, over your ${amount(b.usd)}/${per(b.period)} budget, so this prompt was held. To go on, turn it off (context-doctor budget off) or raise it (context-doctor budget ${raised(b, spend.usd)}/${per(b.period)}). ${resets(b.period)}`,
+    };
+  }
+  if (!spend.warn) return { spend, budget: b };
+  const message = spend.warn >= 100
+    ? `${head}${byToolText(spend.byTool)}: over your ${amount(b.usd)}/${per(b.period)} budget (${pct}%). Raise it with context-doctor budget ${raised(b, spend.usd)}/${per(b.period)}, or add --block to hold prompts over it.`
+    : `${head}${byToolText(spend.byTool)}: ${pct}% of your ${amount(b.usd)}/${per(b.period)} budget.`;
+  return { spend, budget: b, message };
+}
+
+/** The status line's part: "$12/$50 today", or undefined with no budget set. */
+export function budgetStatus(now = Date.now(), home = homedir()): string | undefined {
+  const b = readBudget();
+  if (!b) return undefined;
+  const s = periodSpend(b.period, now, home);
+  const short = (n: number) => (n >= 10 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
+  return `${short(s.usd)}/${amount(b.usd)} ${span(b.period)}${s.usd >= b.usd ? " ⚠" : ""}`;
+}
+
+/** `budget` with no argument, and after setting one: the budget and where the period stands. */
+export function renderBudgetStatus(b: Budget | undefined, s: PeriodSpend | undefined, hookInstalled: boolean): string {
+  if (!b || !s) return "No spend budget set. Set one: context-doctor budget 50/day (or 200/week; --block to hold prompts over it).";
+  const lines = [
+    `Budget: ${amount(b.usd)} a ${per(b.period)}, across Claude Code, Codex and Gemini CLI${b.block ? "; prompts over it are held" : ""}.`,
+    `${span(b.period) === "today" ? "Today" : "This week"}: ${money(s.usd)} so far, ${Math.round((s.usd / b.usd) * 100)}%${byToolText(s.byTool)}. ${resets(b.period)}`,
+  ];
+  lines.push(hookInstalled
+    ? `The every-prompt hook says so at ${THRESHOLDS.join("%, ").replace(/, (\d+)$/, " and $1")}%${b.block ? ", and holds prompts over it" : ""}. Cursor is not counted (context-doctor spend shows it).`
+    : "No every-prompt hook is installed, so nothing will say so: run context-doctor install.");
+  lines.push(`Off: context-doctor budget off`);
+  return lines.join("\n");
+}
+
+/** Our every-prompt hook in Claude Code, Codex or Gemini CLI, or the plugin's. */
+export function promptHookInstalled(home = homedir()): boolean {
+  const has = (path: string, pick: (j: any) => unknown) => {
+    try { return JSON.stringify(pick(JSON.parse(readFileSync(path, "utf8"))) ?? "").includes("context-doctor"); } catch { return false; }
+  };
+  return has(join(claudeDir(), "settings.json"), (j) => [j?.hooks?.UserPromptSubmit, j?.enabledPlugins]) ||
+    has(join(home, ".codex", "hooks.json"), (j) => j?.hooks?.UserPromptSubmit) ||
+    has(join(home, ".gemini", "settings.json"), (j) => j?.hooks?.BeforeAgent);
+}

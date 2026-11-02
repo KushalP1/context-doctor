@@ -27,6 +27,7 @@ import { withInvocation } from "./invocation.js";
 import { describeInstalls, modelSwitchReadiness, PRE_MODEL_SWITCH_SINCE } from "./modelswitch.js";
 import { describeCosts, subagentCostsPath, type SubagentCosts } from "./fanout.js";
 import { claudeDir, claudeJsonPath } from "./claudedir.js";
+import { periodSpend, readBudget } from "./budget.js";
 
 function claudeDesktopConfigPath(): string {
   switch (platform()) {
@@ -724,6 +725,23 @@ export async function runDoctor(): Promise<void> {
     );
   } else {
     checks.push({ label: "Project config", status: "skip", detail: "no .contextdoctorrc (optional; create one with: context-doctor init <preset>)" });
+  }
+
+  // The spend budget: set or not, where the period stands, and whether a hook is there to apply it.
+  {
+    const b = readBudget();
+    if (!b) checks.push({ label: "Spend budget", status: "skip", detail: "none set (optional: context-doctor budget 50/day)" });
+    else {
+      let spent = "";
+      try {
+        const s = periodSpend(b.period);
+        spent = `; ${b.period === "day" ? "today" : "this week"} $${s.usd.toFixed(2)} (${Math.round((s.usd / b.usd) * 100)}%)`;
+      } catch { /* the ledger could not be read: the budget alone */ }
+      const hooked = checks.some((c) => ["Every-prompt hook", "Codex hook", "Gemini CLI hook"].includes(c.label) && c.status === "ok");
+      checks.push(hooked
+        ? { label: "Spend budget", status: "ok", detail: `$${b.usd} a ${b.period}${b.block ? ", prompts over it held" : ", warns at 50/80/100%"}${spent}` }
+        : { label: "Spend budget", status: "warn", detail: `$${b.usd} a ${b.period}${spent}, but no every-prompt hook is registered to apply it: run context-doctor install` });
+    }
   }
 
   checks.push(await checkMcpHandshake());

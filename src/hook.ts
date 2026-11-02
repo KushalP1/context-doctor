@@ -30,6 +30,7 @@ import { modelSwitchMessage } from "./modelswitch.js";
 import { compactFacts, compactInstructions } from "./precompact.js";
 import { fanoutHook, subagentCosts } from "./fanout.js";
 import { claudeDir } from "./claudedir.js";
+import { budgetVerdict } from "./budget.js";
 
 /** Default nudge threshold; a project budget or env var can lower/raise it. */
 const DEFAULT_WARN_TOKENS = 80_000;
@@ -263,8 +264,24 @@ export async function runHook(app?: "copilot"): Promise<void> {
     // first serves a chat whose tool calls fail, the second a resumed heavy chat.
     const cursor = input.hook_event_name === "postToolUse" || input.hook_event_name === "postToolUseFailure" || input.hook_event_name === "sessionStart";
     if (input.hook_event_name === "beforeSubmitPrompt" || (input.cursor_version && !cursor)) return;
+    // A spend budget (budget.ts), before each prompt in Claude Code, Codex and
+    // Gemini CLI: a line to the user at 50%, 80% and 100%, and with --block,
+    // over it, the prompt held. No budget set: one failed read.
+    let budgetNote: string | undefined;
+    if (!cursor && (input.hook_event_name === undefined || input.hook_event_name === "UserPromptSubmit" || input.hook_event_name === "BeforeAgent")) {
+      let v: ReturnType<typeof budgetVerdict>;
+      try { v = budgetVerdict(); } catch { /* a damaged ledger must not cost the rest of the hook */ }
+      if (v?.block) {
+        // Claude Code and Codex: decision "block" (the prompt is erased, the
+        // reason shown); Gemini CLI's BeforeAgent: decision "deny".
+        process.stdout.write(JSON.stringify({ decision: input.hook_event_name === "BeforeAgent" ? "deny" : "block", reason: v.block }) + "\n");
+        return;
+      }
+      budgetNote = v?.message;
+    }
+    const sayBudget = () => { if (budgetNote) console.log(JSON.stringify({ systemMessage: budgetNote })); };
     const transcriptPath = input.transcript_path;
-    if (!transcriptPath || !existsSync(transcriptPath)) return;
+    if (!transcriptPath || !existsSync(transcriptPath)) { sayBudget(); return; }
 
     // Fast path 1: a small transcript cannot exceed the threshold — exit on a
     // single stat() without reading the file. This is the every-prompt cost
@@ -272,7 +289,7 @@ export async function runHook(app?: "copilot"): Promise<void> {
     const { config } = loadConfig(input.cwd ?? input.workspace_roots?.[0] ?? process.cwd());
     const threshold = warnThreshold(config.budget?.maxTokens);
     const sizeBytes = statSync(transcriptPath).size;
-    if (sizeBytes < minBytesForWarn(threshold)) return;
+    if (sizeBytes < minBytesForWarn(threshold)) { sayBudget(); return; }
 
     // Fast path 2: growth gate BEFORE parsing. If the file hasn't grown ~40%
     // since the last full parse, nothing new can trigger — exit without the
@@ -284,7 +301,7 @@ export async function runHook(app?: "copilot"): Promise<void> {
     // before the growth gate, because a return after idle involves no growth.
     // Once per idle period; the tail read is ~1 ms and only on large files.
     const notes: string[] = [];
-    let notice: string | undefined;
+    let notice: string | undefined = budgetNote;
     // Silent when Claude Code compacts this very prompt itself (the context
     // is past its auto-compact window, e.g. one set smaller since): an offer
     // would arrive after the compaction it proposes. Below the window the
@@ -296,7 +313,7 @@ export async function runHook(app?: "copilot"): Promise<void> {
     let cr = prev.cr;
     if (cold && cold.lastReplyAt !== prev.cr) {
       notes.push(renderColdResume(cold));
-      notice = renderColdResumeNotice(cold);
+      notice = [budgetNote, renderColdResumeNotice(cold)].filter(Boolean).join("\n");
       cr = cold.lastReplyAt;
       recordLedger({ ev: "cold_resume", sid: sessionId.slice(0, 12), tok: cold.tokens, model: cold.model });
     }
@@ -324,7 +341,7 @@ export async function runHook(app?: "copilot"): Promise<void> {
 
     // Slow path (growth events only): full parse + profile.
     const parsed = parseSessionFile(transcriptPath);
-    if (parsed.messageCount === 0) return;
+    if (parsed.messageCount === 0) { sayBudget(); return; }
     const model = parsed.model ?? input.model;
     const profile = profileConversation(parseConversation(parsed.conversationJson), model);
 
