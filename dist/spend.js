@@ -398,7 +398,7 @@ export function renderSpend(r, top = 8) {
         return lines.join("\n");
     }
     lines.push("What your AI coding cost, across every tool here");
-    lines.push(`Last ${r.days} days, at list prices`);
+    lines.push(`Last ${r.days === 1 ? "day" : `${r.days} days`}, at list prices`);
     lines.push("─".repeat(60));
     for (const t of r.tools) {
         const unit = t.tool === "cursor" ? "replies" : "requests";
@@ -462,7 +462,7 @@ export function renderSpendShare(r) {
     if (r.requests === 0)
         return "context-doctor found no AI coding usage to measure yet.";
     const tools = r.tools.map((t) => `${t.name} ${t.estimate ? "~" : ""}${usd(t.usd)}${t.estimate ? " (estimate)" : ""}`).join(", ");
-    const lines = [`My AI coding, last ${r.days} days, at list prices: ${usd(r.usd)}${r.tools.length > 1 ? ` (${tools})` : ` in ${r.tools[0].name}`}.`];
+    const lines = [`My AI coding, last ${r.days === 1 ? "day" : `${r.days} days`}, at list prices: ${usd(r.usd)}${r.tools.length > 1 ? ` (${tools})` : ` in ${r.tools[0].name}`}.`];
     const claude = r.tools.find((t) => t.tool === "claude");
     if (claude?.subagentUsd)
         lines.push(`Claude Code subagents: ${usd(claude.subagentUsd)} of it.`);

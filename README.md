@@ -9,6 +9,7 @@ AI agents re-send their whole context on every message: old tool output, pasted 
 ```bash
 npx context-doctor savings     # what your recent sessions cost, and what each fix would have saved
 npx context-doctor fix         # the fixes ranked by dollars; applies only the ones you say yes to
+npx context-doctor spend       # one bill across Claude Code, Codex, Gemini CLI and Cursor
 ```
 
 <img src="https://raw.githubusercontent.com/KushalP1/context-doctor/main/assets/savings.svg" alt="npx context-doctor savings: input billed, what /compact at cold resumes, autopilot and an earlier auto-compact window would have saved" width="640">
@@ -27,11 +28,12 @@ Pick where you work. Each takes about a minute and is fully reversible.
 | **claude.ai, ChatGPT, phone apps** | `npx context-doctor instructions --copy`, then paste into the app's personal preferences (it tells you where). ChatGPT can also reach the MCP server at a URL ([how](./docs/chat-apps.md#chatgpt)) |
 | **Your own app on an LLM API** | Run `npx context-doctor proxy --autopilot` and point `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` (add `/v1`) or `GOOGLE_GEMINI_BASE_URL` at the proxy on `127.0.0.1:8787`, plain HTTP ([exact values](./docs/proxy.md)). No proxy possible? Wrap the SDK client: `withContextDoctor(new Anthropic())` ([library](./docs/library.md)) |
 | **Python / RAG pipelines** | `pip install "git+https://github.com/KushalP1/context-doctor#subdirectory=python"` (PyPI release coming), then `pack_documents(retrieved_docs, question, budget=4000)` trims LangChain or LlamaIndex results to the chunks that matter. [Python README](./python/README.md) |
-| **GitHub pull requests** | `uses: KushalP1/context-doctor@v0.40.0` comments how much a PR grows CLAUDE.md, AGENTS.md and rules, and can fail over a budget ([setup](./docs/ci.md)) |
+| **GitHub pull requests** | `uses: KushalP1/context-doctor@v0.41.0` comments how much a PR grows CLAUDE.md, AGENTS.md and rules, and can fail over a budget ([setup](./docs/ci.md)) |
 
 ## What it does
 
 **Measure, in dollars, on your own history** ([profiling](./docs/profiling.md))
+- `spend`: one bill across Claude Code (subagents included), Codex, Gemini CLI and Cursor, by tool, project, model and day, at list prices ([spend and budget](./docs/spend.md)).
 - `savings`: what your recent Claude Code sessions cost and what each fix below would have saved, replayed request by request against what you were billed.
 - `overhead`: what every request re-reads before your message (system prompt, tools, MCP servers, CLAUDE.md, rules, memory), each file priced per month.
 - `tasks`, `reads`, `subagents`, `compactions`: cost per commit; files read into session after session; whether each subagent was cheaper than the same steps in the parent; whether sessions work worse after compacting.
@@ -51,6 +53,7 @@ Pick where you work. Each takes about a minute and is fully reversible.
 - A subagent price (`PreToolUse` on the Agent tool) shows what a subagent costs before it starts, at your own median for that type (the author's: $3.99 for general-purpose, $1.43 for Explore, 422 runs in 30 days), with the Sonnet price where it would run on Opus or Fable, and a total when launches bunch up. It never blocks.
 - A compaction hook (`PreCompact`) tells each Claude Code compaction what the session cannot lose (files changed, open tasks, your instructions, failing tests), so compacting saves tokens without losing the thread.
 - An every-prompt hook (Claude Code, Codex, Gemini CLI; Cursor after each tool call) tells the model its real context size and the largest waste, and offers `/compact` when you return to a big session after the cache expired.
+- `budget 50/day` (or `/week`): the every-prompt hook in Claude Code, Codex and Gemini CLI says when today's spend passes 50%, 80% and 100% of it, and with `--block` holds prompts over budget; the status line shows `$12/$50 today`.
 - `compact-window`: sets Claude Code's own auto-compact window, measured on your history first. Works in the desktop app too.
 - `cache-ttl`: replays your own pauses at a 5-minute and a 1-hour prompt cache and sets Claude Code's `promptCacheTtl` to the cheaper one (the author's: 7% less main-conversation input at 1 hour; 22% less than the 5-minute default an API key gets). Same content either way, so no quality cost ([fixes](./docs/fix.md)).
 - [Autopilot](./docs/autopilot.md): a local proxy (or SDK wrapper) that clears stale tool output only when the prompt cache is cold, so a request never costs more.
@@ -130,6 +133,8 @@ Rules 1-4 end exactly at character 512, the part ChatGPT's guide says must stand
 |---|---|
 | `context-doctor install` / `uninstall` | Wire (or remove) everything it finds: the MCP server for Claude Desktop, Claude Code, Cursor, Codex, Gemini CLI, Google Antigravity and GitHub Copilot; the Agent Skill (Claude Code, Codex, Antigravity); the every-prompt hook (Claude Code, Codex, Gemini CLI's `BeforeAgent`, Cursor's `postToolUse`, `postToolUseFailure` and `sessionStart`); Claude Code's `PreCompact`, `SessionStart`, `PreToolUse` (the subagent price) and, on 2.1.251+, `PreModelSwitch` hooks; Copilot's `sessionStart` (the standing rules). `--statusline` adds the status bar line ([details](./docs/install.md)) |
 | `context-doctor fix [--apply ids\|all] [--share]` / `fix undo` | Every lever ranked by what it would have saved on your last 30 days (compact earlier, the cache lifetime, autopilot, MCP tool search, unused servers), with what each costs in quality; applies one only on a yes, `fix undo` reverts exactly what it changed, later runs show what each saved since ([details](./docs/fix.md)) |
+| `context-doctor spend [--days n] [--share]` | One bill across every tool on this machine: Claude Code (main conversation and subagents), Codex, Gemini CLI and Cursor (an estimate: no cache split), by tool, project, model and day, with what drives it ([docs](./docs/spend.md)) |
+| `context-doctor budget [<$>/day\|<$>/week [--block]\|off]` | A spend budget the every-prompt hook applies: a line at 50%, 80% and 100%, and with `--block` prompts over it are held until you raise it or turn it off ([docs](./docs/spend.md#a-budget-the-hook-applies-context-doctor-budget)) |
 | `context-doctor doctor` | Self-check the whole installation — one pasteable ✓/✗ diagnosis with fixes, including which surfaces autopilot can reach and any other program on its port |
 | `context-doctor savings [--days n] [--share [--copy]]` | What your recent Claude Code sessions cost, and what `/compact` at cold resumes, autopilot and an earlier auto-compact window would save, replayed through the shipped code against your actual billed usage. `--share` prints totals only (no project names or paths) to post. A bare `context-doctor` in a terminal shows the same |
 | `context-doctor autopilot on\|off\|pause\|resume\|status` | Every new Claude Code session started in a terminal or IDE goes through the local proxy, which clears stale tool output only when the prompt cache is cold: measured 12.7% less input cost, no session worse ([details](./docs/autopilot.md)) |
@@ -175,6 +180,7 @@ Rules 1-4 end exactly at character 512, the part ChatGPT's guide says must stand
 
 ## What's new
 
+- **0.41 One bill, a budget, and the subagents' model**: `context-doctor spend` puts Claude Code (subagents included), Codex, Gemini CLI and Cursor on one bill by tool, project, model and day. `context-doctor budget 50/day` has the every-prompt hook tell you at 50%, 80% and 100%, and with `--block` holds prompts over budget; the status line shows `$12/$50 today`, at about 5 ms a prompt. `fix` gains `subagent-model`: subagents run on your main conversation's model (Opus or Fable included), and `CLAUDE_CODE_SUBAGENT_MODEL` set to Sonnet 5.5 would have cost the author $632 less (38% of $1,658) in 30 days; it changes the model, so it is applied only when you name it, and `fix undo` reverts it.
 - **0.40 Reports in under a second**: `fix`, `savings`, `compact-window`, `cache-ttl`, `cache-misses` and `overhead` read each transcript once and keep what they took from it in `~/.cache/context-doctor`, so a second run reads only what was appended: `fix` 23.5 s → 0.4 s, `savings` 41 s → 0.6 s on the author's 2.7 GB history, every figure unchanged ([details](./docs/performance.md#the-transcript-cache)). Also from a QA pass on 0.39: `install` then `uninstall` gives every config back byte for byte, and `doctor` warns about an out-of-date skill.
 - **0.39 `fix`, the cache lifetime, the cache clock, and Antigravity**: `context-doctor fix` turns the measurements into changes: every lever ranked by what it would have saved on your own sessions, with what each costs in quality, applied only on a yes, undone with `fix undo`, and re-measured afterwards (`/context-doctor:fix` in the plugin). `cache-ttl` replays your pauses at a 5-minute and a 1-hour prompt cache and sets Claude Code's `promptCacheTtl` to the cheaper one, a price-only change. On Claude Code 2.1.251+ the status line says until when the cache is warm and what going cold costs, `cache-misses` explains misses in Claude Code's own words, and `install` wires Google Antigravity.
 - **0.38 Your limits in their own unit, regressions after upgrades, recall, and a subagent price**: `context-doctor limits` shows each plan window's %, pace and run-out time (Claude Pro/Max through the status line, Codex from its rollouts) and what 1M tokens cost in % of it, fitted on your readings with the error; `savings` then speaks in your limit too. `cache-misses` flags step changes after a Claude Code upgrade, `recall` searches the session's own transcript (compacted turns included), a hook prices a subagent before it starts (never blocking), and `overhead prune` switches off unused MCP servers and skills per project, reversibly. OpenAI caches count as warm for up to 24 hours. An independent QA pass's findings were fixed before the release.
@@ -186,7 +192,8 @@ Every release, with the details: [docs/whats-new.md](./docs/whats-new.md).
 
 - [What `install` does](./docs/install.md): every file it writes, what runs in each session after, and when you need MCP
 - [Autopilot](./docs/autopilot.md): how it clears stale tool output, and why it never costs more
-- [Fixes](./docs/fix.md): `fix` (one plan, applied with consent, undone in one step, re-measured) and `cache-ttl`
+- [Fixes](./docs/fix.md): `fix` (one plan, applied with consent, undone in one step, re-measured), `cache-ttl` and the subagents' model
+- [Spend and budget](./docs/spend.md): one bill across every tool, and a budget the every-prompt hook applies
 - [The proxy](./docs/proxy.md): autopilot and the optimizing mode for your API apps, `/stats`, cache advice, a public URL for Cursor
 - [Chat apps](./docs/chat-apps.md): Claude Desktop, ChatGPT, claude.ai and the phone apps; what acts by itself and what only nudges; the MCP tools, prompts and resources
 - [Handoff](./docs/handoff.md): continue a long chat in a new one from a ≤400-token brief
