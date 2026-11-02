@@ -520,7 +520,7 @@ export function savedSince(records, opts = {}) {
         }
         else if (r.id === "subagent-model") {
             const s = subagentModelSavedSince(r.at, r.modelsBefore, opts.subagentPaths);
-            out.push({ id: r.id, at: r.at, savedUsd: s.requests ? s.usd : undefined, detail: s.requests ? `estimated: ${s.requests.toLocaleString("en-US")} subagent requests, priced at the model they ran on before (${movedFromNames(r.modelsBefore ?? {})}) against as billed, the same token counts` : r.modelsBefore ? "no subagent requests it moves since" : "applied; not priced" });
+            out.push({ id: r.id, at: r.at, savedUsd: s.requests ? s.usd : undefined, detail: s.requests ? `estimated: ${s.requests.toLocaleString("en-US")} subagent requests, priced at the model they ran on before (${movedFromNames(r.modelsBefore ?? {})}) against as billed, the same token counts` : r.modelsBefore ? "no subagent requests it moves yet" : "applied; not priced" });
         }
         else if (r.id === "autopilot") {
             const ledger = opts.ledger ?? readLedger();

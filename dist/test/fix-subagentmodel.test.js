@@ -136,7 +136,7 @@ test("CLI: fix offers it in a throwaway home, applies it only when named, undo r
     assert.equal(r.status, 0, r.stderr + r.stdout);
     assert.equal(JSON.parse(readFileSync(settings, "utf8")).env.CLAUDE_CODE_SUBAGENT_MODEL, "claude-sonnet-5-5");
     r = run();
-    assert.match(r.stdout, /✓ Subagent model: CLAUDE_CODE_SUBAGENT_MODEL=claude-sonnet-5-5 in .*settings\.json env/);
+    assert.match(r.stdout, /✓ Subagent model: CLAUDE_CODE_SUBAGENT_MODEL=claude-sonnet-5-5 in .*settings\.json env since \d{4}-\d\d-\d\d: no subagent requests it moves yet/);
     r = run("undo", "subagent-model");
     assert.equal(r.status, 0, r.stderr);
     assert.equal(JSON.parse(readFileSync(settings, "utf8")).env, undefined);
