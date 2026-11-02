@@ -22,7 +22,13 @@
  *    the session would have reached the old window, less the compaction's
  *    own request and summary (an estimate: what the summary dropped is not
  *    priced);
- *  - autopilot: what the proxy recorded saving since (its own ledger).
+ *  - autopilot: what the proxy recorded saving since (its own ledger);
+ *  - the subagents' model: the requests it moved, priced at the model they
+ *    ran on before against as billed (the same token counts: an estimate).
+ *
+ * The subagents' model is the one lever with a quality cost `fix` cannot
+ * measure: it is offered with that said, applied only when named (never by
+ * `--apply all`), and never over a value the user set.
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
@@ -38,8 +44,9 @@ import { tilde } from "./claudedir.js";
 import { applyPrune, undoPrune, type ProjectPlan } from "./prune.js";
 import { readLedger } from "./ledger.js";
 import { claudeDir } from "./claudedir.js";
+import { movedFromNames, renderSubagentTypes, subagentModelSavedSince, SUBAGENT_CANDIDATE, SUBAGENT_CANDIDATE_NAME, SUBAGENT_MODEL_ENV, type SubagentModelReplay } from "./subagentmodel.js";
 
-export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune";
+export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model";
 
 export interface Fix {
   id: FixId;
@@ -60,6 +67,8 @@ export interface Fix {
   value?: number | string;
   /** What would keep it from taking effect (environment, project or managed settings, per-model values). */
   overriddenBy?: string[];
+  /** More lines under it in the plan (the subagents' model: per agent type). */
+  detail?: string[];
 }
 
 /** The measurements a plan is made from (so the plan itself is testable without a machine's history). */
@@ -81,6 +90,10 @@ export interface FixInputs {
   overrides?: Partial<Record<FixId, string[]>>;
   /** The record of applied fixes could not be read. */
   recordProblem?: string;
+  /** Every subagent request replayed at Sonnet 5.5 (subagentmodel.ts). */
+  subagentModel?: SubagentModelReplay;
+  /** CLAUDE_CODE_SUBAGENT_MODEL as the user set it (their settings.json env, or the environment fix runs in): never overwritten. */
+  subagentModelSet?: { value: string; where: string };
   /** The /compact offer at cold returns: advice, not a setting; `hooked` when the every-prompt hook (or the plugin) is there to make it. */
   coldResume?: { netUsd: number; returns: number; hooked: boolean };
 }
@@ -179,6 +192,28 @@ export function planFixes(i: FixInputs): Fix[] {
       state: "available",
     });
   }
+  const sm = i.subagentModel;
+  const set = i.subagentModelSet;
+  if (set) {
+    const inherit = /^(inherit|default)$/i.test(set.value.trim());
+    const less = sm && sm.savedUsd >= MIN_USD ? ` (${SUBAGENT_CANDIDATE_NAME} would have cost ${money(sm.savedUsd)} less)` : "";
+    fixes.push({ id: "subagent-model", title: "Subagent model", basis: "set", quality: "", change: `env.${SUBAGENT_MODEL_ENV}`, state: inherit ? "not-here" : "applied", note: `${SUBAGENT_MODEL_ENV}=${set.value} in ${set.where}${inherit ? `: left as you set it${less}` : ""}`, value: set.value });
+  } else if (sm && sm.savedUsd >= MIN_USD) {
+    const moved = sm.byType.filter((t) => t.moves);
+    const reqs = moved.reduce((s, t) => s + t.requests, 0);
+    fixes.push({
+      id: "subagent-model",
+      title: `Subagents on ${SUBAGENT_CANDIDATE_NAME}${movedFromNames(sm.movedFrom) ? `, not ${movedFromNames(sm.movedFrom)}` : ""}`,
+      savedUsd: sm.savedUsd,
+      savedShare: sm.billedUsd > 0 ? sm.savedUsd / sm.billedUsd : undefined,
+      basis: `${reqs.toLocaleString("en-US")} subagent requests priced at ${SUBAGENT_CANDIDATE_NAME} with the token counts they had (${money(sm.billedUsd)} billed for all ${sm.agents} subagents); an estimate: another model tokenizes and works differently`,
+      quality: `this changes the model your subagents run on (${moved.map((t) => t.type).join(", ")}); the quality cost is not measured here: context-doctor ab can measure it (its tasks with --model ${SUBAGENT_CANDIDATE} and without)`,
+      change: `${where}: env.${SUBAGENT_MODEL_ENV} = "${SUBAGENT_CANDIDATE}"`,
+      state: "available",
+      value: SUBAGENT_CANDIDATE,
+      detail: renderSubagentTypes(sm),
+    });
+  }
   for (const f of fixes) {
     const o = i.overrides?.[f.id];
     if (o?.length && f.state === "available") f.overriddenBy = o;
@@ -209,6 +244,8 @@ export interface FixRecord {
   oneHourShareBefore?: number;
   /** For prune: the project folder. */
   cwd?: string;
+  /** For subagent-model: the models the moved subagents ran on before the change, each one's share of their bill: the baseline "since" compares against. */
+  modelsBefore?: Record<string, number>;
 }
 
 export function fixRecordPath(home?: string): string {
@@ -268,7 +305,11 @@ const KEY_PATH: Partial<Record<FixId, string[]>> = {
   "cache-ttl": ["promptCacheTtl"],
   "cache-ttl-subagents": ["subagentPromptCacheTtl"],
   "tool-search": ["env", "ENABLE_TOOL_SEARCH"],
+  "subagent-model": ["env", SUBAGENT_MODEL_ENV],
 };
+
+/** Fixes with a quality cost not measured here: applied only when named, never by `--apply all`. */
+const NAMED_ONLY = new Set<FixId>(["subagent-model"]);
 
 /** What would keep this fix's value from taking effect, as Claude Code merges settings. */
 export function fixOverrides(id: FixId, deps: { home?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {}): string[] {
@@ -280,6 +321,12 @@ export function fixOverrides(id: FixId, deps: { home?: string; cwd?: string; env
   if (id === "tool-search") {
     const out: string[] = [];
     for (const s of sources) if (s.name !== "user" && s.settings.env?.ENABLE_TOOL_SEARCH !== undefined) out.push(`ENABLE_TOOL_SEARCH=${s.settings.env.ENABLE_TOOL_SEARCH} in ${tilde(s.path)} env`);
+    return out;
+  }
+  if (id === "subagent-model") {
+    // Claude Code applies each settings file's env over the process's, the user's first: a project or managed value wins.
+    const out: string[] = [];
+    for (const s of sources) if (s.name !== "user" && s.settings.env?.[SUBAGENT_MODEL_ENV] !== undefined) out.push(`${SUBAGENT_MODEL_ENV}=${s.settings.env[SUBAGENT_MODEL_ENV]} in ${tilde(s.path)} env`);
     return out;
   }
   return [];
@@ -299,9 +346,10 @@ function applySetting(fix: Fix, home: string | undefined, at: number, extra: Par
       if (parent !== undefined && (parent === null || typeof parent !== "object" || Array.isArray(parent))) throw new SettingsError(`"${key[0]}" in ${tilde(file)} is not an object; fix it first. Nothing was changed.`);
     }
     if (sameJson(now, fix.value)) return [`${key.join(".")} is already ${JSON.stringify(fix.value)} in ${tilde(file)}: nothing to change.`];
+    const old = records.find((r) => r.id === fix.id);
+    if (NAMED_ONLY.has(fix.id) && now !== undefined && !old) throw new SettingsError(`${key.join(".")} is ${JSON.stringify(now)} in ${tilde(file)}, a value you set: left as it is. Nothing was changed.`);
     const after = setJsonPath(cur.text, key, fix.value);
     writeAtomic(file, after);
-    const old = records.find((r) => r.id === fix.id);
     const before = cur.text ?? null;
     const rec: FixRecord = {
       ...extra,
@@ -316,6 +364,7 @@ function applySetting(fix: Fix, home: string | undefined, at: number, extra: Par
       before: old ? (old.after === before ? old.before : undefined) : before,
       after,
       oneHourShareBefore: old?.oneHourShareBefore ?? extra.oneHourShareBefore,
+      modelsBefore: old?.modelsBefore ?? extra.modelsBefore,
     };
     writeFixRecords([...records.filter((r) => r.id !== fix.id), rec], home);
     return [`✓ ${fix.change}`];
@@ -323,13 +372,16 @@ function applySetting(fix: Fix, home: string | undefined, at: number, extra: Par
 }
 
 /** Apply one fix; record it unless it changed nothing. Refusals (a damaged settings file, a damaged record) change nothing. */
-export async function applyFix(fix: Fix, deps: FixDeps = {}, context: { oneHourShare?: number; prune?: ProjectPlan } = {}): Promise<{ ok: boolean; lines: string[] }> {
+export async function applyFix(fix: Fix, deps: FixDeps = {}, context: { oneHourShare?: number; prune?: ProjectPlan; modelsBefore?: Record<string, number> } = {}): Promise<{ ok: boolean; lines: string[] }> {
   const home = deps.home;
   const at = deps.now ?? Date.now();
   if (fix.state !== "available") return { ok: false, lines: [`${fix.title}: ${fix.note ?? "nothing to apply here"}`] };
   try {
     if (KEY_PATH[fix.id]) {
-      const lines = applySetting(fix, home, at, { oneHourShareBefore: context.oneHourShare });
+      // The environment Claude Code starts in is the user's too: a value there is theirs (settings.json would override it).
+      const shell = fix.id === "subagent-model" ? (deps.env ?? process.env)[SUBAGENT_MODEL_ENV] : undefined;
+      if (shell?.trim()) return { ok: false, lines: [`✗ ${fix.id}: ${SUBAGENT_MODEL_ENV}=${shell} in the environment, a value you set: left as it is. Nothing was changed.`] };
+      const lines = applySetting(fix, home, at, { oneHourShareBefore: context.oneHourShare, modelsBefore: context.modelsBefore });
       const over = fixOverrides(fix.id, deps);
       if (over.length) lines.push(`  ⚠ written, but it will not take effect while ${over.join("; ")} ${over.length === 1 ? "overrides" : "override"} it.`);
       return { ok: over.length === 0, lines };
@@ -521,6 +573,9 @@ export function savedSince(records: FixRecord[], opts: { paths?: string[]; subag
     } else if (r.id === "compact-window") {
       const c = compactWindowSavingsSince(r.at, typeof r.previous === "number" ? r.previous : undefined, opts.paths);
       out.push({ id: r.id, at: r.at, savedUsd: c.compactions ? c.usd : undefined, detail: c.compactions ? `${c.compactions} earlier compaction${c.compactions === 1 ? "" : "s"}, the context each removed from later requests (estimated; what the summary dropped is not priced)` : "no earlier compaction yet" });
+    } else if (r.id === "subagent-model") {
+      const s = subagentModelSavedSince(r.at, r.modelsBefore, opts.subagentPaths);
+      out.push({ id: r.id, at: r.at, savedUsd: s.requests ? s.usd : undefined, detail: s.requests ? `estimated: ${s.requests.toLocaleString("en-US")} subagent requests, priced at the model they ran on before (${movedFromNames(r.modelsBefore ?? {})}) against as billed, the same token counts` : r.modelsBefore ? "no subagent requests it moves since" : "applied; not priced" });
     } else if (r.id === "autopilot") {
       const ledger = opts.ledger ?? readLedger();
       const ev = ledger.filter((e) => e.ev === "proxy" && e.ts >= r.at);
@@ -542,6 +597,7 @@ const LABEL: Record<FixId, string> = {
   autopilot: "Autopilot",
   "tool-search": "MCP tool search",
   prune: "Unused MCP servers and skills",
+  "subagent-model": "Subagent model",
 };
 
 export function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], since: SinceResult[], command = (s: string) => `context-doctor ${s}`, coldResume?: FixInputs["coldResume"], recordProblem?: string): string {
@@ -560,6 +616,7 @@ export function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], sin
     out.push(`   measured: ${f.basis}`);
     out.push(`   quality:  ${f.quality}`);
     out.push(`   changes:  ${f.change}   [${f.id}]`);
+    for (const d of f.detail ?? []) out.push(`     ${d}`);
     if (f.overriddenBy?.length) out.push(`   ⚠ would not take effect: ${f.overriddenBy.join("; ")}`);
   });
   if (avail.filter((f) => f.savedUsd !== undefined).length > 1) {
@@ -616,7 +673,8 @@ export function renderFixShare(days: number, billedUsd: number, fixes: Fix[]): s
 
 export function parseFixIds(raw: string, fixes: Fix[]): { ids: FixId[]; unknown: string[] } {
   const names = raw.split(",").map((s) => s.trim()).filter(Boolean);
-  if (names.includes("all")) return { ids: fixes.filter((f) => f.state === "available").map((f) => f.id), unknown: [] };
+  // "all" is every fix but those with an unmeasured quality cost, which apply only when named too.
+  if (names.includes("all")) return { ids: [...new Set([...fixes.filter((f) => f.state === "available" && !NAMED_ONLY.has(f.id)).map((f) => f.id), ...names.filter((n): n is FixId => NAMED_ONLY.has(n as FixId))])], unknown: [] };
   const known = new Set<string>(Object.keys(LABEL));
   return { ids: names.filter((n) => known.has(n)) as FixId[], unknown: names.filter((n) => !known.has(n)) };
 }

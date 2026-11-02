@@ -30,6 +30,7 @@ import { autopilotOff, autopilotOn, autopilotPauseResult, autopilotPaths, autopi
 import { estimateSavings, renderSavings, renderShare, savingsRows } from "./savings.js";
 import { prescan } from "./scan.js";
 import { REQUEST_ROWS } from "./coldresume.js";
+import { replaySubagentModels, shares, SUBAGENT_MODEL_ENV, SUBAGENT_MODEL_FORCE_ENV, SUBAGENT_ROWS } from "./subagentmodel.js";
 import { currentCompactWindow, estimateCompactWindows, MAX_WINDOW, MIN_WINDOW, parseWindow, renderCompactWindows, setCompactWindow, settingsPath } from "./compactwindow.js";
 import { tilde } from "./claudedir.js";
 import { renderPreferences, copyToClipboard, CHAT_PREFERENCES } from "./preferences.js";
@@ -92,9 +93,11 @@ Start here:
                                                 what a bare \`context-doctor\` shows
   context-doctor fix [--apply ids|all] [--share] What to change, ranked by dollars on your own
                                                 sessions (compact earlier, the cache lifetime,
-                                                autopilot, MCP tool search, unused servers): each
-                                                applied only on a yes, \`fix undo\` reverts them,
-                                                later runs show what each saved since
+                                                autopilot, MCP tool search, unused servers, the
+                                                subagents' model): each applied only on a yes
+                                                (the subagents' model only by name, never by
+                                                "all"), \`fix undo\` reverts them, later runs show
+                                                what each saved since
   context-doctor doctor                         Self-check the installation (configs, hook, skill,
                                                 MCP handshake) with one pasteable diagnosis
   context-doctor uninstall                      Undo install
@@ -337,7 +340,7 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
   // Each transcript read once for every replay below; what an earlier run kept is not read again (scan.ts).
   prescan([
     { paths: claudeTranscripts(days), extractors: [savingsRows(!autopilotOnNow), REQUEST_ROWS] },
-    { paths: subagentTranscripts(Date.now() - days * 86_400_000), extractors: [REQUEST_ROWS] },
+    { paths: subagentTranscripts(Date.now() - days * 86_400_000), extractors: [REQUEST_ROWS, SUBAGENT_ROWS] },
     ...(setWindow === undefined ? [{ paths: claudeTranscripts(60), extractors: [QUALITY_ROWS] }] : []),
   ], replaying.tick);
   const report = estimateSavings(days, {}, undefined, replaying.tick, !autopilotOnNow);
@@ -359,6 +362,12 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
   const ttl = estimateCacheTtl(days, { onProgress: ttling.tick });
   ttling.clear();
   const sources = settingsSources({ cwd });
+  // The subagents' model: what the variable would move, and a value the user already set (their settings.json, or this shell).
+  const force = effectiveEnv(SUBAGENT_MODEL_FORCE_ENV, sources);
+  const subagentModel = replaySubagentModels({ since: Date.now() - days * 86_400_000, force: !!force && !/^(0|false)$/i.test(force.value.trim()) });
+  const userSm = sources.find((s) => s.name === "user")?.settings.env?.[SUBAGENT_MODEL_ENV];
+  const shellSm = process.env[SUBAGENT_MODEL_ENV];
+  const subagentModelSet = userSm !== undefined && userSm !== null ? { value: String(userSm), where: `${tilde(join(claudeDir(), "settings.json"))} env` } : shellSm?.trim() ? { value: shellSm, where: "the environment" } : undefined;
   const ts = effectiveEnv("ENABLE_TOOL_SEARCH", sources);
   const toolSearchOff = ts && /^(false|0|no|off)$/i.test(ts.value.trim()) ? ts.value : undefined;
   const servers = claudeMcpConfigs(cwd).filter((c) => !/context-doctor/i.test(c.name));
@@ -372,7 +381,7 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
   let recordProblem: string | undefined;
   try { loadFixRecords(); } catch (e) { recordProblem = (e as Error).message; }
   const sessions = report.sessions.length;
-  const ids: FixId[] = ["compact-window", "cache-ttl", "cache-ttl-subagents", "tool-search"];
+  const ids: FixId[] = ["compact-window", "cache-ttl", "cache-ttl-subagents", "tool-search", "subagent-model"];
   return {
     prunePlan,
     inputs: {
@@ -385,6 +394,8 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
       toolSearchOff,
       mcpServers: toolSearchOff ? servers.length : 0,
       prune: prunePlan,
+      subagentModel,
+      subagentModelSet,
       overrides: Object.fromEntries(ids.map((id) => [id, fixOverrides(id, { cwd })])),
       recordProblem,
       coldResume: { netUsd: Math.max(0, report.coldResumeNetUsd), returns: report.coldResumes, hooked: claudePluginEnabled() || /context-doctor|cli\.js"?\s+hook/.test(JSON.stringify(userSettings.hooks?.UserPromptSubmit ?? [])) },
@@ -1257,7 +1268,7 @@ async function main(): Promise<void> {
         continue;
       }
       const kind = id === "cache-ttl" ? "main" : id === "cache-ttl-subagents" ? "subagents" : undefined;
-      const r = await applyFix(f, { autopilotOn: () => autopilotOn(args.port ?? DEFAULT_AUTOPILOT_PORT) }, { oneHourShare: kind ? inputs.ttl?.[kind].oneHourShare : undefined, prune: prunePlan });
+      const r = await applyFix(f, { autopilotOn: () => autopilotOn(args.port ?? DEFAULT_AUTOPILOT_PORT) }, { oneHourShare: kind ? inputs.ttl?.[kind].oneHourShare : undefined, prune: prunePlan, modelsBefore: inputs.subagentModel ? shares(inputs.subagentModel.movedFrom) : undefined });
       results.push({ id, ...r });
     }
     // Naming fixes that are not there (or nothing at all, with "all") is not a silent success.

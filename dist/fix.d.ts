@@ -22,12 +22,19 @@
  *    the session would have reached the old window, less the compaction's
  *    own request and summary (an estimate: what the summary dropped is not
  *    priced);
- *  - autopilot: what the proxy recorded saving since (its own ledger).
+ *  - autopilot: what the proxy recorded saving since (its own ledger);
+ *  - the subagents' model: the requests it moved, priced at the model they
+ *    ran on before against as billed (the same token counts: an estimate).
+ *
+ * The subagents' model is the one lever with a quality cost `fix` cannot
+ * measure: it is offered with that said, applied only when named (never by
+ * `--apply all`), and never over a value the user set.
  */
 import { type CacheTtlReport, type CurrentTtl } from "./cachettl.js";
 import { type ProjectPlan } from "./prune.js";
 import { readLedger } from "./ledger.js";
-export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune";
+import { type SubagentModelReplay } from "./subagentmodel.js";
+export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model";
 export interface Fix {
     id: FixId;
     title: string;
@@ -47,6 +54,8 @@ export interface Fix {
     value?: number | string;
     /** What would keep it from taking effect (environment, project or managed settings, per-model values). */
     overriddenBy?: string[];
+    /** More lines under it in the plan (the subagents' model: per agent type). */
+    detail?: string[];
 }
 /** The measurements a plan is made from (so the plan itself is testable without a machine's history). */
 export interface FixInputs {
@@ -80,6 +89,13 @@ export interface FixInputs {
     overrides?: Partial<Record<FixId, string[]>>;
     /** The record of applied fixes could not be read. */
     recordProblem?: string;
+    /** Every subagent request replayed at Sonnet 5.5 (subagentmodel.ts). */
+    subagentModel?: SubagentModelReplay;
+    /** CLAUDE_CODE_SUBAGENT_MODEL as the user set it (their settings.json env, or the environment fix runs in): never overwritten. */
+    subagentModelSet?: {
+        value: string;
+        where: string;
+    };
     /** The /compact offer at cold returns: advice, not a setting; `hooked` when the every-prompt hook (or the plugin) is there to make it. */
     coldResume?: {
         netUsd: number;
@@ -108,6 +124,8 @@ export interface FixRecord {
     oneHourShareBefore?: number;
     /** For prune: the project folder. */
     cwd?: string;
+    /** For subagent-model: the models the moved subagents ran on before the change, each one's share of their bill: the baseline "since" compares against. */
+    modelsBefore?: Record<string, number>;
 }
 export declare function fixRecordPath(home?: string): string;
 /**
@@ -140,6 +158,7 @@ export declare function fixOverrides(id: FixId, deps?: {
 export declare function applyFix(fix: Fix, deps?: FixDeps, context?: {
     oneHourShare?: number;
     prune?: ProjectPlan;
+    modelsBefore?: Record<string, number>;
 }): Promise<{
     ok: boolean;
     lines: string[];

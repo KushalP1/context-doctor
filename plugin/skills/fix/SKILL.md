@@ -17,7 +17,7 @@ Then ask which ones they want. Apply only the ones the user names, by the id sho
 node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" fix --apply cache-ttl,compact-window
 ```
 
-Never pass `--apply all` unless the user asked for all of them. New sessions pick the changes up. To revert everything `fix` applied (or one fix, by id):
+Never pass `--apply all` unless the user asked for all of them. `subagent-model` changes the model the subagents run on, a quality cost `fix` does not measure: `--apply all` leaves it out, so apply it only when the user names it after reading that line. New sessions pick the changes up. To revert everything `fix` applied (or one fix, by id):
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" fix undo
