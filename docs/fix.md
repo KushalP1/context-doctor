@@ -50,6 +50,8 @@ Every subagent runs on the main conversation's model unless something says other
 
 **Quality.** Not measured here: this changes the model your subagents run on. `context-doctor ab` measures a model on a suite of small coding tasks (run it with `--model claude-sonnet-5-5` and without); a subagent's own work may differ.
 
+**Where the estimate leans high.** A subagent started with its own `model` (the Agent call's parameter) keeps that model whatever the variable says, but the replay cannot tell those calls apart and counts them as moved. Subagents that inherited Haiku from a Haiku main conversation would get pricier on Sonnet 5.5; they are left as billed, not counted against the saving. Agent types from a plugin whose agent file is not found are listed as unchanged.
+
 **Haiku 5.5 for read-only work.** The plan prices Explore and Plan at Haiku 5.5 ($0.10/$0.50) too, but Haiku's rates hold only to 100k-token prompts and it bills a higher tier above that, which the price table does not hold: the figure is shown when few prompts are past 100k, and "not priced" otherwise. The built-ins cannot be moved one by one; an agent of your own with `model: haiku` in its file runs on Haiku.
 
 **Yours stays yours.** `fix` never overwrites a `CLAUDE_CODE_SUBAGENT_MODEL` you set, in `settings.json` or in the environment (a settings value would override the shell's), `inherit` included: the plan names it. A project or managed settings `env` that sets it wins over the user's file, and the plan says so.
