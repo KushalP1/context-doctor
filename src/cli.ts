@@ -71,6 +71,7 @@ import { effectiveEnv, settingsSources } from "./effective.js";
 import { SettingsError } from "./settingsedit.js";
 import { currentTtl, estimateCacheTtl, renderCacheTtl, setCacheTtl, settingKey, subagentTranscripts, ttlUnsupported, CACHE_TTL_SINCE, type Ttl } from "./cachettl.js";
 import { claudeDir } from "./claudedir.js";
+import { renderSpend, renderSpendShare, spendReport } from "./spend.js";
 
 const HELP = `context-doctor — profile and optimize LLM context windows
 
@@ -122,6 +123,12 @@ Measure:
                                                 and Codex's, the pace, when each runs out, and what
                                                 1M tokens of each kind cost in %, fitted on your own
                                                 readings with the fit's error
+  context-doctor spend [--days n] [--share [--copy]]
+                                                One bill across every tool here: Claude Code (with
+                                                its subagents), Codex, Gemini CLI and Cursor (an
+                                                estimate: no cache split), by project, model and
+                                                day, and what drives it, at list prices. --share:
+                                                totals only, to paste
   context-doctor cache-misses [--days n]        Requests that re-wrote the prompt cache while it was
                                                 still warm: priced, by model and context size, with
                                                 the cause where the transcript shows one
@@ -246,12 +253,11 @@ Options:
                           Default: dedupe, trim-tool-results, strip-base64 (lossless-ish set)
   --keep-recent <n>       (optimize) Messages at the tail to leave untouched (default 6)
   --max-tool-tokens <n>   (optimize) Token budget for trimmed tool results (default 300)
-  --limit <n>             (accuracy, session --list, reads, tasks, subagents) How many to sample
-                          or list
+  --limit <n>             (accuracy, session --list, reads, tasks, subagents, spend) How many to
+                          sample or list
   --days <n>              (savings, compact-window, cache-ttl, overhead, reads, tasks, subagents,
-                          compactions, cache-misses, limits)
-                          Days of history to read (default 30; compactions 60)
-  -q, --query <text>      (pack) The question to rank chunks against
+                          compactions, cache-misses, limits, spend)
+                          Days of history to read (default 30; compactions 60)  -q, --query <text>      (pack) The question to rank chunks against
   --max-tokens <n>        (pack) Token budget (default 4000); (recall) default 2000; (ci) fail over
                           this many tokens
   --session <id|path>     (recall) Search this session instead of the current one
@@ -469,7 +475,7 @@ const COMMANDS = [
   "analyze", "optimize", "proxy", "install", "uninstall", "savings", "compact-window", "autopilot", "mcp",
   "instructions", "session", "cursor", "statusline", "hook", "report", "doctor", "dashboard", "init",
   "experiment", "diff", "accuracy", "overhead", "ci", "cache-plan", "compactions", "cache-misses", "cache-ttl", "fix", "limits", "subagents", "tasks",
-  "reads", "pack", "watch", "ab", "handoff", "recall", "help", "version",
+  "spend", "reads", "pack", "watch", "ab", "handoff", "recall", "help", "version",
 ];
 
 type NumOpts = { min?: number; max?: number; integer?: boolean };
@@ -1343,6 +1349,21 @@ async function main(): Promise<void> {
     const report = limitsReport(args.days ?? 30);
     reading.clear();
     console.log(args.json ? JSON.stringify(report, null, 2) : renderLimits(report));
+    return;
+  }
+
+  if (args.command === "spend") {
+    if (args.file !== undefined) usageError(`Usage: context-doctor spend [--days n] [--limit n] [--share [--copy]] [--json]; got "${args.file}".`);
+    if (args.share && args.json) usageError("--share and --json do not go together: --share prints a few lines to paste.");
+    const reading = progressLine("Reading your usage across tools");
+    const report = spendReport(args.days ?? 30, { onProgress: reading.tick });
+    reading.clear();
+    if (args.json) console.log(JSON.stringify(report, null, 2));
+    else if (args.share) {
+      const text = renderSpendShare(report);
+      console.log(text);
+      if (args.copy) console.log(copyToClipboard(text) ? "\n(copied to the clipboard)" : "\n(no clipboard tool found; copy the lines above)");
+    } else console.log(renderSpend(report, args.limit ?? 8));
     return;
   }
 

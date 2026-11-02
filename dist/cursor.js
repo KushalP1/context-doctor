@@ -12,10 +12,11 @@
  * say so plainly instead of failing obscurely.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
+import { readSideEntry, writeSideEntry } from "./scan.js";
 const require = createRequire(import.meta.url);
 /** Cursor bubble type codes. */
 const BUBBLE_USER = 1;
@@ -76,11 +77,22 @@ export class SqliteUnavailableError extends Error {
 }
 /** Node's built-in SQLite, when this runtime has it (22.13+, or 22.5+ with --experimental-sqlite). */
 function nodeSqlite() {
+    // Node 22-25 warns that SQLite is experimental on first load, on stderr,
+    // in the middle of a report: not something the user can act on.
+    const emit = process.emitWarning;
+    process.emitWarning = ((warning, ...rest) => {
+        if (String(warning).includes("SQLite"))
+            return;
+        return emit.call(process, warning, ...rest);
+    });
     try {
         return require("node:sqlite");
     }
     catch {
         return undefined;
+    }
+    finally {
+        process.emitWarning = emit;
     }
 }
 /**
@@ -236,4 +248,111 @@ export function parseCursorChat(chat) {
         messageCount: messages.length,
         path: `${chat.dbPath}#${chat.composerId}`,
     };
+}
+const CURSOR_SPEND = "cursor-spend.1";
+/** Chat id -> workspace folder, from each workspace's own state (composer.composerData, workspace.json). */
+function cursorFolders() {
+    const out = new Map();
+    for (const dir of cursorStorageDirs()) {
+        let folder;
+        try {
+            const f = JSON.parse(readFileSync(join(dir, "workspace.json"), "utf8"))?.folder;
+            if (typeof f === "string" && f.startsWith("file://"))
+                folder = decodeURIComponent(f.slice("file://".length));
+        }
+        catch {
+            continue; // globalStorage, or a multi-root workspace: no one folder
+        }
+        if (!folder || !existsSync(join(dir, "state.vscdb")))
+            continue;
+        try {
+            const row = queryRows(join(dir, "state.vscdb"), "SELECT value FROM ItemTable WHERE key = 'composer.composerData'")[0];
+            const all = JSON.parse(String(row?.value ?? "{}"))?.allComposers;
+            if (Array.isArray(all))
+                for (const c of all)
+                    if (typeof c?.composerId === "string")
+                        out.set(c.composerId, folder);
+        }
+        catch {
+            /* an older or unreadable workspace database */
+        }
+    }
+    return out;
+}
+/** A time Cursor wrote: epoch ms (as a number or digits) or an ISO string. */
+function cursorTime(v) {
+    const n = typeof v === "number" ? v : typeof v === "string" ? (/^\d+$/.test(v) ? Number(v) : Date.parse(v)) : Number.NaN;
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+/**
+ * Every Cursor reply with token counts since `since`. Only chats updated
+ * since then are read, each by its key range (on the author's 3 GB history
+ * the chat list takes ~0.1 s, one chat's replies ~40 ms), and each chat's
+ * replies are kept until it changes, so a second run reads none of them
+ * again. Throws SqliteUnavailableError when this runtime cannot read SQLite.
+ */
+export function cursorUsage(since) {
+    const out = [];
+    let folders;
+    for (const dbPath of findCursorDatabases()) {
+        let composers;
+        try {
+            // A key range, not LIKE: it walks the primary key's index.
+            composers = queryRows(dbPath, "SELECT key, json_extract(value, '$.lastUpdatedAt') AS lu, json_extract(value, '$.createdAt') AS ca, json_extract(value, '$.modelConfig.modelName') AS mn " +
+                "FROM cursorDiskKV WHERE key >= 'composerData:' AND key < 'composerData;' AND json_valid(value)");
+        }
+        catch (e) {
+            if (e instanceof SqliteUnavailableError)
+                throw e;
+            continue; // no chats in this database
+        }
+        const kept = readSideEntry(dbPath, CURSOR_SPEND) ?? { composers: {} };
+        let changed = false;
+        for (const c of composers) {
+            const id = String(c.key).slice("composerData:".length);
+            const lu = cursorTime(c.lu) ?? cursorTime(c.ca) ?? 0;
+            if (lu < since || !/^[\w-]+$/.test(id))
+                continue;
+            let rows = kept.composers[id]?.lu === lu ? kept.composers[id].rows : undefined;
+            if (!rows) {
+                rows = [];
+                let bubbles = [];
+                try {
+                    bubbles = queryRows(dbPath, "SELECT json_extract(value, '$.tokenCount.inputTokens') AS i, json_extract(value, '$.tokenCount.outputTokens') AS o, " +
+                        "json_extract(value, '$.createdAt') AS ca, json_extract(value, '$.timingInfo.clientStartTime') AS cs, json_extract(value, '$.modelInfo.modelName') AS mn " +
+                        `FROM cursorDiskKV WHERE key >= 'bubbleId:${id}:' AND key < 'bubbleId:${id};' AND json_valid(value)`);
+                }
+                catch {
+                    /* an unreadable chat: nothing from it */
+                }
+                for (const b of bubbles) {
+                    const i = Number(b.i) > 0 ? Number(b.i) : 0, o = Number(b.o) > 0 ? Number(b.o) : 0;
+                    if (i + o === 0)
+                        continue;
+                    // A reply without a time of its own is placed at the chat's last update.
+                    rows.push([cursorTime(b.ca) ?? cursorTime(b.cs) ?? lu, i, o, typeof b.mn === "string" && b.mn ? b.mn : null]);
+                }
+                kept.composers[id] = { lu, rows };
+                changed = true;
+            }
+            if (rows.length && !folders)
+                folders = cursorFolders();
+            const chatModel = typeof c.mn === "string" && c.mn ? c.mn : undefined;
+            for (const [ts, input, output, mn] of rows) {
+                if (ts < since)
+                    continue;
+                const r = { ts, input, output, composerId: id };
+                const model = mn ?? chatModel;
+                if (model)
+                    r.model = model;
+                const folder = folders?.get(id);
+                if (folder)
+                    r.folder = folder;
+                out.push(r);
+            }
+        }
+        if (changed)
+            writeSideEntry(dbPath, CURSOR_SPEND, kept);
+    }
+    return out.sort((a, b) => a.ts - b.ts);
 }

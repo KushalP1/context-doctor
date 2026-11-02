@@ -357,6 +357,27 @@ export function rowsOf(path, ex, opts = {}) {
     }
     return (e.tail.length ? e.rows.concat(e.tail) : e.rows);
 }
+/**
+ * A report's own record for a source that is not a transcript (Cursor's
+ * database), kept beside the transcripts' entries: written the same way,
+ * pruned with them when its source is gone or untouched for 120 days, and
+ * removed by `uninstall`. Undefined when none is kept or it is damaged.
+ */
+export function readSideEntry(path, id) {
+    if (disabled())
+        return undefined;
+    try {
+        const v = JSON.parse(readFileSync(entryFile(path, id), "utf8"));
+        return v?.path === path && v.id === id ? v.value : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+export function writeSideEntry(path, id, value) {
+    // "path" first: pruning reads it from the file's head.
+    persist({ path, id, value }, entryFile(path, id));
+}
 /** Forget this run's records (tests). */
 export function clearScanMemo() {
     memo.clear();

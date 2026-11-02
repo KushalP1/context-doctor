@@ -70,6 +70,8 @@ export declare function recordLimits(rateLimits: unknown, now?: number, path?: s
 /** Every Claude reading in the log since `since`. */
 export declare function readClaudeReadings(since?: number, path?: string): LimitReading[];
 export declare function codexSessionsRoot(home?: string): string;
+/** Codex rollouts under `root` (YYYY/MM/DD folders, or flat) written since `since`. */
+export declare function rolloutFiles(root: string, since: number): string[];
 /**
  * Codex readings and usage since `since`. A token_count event repeats the
  * last request's usage when only the limits were refreshed, so a request is
@@ -80,18 +82,47 @@ export declare function codexLimitData(since: number, root?: string): {
     usage: UsagePoint[];
 };
 /**
- * Every Claude Code request between `since` and `until`, main threads and
- * subagents alike (both draw on the same limits), each reply once.
- */
-/**
  * What the usage fit takes from a Claude Code transcript (subagents' too):
  * every assistant row with usage, in order. A later row of a reply already
  * met keeps only its id and output tokens: it is a repeat, read only for the
- * output a streamed reply settles on its last row.
+ * output a streamed reply settles on its last row. `isSidechain` is kept for
+ * `spend`, which tells a subagent inlined in an older transcript from the
+ * main thread.
  */
 export declare const USAGE_ROWS: Extractor<{
     ids: Record<string, 1>;
 }>;
+/** One Claude Code request as `claudeFileUsage` reads it: the usage point, and what `spend` and `budget` add up. */
+export interface ClaudeRequest extends UsagePoint {
+    /** The row's uuid: what tells a fork's copy of a reply from the reply itself. */
+    uuid?: string;
+    /** Written as a subagent's, inline in the main transcript (older Claude Code). */
+    sidechain?: boolean;
+    /** The prompt's part of `usd` (input, cache writes, cache reads): what `savings` bills. */
+    promptUsd: number;
+}
+/**
+ * The requests of one Claude Code transcript between `since` and `until`,
+ * each reply once, its output settled on its last row. `runRows` is shared
+ * by every file of one report, so a fork's copy of its parent's replies is
+ * counted once, in the file met first (replyCounter). Throws when the
+ * transcript cannot be read.
+ */
+export declare function claudeFileUsage(file: string, since: number, until?: number, runRows?: Set<string>): ClaudeRequest[];
+/**
+ * The Claude Code transcripts written since `since`: each session's main
+ * transcript (`tops`, or every one under the projects folder, newest
+ * first), each followed by its subagents'.
+ */
+export declare function claudeUsageFiles(since: number, tops?: string[]): Array<{
+    file: string;
+    top: string;
+    subagent: boolean;
+}>;
+/**
+ * Every Claude Code request between `since` and `until`, main threads and
+ * subagents alike (both draw on the same limits), each reply once.
+ */
 export declare function claudeUsage(since: number, until?: number, paths?: string[]): UsagePoint[];
 export interface WindowStatus {
     window: string;

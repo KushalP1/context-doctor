@@ -258,4 +258,6 @@ export const GOLDEN_COMMANDS: string[][] = [
   ["cache-ttl"],
   ["cache-ttl", "--json"],
   ["limits", "--json"],
+  ["spend"],
+  ["spend", "--json"],
 ];

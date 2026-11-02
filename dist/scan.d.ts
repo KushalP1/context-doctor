@@ -83,6 +83,14 @@ export declare function prescan(jobs: Array<{
 export declare function rowsOf<R = any>(path: string, ex: Extractor<any>, opts?: {
     keep?: boolean;
 }): R[];
+/**
+ * A report's own record for a source that is not a transcript (Cursor's
+ * database), kept beside the transcripts' entries: written the same way,
+ * pruned with them when its source is gone or untouched for 120 days, and
+ * removed by `uninstall`. Undefined when none is kept or it is damaged.
+ */
+export declare function readSideEntry<T>(path: string, id: string): T | undefined;
+export declare function writeSideEntry(path: string, id: string, value: unknown): void;
 /** Forget this run's records (tests). */
 export declare function clearScanMemo(): void;
 /**

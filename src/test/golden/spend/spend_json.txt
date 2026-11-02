@@ -1,0 +1,450 @@
+{
+  "days": 30,
+  "since": 1788264000000,
+  "until": 1790856000000,
+  "usd": 136.86083499999987,
+  "requests": 260,
+  "tools": [
+    {
+      "tool": "claude",
+      "name": "Claude Code",
+      "usd": 136.80257749999987,
+      "requests": 255,
+      "tokens": {
+        "input": 5699,
+        "read": 39683904,
+        "write": 18173318,
+        "output": 131539
+      },
+      "unpriced": 0,
+      "unpricedTokens": 0,
+      "unpricedModels": [],
+      "subagentUsd": 3.457454799999999
+    },
+    {
+      "tool": "gemini",
+      "name": "Gemini CLI",
+      "usd": 0.05532,
+      "requests": 3,
+      "tokens": {
+        "input": 22000,
+        "read": 50000,
+        "write": 0,
+        "output": 110
+      },
+      "unpriced": 0,
+      "unpricedTokens": 0,
+      "unpricedModels": []
+    },
+    {
+      "tool": "codex",
+      "name": "Codex",
+      "usd": 0.0029375,
+      "requests": 2,
+      "tokens": {
+        "input": 600,
+        "read": 1500,
+        "write": 0,
+        "output": 200
+      },
+      "unpriced": 0,
+      "unpricedTokens": 0,
+      "unpricedModels": []
+    }
+  ],
+  "projects": [
+    {
+      "project": "work-app",
+      "usd": 136.80257749999987,
+      "requests": 255,
+      "byTool": {
+        "claude": 136.80257749999987
+      }
+    },
+    {
+      "project": "site",
+      "usd": 0.05532,
+      "requests": 3,
+      "byTool": {
+        "gemini": 0.05532
+      }
+    },
+    {
+      "project": "tech-app",
+      "usd": 0.0029375,
+      "requests": 2,
+      "byTool": {
+        "codex": 0.0029375
+      }
+    }
+  ],
+  "models": [
+    {
+      "model": "claude-opus-5-5",
+      "usd": 80.64679220000001,
+      "requests": 185,
+      "byTool": {
+        "claude": 80.64679220000001
+      }
+    },
+    {
+      "model": "claude-fable-5-1",
+      "usd": 39.154811,
+      "requests": 26,
+      "byTool": {
+        "claude": 39.154811
+      }
+    },
+    {
+      "model": "claude-sonnet-5",
+      "usd": 17.000974300000003,
+      "requests": 44,
+      "byTool": {
+        "claude": 17.000974300000003
+      }
+    },
+    {
+      "model": "gemini-3-pro",
+      "usd": 0.05532,
+      "requests": 3,
+      "byTool": {
+        "gemini": 0.05532
+      }
+    },
+    {
+      "model": "gpt-5.5",
+      "usd": 0.0029375,
+      "requests": 2,
+      "byTool": {
+        "codex": 0.0029375
+      }
+    }
+  ],
+  "daily": [
+    {
+      "day": "2026-09-01",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-02",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-03",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-04",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-05",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-06",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-07",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-08",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-09",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-10",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-11",
+      "usd": 29.327793,
+      "requests": 56,
+      "byTool": {
+        "claude": 29.327793
+      }
+    },
+    {
+      "day": "2026-09-12",
+      "usd": 9.409965599999998,
+      "requests": 30,
+      "byTool": {
+        "claude": 9.409965599999998
+      }
+    },
+    {
+      "day": "2026-09-13",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-14",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-15",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-16",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-17",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-18",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-19",
+      "usd": 26.562426899999995,
+      "requests": 45,
+      "byTool": {
+        "claude": 26.562426899999995
+      }
+    },
+    {
+      "day": "2026-09-20",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-21",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-22",
+      "usd": 2.1244394,
+      "requests": 14,
+      "byTool": {
+        "claude": 2.1244394
+      }
+    },
+    {
+      "day": "2026-09-23",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-24",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-25",
+      "usd": 11.8418472,
+      "requests": 30,
+      "byTool": {
+        "claude": 11.8418472
+      }
+    },
+    {
+      "day": "2026-09-26",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-27",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-28",
+      "usd": 42.61520329999999,
+      "requests": 52,
+      "byTool": {
+        "claude": 42.61226579999999,
+        "codex": 0.0029375
+      }
+    },
+    {
+      "day": "2026-09-29",
+      "usd": 4.0140302000000005,
+      "requests": 11,
+      "byTool": {
+        "claude": 3.9587102000000005,
+        "gemini": 0.05532
+      }
+    },
+    {
+      "day": "2026-09-30",
+      "usd": 10.965129400000002,
+      "requests": 22,
+      "byTool": {
+        "claude": 10.965129400000002
+      }
+    },
+    {
+      "day": "2026-10-01",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    }
+  ],
+  "parts": {
+    "inputUsd": 0.069422,
+    "writeUsd": 125.79560450000001,
+    "readUsd": 8.195898499999998,
+    "outputUsd": 2.799909999999999
+  },
+  "sessions": [
+    {
+      "tool": "claude",
+      "project": "work-app",
+      "session": "s4",
+      "usd": 42.61226579999999,
+      "requests": 50,
+      "first": 1790596842167,
+      "last": 1790633785416,
+      "model": "claude-fable-5-1"
+    },
+    {
+      "tool": "claude",
+      "project": "work-app",
+      "session": "s1",
+      "usd": 28.7867318,
+      "requests": 58,
+      "first": 1789133112745,
+      "last": 1789181452916,
+      "model": "claude-opus-5-5"
+    },
+    {
+      "tool": "claude",
+      "project": "work-app",
+      "session": "s2",
+      "usd": 26.562426899999995,
+      "requests": 45,
+      "first": 1789819248530,
+      "last": 1789853024321,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "tool": "claude",
+      "project": "work-app",
+      "session": "s3",
+      "usd": 11.8418472,
+      "requests": 30,
+      "first": 1790337665619,
+      "last": 1790360003844,
+      "model": "claude-opus-5-5"
+    },
+    {
+      "tool": "claude",
+      "project": "work-app",
+      "session": "live",
+      "usd": 10.965129400000002,
+      "requests": 22,
+      "first": 1790769650066,
+      "last": 1790801694104,
+      "model": "claude-opus-5-5"
+    },
+    {
+      "tool": "claude",
+      "project": "work-app",
+      "session": "fork",
+      "usd": 9.9510268,
+      "requests": 28,
+      "first": 1789128072745,
+      "last": 1789223664595,
+      "model": "claude-opus-5-5"
+    },
+    {
+      "tool": "claude",
+      "project": "work-app",
+      "session": "s5",
+      "usd": 3.9587102000000005,
+      "requests": 8,
+      "first": 1790683560000,
+      "last": 1790698659572,
+      "model": "claude-opus-5-5"
+    },
+    {
+      "tool": "claude",
+      "project": "work-app",
+      "session": "crlf",
+      "usd": 2.1244394,
+      "requests": 14,
+      "first": 1790078517691,
+      "last": 1790079524976,
+      "model": "claude-opus-5-5"
+    },
+    {
+      "tool": "gemini",
+      "project": "site",
+      "session": "session-2026-09-29T10-00-g",
+      "usd": 0.0532,
+      "requests": 2,
+      "first": 1790683205000,
+      "last": 1790683209000,
+      "model": "gemini-3-pro"
+    },
+    {
+      "tool": "codex",
+      "project": "tech-app",
+      "session": "rollout-2026-09-28T10-00-00-abc",
+      "usd": 0.0029375,
+      "requests": 2,
+      "first": 1790596801000,
+      "last": 1790596809000,
+      "model": "gpt-5.5"
+    },
+    {
+      "tool": "gemini",
+      "project": "site",
+      "session": "session-2026-09-29T09-00-old",
+      "usd": 0.00212,
+      "requests": 1,
+      "first": 1790683199500,
+      "last": 1790683199500,
+      "model": "gemini-3-pro"
+    }
+  ],
+  "skipped": []
+}
+
+[exit 0]

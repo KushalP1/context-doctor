@@ -363,6 +363,27 @@ export function rowsOf<R = any>(path: string, ex: Extractor<any>, opts: { keep?:
   return (e.tail.length ? e.rows.concat(e.tail) : e.rows) as R[];
 }
 
+/**
+ * A report's own record for a source that is not a transcript (Cursor's
+ * database), kept beside the transcripts' entries: written the same way,
+ * pruned with them when its source is gone or untouched for 120 days, and
+ * removed by `uninstall`. Undefined when none is kept or it is damaged.
+ */
+export function readSideEntry<T>(path: string, id: string): T | undefined {
+  if (disabled()) return undefined;
+  try {
+    const v = JSON.parse(readFileSync(entryFile(path, id), "utf8"));
+    return v?.path === path && v.id === id ? (v.value as T) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function writeSideEntry(path: string, id: string, value: unknown): void {
+  // "path" first: pruning reads it from the file's head.
+  persist({ path, id, value } as unknown as Entry, entryFile(path, id));
+}
+
 /** Forget this run's records (tests). */
 export function clearScanMemo(): void {
   memo.clear();

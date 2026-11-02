@@ -1,0 +1,356 @@
+{
+  "days": 30,
+  "since": 1788264000000,
+  "until": 1790856000000,
+  "usd": 136.80257749999987,
+  "requests": 255,
+  "tools": [
+    {
+      "tool": "claude",
+      "name": "Claude Code",
+      "usd": 136.80257749999987,
+      "requests": 255,
+      "tokens": {
+        "input": 5699,
+        "read": 39683904,
+        "write": 18173318,
+        "output": 131539
+      },
+      "unpriced": 0,
+      "unpricedTokens": 0,
+      "unpricedModels": [],
+      "subagentUsd": 3.457454799999999
+    }
+  ],
+  "projects": [
+    {
+      "project": "work-app",
+      "usd": 136.80257749999987,
+      "requests": 255,
+      "byTool": {
+        "claude": 136.80257749999987
+      }
+    }
+  ],
+  "models": [
+    {
+      "model": "claude-opus-5-5",
+      "usd": 80.64679220000001,
+      "requests": 185,
+      "byTool": {
+        "claude": 80.64679220000001
+      }
+    },
+    {
+      "model": "claude-fable-5-1",
+      "usd": 39.154811,
+      "requests": 26,
+      "byTool": {
+        "claude": 39.154811
+      }
+    },
+    {
+      "model": "claude-sonnet-5",
+      "usd": 17.000974300000003,
+      "requests": 44,
+      "byTool": {
+        "claude": 17.000974300000003
+      }
+    }
+  ],
+  "daily": [
+    {
+      "day": "2026-09-01",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-02",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-03",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-04",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-05",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-06",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-07",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-08",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-09",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-10",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-11",
+      "usd": 29.327793,
+      "requests": 56,
+      "byTool": {
+        "claude": 29.327793
+      }
+    },
+    {
+      "day": "2026-09-12",
+      "usd": 9.409965599999998,
+      "requests": 30,
+      "byTool": {
+        "claude": 9.409965599999998
+      }
+    },
+    {
+      "day": "2026-09-13",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-14",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-15",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-16",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-17",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-18",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-19",
+      "usd": 26.562426899999995,
+      "requests": 45,
+      "byTool": {
+        "claude": 26.562426899999995
+      }
+    },
+    {
+      "day": "2026-09-20",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-21",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-22",
+      "usd": 2.1244394,
+      "requests": 14,
+      "byTool": {
+        "claude": 2.1244394
+      }
+    },
+    {
+      "day": "2026-09-23",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-24",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-25",
+      "usd": 11.8418472,
+      "requests": 30,
+      "byTool": {
+        "claude": 11.8418472
+      }
+    },
+    {
+      "day": "2026-09-26",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-27",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    },
+    {
+      "day": "2026-09-28",
+      "usd": 42.61226579999999,
+      "requests": 50,
+      "byTool": {
+        "claude": 42.61226579999999
+      }
+    },
+    {
+      "day": "2026-09-29",
+      "usd": 3.9587102000000005,
+      "requests": 8,
+      "byTool": {
+        "claude": 3.9587102000000005
+      }
+    },
+    {
+      "day": "2026-09-30",
+      "usd": 10.965129400000002,
+      "requests": 22,
+      "byTool": {
+        "claude": 10.965129400000002
+      }
+    },
+    {
+      "day": "2026-10-01",
+      "usd": 0,
+      "requests": 0,
+      "byTool": {}
+    }
+  ],
+  "parts": {
+    "inputUsd": 0.024672,
+    "writeUsd": 125.79560450000001,
+    "readUsd": 8.185710999999998,
+    "outputUsd": 2.7965899999999992
+  },
+  "sessions": [
+    {
+      "tool": "claude",
+      "project": "work-app",
+      "session": "s4",
+      "usd": 42.61226579999999,
+      "requests": 50,
+      "first": 1790596842167,
+      "last": 1790633785416,
+      "model": "claude-fable-5-1"
+    },
+    {
+      "tool": "claude",
+      "project": "work-app",
+      "session": "s1",
+      "usd": 28.7867318,
+      "requests": 58,
+      "first": 1789133112745,
+      "last": 1789181452916,
+      "model": "claude-opus-5-5"
+    },
+    {
+      "tool": "claude",
+      "project": "work-app",
+      "session": "s2",
+      "usd": 26.562426899999995,
+      "requests": 45,
+      "first": 1789819248530,
+      "last": 1789853024321,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "tool": "claude",
+      "project": "work-app",
+      "session": "s3",
+      "usd": 11.8418472,
+      "requests": 30,
+      "first": 1790337665619,
+      "last": 1790360003844,
+      "model": "claude-opus-5-5"
+    },
+    {
+      "tool": "claude",
+      "project": "work-app",
+      "session": "live",
+      "usd": 10.965129400000002,
+      "requests": 22,
+      "first": 1790769650066,
+      "last": 1790801694104,
+      "model": "claude-opus-5-5"
+    },
+    {
+      "tool": "claude",
+      "project": "work-app",
+      "session": "fork",
+      "usd": 9.9510268,
+      "requests": 28,
+      "first": 1789128072745,
+      "last": 1789223664595,
+      "model": "claude-opus-5-5"
+    },
+    {
+      "tool": "claude",
+      "project": "work-app",
+      "session": "s5",
+      "usd": 3.9587102000000005,
+      "requests": 8,
+      "first": 1790683560000,
+      "last": 1790698659572,
+      "model": "claude-opus-5-5"
+    },
+    {
+      "tool": "claude",
+      "project": "work-app",
+      "session": "crlf",
+      "usd": 2.1244394,
+      "requests": 14,
+      "first": 1790078517691,
+      "last": 1790079524976,
+      "model": "claude-opus-5-5"
+    }
+  ],
+  "skipped": []
+}
+
+[exit 0]

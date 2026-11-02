@@ -212,7 +212,8 @@ export function codexSessionsRoot(home = homedir()): string {
   return join(home, ".codex", "sessions");
 }
 
-function rolloutFiles(root: string, since: number): string[] {
+/** Codex rollouts under `root` (YYYY/MM/DD folders, or flat) written since `since`. */
+export function rolloutFiles(root: string, since: number): string[] {
   const out: string[] = [];
   const walk = (dir: string, depth: number): void => {
     let names: string[];
@@ -313,17 +314,15 @@ export function codexLimitData(since: number, root = codexSessionsRoot()): { rea
 // ---------------------------------------------------------------------------
 
 /**
- * Every Claude Code request between `since` and `until`, main threads and
- * subagents alike (both draw on the same limits), each reply once.
- */
-/**
  * What the usage fit takes from a Claude Code transcript (subagents' too):
  * every assistant row with usage, in order. A later row of a reply already
  * met keeps only its id and output tokens: it is a repeat, read only for the
- * output a streamed reply settles on its last row.
+ * output a streamed reply settles on its last row. `isSidechain` is kept for
+ * `spend`, which tells a subagent inlined in an older transcript from the
+ * main thread.
  */
 export const USAGE_ROWS: Extractor<{ ids: Record<string, 1> }> = {
-  id: "usage.1",
+  id: "usage.2",
   init: () => ({ ids: {} }),
   line(line, row, out, st) {
     if (!line.includes('"usage"')) return;
@@ -338,54 +337,96 @@ export const USAGE_ROWS: Extractor<{ ids: Record<string, 1> }> = {
       }
       st.ids[m.id] = 1;
     }
-    out.push(pick({ ...e, message: pick({ ...m, usage: slimUsage(m.usage) }, ["id", "model", "usage"]) }, ["type", "uuid", "timestamp", "message"]));
+    out.push(pick({ ...e, isSidechain: e.isSidechain === true || undefined, message: pick({ ...m, usage: slimUsage(m.usage) }, ["id", "model", "usage"]) }, ["type", "uuid", "timestamp", "isSidechain", "message"]));
   },
 };
 
-export function claudeUsage(since: number, until = Infinity, paths?: string[]): UsagePoint[] {
-  const tops = paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
-  const files: string[] = [];
-  for (const t of tops) {
-    files.push(t);
+/** One Claude Code request as `claudeFileUsage` reads it: the usage point, and what `spend` and `budget` add up. */
+export interface ClaudeRequest extends UsagePoint {
+  /** The row's uuid: what tells a fork's copy of a reply from the reply itself. */
+  uuid?: string;
+  /** Written as a subagent's, inline in the main transcript (older Claude Code). */
+  sidechain?: boolean;
+  /** The prompt's part of `usd` (input, cache writes, cache reads): what `savings` bills. */
+  promptUsd: number;
+}
+
+/**
+ * The requests of one Claude Code transcript between `since` and `until`,
+ * each reply once, its output settled on its last row. `runRows` is shared
+ * by every file of one report, so a fork's copy of its parent's replies is
+ * counted once, in the file met first (replyCounter). Throws when the
+ * transcript cannot be read.
+ */
+export function claudeFileUsage(file: string, since: number, until = Infinity, runRows?: Set<string>): ClaudeRequest[] {
+  const out: ClaudeRequest[] = [];
+  const sighting = replyCounter(runRows);
+  const settle = outputSettler();
+  const byId = new Map<string, { point: ClaudeRequest; price?: ModelPricing }>();
+  rowsOf(file, USAGE_ROWS).forEach((e: Record<string, any>) => {
+    const m = e?.message;
+    if (e?.type !== "assistant" || !m?.usage) return;
+    const seen = sighting(e);
+    if (seen === "repeat") {
+      const known = typeof m.id === "string" ? byId.get(m.id) : undefined;
+      const more = settle(e, false);
+      if (known && more) {
+        known.point.output += more;
+        if (known.price) known.point.usd += (more * known.price.outputPerM) / 1e6;
+      }
+      return;
+    }
+    if (seen !== "new") return;
+    settle(e, true);
+    const ts = Date.parse(String(e.timestamp ?? ""));
+    if (!Number.isFinite(ts) || ts < since || ts > until) return;
+    const u = m.usage as RecordedUsage;
+    const point: ClaudeRequest = { ts, app: "claude", model: realModel(m.model), input: num(u.input_tokens), read: num(u.cache_read_input_tokens), write: num(u.cache_creation_input_tokens), output: num(u.output_tokens), usd: 0, promptUsd: 0 };
+    if (point.input + point.read + point.write === 0) return;
+    if (typeof e.uuid === "string") point.uuid = e.uuid;
+    if (e.isSidechain === true) point.sidechain = true;
+    const price = pricingFor(point.model);
+    if (price) {
+      const c = usageCost(u, price);
+      point.usd = c.totalUsd;
+      point.promptUsd = c.promptUsd;
+    }
+    out.push(point);
+    if (typeof m.id === "string") byId.set(m.id, { point, price });
+  });
+  return out;
+}
+
+/**
+ * The Claude Code transcripts written since `since`: each session's main
+ * transcript (`tops`, or every one under the projects folder, newest
+ * first), each followed by its subagents'.
+ */
+export function claudeUsageFiles(since: number, tops?: string[]): Array<{ file: string; top: string; subagent: boolean }> {
+  const mains = tops ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
+  const files: Array<{ file: string; top: string; subagent: boolean }> = [];
+  for (const t of mains) {
+    files.push({ file: t, top: t, subagent: false });
     const dir = subagentDir(t);
     try {
-      for (const f of readdirSync(dir)) if (f.endsWith(".jsonl") && statSync(join(dir, f)).mtimeMs >= since) files.push(join(dir, f));
+      for (const f of readdirSync(dir)) if (f.endsWith(".jsonl") && statSync(join(dir, f)).mtimeMs >= since) files.push({ file: join(dir, f), top: t, subagent: true });
     } catch {
       /* no subagents */
     }
   }
+  return files;
+}
+
+/**
+ * Every Claude Code request between `since` and `until`, main threads and
+ * subagents alike (both draw on the same limits), each reply once.
+ */
+export function claudeUsage(since: number, until = Infinity, paths?: string[]): UsagePoint[] {
   const out: UsagePoint[] = [];
   const runRows = new Set<string>();
-  for (const file of files) {
-    const sighting = replyCounter(runRows);
-    const settle = outputSettler();
-    const byId = new Map<string, { point: UsagePoint; price?: ModelPricing }>();
+  for (const { file } of claudeUsageFiles(since, paths)) {
     try {
-      rowsOf(file, USAGE_ROWS).forEach((e: Record<string, any>) => {
-        const m = e?.message;
-        if (e?.type !== "assistant" || !m?.usage) return;
-        const seen = sighting(e);
-        if (seen === "repeat") {
-          const known = typeof m.id === "string" ? byId.get(m.id) : undefined;
-          const more = settle(e, false);
-          if (known && more) {
-            known.point.output += more;
-            if (known.price) known.point.usd += (more * known.price.outputPerM) / 1e6;
-          }
-          return;
-        }
-        if (seen !== "new") return;
-        settle(e, true);
-        const ts = Date.parse(String(e.timestamp ?? ""));
-        if (!Number.isFinite(ts) || ts < since || ts > until) return;
-        const u = m.usage as RecordedUsage;
-        const point: UsagePoint = { ts, app: "claude", model: realModel(m.model), input: num(u.input_tokens), read: num(u.cache_read_input_tokens), write: num(u.cache_creation_input_tokens), output: num(u.output_tokens), usd: 0 };
-        if (point.input + point.read + point.write === 0) return;
-        const price = pricingFor(point.model);
-        if (price) point.usd = usageCost(u, price).totalUsd;
-        out.push(point);
-        if (typeof m.id === "string") byId.set(m.id, { point, price });
-      });
+      out.push(...claudeFileUsage(file, since, until, runRows));
     } catch {
       /* skip an unreadable transcript */
     }

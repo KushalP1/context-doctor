@@ -52,4 +52,27 @@ export declare function listCursorChats(limit?: number): CursorChat[];
  * tool-result findings apply to Cursor chats exactly as they do elsewhere.
  */
 export declare function parseCursorChat(chat: CursorChat): ParsedSession;
+/**
+ * One Cursor agent reply that recorded its tokens (`tokenCount` on the
+ * bubble). Cursor keeps the prompt's size and the reply's, with no cache
+ * split and no price; the model is the chat's (`modelConfig.modelName`,
+ * "default" for Auto) unless the reply names its own.
+ */
+export interface CursorReply {
+    ts: number;
+    input: number;
+    output: number;
+    model?: string;
+    composerId: string;
+    /** The workspace folder the chat belongs to, when Cursor recorded one. */
+    folder?: string;
+}
+/**
+ * Every Cursor reply with token counts since `since`. Only chats updated
+ * since then are read, each by its key range (on the author's 3 GB history
+ * the chat list takes ~0.1 s, one chat's replies ~40 ms), and each chat's
+ * replies are kept until it changes, so a second run reads none of them
+ * again. Throws SqliteUnavailableError when this runtime cannot read SQLite.
+ */
+export declare function cursorUsage(since: number): CursorReply[];
 export {};
