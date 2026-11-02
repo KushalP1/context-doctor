@@ -29,7 +29,16 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { forEachLine, listSessions, outputSettler, replyCounter, isClaudeSession } from "./session.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
-import { cacheWriteSplit, formatUsd, pricingFor, usageCost, writeMultiplier } from "./pricing.js";
+import { cacheWriteSplit, formatUsd, pricingFor, usageCost, writeMultiplier, type ModelPricing } from "./pricing.js";
+
+/**
+ * The model `fix` offers the subagents (subagentmodel.ts): the id the price
+ * table knows, which Claude Code's model catalog maps to every provider's
+ * id. Kept here: the every-prompt hook loads this file, and should not load
+ * the replay's.
+ */
+export const SUBAGENT_CANDIDATE = "claude-sonnet-5-5";
+export const SUBAGENT_CANDIDATE_NAME = "Sonnet 5.5";
 
 const CLAUDE = "claude-opus-5";
 const IMAGE_TOKENS = 1600;
@@ -39,6 +48,8 @@ export interface SubagentPayback {
   type: string;
   task: string;
   costUsd: number;
+  /** The same requests at Sonnet 5.5 where they ran on a pricier model, token counts as recorded (an estimate). */
+  atSonnetUsd: number;
   /** What the same work would have cost in the parent. */
   inParentUsd: number;
   steps: number;
@@ -69,9 +80,13 @@ function blockTokens(content: unknown): number {
   return n;
 }
 
+/** The price a request is re-priced at for the Sonnet line: Sonnet 5.5 when its own model costs more, else its own. */
+const SONNET = pricingFor(SUBAGENT_CANDIDATE)!;
+const atSonnet = (p: ModelPricing): ModelPricing => (SONNET.inputPerM < p.inputPerM || (SONNET.inputPerM === p.inputPerM && SONNET.outputPerM < p.outputPerM) ? SONNET : p);
+
 /** A subagent's bill (usage priced as the cache bills it), steps, startup context, start time and the tool output it read. */
-export function scanSubagent(path: string): { costUsd: number; readTokens: number; task: string; steps: number; startup: number; start: number; model?: string; writeMult: number } {
-  let costUsd = 0, readTokens = 0, task = "", model: string | undefined;
+export function scanSubagent(path: string): { costUsd: number; atSonnetUsd: number; readTokens: number; task: string; steps: number; startup: number; start: number; model?: string; writeMult: number } {
+  let costUsd = 0, atSonnetUsd = 0, readTokens = 0, task = "", model: string | undefined;
   let steps = 0, startup = 0, start = Infinity, writes5m = 0, writes1h = 0;
   const sighting = replyCounter();
   const settle = outputSettler();
@@ -91,7 +106,10 @@ export function scanSubagent(path: string): { costUsd: number; readTokens: numbe
       // A later row of the same reply: only its final output count is new.
       const more = settle(e, false);
       const price = more ? pricingFor(realModel(e.message.model) ?? model) : undefined;
-      if (price) costUsd += (more * price.outputPerM) / 1e6;
+      if (price) {
+        costUsd += (more * price.outputPerM) / 1e6;
+        atSonnetUsd += (more * atSonnet(price).outputPerM) / 1e6;
+      }
       return;
     }
     if (seen !== "new") return;
@@ -109,8 +127,9 @@ export function scanSubagent(path: string): { costUsd: number; readTokens: numbe
     const price = pricingFor(model);
     if (!price) return;
     costUsd += usageCost(u, price).totalUsd;
+    atSonnetUsd += usageCost(u, atSonnet(price)).totalUsd;
   });
-  return { costUsd, readTokens, task: task.replace(/\s+/g, " ").slice(0, 90), steps, startup, start, model, writeMult: writeMultiplier(writes5m, writes1h) };
+  return { costUsd, atSonnetUsd, readTokens, task: task.replace(/\s+/g, " ").slice(0, 90), steps, startup, start, model, writeMult: writeMultiplier(writes5m, writes1h) };
 }
 
 interface ParentView {
@@ -218,6 +237,7 @@ export function subagentPayback(days = 30, paths?: string[], onProgress?: (done:
         type: m.meta.agentType ?? "unknown",
         task: m.meta.description ?? s.task,
         costUsd: s.costUsd,
+        atSonnetUsd: s.atSonnetUsd,
         inParentUsd,
         steps: s.steps,
         parentContextTokens,
@@ -242,9 +262,11 @@ export function renderPayback(r: PaybackReport, top = 8): string {
   const paid = all.filter((a) => a.netUsd > 0);
   out.push(
     `Last ${r.days} days: ${all.length} subagents in ${r.sessions} sessions cost ${formatUsd(cost)} at list price.`,
-    `The same work done in the parent would have cost ~${formatUsd(inParent)}: ${paid.length} of ${all.length} were cheaper as subagents, net ${inParent - cost >= 0 ? "+" : "−"}${formatUsd(Math.abs(inParent - cost))}.`,
-    ""
+    `The same work done in the parent would have cost ~${formatUsd(inParent)}: ${paid.length} of ${all.length} were cheaper as subagents, net ${inParent - cost >= 0 ? "+" : "−"}${formatUsd(Math.abs(inParent - cost))}.`
   );
+  const sonnet = all.reduce((s, a) => s + a.atSonnetUsd, 0);
+  if (cost - sonnet >= 1) out.push(`At ${SUBAGENT_CANDIDATE_NAME} (where they ran on a pricier model) the same requests come to ~${formatUsd(sonnet)}, token counts as recorded: an estimate. context-doctor fix says which of them a setting moves.`);
+  out.push("");
   const byType = new Map<string, { n: number; cost: number; net: number; paid: number }>();
   for (const a of all) {
     const t = byType.get(a.type) ?? { n: 0, cost: 0, net: 0, paid: 0 };

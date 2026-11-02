@@ -24,11 +24,21 @@
  * window for a hard task) and what the parent would have spent on its own tool
  * calls, so "did not pay" means "did not pay in context", not "was a mistake".
  */
+/**
+ * The model `fix` offers the subagents (subagentmodel.ts): the id the price
+ * table knows, which Claude Code's model catalog maps to every provider's
+ * id. Kept here: the every-prompt hook loads this file, and should not load
+ * the replay's.
+ */
+export declare const SUBAGENT_CANDIDATE = "claude-sonnet-5-5";
+export declare const SUBAGENT_CANDIDATE_NAME = "Sonnet 5.5";
 export interface SubagentPayback {
     id: string;
     type: string;
     task: string;
     costUsd: number;
+    /** The same requests at Sonnet 5.5 where they ran on a pricier model, token counts as recorded (an estimate). */
+    atSonnetUsd: number;
     /** What the same work would have cost in the parent. */
     inParentUsd: number;
     steps: number;
@@ -48,6 +58,7 @@ export interface PaybackReport {
 /** A subagent's bill (usage priced as the cache bills it), steps, startup context, start time and the tool output it read. */
 export declare function scanSubagent(path: string): {
     costUsd: number;
+    atSonnetUsd: number;
     readTokens: number;
     task: string;
     steps: number;
