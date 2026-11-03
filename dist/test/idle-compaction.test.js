@@ -86,8 +86,9 @@ test("hook: silent on a cold session past a smaller auto-compact window (Claude 
 test("SessionStart on a resume: Claude Code's 'still warm' silences the offer; its price replaces list price", async () => {
     const home = mkdtempSync(join(tmpdir(), "cd-idle-ss-"));
     const p = write([reply(T0, 400_000, 0)], 300_000);
-    const secs = Math.round((Date.now() - T0) / 1000);
-    const ss = (sid, expired) => runHook(home, { session_id: sid, transcript_path: p, hook_event_name: "SessionStart", source: "resume", seconds_since_last_response: secs, context_tokens: 400_010, prompt_cache_likely_expired: expired, estimated_cache_write_usd: 4.0123 });
+    // The idle time as of each call, as Claude Code sends it: computed once up front, a loaded machine
+    // (two hook runs of several seconds each before the third) drifted past the 5 s match.
+    const ss = (sid, expired) => runHook(home, { session_id: sid, transcript_path: p, hook_event_name: "SessionStart", source: "resume", seconds_since_last_response: Math.round((Date.now() - T0) / 1000), context_tokens: 400_010, prompt_cache_likely_expired: expired, estimated_cache_write_usd: 4.0123 });
     assert.equal((await ss("warm", false)).trim(), "", "SessionStart itself prints nothing");
     assert.equal((await runHook(home, { session_id: "warm", transcript_path: p, hook_event_name: "UserPromptSubmit" })).trim(), "");
     await ss("cold", true);
