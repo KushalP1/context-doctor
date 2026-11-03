@@ -19,7 +19,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSyn
 import { homedir } from "node:os";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { estimateTokens, formatTokens } from "./tokens.js";
-import { EXTRACT_BUDGET_MS, EXTRACTABLE, extractText, extractTextAsync } from "./extract.js";
+import { EXTRACT_BUDGET_MS, EXTRACTABLE, extractText, extractTextAsync, monotonicNow } from "./extract.js";
 
 export interface PackSource {
   /** Name shown in chunk ids, e.g. a path relative to where the user is. */
@@ -716,7 +716,8 @@ export async function readSourcesAsync(
 ): Promise<{ sources: PackSource[]; skipped: string[] }> {
   const defer: Array<{ slot: number; path: string }> = [];
   const { sources, skipped } = readSources(paths, { ...options, defer });
-  const deadline = Date.now() + (options.budgetMs ?? EXTRACT_BUDGET_MS);
+  // One budget for every document, on the monotonic clock: a wall clock that jumps between two cannot end it.
+  const deadline = monotonicNow() + (options.budgetMs ?? EXTRACT_BUDGET_MS);
   const failed = new Set<number>();
   for (const d of defer) {
     const got = await extractTextAsync(d.path, deadline);

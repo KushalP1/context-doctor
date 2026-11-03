@@ -112,7 +112,7 @@ test("extraction is asynchronous and bounded: a hung converter neither blocks th
   const timer = setInterval(() => ticks++, 50);
   try {
     const started = Date.now();
-    const got = await extractTextAsync(path, Date.now() + 600);
+    const got = await extractTextAsync(path, performance.now() + 600);
     const took = Date.now() - started;
     assert.ok("error" in got && /time allowed/.test(got.error), JSON.stringify(got));
     assert.ok(took < 3000, `stopped at the budget, not the converter (${took} ms)`);
@@ -145,8 +145,35 @@ test("a wall clock that jumps forward mid-read is not the budget running out", {
   Date.now = () => realNow() + offset;
   const jump = setTimeout(() => { offset = 3_600_000; }, 100);
   try {
-    const got = await extractTextAsync(path, Date.now() + 20_000);
+    const got = await extractTextAsync(path, performance.now() + 20_000);
     assert.ok("text" in got && /signing key/.test(got.text), JSON.stringify(got));
+  } finally {
+    clearTimeout(jump);
+    Date.now = realNow;
+    process.env.PATH = savedPath;
+  }
+});
+
+test("readSourcesAsync: a wall clock that jumps between two documents does not cut the second short", { skip: process.platform === "win32" && "a POSIX shell script stands in for the converter" }, async () => {
+  const { chmodSync } = await import("node:fs");
+  const { readSourcesAsync } = await import("../pack.js");
+  const bin = mkdtempSync(join(tmpdir(), "cd-extract-bin-"));
+  // A pdftotext that takes 0.3 s and reads every PDF.
+  writeFileSync(join(bin, "pdftotext"), '#!/bin/sh\nsleep 0.3\necho "Rotate the signing key"\n');
+  chmodSync(join(bin, "pdftotext"), 0o755);
+  const dir = mkdtempSync(join(tmpdir(), "cd-extract-jump2-"));
+  for (const n of ["a.pdf", "b.pdf"]) writeFileSync(join(dir, n), pdf(["Rotate the signing key"]));
+  const savedPath = process.env.PATH;
+  const realNow = Date.now;
+  process.env.PATH = `${bin}:${savedPath}`;
+  // The wall clock leaps an hour while the first is read: the call's budget was set on it, once, for both.
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  const jump = setTimeout(() => { offset = 3_600_000; }, 100);
+  try {
+    const r = await readSourcesAsync([join(dir, "a.pdf"), join(dir, "b.pdf")], { cwd: dir, budgetMs: 20_000 });
+    assert.deepEqual(r.skipped, []);
+    assert.equal(r.sources.length, 2);
   } finally {
     clearTimeout(jump);
     Date.now = realNow;

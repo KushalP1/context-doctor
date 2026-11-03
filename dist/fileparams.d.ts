@@ -43,7 +43,7 @@ export declare function checkFileUrl(raw: string, env?: NodeJS.ProcessEnv): {
 };
 /**
  * Download one file, following at most FILE_LIMITS.redirects https redirects,
- * within FILE_LIMITS.timeoutMs (or the caller's earlier `deadline`) and
+ * within FILE_LIMITS.timeoutMs (or the caller's earlier `deadline`, on the monotonic clock: monotonicNow()) and
  * `maxBytes` (default the per-file limit). Never throws.
  */
 export declare function downloadFile(raw: string, env?: NodeJS.ProcessEnv, { deadline: callDeadline, maxBytes }?: {

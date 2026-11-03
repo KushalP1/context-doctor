@@ -24,7 +24,7 @@ import { isIP } from "node:net";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
-import { EXTRACT_BUDGET_MS, EXTRACTABLE, extractTextAsync } from "./extract.js";
+import { EXTRACT_BUDGET_MS, EXTRACTABLE, extractTextAsync, monotonicNow } from "./extract.js";
 /** Per file: bytes and time. Per call: files, bytes and time (downloads and extraction together). */
 export const FILE_LIMITS = { files: 10, bytes: 5 * 1024 * 1024, totalBytes: 20 * 1024 * 1024, timeoutMs: 20_000, redirects: 3, callMs: 60_000 };
 const MIME_EXT = {
@@ -169,7 +169,7 @@ function getOnce(url, env, deadline, maxBytes) {
             clearTimeout(overall);
             resolve(r);
         };
-        const timeout = Math.max(1, deadline - Date.now());
+        const timeout = Math.max(1, deadline - monotonicNow());
         // The socket timeout is an idle timeout; a server dripping a byte at a
         // time would never trip it. This one bounds the whole download.
         const overall = setTimeout(() => {
@@ -220,18 +220,18 @@ function getOnce(url, env, deadline, maxBytes) {
 }
 /**
  * Download one file, following at most FILE_LIMITS.redirects https redirects,
- * within FILE_LIMITS.timeoutMs (or the caller's earlier `deadline`) and
+ * within FILE_LIMITS.timeoutMs (or the caller's earlier `deadline`, on the monotonic clock: monotonicNow()) and
  * `maxBytes` (default the per-file limit). Never throws.
  */
 export async function downloadFile(raw, env = process.env, { deadline: callDeadline, maxBytes = FILE_LIMITS.bytes } = {}) {
-    const deadline = Math.min(Date.now() + FILE_LIMITS.timeoutMs, callDeadline ?? Infinity);
+    const deadline = Math.min(monotonicNow() + FILE_LIMITS.timeoutMs, callDeadline ?? Infinity);
     const limit = Math.max(0, Math.min(maxBytes, FILE_LIMITS.bytes));
     let current = raw;
     for (let hop = 0; hop <= FILE_LIMITS.redirects; hop++) {
         const checked = checkFileUrl(current, env);
         if ("error" in checked)
             return { error: hop === 0 ? `refused: ${checked.error}` : `refused a redirect: ${checked.error}` };
-        if (Date.now() >= deadline)
+        if (monotonicNow() >= deadline)
             return { error: "timed out" };
         const r = await getOnce(checked.url, env, deadline, limit);
         if (r.error)
@@ -263,10 +263,10 @@ export async function sourcesFromOpenAiFiles(files, env = process.env) {
     const skipped = [];
     let total = 0;
     // One budget for the whole call, downloads and extraction together.
-    const callDeadline = Date.now() + FILE_LIMITS.callMs;
+    const callDeadline = monotonicNow() + FILE_LIMITS.callMs;
     for (const f of files.slice(0, FILE_LIMITS.files)) {
         const name = safeName(f);
-        if (Date.now() >= callDeadline) {
+        if (monotonicNow() >= callDeadline) {
             skipped.push(`${name}: not read, the ${FILE_LIMITS.callMs / 1000} s allowed for one call ran out`);
             continue;
         }
@@ -285,7 +285,7 @@ export async function sourcesFromOpenAiFiles(files, env = process.env) {
                 const path = join(dir, `upload${docExt}`);
                 writeFileSync(path, got.body, { mode: 0o600 });
                 // Asynchronous and bounded: a hostile document cannot hold the server.
-                const text = await extractTextAsync(path, Math.min(Date.now() + EXTRACT_BUDGET_MS, callDeadline));
+                const text = await extractTextAsync(path, Math.min(monotonicNow() + EXTRACT_BUDGET_MS, callDeadline));
                 if ("error" in text)
                     skipped.push(`${name}: ${text.error}`);
                 else

@@ -107,7 +107,7 @@ export const EXTRACT_BUDGET_MS = 20_000;
  * boot), and a PDF was reported "not read: the time ran out" well inside a
  * 60 s budget, on a converter that had only failed its first form.
  */
-const monotonicNow = () => performance.now();
+export const monotonicNow = () => performance.now();
 /**
  * A command's stdout, or undefined, without blocking the event loop: killed
  * (SIGKILL) when `end` (on the monotonic clock) passes. `timedOut` says which
@@ -155,12 +155,13 @@ function runAsync(cmd, args, end) {
     });
 }
 /**
- * extractText for a server: asynchronous, and bounded by `deadline` (ms since
- * the epoch) across every tool it tries. Past the deadline the reason says so.
+ * extractText for a server: asynchronous, and bounded by `end` (on the
+ * monotonic clock, monotonicNow()) across every tool it tries. Past it the
+ * reason says so. A caller with one budget for several documents sets one
+ * `end` on the same clock: a deadline on the wall clock, converted per
+ * document, let a clock jump between two documents cut the later ones short.
  */
-export async function extractTextAsync(path, deadline = Date.now() + EXTRACT_BUDGET_MS) {
-    // The wall clock is read once, for the time left; from here it is counted on the monotonic one.
-    const end = monotonicNow() + (deadline - Date.now());
+export async function extractTextAsync(path, end = monotonicNow() + EXTRACT_BUDGET_MS) {
     const ext = extname(path).toLowerCase();
     const mac = process.platform === "darwin";
     let text;

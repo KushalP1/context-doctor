@@ -30,10 +30,20 @@ export declare function extractText(path: string): {
 /** Default time budget for one extraction call in the MCP server. */
 export declare const EXTRACT_BUDGET_MS = 20000;
 /**
- * extractText for a server: asynchronous, and bounded by `deadline` (ms since
- * the epoch) across every tool it tries. Past the deadline the reason says so.
+ * Milliseconds on a monotonic clock. The budget is counted on it, never on
+ * Date.now(): a CI runner's wall clock can jump forward (time sync after
+ * boot), and a PDF was reported "not read: the time ran out" well inside a
+ * 60 s budget, on a converter that had only failed its first form.
  */
-export declare function extractTextAsync(path: string, deadline?: number): Promise<{
+export declare const monotonicNow: () => number;
+/**
+ * extractText for a server: asynchronous, and bounded by `end` (on the
+ * monotonic clock, monotonicNow()) across every tool it tries. Past it the
+ * reason says so. A caller with one budget for several documents sets one
+ * `end` on the same clock: a deadline on the wall clock, converted per
+ * document, let a clock jump between two documents cut the later ones short.
+ */
+export declare function extractTextAsync(path: string, end?: number): Promise<{
     text: string;
 } | {
     error: string;

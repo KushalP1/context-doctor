@@ -18,7 +18,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSyn
 import { homedir } from "node:os";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { estimateTokens, formatTokens } from "./tokens.js";
-import { EXTRACT_BUDGET_MS, EXTRACTABLE, extractText, extractTextAsync } from "./extract.js";
+import { EXTRACT_BUDGET_MS, EXTRACTABLE, extractText, extractTextAsync, monotonicNow } from "./extract.js";
 const DEFAULT_BUDGET = 4000;
 const DEFAULT_CHUNK_TOKENS = 400;
 /** Claude's tokenizer produces the most tokens per char; a budget in its terms never overruns another's. */
@@ -646,7 +646,8 @@ export function readSources(paths, cwdOrOptions = process.cwd()) {
 export async function readSourcesAsync(paths, options = {}) {
     const defer = [];
     const { sources, skipped } = readSources(paths, { ...options, defer });
-    const deadline = Date.now() + (options.budgetMs ?? EXTRACT_BUDGET_MS);
+    // One budget for every document, on the monotonic clock: a wall clock that jumps between two cannot end it.
+    const deadline = monotonicNow() + (options.budgetMs ?? EXTRACT_BUDGET_MS);
     const failed = new Set();
     for (const d of defer) {
         const got = await extractTextAsync(d.path, deadline);

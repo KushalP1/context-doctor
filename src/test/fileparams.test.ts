@@ -28,6 +28,7 @@ const DOC = Array.from({ length: 30 }, (_, i) => `## Section ${i}\n\n${i === 17 
 const mock: Server = createServer((req, res) => {
   const url = req.url ?? "/";
   if (url === "/doc.md") return void res.end(DOC);
+  if (url === "/slow-doc.md") return void setTimeout(() => res.end(DOC), 300);
   if (url === "/bin") return void res.end(Buffer.from([0, 1, 2, 3, 0, 0]));
   if (url === "/to-http") return void res.writeHead(302, { location: "http://example.com/doc.md" }).end();
   if (url === "/to-self") return void res.writeHead(302, { location: "/doc.md" }).end();
@@ -247,6 +248,28 @@ test("a malformed redirect is that file's problem: it is skipped with a reason a
   );
   assert.deepEqual(got.sources.map((x) => x.name), ["good.md"]);
   assert.match(got.skipped.join("\n"), /bad\.md: refused a redirect: not a URL/);
+});
+
+test("a wall clock that jumps while one file downloads does not end the call's budget for the next", async () => {
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  // The time sync lands while the first file is on its way (the mock answers it after 300 ms).
+  const jump = setTimeout(() => { offset = 3_600_000; }, 100);
+  try {
+    const got = await sourcesFromOpenAiFiles(
+      [
+        { download_url: at("/slow-doc.md"), file_id: "a", file_name: "a.md" },
+        { download_url: at("/doc.md"), file_id: "b", file_name: "b.md" },
+      ],
+      TEST_ENV
+    );
+    assert.deepEqual(got.skipped, []);
+    assert.deepEqual(got.sources.map((x) => x.name), ["a.md", "b.md"]);
+  } finally {
+    clearTimeout(jump);
+    Date.now = realNow;
+  }
 });
 
 test("the 20 MB total for a call is enforced while bytes arrive, and one time budget covers the call", async () => {
