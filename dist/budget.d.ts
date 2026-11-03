@@ -36,7 +36,7 @@ export interface Budget {
 export declare function budgetPath(): string;
 /** The period's spend ledger and what was said: ~/.claude/.context-doctor-budget-state.json. */
 export declare function budgetStatePath(): string;
-/** "50/day", "$200/week", "7.5/d", "100/wk": a budget, or an error to show. */
+/** "50/day", "$200/week", "7.5/d", "100/wk", "50/days": a budget, or an error to show. */
 export declare function parseBudget(arg: string): {
     usd: number;
     period: Period;

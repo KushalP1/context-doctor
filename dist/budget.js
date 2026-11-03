@@ -41,11 +41,12 @@ export function budgetPath() {
 export function budgetStatePath() {
     return join(dirname(statePath()), ".context-doctor-budget-state.json");
 }
-/** "50/day", "$200/week", "7.5/d", "100/wk": a budget, or an error to show. */
+/** "50/day", "$200/week", "7.5/d", "100/wk", "50/days": a budget, or an error to show. */
 export function parseBudget(arg) {
-    const m = /^\$?(\d+(?:\.\d+)?)\s*\/\s*(day|d|daily|week|w|wk|weekly)$/i.exec(arg.trim());
+    const m = /^\$?(\d*\.?\d+)\s*\/\s*(days?|d|daily|weeks?|w|wks?|weekly)$/i.exec(arg.trim());
     const usd = m ? Number(m[1]) : Number.NaN;
-    if (!m || !(usd > 0) || usd > 1_000_000)
+    // Under a cent it read "your $0.00/day budget".
+    if (!m || !(usd >= 0.01) || usd > 1_000_000)
         return { error: `"${arg}" is not a budget: give dollars per day or per week, e.g. 50/day or 200/week.` };
     return { usd, period: /^d/i.test(m[2]) ? "day" : "week" };
 }
@@ -408,7 +409,7 @@ export function budgetVerdict(now = Date.now(), home = homedir()) {
     if (b.block && spend.usd >= b.usd) {
         return {
             spend, budget: b,
-            block: `${head}${byToolText(spend.byTool)}, over your ${amount(b.usd)}/${per(b.period)} budget, so this prompt was held. To go on, turn it off (context-doctor budget off) or raise it (context-doctor budget ${raised(b, spend.usd)}/${per(b.period)}). ${resets(b.period)}`,
+            block: `${head}${byToolText(spend.byTool)}, over your ${amount(b.usd)}/${per(b.period)} budget, so this prompt was held. To go on, turn it off (context-doctor budget off) or raise it (context-doctor budget ${raised(b, spend.usd)}/${per(b.period)} --block). ${resets(b.period)}`,
         };
     }
     if (!spend.warn)

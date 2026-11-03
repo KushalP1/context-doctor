@@ -52,7 +52,11 @@ test("parseBudget: dollars a day or a week, and a plain error otherwise", () => 
     assert.deepEqual(parseBudget("$200/week"), { usd: 200, period: "week" });
     assert.deepEqual(parseBudget("7.5/d"), { usd: 7.5, period: "day" });
     assert.deepEqual(parseBudget("100 / wk"), { usd: 100, period: "week" });
-    for (const bad of ["50", "50/month", "0/day", "-5/day", "abc", "/day"])
+    assert.deepEqual(parseBudget("50/days"), { usd: 50, period: "day" });
+    assert.deepEqual(parseBudget("200/weeks"), { usd: 200, period: "week" });
+    assert.deepEqual(parseBudget(".5/DAY"), { usd: 0.5, period: "day" });
+    // Under a cent is no budget: it read "your $0.00/day budget".
+    for (const bad of ["50", "50/month", "0/day", "-5/day", "abc", "/day", "1e9/week", "0.001/day", "1.2.3/day"])
         assert.ok("error" in parseBudget(bad), bad);
 });
 test("periods: local midnight, and Monday for a week", () => {
@@ -106,7 +110,7 @@ test("the hook says each threshold once a period, then holds prompts over it wit
         assert.equal(run(env, ["budget", "1/day", "--block"]).status, 0);
         const held = JSON.parse(run(env, ["hook"], prompt()).out);
         assert.equal(held.decision, "block");
-        assert.match(held.reason, /over your \$1\/day budget, so this prompt was held\. To go on, turn it off \(context-doctor budget off\) or raise it \(context-doctor budget 5\/day\)\. It resets at midnight\./);
+        assert.match(held.reason, /over your \$1\/day budget, so this prompt was held\. To go on, turn it off \(context-doctor budget off\) or raise it \(context-doctor budget 5\/day --block\)\. It resets at midnight\./);
         assert.equal(JSON.parse(run(env, ["hook"], prompt()).out).decision, "block", "every prompt, not once");
         // Gemini CLI's BeforeAgent denies.
         assert.equal(JSON.parse(run(env, ["hook"], prompt("BeforeAgent")).out).decision, "deny");
@@ -253,6 +257,23 @@ test("the status line keeps its own cost without a budget, and shows the budget'
     assert.match(renderStatusLine(input) ?? "", /· \$1\.50$/);
     assert.match(renderStatusLine(input, Date.now(), "$12/$50 today") ?? "", /· \$12\/\$50 today$/);
     assert.equal(renderStatusLine({}, Date.now(), "$12/$50 today"), "$12/$50 today");
+});
+test("a threshold the ledger records as said still reaches the user when the rest of the hook fails", () => {
+    const { home, cache, transcript, env } = setup();
+    try {
+        writeFileSync(transcript, [...reply(NOW - 2 * HOUR), ...reply(NOW - HOUR)].join("\n") + "\n");
+        assert.equal(run(env, ["budget", "0.7/day"]).status, 0);
+        // A transcript path the profile cannot read (a folder), past a 1-token warning threshold: the hook fails after the budget check.
+        const folder = join(home, "not-a-transcript");
+        mkdirSync(folder);
+        const r = run({ ...env, CONTEXT_DOCTOR_WARN_TOKENS: "1" }, ["hook"], JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "s1", cwd: "/work/app", transcript_path: folder }));
+        assert.match(JSON.parse(r.out).systemMessage, /\$0\.40 spent today: 57% of your \$0\.70\/day budget/);
+        assert.equal(run(env, ["hook"], prompt()).out.trim(), "", "and once");
+    }
+    finally {
+        rmSync(home, { recursive: true, force: true });
+        rmSync(cache, { recursive: true, force: true });
+    }
 });
 test("budget's arguments: a bad amount, --block alone and extra words are usage errors; uninstall removes it", () => {
     const { home, cache, env } = setup();

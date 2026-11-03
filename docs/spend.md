@@ -52,7 +52,7 @@ What you see, once per threshold per period:
 context-doctor: $41.20 spent today (Claude Code $40.10, Codex $1.10): 82% of your $50/day budget.
 ```
 
-**Holding prompts.** With `--block`, over the budget every prompt is held, with the reason and how to lift it: `context-doctor budget off`, or a higher budget (`context-doctor budget 75/day`); it lifts by itself at midnight (Monday for a week). Each host's documented way:
+**Holding prompts.** With `--block`, over the budget every prompt is held, with the reason and how to lift it: `context-doctor budget off`, or a higher budget (`context-doctor budget 75/day --block`; without `--block` a new budget only warns); it lifts by itself at midnight (Monday for a week). Each host's documented way:
 
 | Host | Hook | Says so | Holds the prompt |
 |---|---|---|---|

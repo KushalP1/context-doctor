@@ -168,6 +168,10 @@ export function hookInput(raw) {
     return out;
 }
 export async function runHook(app) {
+    // The spend budget's line for this prompt, until it is written. The ledger
+    // records a threshold as said before the rest of the hook runs, so a later
+    // failure must still let it out, or it was lost for the whole period.
+    let budgetNote;
     // A hook must never break the user's prompt: any failure exits silently.
     try {
         // GitHub Copilot (`hook copilot`, its sessionStart): the standing rules,
@@ -264,7 +268,6 @@ export async function runHook(app) {
         // A spend budget (budget.ts), before each prompt in Claude Code, Codex and
         // Gemini CLI: a line to the user at 50%, 80% and 100%, and with --block,
         // over it, the prompt held. No budget set: one failed read.
-        let budgetNote;
         if (!cursor && (input.hook_event_name === undefined || input.hook_event_name === "UserPromptSubmit" || input.hook_event_name === "BeforeAgent")) {
             let v;
             try {
@@ -280,7 +283,7 @@ export async function runHook(app) {
             budgetNote = v?.message;
         }
         const sayBudget = () => { if (budgetNote)
-            console.log(JSON.stringify({ systemMessage: budgetNote })); };
+            console.log(JSON.stringify({ systemMessage: budgetNote })); budgetNote = undefined; };
         const transcriptPath = input.transcript_path;
         if (!transcriptPath || !existsSync(transcriptPath)) {
             sayBudget();
@@ -341,6 +344,7 @@ export async function runHook(app) {
             if (lines.length > 0)
                 out.hookSpecificOutput = { hookEventName: event, additionalContext: block };
             console.log(JSON.stringify(out));
+            budgetNote = undefined; // in `notice`, now said
         };
         if (prev.b > 0 && sizeBytes < prev.b * REGROWTH_FACTOR) {
             if (cr !== prev.cr)
@@ -420,6 +424,11 @@ export async function runHook(app) {
         emit([...notes, ...lines]);
     }
     catch {
-        /* silent — never disturb the prompt */
+        // Silent — never disturb the prompt; but a budget line already recorded as said goes out.
+        try {
+            if (budgetNote)
+                process.stdout.write(JSON.stringify({ systemMessage: budgetNote }) + "\n");
+        }
+        catch { /* nothing more to do */ }
     }
 }
