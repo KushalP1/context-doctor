@@ -59,6 +59,10 @@ test("plan: ranked by dollars, says plainly it changes the model, never in --app
   const inherit = planFixes({ ...base, subagentModel: replay(600), subagentModelSet: { value: "inherit", where: "the environment" } });
   assert.equal(inherit[0].state, "not-here");
   assert.match(renderFixPlan(30, 2000, inherit, []), /- Subagent model: CLAUDE_CODE_SUBAGENT_MODEL=inherit in the environment: left as you set it \(Sonnet 5\.5 would have cost \$600 less\)/);
+  // Blank is unset to Claude Code (subagents inherit): left alone like "inherit", not reported as applied.
+  const blank = planFixes({ ...base, subagentModel: replay(600), subagentModelSet: { value: "", where: "~/.claude/settings.json env" } });
+  assert.equal(blank[0].state, "not-here");
+  assert.match(renderFixPlan(30, 2000, blank, []), /- Subagent model: CLAUDE_CODE_SUBAGENT_MODEL="" in ~\/\.claude\/settings\.json env: left as you set it/);
   // A project setting that overrides it is named.
   const over = planFixes({ ...base, subagentModel: replay(600), overrides: { "subagent-model": ["CLAUDE_CODE_SUBAGENT_MODEL=inherit in /p/.claude/settings.json env"] } });
   assert.match(renderFixPlan(30, 2000, over, []), /⚠ would not take effect: CLAUDE_CODE_SUBAGENT_MODEL=inherit in \/p\/\.claude\/settings\.json env/);

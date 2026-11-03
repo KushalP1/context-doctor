@@ -142,9 +142,10 @@ export function planFixes(i) {
     const sm = i.subagentModel;
     const set = i.subagentModelSet;
     if (set) {
-        const inherit = /^(inherit|default)$/i.test(set.value.trim());
+        // Blank reads as unset in Claude Code: subagents inherit, as with "inherit".
+        const inherit = /^(inherit|default|)$/i.test(set.value.trim());
         const less = sm && sm.savedUsd >= MIN_USD ? ` (${SUBAGENT_CANDIDATE_NAME} would have cost ${money(sm.savedUsd)} less)` : "";
-        fixes.push({ id: "subagent-model", title: "Subagent model", basis: "set", quality: "", change: `env.${SUBAGENT_MODEL_ENV}`, state: inherit ? "not-here" : "applied", note: `${SUBAGENT_MODEL_ENV}=${set.value} in ${set.where}${inherit ? `: left as you set it${less}` : ""}`, value: set.value });
+        fixes.push({ id: "subagent-model", title: "Subagent model", basis: "set", quality: "", change: `env.${SUBAGENT_MODEL_ENV}`, state: inherit ? "not-here" : "applied", note: `${SUBAGENT_MODEL_ENV}=${set.value.trim() ? set.value : JSON.stringify(set.value)} in ${set.where}${inherit ? `: left as you set it${less}` : ""}`, value: set.value });
     }
     else if (sm && sm.savedUsd >= MIN_USD) {
         const moved = sm.byType.filter((t) => t.moves);

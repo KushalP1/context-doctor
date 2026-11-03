@@ -44,6 +44,8 @@ test("replay: every request as billed and at Sonnet 5.5, only for the types CLAU
     assert.equal(variableMoves("fork", new Map(), true).moves, false);
     assert.equal(variableMoves("claude", new Map()).moves, true);
     assert.equal(variableMoves("claude-code-guide", new Map()).moves, false);
+    // A transcript with no meta beside it: no type to look up, said so.
+    assert.match(variableMoves("unknown", new Map()).why, /no agent type recorded/);
 });
 test("replay: output settled from the reply's last row, also when it arrives after a cached read", () => {
     const { home, sub } = history((cwd) => [{ id: "b1", type: "general-purpose", rows: reply(at, "claude-opus-5-5", cwd, "msg_grow").slice(0, 1) }]);

@@ -210,7 +210,7 @@ export function variableMoves(type, defs, force = false) {
     }
     const d = defs.get(type);
     if (!d)
-        return { moves: false, why: "its agent file was not found here" };
+        return { moves: false, why: type === "unknown" ? "no agent type recorded beside it (an older Claude Code)" : "its agent file was not found here" };
     if (!d.model)
         return { moves: true };
     return { moves: false, why: `its file says model: ${d.model}` };

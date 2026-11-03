@@ -180,7 +180,7 @@ export function variableMoves(type: string, defs: Map<string, AgentDefinition>, 
     return m === undefined ? { moves: true } : { moves: false, why: m === "inherit" ? "built in, on the main conversation's model" : `built in, on ${m}` };
   }
   const d = defs.get(type);
-  if (!d) return { moves: false, why: "its agent file was not found here" };
+  if (!d) return { moves: false, why: type === "unknown" ? "no agent type recorded beside it (an older Claude Code)" : "its agent file was not found here" };
   if (!d.model) return { moves: true };
   return { moves: false, why: `its file says model: ${d.model}` };
 }
