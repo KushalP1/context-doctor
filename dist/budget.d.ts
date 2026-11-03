@@ -56,6 +56,11 @@ export interface PeriodSpend {
     end: number;
     usd: number;
     byTool: Partial<Record<Tool, number>>;
+    /** Requests on a model with no list price: counted here, not in `usd`. */
+    unpriced?: {
+        requests: number;
+        models: string[];
+    };
 }
 /**
  * What the period holding `now` has cost so far, across Claude Code, Codex
@@ -65,6 +70,7 @@ export interface PeriodSpend {
  */
 export declare function periodSpend(period: Period, now?: number, home?: string, warnAt?: (usd: number, warned: number) => number): PeriodSpend & {
     warn?: number;
+    unpricedNew?: boolean;
 };
 /** The thresholds the hook speaks at. */
 export declare const THRESHOLDS: readonly [50, 80, 100];

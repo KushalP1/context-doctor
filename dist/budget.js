@@ -112,7 +112,7 @@ function readState() {
     try {
         const s = JSON.parse(readFileSync(budgetStatePath(), "utf8"));
         if (typeof s?.start === "number" && s.files && typeof s.files === "object")
-            return { start: s.start, files: s.files, warned: Number(s.warned) || 0, usd: Number(s.usd) || 0, byTool: s.byTool ?? {} };
+            return { start: s.start, files: s.files, warned: Number(s.warned) || 0, unpricedSaid: s.unpricedSaid === true, usd: Number(s.usd) || 0, byTool: s.byTool ?? {} };
     }
     catch {
         /* none yet, or damaged: start afresh */
@@ -125,8 +125,10 @@ function readState() {
  */
 function saveState(st) {
     const disk = readState();
-    if (disk?.start === st.start)
+    if (disk?.start === st.start) {
         st.warned = Math.max(st.warned, disk.warned);
+        st.unpricedSaid = st.unpricedSaid || disk.unpricedSaid;
+    }
     try {
         writeWhole(budgetStatePath(), st);
     }
@@ -183,18 +185,22 @@ function lineStart(fd, size) {
  * shared scan, so only what it has not cached), as the ledger keeps them.
  */
 function readFile(tool, file, since, size) {
-    const k = [], d = [];
+    const k = [], d = [], x = [];
     if (tool !== "claude") {
         // A Codex request's key (a forked rollout repeats its parent's) kept short: 12 hex digits of its hash.
         for (const r of tool === "codex" ? codexFileSpend(file, since) : geminiFileSpend(file, since)) {
+            if (!r.priced)
+                x.push([k.length, r.model ?? "unknown"]);
             k.push(r.key ? createHash("sha1").update(r.key).digest("hex").slice(0, 12) : "");
             d.push(r.usd);
         }
-        return { k, d };
+        return { k, d, ...(x.length ? { x } : {}) };
     }
     const reqs = claudeFileUsage(file, since);
     const at = new Map();
     reqs.forEach((q, i) => {
+        if (!pricingFor(q.model))
+            x.push([i, q.model ?? "unknown"]);
         k.push(keyOf(q.uuid));
         d.push(q.usd);
         if (q.id)
@@ -224,7 +230,7 @@ function readFile(tool, file, since, size) {
     const fd = openSync(file, "r");
     try {
         const o = lineStart(fd, size);
-        return { k, d, o, a: anchorOf(fd, o), r: r.slice(-RECENT_REPLIES) };
+        return { k, d, o, a: anchorOf(fd, o), r: r.slice(-RECENT_REPLIES), ...(x.length ? { x } : {}) };
     }
     finally {
         closeSync(fd);
@@ -280,6 +286,8 @@ function readAppended(e, file, since) {
             let index = -1;
             if (Number.isFinite(ts) && ts >= since && tokens > 0) {
                 index = e.k.length;
+                if (!price)
+                    (e.x ??= []).push([index, realModel(m.model) ?? "unknown"]);
                 e.k.push(keyOf(typeof row.uuid === "string" ? row.uuid : undefined));
                 e.d.push(price ? usageCost(u, price).totalUsd : 0);
             }
@@ -299,7 +307,7 @@ function readAppended(e, file, since) {
 function wellFormed(e) {
     return Boolean(e) && typeof e === "object" && Array.isArray(e.k) && Array.isArray(e.d) && e.k.length === e.d.length &&
         e.k.every((x) => typeof x === "string") && e.d.every((x) => typeof x === "number" && Number.isFinite(x)) &&
-        (e.a === undefined || typeof e.a === "string") && (e.r === undefined || (Array.isArray(e.r) && e.r.every((x) => Array.isArray(x) && x.length === 4)));
+        (e.a === undefined || typeof e.a === "string") && (e.x === undefined || (Array.isArray(e.x) && e.x.every((y) => Array.isArray(y) && typeof y[0] === "number"))) && (e.r === undefined || (Array.isArray(e.r) && e.r.every((x) => Array.isArray(x) && x.length === 4)));
 }
 /**
  * What the period holding `now` has cost so far, across Claude Code, Codex
@@ -352,8 +360,11 @@ export function periodSpend(period, now = Date.now(), home = homedir(), warnAt) 
     const seen = new Set();
     let usd = 0;
     const byTool = {};
+    let unpriced = 0;
+    const models = new Set();
     for (const file of Object.keys(kept).sort()) {
         const e = kept[file];
+        const x = new Map(e.x ?? []);
         e.k.forEach((key, i) => {
             if (key) {
                 if (seen.has(key))
@@ -362,6 +373,10 @@ export function periodSpend(period, now = Date.now(), home = homedir(), warnAt) 
             }
             usd += e.d[i];
             byTool[e.t] = (byTool[e.t] ?? 0) + e.d[i];
+            if (x.has(i)) {
+                unpriced++;
+                models.add(x.get(i));
+            }
         });
     }
     const level = warnAt ? warnAt(usd, st.warned) : 0;
@@ -370,9 +385,15 @@ export function periodSpend(period, now = Date.now(), home = homedir(), warnAt) 
         st.warned = warn;
         changed = true;
     }
+    // The hook (warnAt) says once a period that part of it has no price.
+    const unpricedNew = Boolean(warnAt) && unpriced > 0 && !st.unpricedSaid;
+    if (unpricedNew) {
+        st.unpricedSaid = true;
+        changed = true;
+    }
     if (changed)
         saveState({ ...st, files: kept, usd, byTool });
-    return { start, end: periodEnd(period, now), usd, byTool, ...(warn ? { warn } : {}) };
+    return { start, end: periodEnd(period, now), usd, byTool, ...(unpriced ? { unpriced: { requests: unpriced, models: [...models] } } : {}), ...(warn ? { warn } : {}), ...(unpricedNew ? { unpricedNew } : {}) };
 }
 // ---------------------------------------------------------------------------
 // What the hook, the status line and `budget` say
@@ -393,6 +414,11 @@ export function levelOf(usd, budget) {
 function byToolText(byTool) {
     const parts = Object.keys(byTool).filter((t) => (byTool[t] ?? 0) >= 0.005).sort((a, b) => byTool[b] - byTool[a]).map((t) => `${TOOL_NAME[t]} ${money(byTool[t])}`);
     return parts.length > 1 ? ` (${parts.join(", ")})` : "";
+}
+/** "3 requests on gpt-7 have no list price, so the budget does not count them." */
+function unpricedText(u) {
+    const names = u.models.slice(0, 2).join(", ") + (u.models.length > 2 ? " and others" : "");
+    return `${u.requests.toLocaleString("en-US")} request${u.requests === 1 ? " is" : "s are"} on ${names}, with no list price, so the budget does not count ${u.requests === 1 ? "it" : "them"}.`;
 }
 /** When the period resets, in words. */
 function resets(p) {
@@ -419,12 +445,14 @@ export function budgetVerdict(now = Date.now(), home = homedir()) {
             block: `${head}${byToolText(spend.byTool)}, over your ${amount(b.usd)}/${per(b.period)} budget, so this prompt was held. To go on, turn it off (context-doctor budget off) or raise it (context-doctor budget ${raised(b, spend.usd)}/${per(b.period)} --block). ${resets(b.period)}`,
         };
     }
+    // Once a period: requests the budget cannot price, by name, so it is not read as all there is.
+    const unpriced = spend.unpricedNew && spend.unpriced ? unpricedText(spend.unpriced) : undefined;
     if (!spend.warn)
-        return { spend, budget: b };
+        return unpriced ? { spend, budget: b, message: `context-doctor: ${unpriced}` } : { spend, budget: b };
     const message = spend.warn >= 100
         ? `${head}${byToolText(spend.byTool)}: over your ${amount(b.usd)}/${per(b.period)} budget (${pct}%). Raise it with context-doctor budget ${raised(b, spend.usd)}/${per(b.period)}, or add --block to hold prompts over it.`
         : `${head}${byToolText(spend.byTool)}: ${pct}% of your ${amount(b.usd)}/${per(b.period)} budget.`;
-    return { spend, budget: b, message };
+    return { spend, budget: b, message: unpriced ? `${message} ${unpriced}` : message };
 }
 /** The status line's part: "$12/$50 today", or undefined with no budget set. */
 export function budgetStatus(now = Date.now(), home = homedir()) {
@@ -443,6 +471,8 @@ export function renderBudgetStatus(b, s, hookInstalled) {
         `Budget: ${amount(b.usd)} a ${per(b.period)}, across Claude Code, Codex and Gemini CLI${b.block ? "; prompts over it are held" : ""}.`,
         `${span(b.period) === "today" ? "Today" : "This week"}: ${money(s.usd)} so far, ${Math.round((s.usd / b.usd) * 100)}%${byToolText(s.byTool)}. ${resets(b.period)}`,
     ];
+    if (s.unpriced)
+        lines.push(`Not counted: ${unpricedText(s.unpriced)}`);
     lines.push(hookInstalled
         ? `The every-prompt hook says so at ${THRESHOLDS.join("%, ").replace(/, (\d+)$/, " and $1")}%${b.block ? ", and holds prompts over it" : ""}. Cursor is not counted (context-doctor spend shows it).`
         : "No every-prompt hook is installed, so nothing will say so: run context-doctor install.");

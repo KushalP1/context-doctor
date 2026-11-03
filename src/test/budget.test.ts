@@ -28,12 +28,12 @@ const NOW = Date.UTC(2026, 9, 14, 15, 0, 0);
 
 let n = 0;
 /** One reply: 100k uncached input on claude-sonnet-5 ($2 / 1M) is $0.20; `rows` > 1 writes it as several rows, its output settling on the last. */
-function reply(ts: number, opts: { uuid?: string; rows?: number; output?: number } = {}): string[] {
+function reply(ts: number, opts: { uuid?: string; rows?: number; output?: number; model?: string } = {}): string[] {
   const id = `msg_${n++}`;
   const rows = opts.rows ?? 1;
   return Array.from({ length: rows }, (_, k) => JSON.stringify({
     type: "assistant", uuid: opts.uuid && k === 0 ? opts.uuid : `u-${id}-${k}`, timestamp: new Date(ts + k).toISOString(),
-    message: { id, model: "claude-sonnet-5", role: "assistant", content: [{ type: "text", text: "ok" }], usage: { input_tokens: 100_000, output_tokens: k === rows - 1 ? (opts.output ?? 0) : 1 } },
+    message: { id, model: opts.model ?? "claude-sonnet-5", role: "assistant", content: [{ type: "text", text: "ok" }], usage: { input_tokens: 100_000, output_tokens: k === rows - 1 ? (opts.output ?? 0) : 1 } },
   }));
 }
 
@@ -301,6 +301,24 @@ test("a threshold the ledger records as said still reaches the user when the res
     const r = run({ ...env, CONTEXT_DOCTOR_WARN_TOKENS: "1" }, ["hook"], JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "s1", cwd: "/work/app", transcript_path: folder }));
     assert.match(JSON.parse(r.out).systemMessage, /\$0\.40 spent today: 57% of your \$0\.70\/day budget/);
     assert.equal(run(env, ["hook"], prompt()).out.trim(), "", "and once");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cache, { recursive: true, force: true });
+  }
+});
+
+test("requests on a model with no list price: the hook says once that the budget does not count them, and `budget` says it each time", () => {
+  const { home, cache, transcript, env } = setup();
+  try {
+    writeFileSync(transcript, [...reply(NOW - 2 * HOUR), ...reply(NOW - HOUR, { model: "my-local-model" })].join("\n") + "\n");
+    assert.equal(run(env, ["budget", "10/day"]).status, 0);
+    assert.match(JSON.parse(run(env, ["hook"], prompt()).out).systemMessage, /^context-doctor: 1 request is on my-local-model, with no list price, so the budget does not count it\.$/);
+    assert.equal(run(env, ["hook"], prompt()).out.trim(), "", "once a period");
+    assert.match(run(env, ["budget"]).out, /Today: \$0\.20 so far.*\nNot counted: 1 request is on my-local-model/);
+    // With a threshold reached, one line says both.
+    appendFileSync(transcript, reply(NOW - HOUR / 2, { model: "my-local-model" }).join("\n") + "\n");
+    assert.equal(run(env, ["budget", "0.3/day"]).status, 0);
+    assert.equal(JSON.parse(run(env, ["hook"], prompt()).out).systemMessage, "context-doctor: $0.20 spent today: 67% of your $0.30/day budget.", "said already this period");
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(cache, { recursive: true, force: true });

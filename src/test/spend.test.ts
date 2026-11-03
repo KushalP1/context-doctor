@@ -287,6 +287,20 @@ test("Codex: a forked rollout's copy of its parent's requests counts once, in sp
   }
 });
 
+test("a model with no list price: counted, its tokens shown, 'not priced' rather than a $0.00 that looks free, and --share says it is left out", () => {
+  const base = { project: "app", session: "s", read: 0, write: 0, output: 0, inputUsd: 0, writeUsd: 0, readUsd: 0, outputUsd: 0 };
+  const items = [
+    { ...base, tool: "claude" as const, ts: FIXTURE_NOW - DAY, model: "claude-sonnet-5", input: 100_000, usd: 0.2, inputUsd: 0.2, priced: true },
+    { ...base, tool: "codex" as const, ts: FIXTURE_NOW - DAY, model: "gpt-7", input: 80_000, usd: 0, priced: false },
+  ];
+  const r = summarizeSpend(items, 30, FIXTURE_NOW - 30 * DAY, FIXTURE_NOW);
+  const text = renderSpend(r);
+  assert.match(text, /^Codex +\$0\.00  1 requests +1 not priced$/m);
+  assert.match(text, /^  gpt-7 +\$0\.00 +0%  not priced, 1 request$/m);
+  assert.match(text, /1 Codex requests \(80k tokens\) not priced:\n  no list price for gpt-7\./);
+  assert.match(renderSpendShare(r), /\nNot in it: 1 request \(80k tokens\) on models with no list price\.\n/);
+});
+
 test("nothing on disk: no tools, a plain sentence, and --share says so", async () => {
   const home = mkdtempSync(join(tmpdir(), "cd-spend-empty-"));
   const cache = mkdtempSync(join(tmpdir(), "cd-spend-cache-"));

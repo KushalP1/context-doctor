@@ -456,7 +456,8 @@ export function renderSpend(r: SpendReport, top = 8): string {
   lines.push("─".repeat(60));
   for (const t of r.tools) {
     const unit = t.tool === "cursor" ? "replies" : "requests";
-    const note = t.estimate ? "  estimate, no cache split" : t.subagentUsd ? `  subagents ${usd(t.subagentUsd)}` : "";
+    const notes = [t.estimate ? "estimate, no cache split" : t.subagentUsd ? `subagents ${usd(t.subagentUsd)}` : "", t.unpriced ? `${t.unpriced.toLocaleString("en-US")} not priced` : ""].filter(Boolean);
+    const note = notes.length ? `  ${notes.join(", ")}` : "";
     lines.push(`${t.name.padEnd(14)}${`${t.estimate ? "~" : ""}${usd(t.usd)}`.padStart(11)}  ${`${t.requests.toLocaleString("en-US")} ${unit}`.padEnd(16)}${note}`);
   }
   if (r.tools.length > 1) lines.push(`${"Total".padEnd(14)}${usd(r.usd).padStart(11)}`);
@@ -468,7 +469,9 @@ export function renderSpend(r: SpendReport, top = 8): string {
   };
   const toolsOf = (byTool: Partial<Record<Tool, number>>) => (r.tools.length > 1 ? TOOLS.filter((t) => (byTool[t] ?? 0) > 0).map((t) => TOOL_NAME[t]).join(", ") : undefined);
   list("By project", r.projects.slice(0, top).map((p) => ({ name: p.project, usd: p.usd, tail: toolsOf(p.byTool) })), r.projects.length - top);
-  list("By model", r.models.slice(0, top).map((m) => ({ name: m.model, usd: m.usd })), r.models.length - top);
+  // A model with no list price reads "not priced", not a $0.00 that looks free.
+  const unpricedModels = new Set(r.tools.flatMap((t) => t.unpricedModels));
+  list("By model", r.models.slice(0, top).map((m) => ({ name: m.model, usd: m.usd, ...(m.usd === 0 && unpricedModels.has(m.model) ? { tail: `not priced, ${m.requests.toLocaleString("en-US")} ${m.requests === 1 ? "request" : "requests"}` } : {}) })), r.models.length - top);
 
   // The last two weeks of the window, a bar each, scaled to the busiest.
   const recent = r.daily.slice(-14);
@@ -513,6 +516,9 @@ export function renderSpendShare(r: SpendReport): string {
   const lines = [`My AI coding, last ${r.days === 1 ? "day" : `${r.days} days`}, at list prices: ${usd(r.usd)}${r.tools.length > 1 ? ` (${tools})` : ` in ${r.tools[0].name}`}.`];
   const claude = r.tools.find((t) => t.tool === "claude");
   if (claude?.subagentUsd) lines.push(`Claude Code subagents: ${usd(claude.subagentUsd)} of it.`);
+  // Requests on a model with no list price are not in the total: said, so the total is not read as all of it.
+  const unpriced = r.tools.reduce((n, t) => n + t.unpriced, 0);
+  if (unpriced) lines.push(`Not in it: ${unpriced.toLocaleString("en-US")} ${unpriced === 1 ? "request" : "requests"} (${formatTokens(r.tools.reduce((n, t) => n + t.unpricedTokens, 0))} tokens) on models with no list price.`);
   const parts: Array<[string, number]> = [["cache writes", r.parts.writeUsd], ["cache reads", r.parts.readUsd], ["output", r.parts.outputUsd], ["uncached input", r.parts.inputUsd]];
   const [bigPart, bigUsd] = parts.sort((a, b) => b[1] - a[1])[0];
   const busiest = [...r.daily].sort((a, b) => b.usd - a.usd)[0];

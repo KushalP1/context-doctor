@@ -21,7 +21,7 @@ context-doctor spend --share         # totals only, no paths or project names, t
 | Gemini CLI | `~/.gemini/tmp/<project>/chats/session-*.json[l]` | each `gemini` message's `tokens`, its last copy; a message later rewound was still billed, so it is counted; thoughts bill as output |
 | Cursor | its `state.vscdb` (`cursorDiskKV`), needs SQLite (Node 22.13+ or the `sqlite3` command) | each agent reply's `tokenCount`, at the chat's model (`modelConfig.modelName`); the project from the workspace that lists the chat |
 
-A tool with nothing on disk is left out. Prices are pricing.ts's list prices, cache writes by their TTL, the same code every other report prices with.
+A tool with nothing on disk is left out. Prices are pricing.ts's list prices, cache writes by their TTL, the same code every other report prices with. A request on a model with no list price (a new or local model) is counted with its tokens and marked "not priced" (its tool's row, its model's row, a note; `--share` says it is left out), never shown as a free $0.00.
 
 **Cursor is an estimate.** Its history keeps a prompt's size and the reply's, with no cache split, so every input token is priced uncached: an upper bound. Replies on Auto (`"default"`) have no list price (Cursor bills Auto from your plan): they are counted, with their tokens, and not priced. The report says both.
 
@@ -51,6 +51,8 @@ What you see, once per threshold per period:
 ```
 context-doctor: $41.20 spent today (Claude Code $40.10, Codex $1.10): 82% of your $50/day budget.
 ```
+
+Requests on a model with no list price cannot count toward a dollar budget: the hook says so once a period (`3 requests are on gpt-7, with no list price, so the budget does not count them.`), and `budget` on every run.
 
 **Holding prompts.** With `--block`, over the budget every prompt is held, with the reason and how to lift it: `context-doctor budget off`, or a higher budget (`context-doctor budget 75/day --block`; without `--block` a new budget only warns); it lifts by itself at midnight (Monday for a week). Each host's documented way:
 
