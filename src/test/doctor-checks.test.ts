@@ -116,6 +116,30 @@ test("Devin is reported for what it is: hooks from ~/.claude run in its CLI, wit
   assert.match(devinCheck(home).detail, /Devin Desktop found \(~[\\/]\.devin\)/);
 });
 
+test("the MCP handshake: a crashed server fails at once, a hung one at the timeout, a slow start within it", async () => {
+  const { checkMcpHandshake, handshakeTimeoutMs } = await import("../doctor.js");
+  assert.equal(handshakeTimeoutMs({}), 15_000, "5 s failed on a loaded machine");
+  assert.equal(handshakeTimeoutMs({ CONTEXT_DOCTOR_MCP_HANDSHAKE_MS: "800" }), 800);
+  assert.equal(handshakeTimeoutMs({ CONTEXT_DOCTOR_MCP_HANDSHAKE_MS: "soon" }), 15_000);
+  const dir = mkdtempSync(join(tmpdir(), "ctxdoc-hs-"));
+  const server = (name: string, body: string) => { const p = join(dir, name); writeFileSync(p, body); return p; };
+  let t = Date.now();
+  const crashed = await checkMcpHandshake(server("crash.mjs", "process.exit(3);\n"), 20_000);
+  assert.equal(crashed.status, "fail");
+  assert.match(crashed.detail, /exited \(code 3\) before answering/);
+  assert.ok(Date.now() - t < 10_000, "not the 20 s timeout");
+  t = Date.now();
+  const hung = await checkMcpHandshake(server("hang.mjs", "setInterval(() => {}, 1000);\n"), 300);
+  assert.match(hung.detail, /no initialize response within 0\.3s/);
+  // Slow to start (as Node is on a loaded machine), then a good reply.
+  const reply = { jsonrpc: "2.0", id: 1, result: { serverInfo: { version: "9.9.9" }, instructions: "rules" } };
+  const slow = await checkMcpHandshake(server("slow.mjs", `setTimeout(() => process.stdout.write(${JSON.stringify(JSON.stringify(reply) + "\n")}), 1500); setInterval(() => {}, 1000);\n`), 15_000);
+  assert.equal(slow.status, "ok", slow.detail);
+  // Answers, then exits at once: the reply counts.
+  const quick = await checkMcpHandshake(server("quick.mjs", `process.stdout.write(${JSON.stringify(JSON.stringify(reply) + "\n")}, () => process.exit(0));\n`), 15_000);
+  assert.equal(quick.status, "ok", quick.detail);
+});
+
 test("doctor writes the spend budget as `budget` does: $12.50 and $1,000, not $12.5 and $1000", async () => {
   const home = claudeHome({ hooks: { UserPromptSubmit: [ourHook] } });
   writeFileSync(join(home, ".claude", ".context-doctor-budget.json"), JSON.stringify({ usd: 12.5, period: "day", block: false, at: Date.now() }));

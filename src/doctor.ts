@@ -401,16 +401,31 @@ function hooksDisabled(layers: Array<Record<string, any>>): boolean {
   return layers.reduce<boolean>((off, s) => (typeof s.disableAllHooks === "boolean" ? s.disableAllHooks : off), false);
 }
 
+/**
+ * How long the handshake may take: 15 s, or CONTEXT_DOCTOR_MCP_HANDSHAKE_MS.
+ * 5 s failed on a loaded machine (Node starting the server is most of it); a
+ * server that crashes is reported as soon as it exits, so only one that
+ * hangs alive waits this long.
+ */
+export function handshakeTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const v = Number(env.CONTEXT_DOCTOR_MCP_HANDSHAKE_MS);
+  return Number.isFinite(v) && v > 0 ? v : 15_000;
+}
+
 /** Spawn our own MCP server and run the initialize handshake over stdio. */
-function checkMcpHandshake(): Promise<Check> {
+export function checkMcpHandshake(mcpPath = join(dirname(fileURLToPath(import.meta.url)), "mcp.js"), timeoutMs = handshakeTimeoutMs()): Promise<Check> {
   const label = "MCP server handshake";
-  const mcpPath = join(dirname(fileURLToPath(import.meta.url)), "mcp.js");
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [mcpPath], { stdio: ["pipe", "pipe", "ignore"] });
     const timer = setTimeout(() => {
       child.kill();
-      resolve({ label, status: "fail", detail: "no initialize response within 5s" });
-    }, 5000);
+      resolve({ label, status: "fail", detail: `no initialize response within ${Math.round(timeoutMs / 100) / 10}s` });
+    }, timeoutMs);
+    // A server that dies before answering is a failure now, not after the timeout (after its output, so a last reply still counts).
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      resolve({ label, status: "fail", detail: `the server exited (${signal ?? `code ${code}`}) before answering initialize` });
+    });
     let out = "";
     child.stdout.on("data", (d: Buffer) => {
       out += d.toString();
@@ -435,6 +450,7 @@ function checkMcpHandshake(): Promise<Check> {
       clearTimeout(timer);
       resolve({ label, status: "fail", detail: e.message });
     });
+    child.stdin.on("error", () => { /* the server is gone: its close says so */ });
     child.stdin.write(
       JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "doctor", version: "1" } } }) + "\n"
     );

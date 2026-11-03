@@ -37,6 +37,15 @@ export declare function cacheTtlCheck(home?: string, env?: NodeJS.ProcessEnv): C
  * rather than nothing or a false "ok".
  */
 export declare function devinCheck(home?: string): Check;
+/**
+ * How long the handshake may take: 15 s, or CONTEXT_DOCTOR_MCP_HANDSHAKE_MS.
+ * 5 s failed on a loaded machine (Node starting the server is most of it); a
+ * server that crashes is reported as soon as it exits, so only one that
+ * hangs alive waits this long.
+ */
+export declare function handshakeTimeoutMs(env?: NodeJS.ProcessEnv): number;
+/** Spawn our own MCP server and run the initialize handshake over stdio. */
+export declare function checkMcpHandshake(mcpPath?: string, timeoutMs?: number): Promise<Check>;
 export declare function runDoctor(): Promise<void>;
 /**
  * The Cursor version here: the newest one that ran the hook (its input
