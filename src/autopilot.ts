@@ -708,7 +708,7 @@ export async function autopilotStatus(paths = autopilotPaths()): Promise<string[
  * Called by the every-prompt hook: if autopilot is on and the proxy is down,
  * start it before the prompt's request goes out. Returns quickly either way.
  */
-export async function ensureProxyUp(paths = autopilotPaths(), exec: ServiceExec = tryRun): Promise<void> {
+export async function ensureProxyUp(paths = autopilotPaths(), exec: ServiceExec = tryRun, healthMs = 300): Promise<void> {
   const cfg = readConfig(paths);
   if (!cfg) return;
   migrateToolSearch(paths, cfg);
@@ -720,7 +720,8 @@ export async function ensureProxyUp(paths = autopilotPaths(), exec: ServiceExec 
       writeFileSync(paths.config, JSON.stringify({ ...cfg, codexRouted: undefined }, null, 2));
     } catch { /* never fail a prompt over this */ }
   }
-  const h = await health(cfg.port, 300);
+  // 300 ms: a prompt is waiting. (Tests that are not about a slow proxy pass more.)
+  const h = await health(cfg.port, healthMs);
   if (h.ok) {
     // A service keeps running the code it started with: after an update it
     // answers fine but is still the old version (seen: 0.25 serving for days

@@ -118,4 +118,4 @@ export declare function autopilotStatus(paths?: AutopilotPaths): Promise<string[
  * Called by the every-prompt hook: if autopilot is on and the proxy is down,
  * start it before the prompt's request goes out. Returns quickly either way.
  */
-export declare function ensureProxyUp(paths?: AutopilotPaths, exec?: ServiceExec): Promise<void>;
+export declare function ensureProxyUp(paths?: AutopilotPaths, exec?: ServiceExec, healthMs?: number): Promise<void>;

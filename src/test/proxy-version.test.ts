@@ -16,6 +16,13 @@ test("installedVersion reads the package a CLI path belongs to", () => {
   assert.equal(installedVersion("/nowhere/dist/cli.js"), undefined);
 });
 
+// The stub answers /health at once, but a loaded machine missed the self-heal's 300 ms and took the
+// "proxy down" path instead: this test is about the version, so it allows the stub 10 s. No service
+// manager is ever called (there is none in a throwaway home; the recorder makes sure).
+const HEALTH_MS = 10_000;
+const execs: string[] = [];
+const noExec = (cmd: string, args: string[]) => (execs.push([cmd, ...args].join(" ")), false);
+
 test("an outdated proxy triggers one restart attempt, then waits an hour", async () => {
   const server = createServer((_req, res) => {
     res.setHeader("content-type", "application/json");
@@ -32,13 +39,14 @@ test("an outdated proxy triggers one restart attempt, then waits an hour", async
     writeFileSync(join(pkg, "dist", "cli.js"), "");
     writeFileSync(paths.config, JSON.stringify({ port: (server.address() as { port: number }).port, node: process.execPath, cli: join(pkg, "dist", "cli.js") }));
     const marker = join(home, ".claude", ".context-doctor-proxy-restart");
-    await ensureProxyUp(paths);
+    await ensureProxyUp(paths, noExec, HEALTH_MS);
     assert.ok(existsSync(marker), "a restart was due and attempted");
     writeFileSync(paths.config, JSON.stringify({ port: (server.address() as { port: number }).port, node: process.execPath, cli: join(pkg, "dist", "cli.js") }));
     const first = readFileSync(marker, "utf8");
     await new Promise((r) => setTimeout(r, 5));
-    await ensureProxyUp(paths);
+    await ensureProxyUp(paths, noExec, HEALTH_MS);
     assert.equal(readFileSync(marker, "utf8"), first, "no second attempt within the hour");
+    assert.deepEqual(execs, [], "no service manager touched from a throwaway home");
   } finally {
     server.close();
   }
