@@ -351,6 +351,7 @@ Start here
     context-doctor fix         what to change, ranked by what it saves you; applied only on a yes
     context-doctor install     wire the MCP server, skill and hooks into the apps it finds
     context-doctor savings     what your recent sessions cost, and what each fix would save
+    context-doctor spend       one bill across Claude Code, Codex, Gemini CLI and Cursor
     context-doctor doctor      check the installation
 
 All commands: context-doctor --help
