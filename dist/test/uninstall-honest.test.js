@@ -137,3 +137,14 @@ test("a ~/.claude holding only context-doctor's files is not Claude Code: instal
     assert.equal((await run(cc, ["uninstall"])).code, 0);
     assert.ok(existsSync(join(cc, ".claude", "projects")));
 });
+test("fixes applied with fix stay in the settings, and uninstall says how to revert them", async () => {
+    const home = apps();
+    writeFileSync(join(home, ".claude", ".context-doctor-fixes.json"), JSON.stringify({ version: 2, fixes: [{ id: "cache-ttl", at: 1, value: "1h" }] }));
+    assert.equal((await run(home, ["install"])).code, 0);
+    const r = await run(home, ["uninstall"]);
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.out, /Fixes applied with `context-doctor fix` stay in your settings \(cache-ttl\): run `npx context-doctor fix undo`/);
+    assert.ok(existsSync(join(home, ".claude", ".context-doctor-fixes.json")), "fix undo still needs its record");
+    const none = await run(apps(), ["uninstall"]);
+    assert.doesNotMatch(none.out, /Fixes applied/);
+});

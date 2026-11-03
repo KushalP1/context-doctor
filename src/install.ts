@@ -1469,4 +1469,15 @@ export async function runUninstall(): Promise<void> {
     for (const b of backups) console.log(`  ${tilde(b)}`);
     console.log("Delete them once you no longer need them.");
   }
+  // fix's changes live in the user's settings, not in anything install wrote:
+  // uninstall leaves them (and their record, which `fix undo` reads). Read
+  // here, not through fix.ts, which imports this module.
+  let applied: string[] = [];
+  try {
+    const fixes = JSON.parse(readFileSync(join(claudeDir(), ".context-doctor-fixes.json"), "utf8")).fixes;
+    if (Array.isArray(fixes)) applied = fixes.filter((f) => f && typeof f.id === "string").map((f) => f.id);
+  } catch { /* none, or damaged: fix undo says so */ }
+  if (applied.length > 0) {
+    console.log(`Fixes applied with \`context-doctor fix\` stay in your settings (${applied.join(", ")}): run \`npx context-doctor fix undo\` to revert them.`);
+  }
 }
