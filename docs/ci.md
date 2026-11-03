@@ -16,7 +16,7 @@ jobs:
   memory:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: KushalP1/context-doctor@v0.41.0
         with:
           max-increase: "2000"        # fail a PR that adds more than 2k tokens
