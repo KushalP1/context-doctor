@@ -13,5 +13,13 @@
 export declare function claudeDir(home?: string, env?: NodeJS.ProcessEnv): string;
 /** `~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json`. */
 export declare function claudeJsonPath(home?: string, env?: NodeJS.ProcessEnv): string;
+/**
+ * Is Claude Code on this machine? Its `~/.claude.json`, or a `~/.claude`
+ * that is not only context-doctor's own files. A folder of ours alone is
+ * not Claude Code: the budget, the ledger and the Codex and Gemini CLI hooks
+ * keep their files there, so on a machine with only Codex `budget 50/day`
+ * made `install` wire a Claude Code that is not there.
+ */
+export declare function claudeCodePresent(home?: string, env?: NodeJS.ProcessEnv): boolean;
 /** A path for messages: the home folder as `~`. */
 export declare function tilde(p: string): string;

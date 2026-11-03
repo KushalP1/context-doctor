@@ -16,7 +16,7 @@ import { claudeCodeInstalls, describeInstalls, modelSwitchReadiness, PRE_MODEL_S
 import { FANOUT_MATCHER } from "./fanout.js";
 import { antigravityAllSkillDirs, antigravityMcpConfigPath, antigravityPresent, antigravitySkillDirs } from "./antigravity.js";
 import { COPILOT_HOOK_EVENT, copilotHome, copilotHookFilePath, copilotMcpConfigPath, isOurCopilotEntry, vsCodePresent } from "./copilot.js";
-import { claudeDir, claudeJsonPath } from "./claudedir.js";
+import { claudeCodePresent, claudeDir, claudeJsonPath } from "./claudedir.js";
 import { scanCacheDir } from "./scan.js";
 import { editJsonText, parseSettingsText, sameJson } from "./settingsedit.js";
 
@@ -41,7 +41,7 @@ function targets(): Target[] {
   const cursor = join(homedir(), ".cursor", "mcp.json");
   return [
     { name: "Claude Desktop", configPath: desktop, detect: () => existsSync(dirname(desktop)) },
-    { name: "Claude Code", configPath: claudeCode, detect: () => existsSync(claudeCode) || existsSync(claudeDir()) },
+    { name: "Claude Code", configPath: claudeCode, detect: () => claudeCodePresent() },
     { name: "Cursor", configPath: cursor, detect: () => existsSync(join(homedir(), ".cursor")) },
     { name: "Gemini CLI", configPath: geminiSettingsPath(), detect: geminiCliPresent },
     // Antigravity's MCP file has Claude Desktop's shape (see antigravity.ts).
@@ -334,7 +334,7 @@ function cliCommand(subcommand: string): string {
  */
 export function installStatusLine(): "installed" | "already" | "kept-foreign" | "no-claude-code" {
   const settingsPath = join(claudeDir(), "settings.json");
-  if (!existsSync(claudeDir())) return "no-claude-code";
+  if (!claudeCodePresent()) return "no-claude-code";
   const settings = readJson(settingsPath);
   const want = cliCommand("statusline");
   const current = settings.statusLine?.command as string | undefined;
@@ -388,6 +388,7 @@ function isOurHookEntry(entry: unknown): boolean {
  * Claude Code query gets a context-size check. Idempotent.
  */
 function installHook(): string | null {
+  if (!claudeCodePresent()) return null;
   const settings = join(claudeDir(), "settings.json");
   const path = installHookInto(settings, claudeDir());
   // The same command also answers PreCompact (what each compaction's summary
@@ -565,7 +566,7 @@ function uninstallHookFrom(settingsPath: string, label: string, event = "UserPro
 
 function installSkill(): string | null {
   // Only where Claude Code is: making ~/.claude makes it look installed.
-  if (!existsSync(claudeDir()) && !existsSync(claudeJsonPath())) return null;
+  if (!claudeCodePresent()) return null;
   return installSkillInto(join(claudeDir(), "skills", "context-doctor"), claudeDir());
 }
 
@@ -1124,7 +1125,7 @@ export function runInstall(options: { statusLine?: boolean } = {}): InstallResul
     failures.push("Claude Code hook");
   }
 
-  if (!viaPlugin && existsSync(claudeDir())) {
+  if (!viaPlugin && claudeCodePresent()) {
     try {
       const readiness = modelSwitchReadiness(claudeCodeInstallsFromEnv());
       switch (installModelSwitchHook(readiness)) {
@@ -1395,6 +1396,9 @@ export async function runUninstall(): Promise<void> {
   };
   // First: if anything below fails, Claude Code must still reach the API.
   const hadAutopilot = existsSync(join(claudeDir(), ".context-doctor-autopilot.json"));
+  // A ~/.claude with only our files in it (the budget, the ledger, the Codex
+  // and Gemini CLI hooks' state) is a folder we made, not Claude Code's.
+  const onlyOurFolder = existsSync(claudeDir()) && !claudeCodePresent() && !process.env.CLAUDE_CONFIG_DIR?.trim();
   try {
     await uninstallAutopilot();
     if (hadAutopilot) changes++;
@@ -1445,6 +1449,10 @@ export async function runUninstall(): Promise<void> {
   });
   // Last: the folders install made for the skill, now empty.
   attempt("Claude Code skill folders", () => removeSkillFolders(claudeDir()));
+  // Left behind empty, it would read as Claude Code being installed.
+  if (onlyOurFolder) {
+    try { rmdirSync(claudeDir()); } catch { /* not empty after all */ }
+  }
   if (deletedStubs.length > 0) {
     console.log(`✓ Deleted ${deletedStubs.length === 1 ? "a file" : "files"} install had created, now empty: ${deletedStubs.map(tilde).join(", ")}`);
   }

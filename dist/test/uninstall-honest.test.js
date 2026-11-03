@@ -95,3 +95,25 @@ test("a malformed config for one app does not stop uninstall from removing the r
     assert.ok(!existsSync(join(home, ".cursor", "hooks.json")), "Cursor hooks removed");
     assert.equal(readFileSync(join(home, ".gemini", "settings.json"), "utf8"), "{ broken", "the broken file is left as the user had it");
 });
+test("a ~/.claude holding only context-doctor's files is not Claude Code: install skips it, uninstall removes the folder", async () => {
+    // Codex only; `budget` (or the Codex hook's ledger) keeps its files in ~/.claude.
+    const home = mkdtempSync(join(tmpdir(), "ctxdoc-unin-codex-"));
+    mkdirSync(join(home, ".codex", "sessions"), { recursive: true });
+    assert.equal((await run(home, ["budget", "50/day"])).code, 0);
+    assert.ok(existsSync(join(home, ".claude", ".context-doctor-budget.json")));
+    const i = await run(home, ["install"]);
+    assert.equal(i.code, 0, i.err);
+    assert.ok(!/Claude Code/.test(i.out), i.out);
+    assert.match(i.out, /Codex: MCP server added/);
+    for (const f of [".claude.json", ".claude/settings.json", ".claude/skills"])
+        assert.ok(!existsSync(join(home, f)), `${f} written for an absent Claude Code`);
+    const u = await run(home, ["uninstall"]);
+    assert.equal(u.code, 0, u.err);
+    assert.ok(!existsSync(join(home, ".claude")), "the folder only our files were in");
+    assert.ok(existsSync(join(home, ".codex", "sessions")));
+    // A Claude Code folder stays, whatever it holds.
+    const cc = mkdtempSync(join(tmpdir(), "ctxdoc-unin-cc-"));
+    mkdirSync(join(cc, ".claude", "projects"), { recursive: true });
+    assert.equal((await run(cc, ["uninstall"])).code, 0);
+    assert.ok(existsSync(join(cc, ".claude", "projects")));
+});

@@ -10,6 +10,7 @@
  * the real user's setup, not someone else's.
  */
 
+import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -27,6 +28,23 @@ export function claudeDir(home?: string, env: NodeJS.ProcessEnv = process.env): 
 /** `~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json`. */
 export function claudeJsonPath(home?: string, env: NodeJS.ProcessEnv = process.env): string {
   return join(configDirEnv(home, env) ?? home ?? homedir(), ".claude.json");
+}
+
+/**
+ * Is Claude Code on this machine? Its `~/.claude.json`, or a `~/.claude`
+ * that is not only context-doctor's own files. A folder of ours alone is
+ * not Claude Code: the budget, the ledger and the Codex and Gemini CLI hooks
+ * keep their files there, so on a machine with only Codex `budget 50/day`
+ * made `install` wire a Claude Code that is not there.
+ */
+export function claudeCodePresent(home?: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (existsSync(claudeJsonPath(home, env))) return true;
+  try {
+    const entries = readdirSync(claudeDir(home, env));
+    return entries.length === 0 || entries.some((f) => !f.startsWith(".context-doctor"));
+  } catch {
+    return false;
+  }
 }
 
 /** A path for messages: the home folder as `~`. */

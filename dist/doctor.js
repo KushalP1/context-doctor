@@ -25,7 +25,7 @@ import { describeDesktopUsage, desktopUsage } from "./desktopusage.js";
 import { withInvocation } from "./invocation.js";
 import { describeInstalls, modelSwitchReadiness, PRE_MODEL_SWITCH_SINCE } from "./modelswitch.js";
 import { describeCosts, subagentCostsPath } from "./fanout.js";
-import { claudeDir, claudeJsonPath } from "./claudedir.js";
+import { claudeCodePresent, claudeDir, claudeJsonPath } from "./claudedir.js";
 import { periodSpend, readBudget } from "./budget.js";
 function claudeDesktopConfigPath() {
     switch (platform()) {
@@ -467,7 +467,7 @@ export async function runDoctor() {
     // Hook registration. ~/.claude without a settings.json is Claude Code with
     // no hook registered, not Claude Code absent.
     const settingsPath = join(claudeDir(), "settings.json");
-    if (existsSync(settingsPath) || existsSync(claudeDir())) {
+    if (existsSync(settingsPath) || claudeCodePresent()) {
         try {
             const settings = readConfig(settingsPath) ?? {};
             const entries = settings.hooks?.UserPromptSubmit ?? [];
