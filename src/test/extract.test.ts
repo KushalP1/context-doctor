@@ -127,6 +127,33 @@ test("extraction is asynchronous and bounded: a hung converter neither blocks th
   }
 });
 
+test("a wall clock that jumps forward mid-read is not the budget running out", { skip: process.platform === "win32" && "a POSIX shell script stands in for the converter" }, async () => {
+  const { chmodSync } = await import("node:fs");
+  const { extractTextAsync } = await import("../extract.js");
+  const bin = mkdtempSync(join(tmpdir(), "cd-extract-bin-"));
+  // Like a pdftotext that rejects the first form (`-enc UTF-8 … -`) and reads on the second.
+  writeFileSync(join(bin, "pdftotext"), '#!/bin/sh\nif [ "$1" = "-enc" ]; then sleep 0.3; exit 1; fi\necho "Rotate the signing key"\n');
+  chmodSync(join(bin, "pdftotext"), 0o755);
+  const dir = mkdtempSync(join(tmpdir(), "cd-extract-jump-"));
+  const path = join(dir, "manual.pdf");
+  writeFileSync(path, pdf(["Rotate the signing key"]));
+  const savedPath = process.env.PATH;
+  const realNow = Date.now;
+  process.env.PATH = `${bin}:${savedPath}`;
+  // A runner's time sync, 100 ms in: the wall clock leaps an hour while the first form runs.
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  const jump = setTimeout(() => { offset = 3_600_000; }, 100);
+  try {
+    const got = await extractTextAsync(path, Date.now() + 20_000);
+    assert.ok("text" in got && /signing key/.test(got.text), JSON.stringify(got));
+  } finally {
+    clearTimeout(jump);
+    Date.now = realNow;
+    process.env.PATH = savedPath;
+  }
+});
+
 test("readSourcesAsync reads the same sources as readSources, PDFs included", { skip: !canPdf && "no pdftotext and not macOS" }, async () => {
   const { readSourcesAsync } = await import("../pack.js");
   const dir = mkdtempSync(join(tmpdir(), "cd-extract-async-"));

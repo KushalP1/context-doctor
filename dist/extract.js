@@ -102,11 +102,19 @@ export function extractText(path) {
 /** Default time budget for one extraction call in the MCP server. */
 export const EXTRACT_BUDGET_MS = 20_000;
 /**
- * A command's stdout, or undefined, without blocking the event loop: killed
- * (SIGKILL) when `deadline` passes. `timedOut` says which happened.
+ * Milliseconds on a monotonic clock. The budget is counted on it, never on
+ * Date.now(): a CI runner's wall clock can jump forward (time sync after
+ * boot), and a PDF was reported "not read: the time ran out" well inside a
+ * 60 s budget, on a converter that had only failed its first form.
  */
-function runAsync(cmd, args, deadline) {
-    const timeout = deadline - Date.now();
+const monotonicNow = () => performance.now();
+/**
+ * A command's stdout, or undefined, without blocking the event loop: killed
+ * (SIGKILL) when `end` (on the monotonic clock) passes. `timedOut` says which
+ * happened.
+ */
+function runAsync(cmd, args, end) {
+    const timeout = Math.ceil(end - monotonicNow());
     if (timeout <= 0)
         return Promise.resolve({ timedOut: true });
     return new Promise((resolve) => {
@@ -132,10 +140,14 @@ function runAsync(cmd, args, deadline) {
                 // reason (seen on Windows runners, well inside a 60 s budget) is a
                 // failed tool, and the next one is tried.
                 if (err)
-                    return finish({ timedOut: Date.now() >= deadline - 50 });
+                    return finish({ timedOut: monotonicNow() >= end - 50 });
                 finish({ out: typeof stdout === "string" && stdout.trim() ? stdout : undefined, timedOut: false });
             });
             child.on("error", () => finish({ timedOut: false }));
+            // No input, as spawnSync gives the synchronous path: a converter that
+            // reads stdin gets end-of-file instead of waiting out the budget.
+            child.stdin?.on("error", () => { });
+            child.stdin?.end();
         }
         catch {
             finish({ timedOut: false });
@@ -147,6 +159,8 @@ function runAsync(cmd, args, deadline) {
  * the epoch) across every tool it tries. Past the deadline the reason says so.
  */
 export async function extractTextAsync(path, deadline = Date.now() + EXTRACT_BUDGET_MS) {
+    // The wall clock is read once, for the time left; from here it is counted on the monotonic one.
+    const end = monotonicNow() + (deadline - Date.now());
     const ext = extname(path).toLowerCase();
     const mac = process.platform === "darwin";
     let text;
@@ -154,7 +168,7 @@ export async function extractTextAsync(path, deadline = Date.now() + EXTRACT_BUD
     const tryRun = async (cmd, args) => {
         if (text || timedOut)
             return;
-        const r = await runAsync(cmd, args, deadline);
+        const r = await runAsync(cmd, args, end);
         if (r.timedOut)
             timedOut = true;
         else
@@ -167,7 +181,7 @@ export async function extractTextAsync(path, deadline = Date.now() + EXTRACT_BUD
         if (!text && !timedOut) {
             const out = join(mkdtempSync(join(tmpdir(), "cd-pdf-")), "out.txt");
             try {
-                const r = await runAsync("pdftotext", [path, out], deadline);
+                const r = await runAsync("pdftotext", [path, out], end);
                 if (r.timedOut)
                     timedOut = true;
                 else if (existsSync(out))
@@ -192,7 +206,7 @@ export async function extractTextAsync(path, deadline = Date.now() + EXTRACT_BUD
     if (!text && !timedOut) {
         const members = ext === ".docx" ? ["word/document.xml"] : ext === ".pptx" ? ["ppt/slides/*.xml"] : ext === ".odt" ? ["content.xml"] : [];
         if (members.length) {
-            const r = await runAsync("unzip", ["-p", path, ...members], deadline);
+            const r = await runAsync("unzip", ["-p", path, ...members], end);
             if (r.timedOut)
                 timedOut = true;
             else if (r.out)
