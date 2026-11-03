@@ -235,7 +235,9 @@ export async function runHook(app) {
         // re-caching costs. Kept for the first prompt, which decides the offer
         // (an offer before any message would come before the rebuild it prices).
         if (input.hook_event_name === "SessionStart") {
-            const verdict = resumeVerdict(input);
+            // Its idle seconds are as of when Claude Code started this hook: count from this process's
+            // start, not from now, after loading (seconds on a loaded machine, past the 5 s match).
+            const verdict = resumeVerdict(input, Math.round(performance.timeOrigin));
             if (verdict && input.session_id)
                 writeSessionState(input.session_id, { ...readSessionState(input.session_id), rv: verdict });
             return;

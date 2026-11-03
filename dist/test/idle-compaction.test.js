@@ -37,9 +37,9 @@ function write(rows, pad = 0) {
     writeFileSync(p, [prompt(T0 - 1000, "x".repeat(pad)), ...rows].map((l) => JSON.stringify(l)).join("\n"));
     return p;
 }
-function runHook(home, input) {
+function runHook(home, input, nodeArgs = []) {
     return new Promise((resolve, reject) => {
-        const child = execFile(process.execPath, [cliPath, "hook"], { env: { ...sandboxEnv(home), CONTEXT_DOCTOR_HOOK_STATE: join(home, "state.json") } }, (err, out) => (err ? reject(err) : resolve(out)));
+        const child = execFile(process.execPath, [...nodeArgs, cliPath, "hook"], { env: { ...sandboxEnv(home), CONTEXT_DOCTOR_HOOK_STATE: join(home, "state.json") } }, (err, out) => (err ? reject(err) : resolve(out)));
         child.stdin.end(JSON.stringify(input));
     });
 }
@@ -94,6 +94,15 @@ test("SessionStart on a resume: Claude Code's 'still warm' silences the offer; i
     await ss("cold", true);
     const out = JSON.parse(await runHook(home, { session_id: "cold", transcript_path: p, hook_event_name: "UserPromptSubmit" }));
     assert.match(out.systemMessage, /~\$4\.01 by Claude Code's estimate/);
+});
+test("SessionStart's idle time counts from when the hook started, however long it then takes to load", async () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-idle-slow-"));
+    const p = write([reply(T0, 400_000, 0)], 300_000);
+    // A loaded machine, made certain: the hook process spends 6 s before it even loads the CLI.
+    const slow = ["--import", `data:text/javascript,${encodeURIComponent("const t = Date.now(); while (Date.now() - t < 6000) {}")}`];
+    await runHook(home, { session_id: "slow", transcript_path: p, hook_event_name: "SessionStart", source: "resume", seconds_since_last_response: Math.round((Date.now() - T0) / 1000), context_tokens: 400_010, prompt_cache_likely_expired: true, estimated_cache_write_usd: 4.0123 }, slow);
+    const out = JSON.parse(await runHook(home, { session_id: "slow", transcript_path: p, hook_event_name: "UserPromptSubmit" }));
+    assert.match(out.systemMessage, /~\$4\.01 by Claude Code's estimate/, "the verdict matched the transcript's last reply");
 });
 test("a resume verdict: matched by reply time, a warm one lapses after five minutes, startups are ignored", () => {
     const now = T0 + 2 * HOUR;
