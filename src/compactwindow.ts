@@ -28,7 +28,7 @@ import { listSessions, replyCounter, isClaudeSession } from "./session.js";
 import { cacheWriteSplit, pricingFor, usageCost, writeMultiplier } from "./pricing.js";
 import { realModel } from "./tokens.js";
 import { backupOnce } from "./install.js";
-import { ABSENT, readSettings, setJsonPath, writeAtomic } from "./settingsedit.js";
+import { ABSENT, readSettings, setJsonPath, withSettingsLock, writeAtomic } from "./settingsedit.js";
 import { compactWindowOverrides, effectiveCompactWindow, settingsSources } from "./effective.js";
 import { withInvocation } from "./invocation.js";
 import { idleCompactMinTokens, isIdleCompactNotice, REQUEST_ROWS } from "./coldresume.js";
@@ -294,13 +294,16 @@ export function setCompactWindow(window: number | undefined, home?: string): Set
     throw new Error(`window must be a whole number of tokens between ${MIN_WINDOW} and ${MAX_WINDOW}`);
   }
   const p = settingsPath(home);
-  const cur = readSettings(p);
-  const previous = cur.data.autoCompactWindow;
-  if (window === undefined ? previous === undefined : previous === window) return { changed: false, created: false, ...(previous !== undefined ? { previous } : {}) };
-  const next = setJsonPath(cur.text, ["autoCompactWindow"], window === undefined ? ABSENT : window);
-  backupOnce(p);
-  writeAtomic(p, next);
-  return { changed: true, created: cur.text === undefined, backup: cur.text !== undefined ? `${p}.context-doctor.backup` : undefined, previous };
+  // Read and written under the lock fix and autopilot take: a concurrent writer's key is not lost.
+  return withSettingsLock(p, () => {
+    const cur = readSettings(p);
+    const previous = cur.data.autoCompactWindow;
+    if (window === undefined ? previous === undefined : previous === window) return { changed: false, created: false, ...(previous !== undefined ? { previous } : {}) };
+    const next = setJsonPath(cur.text, ["autoCompactWindow"], window === undefined ? ABSENT : window);
+    backupOnce(p);
+    writeAtomic(p, next);
+    return { changed: true, created: cur.text === undefined, backup: cur.text !== undefined ? `${p}.context-doctor.backup` : undefined, previous };
+  });
 }
 
 /** "400k" / "400000" / "0.4m" -> 400000. Undefined when unparseable. */

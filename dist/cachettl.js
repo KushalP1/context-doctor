@@ -41,7 +41,7 @@ import { rowsOf } from "./scan.js";
 import { CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, pricingFor, usageCost } from "./pricing.js";
 import { realModel } from "./tokens.js";
 import { backupOnce } from "./install.js";
-import { ABSENT, readSettings, setJsonPath, writeAtomic } from "./settingsedit.js";
+import { ABSENT, readSettings, setJsonPath, withSettingsLock, writeAtomic } from "./settingsedit.js";
 import { effectiveTtl, settingsSources, ttlOverrides } from "./effective.js";
 import { compareVersions, describeInstalls } from "./modelswitch.js";
 import { claudeDir } from "./claudedir.js";
@@ -278,14 +278,17 @@ export function currentTtl(home, env = process.env, cwd = process.cwd()) {
 /** Set (or with undefined, remove) promptCacheTtl / subagentPromptCacheTtl in the user's settings.json, editing only that key. */
 export function setCacheTtl(kind, ttl, home) {
     const p = claudeSettingsPath(home);
-    const cur = readSettings(p);
-    const previous = cur.data[KEY[kind]];
-    if (ttl === undefined ? previous === undefined : previous === ttl)
-        return { changed: false, created: false, ...(previous !== undefined ? { previous } : {}) };
-    const next = setJsonPath(cur.text, [KEY[kind]], ttl === undefined ? ABSENT : ttl);
-    backupOnce(p);
-    writeAtomic(p, next);
-    return { changed: true, created: cur.text === undefined, backup: cur.text !== undefined ? `${p}.context-doctor.backup` : undefined, previous };
+    // Read and written under the lock fix and autopilot take: a concurrent writer's key is not lost.
+    return withSettingsLock(p, () => {
+        const cur = readSettings(p);
+        const previous = cur.data[KEY[kind]];
+        if (ttl === undefined ? previous === undefined : previous === ttl)
+            return { changed: false, created: false, ...(previous !== undefined ? { previous } : {}) };
+        const next = setJsonPath(cur.text, [KEY[kind]], ttl === undefined ? ABSENT : ttl);
+        backupOnce(p);
+        writeAtomic(p, next);
+        return { changed: true, created: cur.text === undefined, backup: cur.text !== undefined ? `${p}.context-doctor.backup` : undefined, previous };
+    });
 }
 export function settingKey(kind) {
     return KEY[kind];

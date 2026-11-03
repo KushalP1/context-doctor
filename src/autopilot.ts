@@ -25,6 +25,7 @@ import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isEphemeralPath, readJson, writeJsonWithBackup } from "./install.js";
+import { withSettingsLock } from "./settingsedit.js";
 import { formatTokens } from "./tokens.js";
 import { codexAuthMode, codexHomeIn, codexRouting, routeCodex, unrouteCodex } from "./codexroute.js";
 import { claudeDir } from "./claudedir.js";
@@ -247,12 +248,15 @@ export function keepToolSearch(env: Record<string, string>): boolean {
 function migrateToolSearch(paths: AutopilotPaths, cfg: AutopilotConfig): void {
   if (cfg.setToolSearch !== undefined) return;
   try {
-    const settings = readJson(paths.settings);
-    const env = settings.env as Record<string, string> | undefined;
-    if (!env || env.ANTHROPIC_BASE_URL !== proxyUrl(cfg.port)) return;
-    const set = keepToolSearch(env);
-    if (set) writeJsonWithBackup(paths.settings, settings);
-    writeFileSync(paths.config, JSON.stringify({ ...cfg, setToolSearch: set }, null, 2));
+    // Under the settings lock (fix, cache-ttl, compact-window take it too), waiting briefly: a prompt is waiting.
+    withSettingsLock(paths.settings, () => {
+      const settings = readJson(paths.settings);
+      const env = settings.env as Record<string, string> | undefined;
+      if (!env || env.ANTHROPIC_BASE_URL !== proxyUrl(cfg.port)) return;
+      const set = keepToolSearch(env);
+      if (set) writeJsonWithBackup(paths.settings, settings);
+      writeFileSync(paths.config, JSON.stringify({ ...cfg, setToolSearch: set }, null, 2));
+    }, 500);
   } catch {
     /* the self-heal must never disturb a prompt */
   }
@@ -566,15 +570,19 @@ export async function autopilotOn(port = DEFAULT_AUTOPILOT_PORT, paths = autopil
   }
   lines.push(`✓ Proxy running with autopilot on ${proxyUrl(port)} (${how})`);
 
-  const settings = readJson(paths.settings);
-  const env = (settings.env ??= {}) as Record<string, string>;
-  const previousBaseUrl = baseUrlToRestore(paths, port, env.ANTHROPIC_BASE_URL ?? null);
+  // Read and written under the settings lock fix, cache-ttl and compact-window take: no concurrent key is lost.
+  const { previousBaseUrl, setToolSearch } = withSettingsLock(paths.settings, () => {
+    const settings = readJson(paths.settings);
+    const env = (settings.env ??= {}) as Record<string, string>;
+    const previousBaseUrl = baseUrlToRestore(paths, port, env.ANTHROPIC_BASE_URL ?? null);
+    env.ANTHROPIC_BASE_URL = proxyUrl(port);
+    const setToolSearch = keepToolSearch(env);
+    writeJsonWithBackup(paths.settings, settings);
+    return { previousBaseUrl, setToolSearch };
+  });
   if (previousBaseUrl && previousBaseUrl !== proxyUrl(port)) {
     lines.push(`! settings.json already routed Claude Code to ${previousBaseUrl}; autopilot forwards to api.anthropic.com instead. \`autopilot off\` restores it.`);
   }
-  env.ANTHROPIC_BASE_URL = proxyUrl(port);
-  const setToolSearch = keepToolSearch(env);
-  writeJsonWithBackup(paths.settings, settings);
   // Codex on an API key: its address is openai_base_url in config.toml.
   let codex: ReturnType<typeof routeCodex> = { routed: false };
   try { codex = routeCodex(homeOf(paths), codexUrl(port), isOurCodexUrl(port, paths)); } catch (e) { codex = { routed: false, line: `! Codex not routed: ${(e as Error).message}` }; }
@@ -593,21 +601,24 @@ export async function autopilotOn(port = DEFAULT_AUTOPILOT_PORT, paths = autopil
 export async function autopilotOff(paths = autopilotPaths(), exec: ServiceExec = tryRun): Promise<string[]> {
   const lines: string[] = [];
   const cfg = readConfig(paths);
-  const settings = readJson(paths.settings);
-  const env = settings.env as Record<string, string> | undefined;
-  // With the config damaged its port is unknown; the proxy URL in settings
-  // must still go, or every new Claude Code session points at a proxy whose
-  // service is being removed.
-  const ours = env?.ANTHROPIC_BASE_URL ? isOurProxyUrl(env.ANTHROPIC_BASE_URL, cfg?.port, paths) : false;
-  if (env && ours) {
+  // Read and written under the settings lock fix, cache-ttl and compact-window take.
+  const unrouted = withSettingsLock(paths.settings, () => {
+    const settings = readJson(paths.settings);
+    const env = settings.env as Record<string, string> | undefined;
+    // With the config damaged its port is unknown; the proxy URL in settings
+    // must still go, or every new Claude Code session points at a proxy whose
+    // service is being removed.
+    const ours = env?.ANTHROPIC_BASE_URL ? isOurProxyUrl(env.ANTHROPIC_BASE_URL, cfg?.port, paths) : false;
+    if (!env || !ours) return false;
     const restore = cfg?.previousBaseUrl && !isOurProxyUrl(cfg.previousBaseUrl, cfg.port, paths) ? cfg.previousBaseUrl : undefined;
     if (restore) env.ANTHROPIC_BASE_URL = restore;
     else delete env.ANTHROPIC_BASE_URL;
     if (cfg?.setToolSearch && env.ENABLE_TOOL_SEARCH === "auto") delete env.ENABLE_TOOL_SEARCH;
     if (Object.keys(env).length === 0) delete settings.env;
     writeJsonWithBackup(paths.settings, settings);
-    lines.push("✓ Claude Code no longer routed through the proxy (new sessions)");
-  }
+    return true;
+  });
+  if (unrouted) lines.push("✓ Claude Code no longer routed through the proxy (new sessions)");
   // Our address in Codex's config.toml goes too, whether or not we recorded it.
   try {
     if (unrouteCodex(homeOf(paths), isOurCodexUrl(cfg?.port, paths))) lines.push("✓ Codex no longer routed through the proxy (new sessions)");

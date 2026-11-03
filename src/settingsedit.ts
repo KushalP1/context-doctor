@@ -11,7 +11,7 @@
  * file's mode; a lock file serialises context-doctor's own writers.
  */
 
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { tilde } from "./claudedir.js";
 
@@ -424,6 +424,26 @@ export function removeFile(path: string): void {
 }
 
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
+/** Locks this process holds: a nested withLock of the same file runs inside the outer one instead of waiting on itself. */
+const held = new Set<string>();
+
+/** The lock every context-doctor writer of Claude Code's settings.json takes (fix, cache-ttl, compact-window, autopilot): beside the file. */
+export function settingsLockPath(settingsFile: string): string {
+  return join(dirname(settingsFile), ".context-doctor-fixes.lock");
+}
+
+/** Run `fn` holding the lock of Claude Code's settings.json at `settingsFile` (its folder created if missing). */
+export function withSettingsLock<T>(settingsFile: string, fn: () => T, waitMs?: number): T {
+  const dir = dirname(settingsFile);
+  const created = !existsSync(dir);
+  if (created) mkdirSync(dir, { recursive: true });
+  try {
+    return withLock(settingsLockPath(settingsFile), fn, waitMs);
+  } finally {
+    // A folder made only to hold the lock goes again (a run that changed nothing leaves nothing).
+    if (created) try { rmdirSync(dir); } catch { /* it holds something now */ }
+  }
+}
 
 /**
  * Run `fn` holding `lockPath` (created exclusively). Another context-doctor
@@ -431,6 +451,7 @@ const sleeper = new Int32Array(new SharedArrayBuffer(4));
  * taken over (its writer died).
  */
 export function withLock<T>(lockPath: string, fn: () => T, waitMs = 10_000, staleMs = 30_000): T {
+  if (held.has(lockPath)) return fn();
   const until = Date.now() + waitMs;
   let fd: number | undefined;
   for (;;) {
@@ -448,9 +469,11 @@ export function withLock<T>(lockPath: string, fn: () => T, waitMs = 10_000, stal
       Atomics.wait(sleeper, 0, 0, 25);
     }
   }
+  held.add(lockPath);
   try {
     return fn();
   } finally {
+    held.delete(lockPath);
     try { closeSync(fd); } catch { /* closed */ }
     try { unlinkSync(lockPath); } catch { /* gone */ }
   }

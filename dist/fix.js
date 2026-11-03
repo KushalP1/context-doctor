@@ -36,7 +36,7 @@ import { forEachLine, listSessions, isClaudeSession } from "./session.js";
 import { pricingFor } from "./pricing.js";
 import { contextWindowFor, realModel } from "./tokens.js";
 import { adviseTtl, estimateCacheTtl } from "./cachettl.js";
-import { ABSENT, getPath, parseSettingsText, readSettings, removeFile, sameJson, setJsonPath, SettingsError, withLock, writeAtomic } from "./settingsedit.js";
+import { ABSENT, getPath, parseSettingsText, readSettings, removeFile, sameJson, setJsonPath, SettingsError, settingsLockPath, withLock, writeAtomic } from "./settingsedit.js";
 import { compactWindowOverrides, processEnvWhere, settingsSources, shellSet, ttlOverrides } from "./effective.js";
 import { tilde } from "./claudedir.js";
 import { applyPrune, undoPrune } from "./prune.js";
@@ -178,8 +178,9 @@ export function planFixes(i) {
 export function fixRecordPath(home) {
     return join(claudeDir(home), ".context-doctor-fixes.json");
 }
+/** The lock of the user's settings.json, which cache-ttl, compact-window and autopilot take too. */
 function lockPath(home) {
-    return join(claudeDir(home), ".context-doctor-fixes.lock");
+    return settingsLockPath(join(claudeDir(home), "settings.json"));
 }
 /**
  * The records, strictly: an absent file is none; a file that is not ours to

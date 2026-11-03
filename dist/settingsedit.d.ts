@@ -64,6 +64,10 @@ export declare function editJsonText(text: string | undefined, after: Record<str
 export declare function writeAtomic(path: string, text: string): void;
 /** Remove a file through a symbolic link: the target goes, the link would dangle, so the link goes too. */
 export declare function removeFile(path: string): void;
+/** The lock every context-doctor writer of Claude Code's settings.json takes (fix, cache-ttl, compact-window, autopilot): beside the file. */
+export declare function settingsLockPath(settingsFile: string): string;
+/** Run `fn` holding the lock of Claude Code's settings.json at `settingsFile` (its folder created if missing). */
+export declare function withSettingsLock<T>(settingsFile: string, fn: () => T, waitMs?: number): T;
 /**
  * Run `fn` holding `lockPath` (created exclusively). Another context-doctor
  * holding it is waited for, up to `waitMs`; a lock older than `staleMs` is

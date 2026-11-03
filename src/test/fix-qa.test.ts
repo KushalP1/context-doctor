@@ -164,6 +164,37 @@ test("concurrent runs: eight processes applying four fixes lose nothing", async 
   assert.equal(read(file), '{\n  "a": 1\n}\n');
 });
 
+test("concurrent writers of settings.json: cache-ttl, compact-window, fix and autopilot off share one lock and lose nothing", async () => {
+  // Autopilot on (its proxy URL in settings.json), and every other writer starting at the same moment.
+  const { home: h, file } = home(JSON.stringify({ a: 1, env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8787" } }, null, 2) + "\n");
+  writeFileSync(join(h, ".claude", ".context-doctor-autopilot.json"), JSON.stringify({ port: 8787, node: process.execPath, cli: "/x" }));
+  const script = join(h, "one.mjs");
+  const mod = (m: string) => JSON.stringify(new URL(`../${m}.js`, import.meta.url).href);
+  writeFileSync(script, [
+    `const [what, go] = process.argv.slice(2);`,
+    `const home = process.env.HOME;`,
+    `const { setCacheTtl } = await import(${mod("cachettl")});`,
+    `const { setCompactWindow } = await import(${mod("compactwindow")});`,
+    `const { applyFix } = await import(${mod("fix")});`,
+    `const { autopilotOff, autopilotPaths } = await import(${mod("autopilot")});`,
+    `while (Date.now() < Number(go)) {}`,
+    `if (what === "ttl") setCacheTtl("main", "1h", home);`,
+    `if (what === "ttl-sub") setCacheTtl("subagents", "5m", home);`,
+    `if (what === "window") setCompactWindow(400000, home);`,
+    `if (what === "fix") { const r = await applyFix({ id: "tool-search", title: "", basis: "", quality: "", change: "", state: "available", value: "auto" }, { home }); if (!r.ok) process.exit(1); }`,
+    `if (what === "off") await autopilotOff(autopilotPaths(home), () => true);`,
+  ].join("\n"));
+  const go = Date.now() + 1500;
+  const jobs = ["ttl", "ttl-sub", "window", "fix", "off", "ttl", "ttl-sub", "window", "fix"];
+  const env = { ...sandboxEnv(h), CONTEXT_DOCTOR_NO_MANAGED_SETTINGS: "1" };
+  const codes = await Promise.all(jobs.map((what) => new Promise<number>((res) => spawn(process.execPath, [script, what, String(go)], { env, stdio: "ignore" }).on("exit", (c) => res(c ?? 1)))));
+  assert.deepEqual(codes, codes.map(() => 0));
+  const s = JSON.parse(read(file));
+  assert.deepEqual([s.a, s.promptCacheTtl, s.subagentPromptCacheTtl, s.autoCompactWindow, s.env?.ENABLE_TOOL_SEARCH, s.env?.ANTHROPIC_BASE_URL], [1, "1h", "5m", 400000, "auto", undefined]);
+  assert.ok(!existsSync(join(h, ".claude", ".context-doctor-fixes.lock")), "no lock left");
+  assert.deepEqual(readdirSync(join(h, ".claude")).filter((f) => f.endsWith(".tmp")), [], "no temporary file left");
+});
+
 test("CLAUDE_CONFIG_DIR: Claude Code's folder and .claude.json follow it, for the real user only", () => {
   const env = { CLAUDE_CONFIG_DIR: "/tmp/cc-config" };
   assert.equal(claudeDir(undefined, env), resolve("/tmp/cc-config"));

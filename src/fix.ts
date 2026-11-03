@@ -38,7 +38,7 @@ import { forEachLine, listSessions, isClaudeSession } from "./session.js";
 import { pricingFor } from "./pricing.js";
 import { contextWindowFor, realModel } from "./tokens.js";
 import { adviseTtl, estimateCacheTtl, type CacheTtlReport, type CurrentTtl, type TtlKind } from "./cachettl.js";
-import { ABSENT, getPath, parseSettingsText, readSettings, removeFile, sameJson, setJsonPath, SettingsError, withLock, writeAtomic } from "./settingsedit.js";
+import { ABSENT, getPath, parseSettingsText, readSettings, removeFile, sameJson, setJsonPath, SettingsError, settingsLockPath, withLock, writeAtomic } from "./settingsedit.js";
 import { compactWindowOverrides, processEnvWhere, settingsSources, shellSet, ttlOverrides } from "./effective.js";
 import { tilde } from "./claudedir.js";
 import { applyPrune, undoPrune, type ProjectPlan } from "./prune.js";
@@ -259,8 +259,9 @@ export function fixRecordPath(home?: string): string {
   return join(claudeDir(home), ".context-doctor-fixes.json");
 }
 
+/** The lock of the user's settings.json, which cache-ttl, compact-window and autopilot take too. */
 function lockPath(home?: string): string {
-  return join(claudeDir(home), ".context-doctor-fixes.lock");
+  return settingsLockPath(join(claudeDir(home), "settings.json"));
 }
 
 /**
