@@ -259,9 +259,7 @@ the estimator to noise. Calibration needs a real tokenizer, not this data.
 
 Each release with the measurements behind it. Dollar figures are as measured when the release shipped, with the prices and counting of the time; the 0.32 audit fixed both, and the README's headline figures are the re-measured ones.
 
-## Shipped on main, not yet released
-
-### Fixed since 0.41.0
+## Shipped in 0.42.0: an audit of 0.41
 
 From an independent audit of 0.41.0 (2026-11-03, three auditors: `spend` and `budget`; `fix` and its subagent lever; the CLI, install and docs), each with a regression test that fails on the code before:
 
