@@ -738,9 +738,11 @@ export async function runDoctor(): Promise<void> {
         spent = `; ${b.period === "day" ? "today" : "this week"} $${s.usd.toFixed(2)} (${Math.round((s.usd / b.usd) * 100)}%)`;
       } catch { /* the ledger could not be read: the budget alone */ }
       const hooked = checks.some((c) => ["Every-prompt hook", "Codex hook", "Gemini CLI hook"].includes(c.label) && c.status === "ok");
+      // As `budget` writes it: $50, $1,000, $12.50 (it printed $12.5 and $1000).
+      const usd = Number.isInteger(b.usd) ? `$${b.usd.toLocaleString("en-US")}` : `$${b.usd.toFixed(2)}`;
       checks.push(hooked
-        ? { label: "Spend budget", status: "ok", detail: `$${b.usd} a ${b.period}${b.block ? ", prompts over it held" : ", warns at 50/80/100%"}${spent}` }
-        : { label: "Spend budget", status: "warn", detail: `$${b.usd} a ${b.period}${spent}, but no every-prompt hook is registered to apply it: run context-doctor install` });
+        ? { label: "Spend budget", status: "ok", detail: `${usd} a ${b.period}${b.block ? ", prompts over it held" : ", warns at 50/80/100%"}${spent}` }
+        : { label: "Spend budget", status: "warn", detail: `${usd} a ${b.period}${spent}, but no every-prompt hook is registered to apply it: run context-doctor install` });
     }
   }
 

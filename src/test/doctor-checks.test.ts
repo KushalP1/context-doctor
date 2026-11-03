@@ -115,3 +115,11 @@ test("Devin is reported for what it is: hooks from ~/.claude run in its CLI, wit
   mkdirSync(join(home, ".devin"));
   assert.match(devinCheck(home).detail, /Devin Desktop found \(~[\\/]\.devin\)/);
 });
+
+test("doctor writes the spend budget as `budget` does: $12.50 and $1,000, not $12.5 and $1000", async () => {
+  const home = claudeHome({ hooks: { UserPromptSubmit: [ourHook] } });
+  writeFileSync(join(home, ".claude", ".context-doctor-budget.json"), JSON.stringify({ usd: 12.5, period: "day", block: false, at: Date.now() }));
+  assert.match((await doctor(home)).out, /Spend budget\s+\$12\.50 a day, warns at 50\/80\/100%/);
+  writeFileSync(join(home, ".claude", ".context-doctor-budget.json"), JSON.stringify({ usd: 1000, period: "week", block: true, at: Date.now() }));
+  assert.match((await doctor(home)).out, /Spend budget\s+\$1,000 a week, prompts over it held/);
+});
