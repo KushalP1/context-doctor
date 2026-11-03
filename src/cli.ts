@@ -1461,7 +1461,7 @@ async function main(): Promise<void> {
     }
     const b = readBudget();
     const s = b ? periodSpend(b.period) : undefined;
-    if (args.json) console.log(JSON.stringify(b && s ? { ...b, spent: s.usd, byTool: s.byTool, periodStart: s.start, periodEnd: s.end } : null, null, 2));
+    if (args.json) console.log(JSON.stringify(b && s ? { ...b, spent: s.usd, byTool: s.byTool, periodStart: s.start, periodEnd: s.end, unpriced: s.unpriced ?? null } : null, null, 2));
     else console.log(withInvocation(renderBudgetStatus(b, s, promptHookInstalled())));
     return;
   }

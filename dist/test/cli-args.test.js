@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -122,6 +122,23 @@ test("--json is JSON or an error: never a text report a script then fails to par
     assert.match(run("spend", "--help").stdout, /--json {18}\(analyze, /);
     assert.match(run("fix", "--help").stdout, /--days <n>/, "fix reads --days");
     assert.ok(!/--json/.test(run("doctor", "--help").stdout));
+});
+test("budget --json says how many of the period's requests had no known price", () => {
+    const h = mkdtempSync(join(tmpdir(), "ctxdoc-budget-json-"));
+    const project = join(h, ".claude", "projects", "-work");
+    mkdirSync(project, { recursive: true });
+    const row = (id, model) => JSON.stringify({
+        type: "assistant", timestamp: new Date().toISOString(), sessionId: "s1", cwd: "/work",
+        message: { id, role: "assistant", model, content: [{ type: "text", text: "ok" }], usage: { input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+    });
+    writeFileSync(join(project, "s1.jsonl"), [row("m1", "claude-sonnet-5"), row("m2", "some-local-model")].join("\n") + "\n");
+    const go = (...args) => spawnSync(process.execPath, [cli, ...args], { encoding: "utf8", env: sandboxEnv(h), cwd: h });
+    assert.equal(go("budget", "50/day").status, 0);
+    const r = go("budget", "--json");
+    assert.equal(r.status, 0, r.stderr);
+    const j = JSON.parse(r.stdout);
+    assert.ok(j.spent > 0, r.stdout);
+    assert.deepEqual(j.unpriced, { requests: 1, models: ["some-local-model"] });
 });
 test("analyze with no file says what is missing", () => {
     const r = run("analyze");
