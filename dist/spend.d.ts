@@ -55,7 +55,7 @@ export interface SpendItem {
     priced: boolean;
     /** Claude Code: run by a subagent. */
     subagent?: boolean;
-    /** Claude Code: the reply's row uuid, which a fork's copy shares. */
+    /** Claude Code: the reply's row uuid, which a fork's copy shares. Codex: the event's codexEventKey, which a forked rollout's copy shares. */
     key?: string;
 }
 /** A project's name as `savings` shows it: the folder's path with "-" for separators, less "-Users-<you>-". */
@@ -74,6 +74,7 @@ export declare const CODEX_SPEND_ROWS: Extractor<null>;
 export declare function codexFileSpend(file: string, since: number, until?: number): SpendItem[];
 /** Codex rollouts written since `since`: the live ones and the archived. */
 export declare function codexFiles(since: number, home?: string): string[];
+/** Every Codex request in the window, once: a forked rollout's copy of its parent's (codexEventKey) counts at the earliest time met. */
 export declare function codexSpend(since: number, until?: number, home?: string): SpendItem[];
 /**
  * What `spend` takes from a Gemini CLI chat (JSONL): each `gemini` message's

@@ -241,6 +241,22 @@ test("a reply streamed across midnight is yesterday's: its rows appended after t
         assert.ok(Math.abs(after - 0.2) < 1e-9 && Math.abs(after - full) < 1e-9, `${after} vs ${full}`);
     });
 });
+test("a forked Codex rollout's copy of its parent's requests counts once in the period", async () => {
+    await inLedgerSandbox((home) => {
+        const dir = join(home, ".codex", "sessions", "2026", "10", "14");
+        mkdirSync(dir, { recursive: true });
+        const iso = (t) => new Date(t).toISOString();
+        // gpt-5.5 at $1.25 / 1M: 80k uncached is $0.10.
+        const tc = (at, total) => ({ timestamp: iso(at), type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: total, total_tokens: total }, last_token_usage: { input_tokens: 80_000, total_tokens: 80_000 } } } });
+        const ctx = (at) => ({ timestamp: iso(at), type: "turn_context", payload: { cwd: "/work/app", model: "gpt-5.5" } });
+        const write = (name, rows) => writeFileSync(join(dir, name), rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+        write("rollout-2026-10-14T10-00-00-parent.jsonl", [ctx(NOW - 3 * HOUR), tc(NOW - 3 * HOUR, 80_000), tc(NOW - 2 * HOUR, 160_000)]);
+        // The fork: the parent's two copied at its own time, then one of its own.
+        write("rollout-2026-10-14T13-00-00-fork.jsonl", [ctx(NOW - HOUR), tc(NOW - HOUR, 80_000), tc(NOW - HOUR, 160_000), tc(NOW - HOUR / 2, 240_000)]);
+        const s = periodSpend("day", NOW, home);
+        assert.ok(Math.abs(s.usd - 0.3) < 1e-9 && Math.abs((s.byTool.codex ?? 0) - 0.3) < 1e-9, `${s.usd}: three requests, not five`);
+    });
+});
 test("a ledger entry in a shape this version does not write is read again, not thrown on every prompt", async () => {
     await inLedgerSandbox((home, transcript) => {
         writeFileSync(transcript, reply(NOW - HOUR).join("\n") + "\n");

@@ -24,7 +24,7 @@
  */
 
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { codexDir } from "./codexdir.js";
@@ -205,7 +205,8 @@ function lineStart(fd: number, size: number): number {
 function readFile(tool: Tool, file: string, since: number, size: number): Omit<FileEntry, "t" | "s" | "m" | "i"> {
   const k: string[] = [], d: number[] = [];
   if (tool !== "claude") {
-    for (const r of tool === "codex" ? codexFileSpend(file, since) : geminiFileSpend(file, since)) { k.push(""); d.push(r.usd); }
+    // A Codex request's key (a forked rollout repeats its parent's) kept short: 12 hex digits of its hash.
+    for (const r of tool === "codex" ? codexFileSpend(file, since) : geminiFileSpend(file, since)) { k.push(r.key ? createHash("sha1").update(r.key).digest("hex").slice(0, 12) : ""); d.push(r.usd); }
     return { k, d };
   }
   const reqs = claudeFileUsage(file, since);

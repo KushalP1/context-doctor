@@ -72,10 +72,24 @@ export declare function readClaudeReadings(since?: number, path?: string): Limit
 export declare function codexSessionsRoot(home?: string): string;
 /** Codex rollouts under `root` (YYYY/MM/DD folders, or flat) written since `since`. */
 export declare function rolloutFiles(root: string, since: number): string[];
+/** The token counts a Codex event's identity is made of, in its running total and its last request. */
+export declare const CODEX_USAGE_FIELDS: readonly ["input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens"];
+/**
+ * A Codex token_count event's identity: its running total and its last
+ * request. A forked rollout (a subagent's, a fork of a thread) begins with a
+ * copy of its parent's history, token_count events included, all stamped at
+ * the moment of the fork: seen on this machine, a subagent's rollout repeated
+ * 11 of its parent's 18 requests. The copy carries the same counts, so this
+ * key counts each request once, however many rollouts hold it. "" when the
+ * event has no running total (nothing to tell a copy by).
+ */
+export declare function codexEventKey(total: unknown, last: unknown): string;
 /**
  * Codex readings and usage since `since`. A token_count event repeats the
  * last request's usage when only the limits were refreshed, so a request is
- * counted when the running total moves.
+ * counted when the running total moves. A forked rollout's copy of its
+ * parent's events (codexEventKey) is counted once, at the earliest time met:
+ * the copy is stamped at the fork, its limits readings stale by then.
  */
 export declare function codexLimitData(since: number, root?: string): {
     readings: LimitReading[];

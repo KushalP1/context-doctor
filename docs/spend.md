@@ -17,7 +17,7 @@ context-doctor spend --share         # totals only, no paths or project names, t
 | Tool | From | Counted |
 |---|---|---|
 | Claude Code | `~/.claude/projects/*/*.jsonl` (`CLAUDE_CONFIG_DIR` honoured) and each session's `subagents/agent-*.jsonl` | every reply's `usage`, once: a reply written as several rows is one request (its output settled on the last row), and a forked session's copy of its parent is counted once |
-| Codex | `~/.codex/sessions` and `~/.codex/archived_sessions` (`CODEX_HOME` honoured) | each `token_count` event whose running total moved (one that only refreshed the limits repeats the last request); the model from `turn_context`, the project from the session's folder |
+| Codex | `~/.codex/sessions` and `~/.codex/archived_sessions` (`CODEX_HOME` honoured) | each `token_count` event whose running total moved (one that only refreshed the limits repeats the last request), a forked rollout's copy of its parent's events counted once; the model from `turn_context`, the project from the session's folder |
 | Gemini CLI | `~/.gemini/tmp/<project>/chats/session-*.json[l]` | each `gemini` message's `tokens`, its last copy; a message later rewound was still billed, so it is counted; thoughts bill as output |
 | Cursor | its `state.vscdb` (`cursorDiskKV`), needs SQLite (Node 22.13+ or the `sqlite3` command) | each agent reply's `tokenCount`, at the chat's model (`modelConfig.modelName`); the project from the workspace that lists the chat |
 

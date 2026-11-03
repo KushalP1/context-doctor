@@ -211,6 +211,25 @@ export function rolloutFiles(root, since) {
     return out;
 }
 const num = (v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
+/** The token counts a Codex event's identity is made of, in its running total and its last request. */
+export const CODEX_USAGE_FIELDS = ["input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens"];
+/**
+ * A Codex token_count event's identity: its running total and its last
+ * request. A forked rollout (a subagent's, a fork of a thread) begins with a
+ * copy of its parent's history, token_count events included, all stamped at
+ * the moment of the fork: seen on this machine, a subagent's rollout repeated
+ * 11 of its parent's 18 requests. The copy carries the same counts, so this
+ * key counts each request once, however many rollouts hold it. "" when the
+ * event has no running total (nothing to tell a copy by).
+ */
+export function codexEventKey(total, last) {
+    if (!total || typeof total !== "object" || !last || typeof last !== "object")
+        return "";
+    const t = total, l = last;
+    if (!num(t.total_tokens))
+        return "";
+    return `cx:${CODEX_USAGE_FIELDS.map((k) => num(t[k])).join(",")}/${CODEX_USAGE_FIELDS.map((k) => num(l[k])).join(",")}`;
+}
 /** "codex:300", "codex:10080"; a limit id other than "codex" is kept in the key. */
 function codexWindow(limitId, minutes, plan) {
     // The plan is part of the key: two sign-ins (a team plan, a free one) are two accounts' limits.
@@ -220,13 +239,16 @@ function codexWindow(limitId, minutes, plan) {
 /**
  * Codex readings and usage since `since`. A token_count event repeats the
  * last request's usage when only the limits were refreshed, so a request is
- * counted when the running total moves.
+ * counted when the running total moves. A forked rollout's copy of its
+ * parent's events (codexEventKey) is counted once, at the earliest time met:
+ * the copy is stamped at the fork, its limits readings stale by then.
  */
 export function codexLimitData(since, root = codexSessionsRoot()) {
     const readings = [];
     const usage = [];
     if (!existsSync(root))
         return { readings, usage };
+    const events = [];
     for (const file of rolloutFiles(root, since)) {
         let model;
         let total = -1;
@@ -256,33 +278,46 @@ export function codexLimitData(since, root = codexSessionsRoot()) {
                     return;
                 const runTotal = num(p.info?.total_token_usage?.total_tokens);
                 const last = p.info?.last_token_usage;
+                const ev = { ts, key: codexEventKey(p.info?.total_token_usage, last), file, readings: [] };
                 // No running total recorded: every event is a request.
                 if (last && num(last.input_tokens) > 0 && (runTotal === 0 || runTotal !== total)) {
                     total = runTotal;
                     const u = openAIUsage(last);
                     const price = pricingFor(model);
-                    usage.push({ ts, app: "codex", model, input: num(u.input_tokens), read: num(u.cache_read_input_tokens), write: num(u.cache_creation_input_tokens), output: num(u.output_tokens), usd: price ? usageCost(u, price).totalUsd : 0 });
+                    ev.point = { ts, app: "codex", model, input: num(u.input_tokens), read: num(u.cache_read_input_tokens), write: num(u.cache_creation_input_tokens), output: num(u.output_tokens), usd: price ? usageCost(u, price).totalUsd : 0 };
                 }
                 const rl = p.rate_limits;
-                if (!rl || typeof rl !== "object")
-                    return;
-                for (const slot of ["primary", "secondary"]) {
-                    const w = rl[slot];
-                    const pct = w?.used_percent;
-                    const minutes = num(w?.window_minutes);
-                    if (typeof pct !== "number" || !Number.isFinite(pct) || pct < 0 || pct > 1000 || !minutes)
-                        continue;
-                    const reset = num(w.resets_at);
-                    readings.push({ ts, app: "codex", window: codexWindow(rl.limit_id, minutes, rl.plan_type), pct, resetsAt: reset ? reset * 1000 : undefined, windowMs: minutes * MIN, plan: typeof rl.plan_type === "string" ? rl.plan_type.slice(0, 20) : undefined });
+                if (rl && typeof rl === "object") {
+                    for (const slot of ["primary", "secondary"]) {
+                        const w = rl[slot];
+                        const pct = w?.used_percent;
+                        const minutes = num(w?.window_minutes);
+                        if (typeof pct !== "number" || !Number.isFinite(pct) || pct < 0 || pct > 1000 || !minutes)
+                            continue;
+                        const reset = num(w.resets_at);
+                        ev.readings.push({ ts, app: "codex", window: codexWindow(rl.limit_id, minutes, rl.plan_type), pct, resetsAt: reset ? reset * 1000 : undefined, windowMs: minutes * MIN, plan: typeof rl.plan_type === "string" ? rl.plan_type.slice(0, 20) : undefined });
+                    }
                 }
+                if (ev.point || ev.readings.length)
+                    events.push(ev);
             });
         }
         catch {
             /* one unreadable rollout must not sink the report */
         }
     }
-    readings.sort((a, b) => a.ts - b.ts);
-    usage.sort((a, b) => a.ts - b.ts);
+    // A key belongs to the rollout that has it first; within it, a refresh of the limits shares its request's key.
+    const owner = new Map();
+    for (const ev of events.sort((a, b) => a.ts - b.ts)) {
+        if (ev.key) {
+            const first = owner.get(ev.key) ?? (owner.set(ev.key, ev.file), ev.file);
+            if (first !== ev.file)
+                continue;
+        }
+        if (ev.point)
+            usage.push(ev.point);
+        readings.push(...ev.readings);
+    }
     return { readings, usage };
 }
 // ---------------------------------------------------------------------------

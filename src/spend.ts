@@ -35,7 +35,7 @@ import { basename, dirname, join } from "node:path";
 import { codexDir } from "./codexdir.js";
 import { homedir } from "node:os";
 import { existsSync, statSync } from "node:fs";
-import { claudeFileUsage, claudeUsageFiles, codexSessionsRoot, rolloutFiles } from "./limits.js";
+import { claudeFileUsage, claudeUsageFiles, codexEventKey, codexSessionsRoot, rolloutFiles } from "./limits.js";
 import { listGeminiChats, readGeminiMessages } from "./gemini.js";
 import { cursorUsage, SqliteUnavailableError } from "./cursor.js";
 import { openAIUsage, pricingFor, usageCost, type RecordedUsage } from "./pricing.js";
@@ -70,7 +70,7 @@ export interface SpendItem {
   priced: boolean;
   /** Claude Code: run by a subagent. */
   subagent?: boolean;
-  /** Claude Code: the reply's row uuid, which a fork's copy shares. */
+  /** Claude Code: the reply's row uuid, which a fork's copy shares. Codex: the event's codexEventKey, which a forked rollout's copy shares. */
   key?: string;
 }
 
@@ -143,7 +143,7 @@ export function claudeSpend(since: number, until = Infinity, tops?: string[], on
  * and every token_count event's last request and running total.
  */
 export const CODEX_SPEND_ROWS: Extractor<null> = {
-  id: "codex-spend.1",
+  id: "codex-spend.2",
   init: () => null,
   line(line, row, out) {
     if (!line.includes('"token_count"') && !line.includes('"turn_context"') && !line.includes('"session_meta"')) return;
@@ -160,7 +160,7 @@ export const CODEX_SPEND_ROWS: Extractor<null> = {
     const last = p.info?.last_token_usage;
     if (!last || typeof last !== "object") return;
     const total = p.info?.total_token_usage?.total_tokens;
-    out.push({ k: "t", ts: String(e.timestamp ?? ""), total: typeof total === "number" ? total : 0, u: pick(last, ["input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens", "input_tokens_details", "prompt_tokens", "prompt_tokens_details", "completion_tokens"]) });
+    out.push({ k: "t", ts: String(e.timestamp ?? ""), total: typeof total === "number" ? total : 0, key: codexEventKey(p.info?.total_token_usage, last), u: pick(last, ["input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens", "input_tokens_details", "prompt_tokens", "prompt_tokens_details", "completion_tokens"]) });
   },
 };
 
@@ -181,7 +181,7 @@ export function codexFileSpend(file: string, since: number, until = Infinity): S
     const ts = Date.parse(r.ts);
     if (!Number.isFinite(ts) || ts < since || ts > until) continue;
     const u = openAIUsage(r.u);
-    out.push(priced({ tool: "codex", ts, project: cwd ? projectName(cwd) : "codex", session: basename(file, ".jsonl"), ...(model ? { model } : {}), input: num(u.input_tokens), read: num(u.cache_read_input_tokens), write: num(u.cache_creation_input_tokens), output: num(u.output_tokens) }, u));
+    out.push(priced({ tool: "codex", ts, project: cwd ? projectName(cwd) : "codex", session: basename(file, ".jsonl"), ...(model ? { model } : {}), input: num(u.input_tokens), read: num(u.cache_read_input_tokens), write: num(u.cache_creation_input_tokens), output: num(u.output_tokens), ...(r.key ? { key: r.key } : {}) }, u));
   }
   return out;
 }
@@ -192,12 +192,14 @@ export function codexFiles(since: number, home = homedir()): string[] {
   return roots.filter((r) => existsSync(r)).flatMap((r) => rolloutFiles(r, since));
 }
 
+/** Every Codex request in the window, once: a forked rollout's copy of its parent's (codexEventKey) counts at the earliest time met. */
 export function codexSpend(since: number, until = Infinity, home = homedir()): SpendItem[] {
-  const out: SpendItem[] = [];
+  const all: SpendItem[] = [];
   for (const f of codexFiles(since, home)) {
-    try { out.push(...codexFileSpend(f, since, until)); } catch { /* unreadable: skipped */ }
+    try { all.push(...codexFileSpend(f, since, until)); } catch { /* unreadable: skipped */ }
   }
-  return out;
+  const seen = new Set<string>();
+  return all.sort((a, b) => a.ts - b.ts).filter((it) => !it.key || (!seen.has(it.key) && Boolean(seen.add(it.key))));
 }
 
 // ---------------------------------------------------------------------------

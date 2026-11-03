@@ -139,7 +139,8 @@ test("Codex: a request each time the running total moves, priced as limits price
       // Archived rollouts were billed too.
       mkdirSync(join(home, ".codex", "archived_sessions"), { recursive: true });
       const src = readFileSync(join(home, ".codex", "sessions", "2026", "09", "28", "rollout-2026-09-28T10-00-00-abc.jsonl"), "utf8");
-      writeFileSync(join(home, ".codex", "archived_sessions", "rollout-2026-09-27T10-00-00-def.jsonl"), src);
+      // Another session's (its running totals its own: a byte-for-byte copy would be the same requests, counted once).
+      writeFileSync(join(home, ".codex", "archived_sessions", "rollout-2026-09-27T10-00-00-def.jsonl"), src.replace(/"total_token_usage":\{"total_tokens":(\d+)\}/g, (_m, n) => `"total_token_usage":{"total_tokens":${Number(n) + 5}}`));
       assert.equal(codexSpend(since, FIXTURE_NOW, home).length, 4);
       assert.equal(codexSpend(FIXTURE_NOW - DAY, FIXTURE_NOW, home).filter((i) => i.ts < FIXTURE_NOW - DAY).length, 0, "the window holds");
     });
@@ -240,6 +241,45 @@ test("Cursor: each reply's tokenCount, an estimate at the chat's model, Auto cou
       db3.prepare("UPDATE cursorDiskKV SET value = ? WHERE key = 'composerData:c1'").run(JSON.stringify({ composerId: "c1", lastUpdatedAt: t + 120_000, modelConfig: { modelName: "claude-4.5-sonnet" } }));
       db3.close();
       assert.equal(cursorSpend(since, FIXTURE_NOW).length, 2, "re-read after the chat changed");
+    }));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cache, { recursive: true, force: true });
+  }
+});
+
+test("Codex: a forked rollout's copy of its parent's requests counts once, in spend, limits and the budget", async () => {
+  const home = mkdtempSync(join(tmpdir(), "cd-spend-codexfork-"));
+  const cache = mkdtempSync(join(tmpdir(), "cd-spend-cache-"));
+  try {
+    const dir = join(home, ".codex", "sessions", "2026", "09", "28");
+    mkdirSync(dir, { recursive: true });
+    const t = FIXTURE_NOW - 3 * DAY;
+    // Two requests in the parent; the fork (a subagent's, as Codex Desktop writes it) starts with a copy of
+    // both, stamped at the fork's own time, then makes one request of its own, its running total carried on.
+    const tc = (at: number, total: Record<string, number>, last: Record<string, number>) => ({ timestamp: iso(at), type: "event_msg", payload: { type: "token_count", info: { total_token_usage: total, last_token_usage: last }, rate_limits: { primary: { used_percent: 10, window_minutes: 300 } } } });
+    const r1 = tc(t + 1_000, { input_tokens: 1_000, output_tokens: 100, total_tokens: 1_100 }, { input_tokens: 1_000, output_tokens: 100, total_tokens: 1_100 });
+    const r2 = tc(t + 9_000, { input_tokens: 2_100, output_tokens: 200, total_tokens: 2_300 }, { input_tokens: 1_100, output_tokens: 100, total_tokens: 1_200 });
+    const meta = (id: string, at: number, extra = {}) => ({ timestamp: iso(at), type: "session_meta", payload: { id, cwd: "/Users/me/tech/app", ...extra } });
+    const ctx = (at: number) => ({ timestamp: iso(at), type: "turn_context", payload: { cwd: "/Users/me/tech/app", model: "gpt-5.5" } });
+    const write = (name: string, rows: unknown[]) => writeFileSync(join(dir, name), rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+    write("rollout-2026-09-28T10-00-00-parent.jsonl", [meta("parent", t), ctx(t + 10), r1, r2]);
+    const f = t + 60_000;
+    const restamp = (r: { timestamp: string }) => ({ ...r, timestamp: iso(f + 2) });
+    write("rollout-2026-09-28T10-01-00-fork.jsonl", [
+      meta("fork", f, { forked_from_id: "parent" }), meta("parent", f + 1), restamp(ctx(t + 10)), restamp(r1), restamp(r2),
+      ctx(f + 5_000), tc(f + 20_000, { input_tokens: 3_100, output_tokens: 300, total_tokens: 3_500 }, { input_tokens: 1_000, output_tokens: 100, total_tokens: 1_100 }),
+    ]);
+    await withSandboxHome(home, () => at(FIXTURE_NOW, cache, () => {
+      const since = FIXTURE_NOW - 30 * DAY;
+      const items = codexSpend(since, FIXTURE_NOW, home);
+      assert.equal(items.length, 3, "two of the parent's, one of the fork's: the copies not again");
+      assert.deepEqual(items.map((i) => i.ts), [t + 1_000, t + 9_000, f + 20_000], "at the parent's own times");
+      // Three distinct requests of 1,000 + 1,100 + 1,000 uncached in, 100 out each, at gpt-5.5's $1.25 / $10.
+      close(items.reduce((n, i) => n + i.usd, 0), (3_100 * 1.25 + 300 * 10) / 1e6, "priced once");
+      const lim = codexLimitData(since, join(home, ".codex", "sessions"));
+      assert.equal(lim.usage.length, 3, "limits' usage fit counts them once too");
+      assert.ok(!lim.readings.some((r) => r.ts === f + 2), "the copies' stale limit readings are not readings at the fork's time");
     }));
   } finally {
     rmSync(home, { recursive: true, force: true });

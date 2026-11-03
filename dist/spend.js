@@ -34,7 +34,7 @@ import { basename, dirname, join } from "node:path";
 import { codexDir } from "./codexdir.js";
 import { homedir } from "node:os";
 import { existsSync, statSync } from "node:fs";
-import { claudeFileUsage, claudeUsageFiles, codexSessionsRoot, rolloutFiles } from "./limits.js";
+import { claudeFileUsage, claudeUsageFiles, codexEventKey, codexSessionsRoot, rolloutFiles } from "./limits.js";
 import { listGeminiChats, readGeminiMessages } from "./gemini.js";
 import { cursorUsage, SqliteUnavailableError } from "./cursor.js";
 import { openAIUsage, pricingFor, usageCost } from "./pricing.js";
@@ -112,7 +112,7 @@ export function claudeSpend(since, until = Infinity, tops, onProgress) {
  * and every token_count event's last request and running total.
  */
 export const CODEX_SPEND_ROWS = {
-    id: "codex-spend.1",
+    id: "codex-spend.2",
     init: () => null,
     line(line, row, out) {
         if (!line.includes('"token_count"') && !line.includes('"turn_context"') && !line.includes('"session_meta"'))
@@ -140,7 +140,7 @@ export const CODEX_SPEND_ROWS = {
         if (!last || typeof last !== "object")
             return;
         const total = p.info?.total_token_usage?.total_tokens;
-        out.push({ k: "t", ts: String(e.timestamp ?? ""), total: typeof total === "number" ? total : 0, u: pick(last, ["input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens", "input_tokens_details", "prompt_tokens", "prompt_tokens_details", "completion_tokens"]) });
+        out.push({ k: "t", ts: String(e.timestamp ?? ""), total: typeof total === "number" ? total : 0, key: codexEventKey(p.info?.total_token_usage, last), u: pick(last, ["input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens", "input_tokens_details", "prompt_tokens", "prompt_tokens_details", "completion_tokens"]) });
     },
 };
 const num = (v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
@@ -167,7 +167,7 @@ export function codexFileSpend(file, since, until = Infinity) {
         if (!Number.isFinite(ts) || ts < since || ts > until)
             continue;
         const u = openAIUsage(r.u);
-        out.push(priced({ tool: "codex", ts, project: cwd ? projectName(cwd) : "codex", session: basename(file, ".jsonl"), ...(model ? { model } : {}), input: num(u.input_tokens), read: num(u.cache_read_input_tokens), write: num(u.cache_creation_input_tokens), output: num(u.output_tokens) }, u));
+        out.push(priced({ tool: "codex", ts, project: cwd ? projectName(cwd) : "codex", session: basename(file, ".jsonl"), ...(model ? { model } : {}), input: num(u.input_tokens), read: num(u.cache_read_input_tokens), write: num(u.cache_creation_input_tokens), output: num(u.output_tokens), ...(r.key ? { key: r.key } : {}) }, u));
     }
     return out;
 }
@@ -176,15 +176,17 @@ export function codexFiles(since, home = homedir()) {
     const roots = [codexSessionsRoot(home), join(codexDir(home), "archived_sessions")];
     return roots.filter((r) => existsSync(r)).flatMap((r) => rolloutFiles(r, since));
 }
+/** Every Codex request in the window, once: a forked rollout's copy of its parent's (codexEventKey) counts at the earliest time met. */
 export function codexSpend(since, until = Infinity, home = homedir()) {
-    const out = [];
+    const all = [];
     for (const f of codexFiles(since, home)) {
         try {
-            out.push(...codexFileSpend(f, since, until));
+            all.push(...codexFileSpend(f, since, until));
         }
         catch { /* unreadable: skipped */ }
     }
-    return out;
+    const seen = new Set();
+    return all.sort((a, b) => a.ts - b.ts).filter((it) => !it.key || (!seen.has(it.key) && Boolean(seen.add(it.key))));
 }
 // ---------------------------------------------------------------------------
 // Gemini CLI

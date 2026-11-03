@@ -23,7 +23,7 @@
  * replies count once. Measured on the author's history: docs/spend.md.
  */
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { codexDir } from "./codexdir.js";
@@ -185,8 +185,9 @@ function lineStart(fd, size) {
 function readFile(tool, file, since, size) {
     const k = [], d = [];
     if (tool !== "claude") {
+        // A Codex request's key (a forked rollout repeats its parent's) kept short: 12 hex digits of its hash.
         for (const r of tool === "codex" ? codexFileSpend(file, since) : geminiFileSpend(file, since)) {
-            k.push("");
+            k.push(r.key ? createHash("sha1").update(r.key).digest("hex").slice(0, 12) : "");
             d.push(r.usd);
         }
         return { k, d };
