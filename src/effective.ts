@@ -82,6 +82,36 @@ export function settingsSources(opts: { home?: string; cwd?: string; env?: NodeJ
   return out;
 }
 
+/** Run from inside a Claude Code session (its Bash tool, a plugin command): Claude Code sets CLAUDECODE for its children. */
+export function underClaudeCode(env: NodeJS.ProcessEnv = process.env): boolean {
+  return !!env.CLAUDECODE?.trim();
+}
+
+/**
+ * Where a value found in the process environment came from, for messages.
+ * Inside a Claude Code session the process carries every settings file's
+ * `env` as it was when the session started, so a value no settings file
+ * holds now is the launching shell's or one removed from settings since.
+ */
+export function processEnvWhere(name: string, value: string, env: NodeJS.ProcessEnv = process.env): string {
+  return underClaudeCode(env)
+    ? `${name}=${value} in this Claude Code session's environment (from the shell that started it, or a settings env removed since: a new session reads settings again)`
+    : `${name}=${value} in the environment`;
+}
+
+/**
+ * Is the process's value of `name` one the user set in their shell? Not when
+ * a settings file's `env` holds the same value (Claude Code copied it into
+ * the session this runs in), nor, inside Claude Code, when it is `written`,
+ * the value context-doctor itself wrote: a copy left from before an undo.
+ */
+export function shellSet(name: string, sources: SettingsSource[], env: NodeJS.ProcessEnv = process.env, written?: string): boolean {
+  const v = env[name];
+  if (v === undefined || v.trim() === "") return false;
+  if (sources.some((s) => s.settings.env?.[name] !== undefined && s.settings.env[name] !== null && String(s.settings.env[name]) === v)) return false;
+  return !(underClaudeCode(env) && written !== undefined && v === written);
+}
+
 /** An environment variable as Claude Code sees it: a settings file's `env` (highest first), else the process. */
 export function effectiveEnv(name: string, sources: SettingsSource[], env: NodeJS.ProcessEnv = process.env): { value: string; where: string } | undefined {
   for (const s of sources) {
@@ -89,7 +119,7 @@ export function effectiveEnv(name: string, sources: SettingsSource[], env: NodeJ
     if (v !== undefined && v !== null && String(v).trim() !== "") return { value: String(v), where: `${name}=${v} in ${tilde(s.path)} env` };
   }
   const v = env[name];
-  if (v !== undefined && v.trim() !== "") return { value: v, where: `${name}=${v} in the environment` };
+  if (v !== undefined && v.trim() !== "") return { value: v, where: processEnvWhere(name, v, env) };
   return undefined;
 }
 

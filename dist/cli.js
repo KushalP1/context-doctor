@@ -57,7 +57,7 @@ import { renderReads, repeatedReads } from "./reads.js";
 import { costPerTask, renderTasks } from "./tasks.js";
 import { planCache, renderCachePlan } from "./cacheplan.js";
 import { cacheMisses, cacheMissesLine, cacheMissesSignificant, renderCacheMisses, MISS_ROWS } from "./cachemisses.js";
-import { renderPayback, subagentPayback } from "./subagentpay.js";
+import { renderPayback, subagentPayback, SUBAGENT_CANDIDATE } from "./subagentpay.js";
 import { compactionQuality, renderCompactionQuality, QUALITY_ROWS } from "./compactquality.js";
 import { isHandoffId, listHandoffs, readHandoff, renderHandoffList, stripControls } from "./handoff.js";
 import { claudeLimitFit, limitSavingsLines, limitsReport, renderLimits } from "./limits.js";
@@ -67,7 +67,7 @@ import { applyPrune, canonical, installedSkills, planPrune, renderPrune, undoPru
 import { lensOverSessions, renderLens, sessionLens, LENS_ROWS } from "./lens.js";
 import { applyFix, fixOverrides, loadFixRecords, parseFixIds, planFixes, readFixRecords, renderFixPlan, renderFixShare, savedSince, undoFixes } from "./fix.js";
 import { claudeMcpConfigs, MCP_ROWS } from "./mcpschema.js";
-import { effectiveEnv, settingsSources } from "./effective.js";
+import { effectiveEnv, settingsSources, shellSet, underClaudeCode } from "./effective.js";
 import { SettingsError } from "./settingsedit.js";
 import { currentTtl, estimateCacheTtl, renderCacheTtl, setCacheTtl, settingKey, subagentTranscripts, ttlUnsupported, CACHE_TTL_SINCE } from "./cachettl.js";
 import { claudeDir } from "./claudedir.js";
@@ -400,7 +400,15 @@ async function measureFixInputs(days) {
     const subagentModel = replaySubagentModels({ since: Date.now() - days * 86_400_000, force: !!force && !/^(0|false)$/i.test(force.value.trim()) });
     const userSm = sources.find((s) => s.name === "user")?.settings.env?.[SUBAGENT_MODEL_ENV];
     const shellSm = process.env[SUBAGENT_MODEL_ENV];
-    const subagentModelSet = userSm !== undefined && userSm !== null ? { value: String(userSm), where: `${tilde(join(claudeDir(), "settings.json"))} env` } : shellSm?.trim() ? { value: shellSm, where: "the environment" } : undefined;
+    // Inside a Claude Code session (the plugin's /context-doctor:fix) the
+    // process carries the settings files' env as the session started: a
+    // project's or managed value is that file's (named as an override, not as
+    // "a value you set"), and fix's own value just undone is no one's.
+    const subagentModelSet = userSm !== undefined && userSm !== null
+        ? { value: String(userSm), where: `${tilde(join(claudeDir(), "settings.json"))} env` }
+        : shellSet(SUBAGENT_MODEL_ENV, sources, process.env, SUBAGENT_CANDIDATE)
+            ? { value: shellSm, where: underClaudeCode() ? "this Claude Code session's environment (from the shell that started it, or a settings env removed since: a new session reads settings again)" : "the environment" }
+            : undefined;
     const ts = effectiveEnv("ENABLE_TOOL_SEARCH", sources);
     const toolSearchOff = ts && /^(false|0|no|off)$/i.test(ts.value.trim()) ? ts.value : undefined;
     const servers = claudeMcpConfigs(cwd).filter((c) => !/context-doctor/i.test(c.name));

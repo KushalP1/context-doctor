@@ -39,7 +39,7 @@ import { pricingFor } from "./pricing.js";
 import { contextWindowFor, realModel } from "./tokens.js";
 import { adviseTtl, estimateCacheTtl, type CacheTtlReport, type CurrentTtl, type TtlKind } from "./cachettl.js";
 import { ABSENT, getPath, parseSettingsText, readSettings, removeFile, sameJson, setJsonPath, SettingsError, withLock, writeAtomic } from "./settingsedit.js";
-import { compactWindowOverrides, settingsSources, ttlOverrides } from "./effective.js";
+import { compactWindowOverrides, processEnvWhere, settingsSources, shellSet, ttlOverrides } from "./effective.js";
 import { tilde } from "./claudedir.js";
 import { applyPrune, undoPrune, type ProjectPlan } from "./prune.js";
 import { readLedger } from "./ledger.js";
@@ -386,8 +386,10 @@ export async function applyFix(fix: Fix, deps: FixDeps = {}, context: { oneHourS
   try {
     if (KEY_PATH[fix.id]) {
       // The environment Claude Code starts in is the user's too: a value there is theirs (settings.json would override it).
-      const shell = fix.id === "subagent-model" ? (deps.env ?? process.env)[SUBAGENT_MODEL_ENV] : undefined;
-      if (shell?.trim()) return { ok: false, lines: [`✗ ${fix.id}: ${SUBAGENT_MODEL_ENV}=${shell} in the environment, a value you set: left as it is. Nothing was changed.`] };
+      // Not a value Claude Code copied from a settings file into the session this runs in, nor fix's own left from before an undo.
+      const env = deps.env ?? process.env;
+      const shell = fix.id === "subagent-model" && shellSet(SUBAGENT_MODEL_ENV, settingsSources({ home: deps.home, cwd: deps.cwd, env }), env, String(fix.value)) ? env[SUBAGENT_MODEL_ENV]! : undefined;
+      if (shell) return { ok: false, lines: [`✗ ${fix.id}: ${processEnvWhere(SUBAGENT_MODEL_ENV, shell, env)}, a value you set: left as it is. Nothing was changed.`] };
       const lines = applySetting(fix, home, at, { oneHourShareBefore: context.oneHourShare, modelsBefore: context.modelsBefore });
       const over = fixOverrides(fix.id, deps);
       if (over.length) lines.push(`  ⚠ written, but it will not take effect while ${over.join("; ")} ${over.length === 1 ? "overrides" : "override"} it.`);

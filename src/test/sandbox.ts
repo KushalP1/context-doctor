@@ -20,6 +20,8 @@ export function sandboxEnv(home: string): NodeJS.ProcessEnv {
   delete env.COPILOT_HOME;
   delete env.CODEX_HOME;
   delete env.CLAUDE_CONFIG_DIR;
+  // Run from inside a Claude Code session, the suite must behave as on CI.
+  delete env.CLAUDECODE;
   return env;
 }
 

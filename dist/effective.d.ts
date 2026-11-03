@@ -35,6 +35,22 @@ export declare function settingsSources(opts?: {
     cwd?: string;
     env?: NodeJS.ProcessEnv;
 }): SettingsSource[];
+/** Run from inside a Claude Code session (its Bash tool, a plugin command): Claude Code sets CLAUDECODE for its children. */
+export declare function underClaudeCode(env?: NodeJS.ProcessEnv): boolean;
+/**
+ * Where a value found in the process environment came from, for messages.
+ * Inside a Claude Code session the process carries every settings file's
+ * `env` as it was when the session started, so a value no settings file
+ * holds now is the launching shell's or one removed from settings since.
+ */
+export declare function processEnvWhere(name: string, value: string, env?: NodeJS.ProcessEnv): string;
+/**
+ * Is the process's value of `name` one the user set in their shell? Not when
+ * a settings file's `env` holds the same value (Claude Code copied it into
+ * the session this runs in), nor, inside Claude Code, when it is `written`,
+ * the value context-doctor itself wrote: a copy left from before an undo.
+ */
+export declare function shellSet(name: string, sources: SettingsSource[], env?: NodeJS.ProcessEnv, written?: string): boolean;
 /** An environment variable as Claude Code sees it: a settings file's `env` (highest first), else the process. */
 export declare function effectiveEnv(name: string, sources: SettingsSource[], env?: NodeJS.ProcessEnv): {
     value: string;

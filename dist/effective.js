@@ -78,6 +78,35 @@ export function settingsSources(opts = {}) {
     }
     return out;
 }
+/** Run from inside a Claude Code session (its Bash tool, a plugin command): Claude Code sets CLAUDECODE for its children. */
+export function underClaudeCode(env = process.env) {
+    return !!env.CLAUDECODE?.trim();
+}
+/**
+ * Where a value found in the process environment came from, for messages.
+ * Inside a Claude Code session the process carries every settings file's
+ * `env` as it was when the session started, so a value no settings file
+ * holds now is the launching shell's or one removed from settings since.
+ */
+export function processEnvWhere(name, value, env = process.env) {
+    return underClaudeCode(env)
+        ? `${name}=${value} in this Claude Code session's environment (from the shell that started it, or a settings env removed since: a new session reads settings again)`
+        : `${name}=${value} in the environment`;
+}
+/**
+ * Is the process's value of `name` one the user set in their shell? Not when
+ * a settings file's `env` holds the same value (Claude Code copied it into
+ * the session this runs in), nor, inside Claude Code, when it is `written`,
+ * the value context-doctor itself wrote: a copy left from before an undo.
+ */
+export function shellSet(name, sources, env = process.env, written) {
+    const v = env[name];
+    if (v === undefined || v.trim() === "")
+        return false;
+    if (sources.some((s) => s.settings.env?.[name] !== undefined && s.settings.env[name] !== null && String(s.settings.env[name]) === v))
+        return false;
+    return !(underClaudeCode(env) && written !== undefined && v === written);
+}
 /** An environment variable as Claude Code sees it: a settings file's `env` (highest first), else the process. */
 export function effectiveEnv(name, sources, env = process.env) {
     for (const s of sources) {
@@ -87,7 +116,7 @@ export function effectiveEnv(name, sources, env = process.env) {
     }
     const v = env[name];
     if (v !== undefined && v.trim() !== "")
-        return { value: v, where: `${name}=${v} in the environment` };
+        return { value: v, where: processEnvWhere(name, v, env) };
     return undefined;
 }
 const truthy = (v) => v !== "0" && v.toLowerCase() !== "false";
