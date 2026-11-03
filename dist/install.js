@@ -604,10 +604,12 @@ function installSkillInto(skillDest, appHome) {
         return null;
     const missing = appHome ? skillFolders(appHome).filter((d) => !existsSync(d)) : [];
     mkdirSync(skillDest, { recursive: true });
-    copyFileSync(skillSource, join(skillDest, "SKILL.md"));
+    // Written whole and renamed into place: two installs at once (or Claude
+    // Code reading the skill) made Windows refuse a plain copy with EBUSY.
+    writeAtomic(join(skillDest, "SKILL.md"), readFileSync(skillSource, "utf8"));
     if (appHome && missing.length > 0) {
         const all = [...new Set([...createdSkillFolders(appHome), ...missing])];
-        writeFileSync(join(appHome, CREATED_MARKER), JSON.stringify({ created: all }) + "\n");
+        writeAtomic(join(appHome, CREATED_MARKER), JSON.stringify({ created: all }) + "\n");
     }
     return join(skillDest, "SKILL.md");
 }
