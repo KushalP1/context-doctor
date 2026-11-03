@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -268,6 +268,34 @@ test("a transcript rewritten in place, same inode and larger, is read again in f
     clearScanMemo();
     const full = claudeSpend(periodStart("day", NOW), NOW + HOUR).reduce((s, i) => s + i.usd, 0);
     assert.ok(Math.abs(after - 1.6) < 1e-9 && Math.abs(after - full) < 1e-9, `${after} vs ${full}`);
+  });
+});
+
+test("Codex's folders: a new rollout counts at once, a resumed one in an older folder within five minutes, a moved one at once", async () => {
+  await inLedgerSandbox((home) => {
+    const sessions = join(home, ".codex", "sessions");
+    const iso = (t: number) => new Date(t).toISOString();
+    // gpt-5.5 at $1.25 / 1M: 80k uncached is $0.10 a request.
+    const lines = (at: number, total: number) => [
+      JSON.stringify({ timestamp: iso(at), type: "turn_context", payload: { cwd: "/work/app", model: "gpt-5.5" } }),
+      JSON.stringify({ timestamp: iso(at), type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: total, total_tokens: total }, last_token_usage: { input_tokens: 80_000, total_tokens: 80_000 } } } }),
+    ].join("\n") + "\n";
+    const at = (rel: string, text: string) => { const p = join(sessions, rel); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, text); return p; };
+    const old = at("2026/09/01/rollout-old.jsonl", lines(Date.UTC(2026, 8, 1, 12), 80_000));
+    utimesSync(old, new Date(Date.UTC(2026, 8, 1, 13)), new Date(Date.UTC(2026, 8, 1, 13)));
+    at("2026/10/14/rollout-a.jsonl", lines(NOW - HOUR, 1_000_000));
+    const usd = (t: number) => periodSpend("day", t, home).usd;
+    assert.ok(Math.abs(usd(NOW) - 0.1) < 1e-9);
+    const b = at("2026/10/14/rollout-b.jsonl", lines(NOW, 2_000_000));
+    assert.ok(Math.abs(usd(NOW + 60_000) - 0.2) < 1e-9, "a new rollout, in today's folder: at once");
+    // Resumed: appended where it is, in September's folder.
+    appendFileSync(old, lines(NOW + 90_000, 160_000));
+    assert.ok(Math.abs(usd(NOW + 120_000) - 0.2) < 1e-9, "not walked for yet");
+    assert.ok(Math.abs(usd(NOW + 6 * 60_000) - 0.3) < 1e-9, "within five minutes");
+    // Archived: moved out of sessions; the next prompt walks again rather than lose it.
+    mkdirSync(join(home, ".codex", "archived_sessions"), { recursive: true });
+    renameSync(b, join(home, ".codex", "archived_sessions", "rollout-b.jsonl"));
+    assert.ok(Math.abs(usd(NOW + 7 * 60_000) - 0.3) < 1e-9, "a moved rollout still counts");
   });
 });
 

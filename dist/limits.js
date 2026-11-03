@@ -182,28 +182,35 @@ export function codexSessionsRoot(home = homedir()) {
 export function rolloutFiles(root, since) {
     const out = [];
     const walk = (dir, depth) => {
-        let names;
+        let entries;
         try {
-            names = readdirSync(dir);
+            entries = readdirSync(dir, { withFileTypes: true });
         }
         catch {
             return;
         }
-        for (const name of names) {
-            const p = join(dir, name);
-            let st;
-            try {
-                st = statSync(p);
+        for (const e of entries) {
+            const p = join(dir, e.name);
+            // A folder needs no stat of its own; a symlink is stat'ed to see what it is.
+            let isDir = e.isDirectory();
+            if (e.isSymbolicLink()) {
+                try {
+                    isDir = statSync(p).isDirectory();
+                }
+                catch {
+                    continue;
+                }
             }
-            catch {
-                continue;
-            }
-            if (st.isDirectory()) {
+            if (isDir) {
                 if (depth < 3)
                     walk(p, depth + 1);
             }
-            else if (name.endsWith(".jsonl") && st.mtimeMs >= since) {
-                out.push(p);
+            else if (e.name.endsWith(".jsonl")) {
+                try {
+                    if (statSync(p).mtimeMs >= since)
+                        out.push(p);
+                }
+                catch { /* vanished */ }
             }
         }
     };

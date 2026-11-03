@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 import { codexDir } from "./codexdir.js";
 import { statePath } from "./ledger.js";
 import { claudeDir } from "./claudedir.js";
-import { claudeFileUsage, claudeUsageFiles, USAGE_ROWS } from "./limits.js";
+import { claudeFileUsage, claudeUsageFiles, codexSessionsRoot, rolloutFiles, USAGE_ROWS } from "./limits.js";
 import { codexFileSpend, codexFiles, geminiFileSpend, geminiFiles, TOOL_NAME, type Tool } from "./spend.js";
 import { pricingFor, usageCost, type RecordedUsage } from "./pricing.js";
 import { anchorOf, rowsOf } from "./scan.js";
@@ -147,6 +147,8 @@ interface BudgetState {
   warned: number;
   /** Whether the hook has said that part of this period has no list price. */
   unpricedSaid?: boolean;
+  /** Codex's rollouts written in the period at the last full walk of its folders, and when (ms). */
+  cx?: { at: number; files: string[] };
   usd: number;
   byTool: Partial<Record<Tool, number>>;
 }
@@ -154,7 +156,7 @@ interface BudgetState {
 function readState(): BudgetState | undefined {
   try {
     const s = JSON.parse(readFileSync(budgetStatePath(), "utf8"));
-    if (typeof s?.start === "number" && s.files && typeof s.files === "object") return { start: s.start, files: s.files, warned: Number(s.warned) || 0, unpricedSaid: s.unpricedSaid === true, usd: Number(s.usd) || 0, byTool: s.byTool ?? {} };
+    if (typeof s?.start === "number" && s.files && typeof s.files === "object") return { start: s.start, files: s.files, warned: Number(s.warned) || 0, unpricedSaid: s.unpricedSaid === true, ...(s.cx && typeof s.cx.at === "number" && Array.isArray(s.cx.files) ? { cx: s.cx } : {}), usd: Number(s.usd) || 0, byTool: s.byTool ?? {} };
   } catch {
     /* none yet, or damaged: start afresh */
   }
@@ -189,6 +191,37 @@ function claudeTops(since: number): string[] {
     }
   }
   return out;
+}
+
+/** How long the hook goes between full walks of Codex's folders. */
+const CODEX_WALK_MS = 5 * 60_000;
+
+/**
+ * Codex's rollouts written in the period, without stat'ing every rollout on
+ * every prompt (3,000 of them took 16 ms; the status line runs this too).
+ * Codex files a rollout under the day it began (sessions/YYYY/MM/DD), so a
+ * new one is in the period's own folders, walked every time. A resumed one
+ * is appended where it is, in an older folder: those are found by a full
+ * walk, done once every CODEX_WALK_MS (so a resumed session's spend can be
+ * up to five minutes late) and at once when a known rollout is gone (moved
+ * to archived_sessions). `st.cx` keeps the last full walk.
+ */
+function codexPeriodFiles(st: BudgetState, start: number, now: number, home: string): string[] {
+  const known = st.cx?.files ?? [];
+  if (!st.cx || now - st.cx.at >= CODEX_WALK_MS || now < st.cx.at || known.some((f) => !existsSync(f))) {
+    st.cx = { at: now, files: codexFiles(start, home) };
+    return st.cx.files;
+  }
+  // The period's day folders, by local and by UTC date, a day either side.
+  const root = codexSessionsRoot(home);
+  const days = new Set<string>();
+  for (let t = start - 86_400_000; t <= now + 86_400_000; t += 3_600_000) {
+    const d = new Date(t);
+    for (const [y, m, dd] of [[d.getFullYear(), d.getMonth() + 1, d.getDate()], [d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()]]) days.add(join(root, String(y), String(m).padStart(2, "0"), String(dd).padStart(2, "0")));
+  }
+  const out = new Set(known);
+  for (const dir of days) for (const f of rolloutFiles(dir, start)) out.add(f);
+  return [...out];
 }
 
 /** 12 hex digits of a row's uuid: enough to tell a fork's copy, a third of the bytes. */
@@ -334,12 +367,13 @@ export function periodSpend(period: Period, now = Date.now(), home = homedir(), 
   const prev = readState();
   const fresh = !prev || prev.start !== start;
   const st: BudgetState = fresh ? { start, files: {}, warned: 0, usd: 0, byTool: {} } : prev;
+  const walked = st.cx?.at;
   const files: Array<[Tool, string]> = [
     ...claudeUsageFiles(start, claudeTops(start)).map((f) => ["claude", f.file] as [Tool, string]),
-    ...codexFiles(start, home).map((f) => ["codex", f] as [Tool, string]),
+    ...codexPeriodFiles(st, start, now, home).map((f) => ["codex", f] as [Tool, string]),
     ...geminiFiles(start, home).map((f) => ["gemini", f] as [Tool, string]),
   ];
-  let changed = fresh;
+  let changed = fresh || st.cx?.at !== walked;
   const kept: Record<string, FileEntry> = {};
   for (const [tool, file] of files) {
     let s;
