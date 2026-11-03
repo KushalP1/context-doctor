@@ -421,7 +421,7 @@ export function writeAtomic(path, text) {
     const tmp = join(dirname(target), `.${basename(target)}.context-doctor-${process.pid}-${Date.now()}.tmp`);
     writeFileSync(tmp, text, mode !== undefined ? { mode } : undefined);
     try {
-        renameSync(tmp, target);
+        renameWithRetry(tmp, target);
     }
     catch (e) {
         try {
@@ -429,6 +429,28 @@ export function writeAtomic(path, text) {
         }
         catch { /* gone */ }
         throw e;
+    }
+}
+/**
+ * renameSync, retried on Windows while another process has the target open:
+ * there a rename over a file someone is reading fails with EPERM, EACCES or
+ * EBUSY (Claude Code, an editor, or another context-doctor reading
+ * settings.json), where POSIX replaces it at once. Up to about 2 s, as
+ * graceful-fs does for npm.
+ */
+function renameWithRetry(from, to) {
+    const until = Date.now() + 2_000;
+    for (let wait = 5;; wait = Math.min(wait * 2, 100)) {
+        try {
+            renameSync(from, to);
+            return;
+        }
+        catch (e) {
+            const code = e.code;
+            if (process.platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(code ?? "") || Date.now() >= until)
+                throw e;
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, wait);
+        }
     }
 }
 /** Remove a file through a symbolic link: the target goes, the link would dangle, so the link goes too. */

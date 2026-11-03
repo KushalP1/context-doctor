@@ -39,12 +39,18 @@ test("install, uninstall, cache-ttl, compact-window and fix at the same moment: 
     `if (what === "uninstall") await runUninstall();`,
   ].join("\n"));
   const env = { ...sandboxEnv(h), CONTEXT_DOCTOR_NO_MANAGED_SETTINGS: "1", CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS: "2.1.309", PATH: "" };
+  // Each job's exit code, with its stderr when it failed (a Windows runner's EPERM was invisible otherwise).
   const race = async (jobs: string[]) => {
     const go = Date.now() + 1500;
-    return Promise.all(jobs.map((what) => new Promise<number>((res) => spawn(process.execPath, [script, what, String(go)], { env, stdio: "ignore" }).on("exit", (c) => res(c ?? 1)))));
+    return Promise.all(jobs.map((what) => new Promise<string>((res) => {
+      const child = spawn(process.execPath, [script, what, String(go)], { env, stdio: ["ignore", "ignore", "pipe"] });
+      let err = "";
+      child.stderr.on("data", (d) => { err += d; });
+      child.on("close", (c) => res(c === 0 ? "0" : `${what}: exit ${c}: ${err.slice(0, 400)}`));
+    })));
   };
   const codes = await race(["install", "ttl", "ttl-sub", "window", "fix", "install", "ttl", "window", "fix"]);
-  assert.deepEqual(codes, codes.map(() => 0));
+  assert.deepEqual(codes, codes.map(() => "0"));
   let s = JSON.parse(readFileSync(file, "utf8"));
   assert.deepEqual([s.a, s.promptCacheTtl, s.subagentPromptCacheTtl, s.autoCompactWindow, s.env?.ENABLE_TOOL_SEARCH], [1, "1h", "5m", 400000, "auto"]);
   for (const event of ["UserPromptSubmit", "PreCompact", "SessionStart", "PreToolUse", "PreModelSwitch"]) {
@@ -52,7 +58,7 @@ test("install, uninstall, cache-ttl, compact-window and fix at the same moment: 
   }
   assert.match(s.statusLine?.command ?? "", /statusline/);
   // Uninstall racing more writers: our entries go, theirs stay.
-  assert.deepEqual(await race(["uninstall", "ttl", "window", "fix"]), [0, 0, 0, 0]);
+  assert.deepEqual(await race(["uninstall", "ttl", "window", "fix"]), ["0", "0", "0", "0"]);
   s = JSON.parse(readFileSync(file, "utf8"));
   assert.deepEqual([s.a, s.promptCacheTtl, s.subagentPromptCacheTtl, s.autoCompactWindow, s.env?.ENABLE_TOOL_SEARCH, s.hooks, s.statusLine], [1, "1h", "5m", 400000, "auto", undefined, undefined]);
   assert.ok(!existsSync(join(h, ".claude", ".context-doctor-fixes.lock")), "no lock left");
