@@ -11,7 +11,9 @@
  *     built-ins: Explore, Plan and fork say "inherit", claude-code-guide
  *     "haiku", statusline-setup "sonnet"; general-purpose and claude name
  *     none);
- *  3. CLAUDE_CODE_SUBAGENT_MODEL, unless it is "inherit" or "default";
+ *  3. CLAUDE_CODE_SUBAGENT_MODEL, unless it is empty or "inherit" (this
+ *     function treats "default" as a model name; Claude Code's fallback
+ *     chain treats it like "inherit");
  *  4. the main conversation's model.
  * So the variable moves only the agents whose definition names no model
  * (general-purpose, claude, agents of your own without `model:`).

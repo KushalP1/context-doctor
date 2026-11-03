@@ -88,6 +88,18 @@ test("apply then undo: settings.json byte for byte; an existing value, in the fi
     if (original === undefined) assert.ok(!existsSync(settings), "the file fix created goes again");
     else assert.equal(readFileSync(settings, "utf8"), original);
   }
+  // The file changed since (another key), so undo takes out just the key: and the `env` fix added for it, now empty.
+  writeFileSync(settings, '{\n  "a": 1\n}\n');
+  await applyFix(fix, deps, {});
+  writeFileSync(settings, readFileSync(settings, "utf8").replace('"a": 1', '"a": 2'));
+  assert.match((await undoFixes(["subagent-model"], deps)).join("\n"), /✓ env\.CLAUDE_CODE_SUBAGENT_MODEL removed/);
+  assert.equal(readFileSync(settings, "utf8"), '{\n  "a": 2\n}\n');
+  // An `env` that was there before stays, even empty.
+  writeFileSync(settings, '{\n  "env": {}\n}\n');
+  await applyFix(fix, deps, {});
+  writeFileSync(settings, readFileSync(settings, "utf8").replace("{\n  \"env\"", '{\n  "a": 1,\n  "env"'));
+  await undoFixes(["subagent-model"], deps);
+  assert.deepEqual(JSON.parse(readFileSync(settings, "utf8")), { a: 1, env: {} });
   // Set by the user, even to "inherit": refused, the file untouched, nothing recorded.
   const mine = '{\n  "env": { "CLAUDE_CODE_SUBAGENT_MODEL": "inherit" }\n}\n';
   writeFileSync(settings, mine);

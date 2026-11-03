@@ -36,7 +36,7 @@ import { forEachLine, listSessions, isClaudeSession } from "./session.js";
 import { pricingFor } from "./pricing.js";
 import { contextWindowFor, realModel } from "./tokens.js";
 import { adviseTtl, estimateCacheTtl } from "./cachettl.js";
-import { ABSENT, getPath, readSettings, removeFile, sameJson, setJsonPath, SettingsError, withLock, writeAtomic } from "./settingsedit.js";
+import { ABSENT, getPath, parseSettingsText, readSettings, removeFile, sameJson, setJsonPath, SettingsError, withLock, writeAtomic } from "./settingsedit.js";
 import { compactWindowOverrides, settingsSources, ttlOverrides } from "./effective.js";
 import { tilde } from "./claudedir.js";
 import { applyPrune, undoPrune } from "./prune.js";
@@ -354,7 +354,19 @@ function undoSetting(r, home) {
     if (!sameJson(now, r.value)) {
         return `– ${name} was changed since fix set it (now ${now === undefined ? "not set" : JSON.stringify(now)}): left as it is`;
     }
-    const next = setJsonPath(cur.text, key, r.hadPrevious ? r.previous : ABSENT);
+    let next = setJsonPath(cur.text, key, r.hadPrevious ? r.previous : ABSENT);
+    // The object fix created to hold the key (`env`), now empty, goes too.
+    if (!r.hadPrevious && key.length > 1 && r.before !== undefined) {
+        const parent = key.slice(0, -1);
+        let had = true;
+        try {
+            had = r.before !== null && getPath(parseSettingsText(r.before), parent) !== undefined;
+        }
+        catch { /* unreadable: keep it */ }
+        const left = getPath(parseSettingsText(next), parent);
+        if (!had && left && typeof left === "object" && Object.keys(left).length === 0)
+            next = setJsonPath(next, parent, ABSENT);
+    }
     // A file fix created and that is now an empty object goes again.
     if (r.before === null && !r.hadPrevious) {
         try {
