@@ -55,6 +55,13 @@ test("the bundled MCP server answers from a directory with no node_modules", asy
         const out = await reply;
         assert.match(out, /profile_context/);
         assert.match(out, /optimize_context/);
+        // The Claude Desktop bundle's manifest lists the tools by hand: it listed
+        // four of six after save_handoff and recall were added.
+        const tools = JSON.parse(out.split("\n").find((l) => l.includes('"id":2'))).result.tools.map((t) => t.name);
+        const mcpb = readFileSync(join(root, "scripts", "build-mcpb.mjs"), "utf8");
+        const listed = [...(/tools: \[([\s\S]*?)\n {2}\],/.exec(mcpb)?.[1] ?? "").matchAll(/name: "([a-z_]+)"/g)].map((m) => m[1]);
+        assert.deepEqual(listed.sort(), tools.sort(), "scripts/build-mcpb.mjs lists the server's tools");
+        assert.match(mcpb, new RegExp(`Adds ${["", "one", "two", "three", "four", "five", "six", "seven", "eight"][tools.length]} tools`));
     }
     finally {
         child.kill();
