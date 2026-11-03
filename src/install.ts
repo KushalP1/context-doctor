@@ -20,7 +20,7 @@ import { claudeCodePresent, claudeDir, claudeJsonPath } from "./claudedir.js";
 import { fallbackStateDir } from "./ledger.js";
 import { codexDir as codexHomeDir } from "./codexdir.js";
 import { scanCacheDir } from "./scan.js";
-import { editJsonText, parseSettingsText, sameJson } from "./settingsedit.js";
+import { editJsonText, parseSettingsText, sameJson, withSettingsLock, writeAtomic } from "./settingsedit.js";
 
 interface Target {
   name: string;
@@ -270,7 +270,18 @@ function readText(path: string): string | undefined {
 export function writeJsonWithBackup(path: string, data: Record<string, any>): void {
   mkdirSync(dirname(path), { recursive: true });
   backupOnce(path);
-  writeFileSync(path, editJsonText(readText(path), data, allowsComments(path)));
+  // A temporary file renamed over the config: an app reading it mid-write never sees half of it.
+  writeAtomic(path, editJsonText(readText(path), data, allowsComments(path)));
+}
+
+/**
+ * Run a read-modify-write of `path` holding Claude Code's settings lock when
+ * `path` is its settings.json: the lock `fix`, `cache-ttl`, `compact-window`
+ * and autopilot hold, so an install running beside one of them loses
+ * neither's change. Other configs have no lock of theirs to share.
+ */
+function settingsUpdate<T>(path: string, fn: () => T): T {
+  return path === join(claudeDir(), "settings.json") ? withSettingsLock(path, fn) : fn();
 }
 
 /**
@@ -337,14 +348,16 @@ function cliCommand(subcommand: string): string {
 export function installStatusLine(): "installed" | "already" | "kept-foreign" | "no-claude-code" {
   const settingsPath = join(claudeDir(), "settings.json");
   if (!claudeCodePresent()) return "no-claude-code";
-  const settings = readJson(settingsPath);
-  const want = cliCommand("statusline");
-  const current = settings.statusLine?.command as string | undefined;
-  if (current === want) return "already";
-  if (current && !isOurStatusLine(current)) return "kept-foreign";
-  settings.statusLine = { type: "command", command: want };
-  writeJsonWithBackup(settingsPath, settings);
-  return "installed";
+  return settingsUpdate(settingsPath, () => {
+    const settings = readJson(settingsPath);
+    const want = cliCommand("statusline");
+    const current = settings.statusLine?.command as string | undefined;
+    if (current === want) return "already";
+    if (current && !isOurStatusLine(current)) return "kept-foreign";
+    settings.statusLine = { type: "command", command: want };
+    writeJsonWithBackup(settingsPath, settings);
+    return "installed";
+  });
 }
 
 function isOurStatusLine(command: string): boolean {
@@ -354,13 +367,15 @@ function isOurStatusLine(command: string): boolean {
 function uninstallStatusLine(): void {
   const settingsPath = join(claudeDir(), "settings.json");
   if (!existsSync(settingsPath)) return;
-  const settings = readJson(settingsPath);
-  const current = settings.statusLine?.command as string | undefined;
-  if (current && isOurStatusLine(current)) {
-    delete settings.statusLine;
-    writeUninstalled(settingsPath, settings);
-    done("✓ Claude Code status line removed");
-  }
+  settingsUpdate(settingsPath, () => {
+    const settings = readJson(settingsPath);
+    const current = settings.statusLine?.command as string | undefined;
+    if (current && isOurStatusLine(current)) {
+      delete settings.statusLine;
+      writeUninstalled(settingsPath, settings);
+      done("✓ Claude Code status line removed");
+    }
+  });
 }
 
 /** True when the hook had to fall back to npx — worth telling the user. */
@@ -414,6 +429,10 @@ function installHook(): string | null {
  */
 function installHookInto(settingsPath: string, gateDir: string, event = "UserPromptSubmit", opts: { matcher?: string; timeout?: number } = {}): string | null {
   if (!existsSync(gateDir)) return null; // that app is not on this machine
+  return settingsUpdate(settingsPath, () => addHookEntry(settingsPath, event, opts));
+}
+
+function addHookEntry(settingsPath: string, event: string, opts: { matcher?: string; timeout?: number }): string {
   const settings = readJson(settingsPath);
   settings.hooks = settings.hooks ?? {};
   const entries: Array<Record<string, any>> = settings.hooks[event] ?? [];
@@ -554,6 +573,10 @@ export function claudeCodeInstallsFromEnv(): ClaudeCodeInstall[] {
 
 function uninstallHookFrom(settingsPath: string, label: string, event = "UserPromptSubmit"): void {
   if (!existsSync(settingsPath)) return;
+  settingsUpdate(settingsPath, () => removeHookEntry(settingsPath, label, event));
+}
+
+function removeHookEntry(settingsPath: string, label: string, event: string): void {
   const settings = readJson(settingsPath);
   const entries: Array<Record<string, any>> | undefined = settings.hooks?.[event];
   if (!entries) return;
@@ -1229,13 +1252,15 @@ async function uninstallAutopilot(): Promise<void> {
   // `off` restores only what a readable config describes. A damaged one
   // leaves the proxy address in settings.json, which is the dead-port case.
   try {
-    const settings = readJson(paths.settings);
-    if (settings.env?.ANTHROPIC_BASE_URL === proxyUrl(port)) {
-      delete settings.env.ANTHROPIC_BASE_URL;
-      if (Object.keys(settings.env).length === 0) delete settings.env;
-      writeJsonWithBackup(paths.settings, settings);
-      console.log(`✓ Claude Code no longer routed through ${proxyUrl(port)} (autopilot's config could not say what address, if any, it had replaced)`);
-    }
+    withSettingsLock(paths.settings, () => {
+      const settings = readJson(paths.settings);
+      if (settings.env?.ANTHROPIC_BASE_URL === proxyUrl(port)) {
+        delete settings.env.ANTHROPIC_BASE_URL;
+        if (Object.keys(settings.env).length === 0) delete settings.env;
+        writeJsonWithBackup(paths.settings, settings);
+        console.log(`✓ Claude Code no longer routed through ${proxyUrl(port)} (autopilot's config could not say what address, if any, it had replaced)`);
+      }
+    });
   } catch (e) {
     console.error(`✗ Autopilot: ${(e as Error).message}`);
   }
@@ -1314,7 +1339,7 @@ function writeUninstalled(path: string, config: Record<string, any>, extraKeys: 
   }
   // An empty file before install is an empty file again, not "{}".
   if (empty && isEmptyStub(config, extraKeys)) {
-    writeFileSync(path, "");
+    writeAtomic(path, "");
     return;
   }
   // Exactly the file from before install when that is what is left (also
@@ -1323,11 +1348,11 @@ function writeUninstalled(path: string, config: Record<string, any>, extraKeys: 
   const backup = readText(path + BACKUP_SUFFIX);
   try {
     if (backup?.trim() && sameJson(parseSettingsText(backup, allowsComments(path)), config)) {
-      writeFileSync(path, backup);
+      writeAtomic(path, backup);
       return;
     }
   } catch { /* an unreadable backup: edit the file as it is */ }
-  writeFileSync(path, editJsonText(readText(path), config, allowsComments(path)));
+  writeAtomic(path, editJsonText(readText(path), config, allowsComments(path)));
 }
 
 /** Remove the SKILL.md install copied, and its folder once nothing else is in it. */
