@@ -17,6 +17,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { ParsedSession } from "./session.js";
 import { readSideEntry, writeSideEntry } from "./scan.js";
 
@@ -147,12 +148,24 @@ export function queryRows(dbPath: string, sql: string): Row[] {
     }
   }
   // Fallback: the sqlite3 CLI, if the user has it.
+  const cli = (target: string) => execFileSync("sqlite3", ["-readonly", "-json", target, sql], {
+    encoding: "utf8",
+    maxBuffer: 512 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"], // a missing table is expected on some DBs
+  });
   try {
-    const out = execFileSync("sqlite3", ["-readonly", "-json", dbPath, sql], {
-      encoding: "utf8",
-      maxBuffer: 512 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"], // a missing table is expected on some DBs
-    });
+    let out: string;
+    try {
+      out = cli(dbPath);
+    } catch (e) {
+      // macOS's own sqlite3 cannot open a WAL database read-only once its
+      // -wal and -shm files are gone, which is how Cursor leaves it when it
+      // quits ("unable to open database file"): every Cursor read failed
+      // there on Node < 22.13. With no -wal file nothing is writing it, so
+      // it is read as immutable.
+      if ((e as NodeJS.ErrnoException).code === "ENOENT" || existsSync(`${dbPath}-wal`)) throw e;
+      out = cli(`${pathToFileURL(dbPath).href}?immutable=1`);
+    }
     return out.trim() ? (JSON.parse(out) as Row[]) : [];
   } catch (cliErr) {
     // Neither backend exists: the same answer for every database, so say it once.

@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { createRequire } from "node:module";
 import { platform, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -85,4 +85,25 @@ test("with no SQLite backend at all, cursor says so instead of 'No Cursor chats 
   assert.equal(r.code, 1);
   assert.match(r.stderr, /needs SQLite/, "the real cause, so the user knows what to install");
   assert.doesNotMatch(r.stderr, /No Cursor chats found/, "the chats exist; SQLite does not");
+});
+
+/** Whether a sqlite3 command is on PATH. */
+function hasSqliteCli(): boolean {
+  return spawnSync("sqlite3", ["-version"], { encoding: "utf8" }).status === 0;
+}
+
+test("without node:sqlite, a Cursor database in WAL mode that Cursor has closed is still read through the sqlite3 command", { skip: skip || (!canDisableNodeSqlite() && "cannot switch node:sqlite off here") || (!hasSqliteCli() && "no sqlite3 command") }, async () => {
+  const home = cursorHome();
+  // Cursor's database is in WAL mode; closed, it has no -wal or -shm beside it,
+  // and macOS's own sqlite3 then failed to open it read-only.
+  const storage = platform() === "darwin" ? join(home, "Library", "Application Support", "Cursor", "User", "globalStorage")
+    : platform() === "win32" ? join(home, "AppData", "Roaming", "Cursor", "User", "globalStorage")
+      : join(home, ".config", "Cursor", "User", "globalStorage");
+  const db = new DatabaseSync!(join(storage, "state.vscdb"));
+  db.exec("PRAGMA journal_mode=WAL");
+  db.close();
+  assert.ok(!existsSync(join(storage, "state.vscdb-wal")), "closed: no -wal");
+  const r = await run(["--no-experimental-sqlite", cliPath, "cursor", "--list"], sandboxEnv(home));
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /Chat 24/);
 });
