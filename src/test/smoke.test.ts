@@ -332,7 +332,7 @@ test("numeric flags reject garbage with a message naming the flag; unknown comma
   const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
   const run = (...args: string[]) => spawnSync(process.execPath, [cli, ...args], { encoding: "utf8" });
   for (const [args, msg] of [
-    [["savings", "--days", "abc"], /--days needs a number of at least 1; got "abc"/],
+    [["savings", "--days", "abc"], /--days needs a whole number of at least 1; got "abc"/],
     [["savings", "--days", "0"], /--days needs/],
     [["proxy", "--port", "99999"], /--port needs a whole number between 0 and 65535/],
     [["analyze", "x.json", "--keep-recent", "-1"], /--keep-recent needs a whole number of at least 0/],

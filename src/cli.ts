@@ -577,7 +577,7 @@ const FLAGS: FlagSpec[] = [
   { names: ["--statusline"], set: (a) => { a.statusLine = true; } },
   { names: ["--host"], value: "text", set: (a, v) => { a.host = v; } },
   { names: ["--token"], value: "text", set: (a, v) => { a.token = v; } },
-  { names: ["--days"], value: "number", num: { min: 1 }, set: (a, v) => { a.days = v; } },
+  { names: ["--days"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.days = v; } },
   { names: ["--autopilot"], set: (a) => { a.autopilot = true; } },
   { names: ["--autopilot-state"], value: "text", set: (a, v) => { a.autopilotState = v; } },
   { names: ["--autopilot-pause-file"], value: "text", set: (a, v) => { a.autopilotPauseFile = v; } },
@@ -1436,7 +1436,9 @@ async function main(): Promise<void> {
     if ((args.positionals?.length ?? 0) > 1) usageError(`${usage}; got "${args.positionals!.slice(1).join(" ")}" too.`);
     if (sub === "off") {
       if (args.block) usageError("--block goes with a budget: context-doctor budget 50/day --block.");
-      console.log(clearBudget() ? "Budget off: the every-prompt hook no longer counts spend." : "No budget was set.");
+      const was = clearBudget();
+      // --json: the budget as it now stands, as `budget --json` prints it (none).
+      console.log(args.json ? "null" : was ? "Budget off: the every-prompt hook no longer counts spend." : "No budget was set.");
       return;
     }
     if (sub !== undefined) {

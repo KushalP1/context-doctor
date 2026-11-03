@@ -122,6 +122,13 @@ test("--json is JSON or an error: never a text report a script then fails to par
   const cw = JSON.parse(c.stdout);
   assert.equal(cw.sessions, 0);
   assert.equal(cw.current, null);
+  const off = run("budget", "off", "--json");
+  assert.equal(off.status, 0, off.stderr);
+  assert.equal(JSON.parse(off.stdout), null, "no budget now, as `budget --json` says it");
+  // And --days is a whole number of days ("Last 1.5 days" was printed).
+  const d = run("spend", "--days", "1.5");
+  assert.equal(d.status, 1);
+  assert.match(d.stderr, /--days needs a whole number of at least 1; got "1\.5"/);
   // And each command's help says whether it has --json.
   assert.match(run("spend", "--help").stdout, /--json {18}\(analyze, /);
   assert.match(run("fix", "--help").stdout, /--days <n>/, "fix reads --days");
