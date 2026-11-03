@@ -170,7 +170,9 @@ function killLeftovers(root) {
             }
         }
         else {
-            const r = spawnSync("lsof", ["-t", "+D", root], { encoding: "utf8", timeout: 5000 });
+            // lsof walks every process's open files: ~0.5 s here, several on a loaded machine. Cut off
+            // early, it found nothing and the leftover lived on, so it gets time.
+            const r = spawnSync("lsof", ["-t", "+D", root], { encoding: "utf8", timeout: 30_000 });
             for (const line of (r.stdout ?? "").split("\n"))
                 if (/^\d+$/.test(line.trim()))
                     pids.add(Number(line.trim()));

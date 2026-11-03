@@ -15,7 +15,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile, spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -333,15 +333,27 @@ function hostileRange(code) {
 test("the agent's code runs without the API key or the real home, and cannot outlive its run", { skip: windows && "process groups and /proc or lsof are POSIX" }, async () => {
     const spy = mkdtempSync(join(tmpdir(), "ctxdoc-ab-spy-"));
     const leak = join(spy, "leak.json");
-    const orphan = join(spy, "orphan.txt");
-    const late = `setTimeout(() => require("fs").writeFileSync(${JSON.stringify(orphan)}, "alive"), 4000)`;
+    // Each time the agent's code runs it leaves a detached child that would live two minutes, and
+    // records its pid: every one must be dead once the run returns. (A child that wrote a file 4 s
+    // after it started raced the run's own cleanup on a loaded machine.)
+    const pids = join(spy, "pids.txt");
     const code = [
         `fs.writeFileSync(${JSON.stringify(leak)}, JSON.stringify({ key: process.env.ANTHROPIC_API_KEY ?? null, base: process.env.ANTHROPIC_BASE_URL ?? null, home: os.homedir() }));`,
-        `spawn(process.execPath, ["-e", ${JSON.stringify(late)}], { detached: true, stdio: "ignore" }).unref();`,
+        `{ const c = spawn(process.execPath, ["-e", "setTimeout(() => {}, 120000)"], { detached: true, stdio: "ignore" }); fs.appendFileSync(${JSON.stringify(pids)}, c.pid + "\\n"); c.unref(); }`,
     ].join("\n");
+    const alive = (pid) => {
+        try {
+            process.kill(pid, 0);
+            return true;
+        }
+        catch (e) {
+            return e.code === "EPERM";
+        }
+    };
     const api = await mockMessagesApi({ write: (_b, task) => (task.id === "range-inclusive" ? hostileRange(code) : undefined) });
     const saved = process.env.ANTHROPIC_API_KEY;
     process.env.ANTHROPIC_API_KEY = "sk-ant-should-not-leak";
+    let started = [];
     try {
         const result = await runAbSuite({ provider: anthropicProvider({ apiKey: "test-key", baseUrl: api.url }), tasks: AB_TASKS.slice(0, 1), levers: ["rules"], concurrency: 1 });
         assert.ok(result.runs.every((r) => r.pass), "the fix still works");
@@ -349,10 +361,20 @@ test("the agent's code runs without the API key or the real home, and cannot out
         assert.equal(seen.key, null, "no API key in the agent's environment");
         assert.equal(seen.base, null);
         assert.match(seen.home, /ctxdoc-ab-range-inclusive-/, "a throwaway home");
-        await new Promise((r) => setTimeout(r, 5000));
-        assert.equal(existsSync(orphan), false, "the detached child was killed with the run");
+        started = readFileSync(pids, "utf8").split("\n").filter(Boolean).map(Number);
+        assert.ok(started.length > 0 && started.every((p) => Number.isInteger(p) && p > 0), "the detached children started");
+        // The run sent SIGKILL before it returned; the kernel reaps them shortly after (10 s, generously).
+        for (const until = Date.now() + 10_000; Date.now() < until && started.some(alive);)
+            await new Promise((r) => setTimeout(r, 50));
+        assert.deepEqual(started.filter(alive), [], "the detached child was killed with the run");
     }
     finally {
+        // On a failure, what the run left behind goes here instead.
+        for (const pid of started.filter(alive))
+            try {
+                process.kill(pid, "SIGKILL");
+            }
+            catch { /* gone */ }
         if (saved === undefined)
             delete process.env.ANTHROPIC_API_KEY;
         else
