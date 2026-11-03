@@ -24,13 +24,15 @@
 
 import { existsSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
+import { codexDir } from "./codexdir.js";
 
 const KEY = "openai_base_url";
 const ANY_HEADER = /^\s*\[/;
 const keyLine = (key: string) => new RegExp(String.raw`^\s*(?:${key}|"${key}"|'${key}')\s*=\s*(?:"([^"]*)"|'([^']*)')\s*(?:#.*)?$`);
 
+/** Codex's home for `home`: CODEX_HOME when `home` is this user's (codexdir.ts). */
 export function codexHomeIn(home: string): string {
-  return join(home, ".codex");
+  return codexDir(home);
 }
 
 /** How Codex signs in, from auth.json: "apikey", "chatgpt", another mode, or undefined (none yet). */

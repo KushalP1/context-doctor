@@ -18,6 +18,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { codexDir } from "./codexdir.js";
 import { forEachLine, listSessions, replyCounter, textOf } from "./session.js";
 import { estimateTokens, formatTokens, providerFor, realModel, tokensForLength } from "./tokens.js";
 import { cacheWriteSplit, formatUsd, pricingFor, writeMultiplier as ttlWriteMultiplier } from "./pricing.js";
@@ -168,7 +169,7 @@ export function findMemoryFiles(cwd = process.cwd(), home = homedir()): MemoryFi
   if (auto) add("Claude Code", autoMemoryPath(cwd, home), "auto memory", auto.split("\n").slice(0, 200).join("\n"));
 
   // Codex: global AGENTS.md, then each directory down to cwd (it stops at the git root; root-ward extras are rare).
-  add("Codex", join(home, ".codex", "AGENTS.md"), "user");
+  add("Codex", join(codexDir(home), "AGENTS.md"), "user");
   for (const d of ancestors(cwd).reverse()) {
     if (d === home) continue;
     add("Codex", join(d, "AGENTS.override.md"), "project") ?? add("Codex", join(d, "AGENTS.md"), "project");

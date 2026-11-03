@@ -31,6 +31,7 @@
  * subagents too; on the requests both count, the dollars are the same.
  */
 import { basename, dirname, join } from "node:path";
+import { codexDir } from "./codexdir.js";
 import { homedir } from "node:os";
 import { existsSync, statSync } from "node:fs";
 import { claudeFileUsage, claudeUsageFiles, codexSessionsRoot, rolloutFiles } from "./limits.js";
@@ -172,7 +173,7 @@ export function codexFileSpend(file, since, until = Infinity) {
 }
 /** Codex rollouts written since `since`: the live ones and the archived. */
 export function codexFiles(since, home = homedir()) {
-    const roots = [codexSessionsRoot(home), join(home, ".codex", "archived_sessions")];
+    const roots = [codexSessionsRoot(home), join(codexDir(home), "archived_sessions")];
     return roots.filter((r) => existsSync(r)).flatMap((r) => rolloutFiles(r, since));
 }
 export function codexSpend(since, until = Infinity, home = homedir()) {

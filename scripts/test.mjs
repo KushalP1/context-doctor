@@ -28,6 +28,8 @@ delete env.XDG_CACHE_HOME;
 delete env.CONTEXT_DOCTOR_NO_CACHE;
 // Claude Code's config folder and managed settings follow these: never the developer's own.
 delete env.CLAUDE_CONFIG_DIR;
+// Codex's home follows CODEX_HOME: never the developer's own.
+delete env.CODEX_HOME;
 delete env.CLAUDE_CODE_MANAGED_SETTINGS_PATH;
 env.CONTEXT_DOCTOR_NO_MANAGED_SETTINGS = "1";
 // On GitHub Actions, failing tests also become annotations: a job's log

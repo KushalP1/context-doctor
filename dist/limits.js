@@ -28,6 +28,7 @@
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { codexDir } from "./codexdir.js";
 import { statePath } from "./ledger.js";
 import { forEachLine, listSessions, outputSettler, replyCounter, isClaudeSession } from "./session.js";
 import { subagentDir } from "./subagents.js";
@@ -175,7 +176,7 @@ export function readClaudeReadings(since = 0, path = limitsLogPath()) {
 // Codex: readings and usage, both from its rollouts
 // ---------------------------------------------------------------------------
 export function codexSessionsRoot(home = homedir()) {
-    return join(home, ".codex", "sessions");
+    return join(codexDir(home), "sessions");
 }
 /** Codex rollouts under `root` (YYYY/MM/DD folders, or flat) written since `since`. */
 export function rolloutFiles(root, since) {

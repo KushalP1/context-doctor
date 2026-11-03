@@ -21,6 +21,7 @@
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { codexDir } from "./codexdir.js";
 import { claudeProjectDir, forEachLine } from "./session.js";
 import { packContext } from "./pack.js";
 import { maskSecrets, stripControls } from "./handoff.js";
@@ -242,7 +243,7 @@ function newestIn(dir) {
 }
 /** The newest Codex rollout of the last week that started in `cwd`. */
 function newestCodexFor(cwd, home) {
-    const codexRoot = join(home, ".codex", "sessions");
+    const codexRoot = join(codexDir(home), "sessions");
     if (!existsSync(codexRoot))
         return undefined;
     const since = Date.now() - 7 * 86_400_000;
@@ -323,7 +324,7 @@ export function findSession(idOrPath, home = homedir()) {
         if (existsSync(p))
             return p;
     }
-    const codexRoot = join(home, ".codex", "sessions");
+    const codexRoot = join(codexDir(home), "sessions");
     let hit;
     const walk = (dir, depth) => {
         if (hit)

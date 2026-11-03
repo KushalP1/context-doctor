@@ -27,6 +27,7 @@ import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, rea
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { codexDir } from "./codexdir.js";
 import { statePath } from "./ledger.js";
 import { claudeDir } from "./claudedir.js";
 import { claudeFileUsage, claudeUsageFiles, USAGE_ROWS } from "./limits.js";
@@ -448,6 +449,6 @@ export function promptHookInstalled(home = homedir()): boolean {
     try { return JSON.stringify(pick(JSON.parse(readFileSync(path, "utf8"))) ?? "").includes("context-doctor"); } catch { return false; }
   };
   return has(join(claudeDir(), "settings.json"), (j) => [j?.hooks?.UserPromptSubmit, j?.enabledPlugins]) ||
-    has(join(home, ".codex", "hooks.json"), (j) => j?.hooks?.UserPromptSubmit) ||
+    has(join(codexDir(home), "hooks.json"), (j) => j?.hooks?.UserPromptSubmit) ||
     has(join(home, ".gemini", "settings.json"), (j) => j?.hooks?.BeforeAgent);
 }

@@ -32,6 +32,7 @@
  */
 
 import { basename, dirname, join } from "node:path";
+import { codexDir } from "./codexdir.js";
 import { homedir } from "node:os";
 import { existsSync, statSync } from "node:fs";
 import { claudeFileUsage, claudeUsageFiles, codexSessionsRoot, rolloutFiles } from "./limits.js";
@@ -187,7 +188,7 @@ export function codexFileSpend(file: string, since: number, until = Infinity): S
 
 /** Codex rollouts written since `since`: the live ones and the archived. */
 export function codexFiles(since: number, home = homedir()): string[] {
-  const roots = [codexSessionsRoot(home), join(home, ".codex", "archived_sessions")];
+  const roots = [codexSessionsRoot(home), join(codexDir(home), "archived_sessions")];
   return roots.filter((r) => existsSync(r)).flatMap((r) => rolloutFiles(r, since));
 }
 

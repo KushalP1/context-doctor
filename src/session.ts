@@ -15,6 +15,7 @@ import { readdirSync, readFileSync, statSync, existsSync, openSync, readSync, cl
 import { StringDecoder } from "node:string_decoder";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { codexDir } from "./codexdir.js";
 import { isGeminiChat, listGeminiChats, parseGeminiChat } from "./gemini.js";
 import { claudeDir } from "./claudedir.js";
 
@@ -127,7 +128,7 @@ export function listSessions(limit = 20): SessionInfo[] {
     }
   }
   // Codex keeps rollouts by date: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl.
-  const codexRoot = join(homedir(), ".codex", "sessions");
+  const codexRoot = join(codexDir(), "sessions");
   if (existsSync(codexRoot)) {
     const walk = (dir: string, depth: number): void => {
       let entries: string[];

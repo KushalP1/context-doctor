@@ -21,6 +21,7 @@
  * config.toml is the user's file: only our one top-level line is ever
  * added, replaced or removed, and a value someone else set is left alone.
  */
+/** Codex's home for `home`: CODEX_HOME when `home` is this user's (codexdir.ts). */
 export declare function codexHomeIn(home: string): string;
 /** How Codex signs in, from auth.json: "apikey", "chatgpt", another mode, or undefined (none yet). */
 export declare function codexAuthMode(codexHome: string): string | undefined;

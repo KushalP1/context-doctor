@@ -22,6 +22,7 @@
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { codexDir } from "./codexdir.js";
 import { claudeProjectDir, forEachLine } from "./session.js";
 import { packContext, type Chunk } from "./pack.js";
 import { maskSecrets, stripControls } from "./handoff.js";
@@ -269,7 +270,7 @@ function newestIn(dir: string): { path: string; at: number } | undefined {
 
 /** The newest Codex rollout of the last week that started in `cwd`. */
 function newestCodexFor(cwd: string, home: string): { path: string; at: number } | undefined {
-  const codexRoot = join(home, ".codex", "sessions");
+  const codexRoot = join(codexDir(home), "sessions");
   if (!existsSync(codexRoot)) return undefined;
   const since = Date.now() - 7 * 86_400_000;
   const candidates: Array<{ path: string; at: number }> = [];
@@ -330,7 +331,7 @@ export function findSession(idOrPath: string, home = homedir()): string | undefi
     const p = join(root, d, `${idOrPath}.jsonl`);
     if (existsSync(p)) return p;
   }
-  const codexRoot = join(home, ".codex", "sessions");
+  const codexRoot = join(codexDir(home), "sessions");
   let hit: string | undefined;
   const walk = (dir: string, depth: number) => {
     if (hit) return;
