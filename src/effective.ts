@@ -33,13 +33,19 @@ export interface SettingsSource {
   settings: Record<string, any>;
 }
 
+/** The platform's folder for managed (policy) configuration; undefined when context-doctor is told to ignore it. */
+export function managedDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (env.CONTEXT_DOCTOR_NO_MANAGED_SETTINGS) return undefined;
+  return process.platform === "darwin" ? "/Library/Application Support/ClaudeCode"
+    : process.platform === "win32" ? join(env.ProgramFiles ?? "C:\\Program Files", "ClaudeCode")
+    : "/etc/claude-code";
+}
+
 /** Managed (policy) settings files: CLAUDE_CODE_MANAGED_SETTINGS_PATH, else the platform's place and its drop-in folder. */
 export function managedSettingsPaths(env: NodeJS.ProcessEnv = process.env): string[] {
   if (env.CONTEXT_DOCTOR_NO_MANAGED_SETTINGS) return [];
   if (env.CLAUDE_CODE_MANAGED_SETTINGS_PATH) return [env.CLAUDE_CODE_MANAGED_SETTINGS_PATH];
-  const dir = process.platform === "darwin" ? "/Library/Application Support/ClaudeCode"
-    : process.platform === "win32" ? join(env.ProgramFiles ?? "C:\\Program Files", "ClaudeCode")
-    : "/etc/claude-code";
+  const dir = managedDir(env)!;
   const out = [join(dir, "managed-settings.json")];
   try {
     for (const f of readdirSync(join(dir, "managed-settings.d")).sort()) if (f.endsWith(".json")) out.push(join(dir, "managed-settings.d", f));
