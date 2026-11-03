@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type SubagentModelReplay } from "../subagentmodel.js";
-import { applyFix, fixOverrides, parseFixIds, planFixes, readFixRecords, renderFixPlan, savedSince, undoFixes, type FixInputs } from "../fix.js";
+import { applyFix, fixOverrides, parseFixIds, planFixes, readFixRecords, renderFixPlan, renderFixShare, savedSince, undoFixes, type FixInputs } from "../fix.js";
 import { sandboxEnv } from "./sandbox.js";
 import { at, DAY, history, now, OPUS, reply, SONNET } from "./subagent-fixture.js";
 
@@ -43,7 +43,10 @@ test("plan: ranked by dollars, says plainly it changes the model, never in --app
   assert.match(f.basis, /an estimate/);
   assert.match(f.change, /env\.CLAUDE_CODE_SUBAGENT_MODEL = "claude-sonnet-5-5"/);
   const text = renderFixPlan(30, 2000, fixes, []);
-  assert.match(text, /1\. Subagents on Sonnet 5\.5, not Opus 5\.5 +\$600 \(60%\)/);
+  // 60% of the subagents' $1,000, not of the $2,000 of input the first line names: said so, in the plan and in the post.
+  assert.match(text, /1\. Subagents on Sonnet 5\.5, not Opus 5\.5 +\$600 \(60% of subagents\)/);
+  assert.match(text, /Compact earlier: auto-compact window 400k +\$500 \(25%\)\n/);
+  assert.match(renderFixShare(30, 2000, fixes), /- Subagent model: \$600 \(60% of subagents\)\n- Compact earlier: \$500 \(25%\)\n/);
   assert.match(text, /Explore .* unchanged/);
   assert.match(text, /Explore, \$100\) at Haiku 5\.5: ~\$3\.00\./);
   // --apply all leaves it out; naming it applies it.

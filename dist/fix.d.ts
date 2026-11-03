@@ -41,6 +41,8 @@ export interface Fix {
     /** Saved over the measured period, when it can be priced. */
     savedUsd?: number;
     savedShare?: number;
+    /** What the share is of, when it is not the input the plan's first line names ("of subagents"). */
+    shareOf?: string;
     /** How the figure was measured. */
     basis: string;
     /** What it costs in quality, plainly. */

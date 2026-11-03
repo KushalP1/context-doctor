@@ -48,6 +48,8 @@ const MIN_USD = 1;
 const money = (n) => (n >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
 const pct = (x) => `${Math.round(x * 100)}%`;
 const k = (n) => `${Math.round(n / 1000)}k`;
+/** " (48%)", or " (37% of subagents)" for a share of something else. */
+const share = (f) => (f.savedShare !== undefined ? ` (${pct(f.savedShare)}${f.shareOf ? ` ${f.shareOf}` : ""})` : "");
 export function planFixes(i) {
     const fixes = [];
     const where = tilde(join(claudeDir(), "settings.json"));
@@ -155,6 +157,8 @@ export function planFixes(i) {
             title: `Subagents on ${SUBAGENT_CANDIDATE_NAME}${movedFromNames(sm.movedFrom) ? `, not ${movedFromNames(sm.movedFrom)}` : ""}`,
             savedUsd: sm.savedUsd,
             savedShare: sm.billedUsd > 0 ? sm.savedUsd / sm.billedUsd : undefined,
+            // The subagents' own bill, not the main conversations' input the plan's first line names.
+            shareOf: "of subagents",
             basis: `${reqs.toLocaleString("en-US")} subagent requests priced at ${SUBAGENT_CANDIDATE_NAME} with the token counts they had (${money(sm.billedUsd)} billed for all ${sm.agents} subagents); an estimate: another model tokenizes and works differently`,
             quality: `this changes the model your subagents run on (${moved.map((t) => t.type).join(", ")}); the quality cost is not measured here: context-doctor ab can measure it (its tasks with --model ${SUBAGENT_CANDIDATE} and without)`,
             change: `${where}: env.${SUBAGENT_MODEL_ENV} = "${SUBAGENT_CANDIDATE}"`,
@@ -569,7 +573,7 @@ export function renderFixPlan(days, billedUsd, fixes, since, command = (s) => `c
     if (avail.length === 0)
         out.push(...(billedUsd > 0 ? ["Nothing left to fix here: every lever that pays on your history is applied."] : noHistory(days, command)));
     avail.forEach((f, n) => {
-        const usd = f.savedUsd !== undefined ? `${money(f.savedUsd)}${f.savedShare !== undefined ? ` (${pct(f.savedShare)})` : ""}` : "not priced";
+        const usd = f.savedUsd !== undefined ? `${money(f.savedUsd)}${share(f)}` : "not priced";
         const head = `${n + 1}. ${f.title}`;
         out.push(head.length < 52 ? head.padEnd(52) + usd.padStart(14) : `${head}   ${usd}`);
         out.push(`   measured: ${f.basis}`);
@@ -625,7 +629,7 @@ export function renderFixShare(days, billedUsd, fixes) {
     const avail = fixes.filter((f) => f.state === "available" && f.savedUsd !== undefined);
     const lines = [`context-doctor fix on my last ${days} days of Claude Code (${money(billedUsd)} of input at list price):`];
     for (const f of avail)
-        lines.push(`- ${LABEL[f.id]}: ${money(f.savedUsd)}${f.savedShare !== undefined ? ` (${pct(f.savedShare)})` : ""}`);
+        lines.push(`- ${LABEL[f.id]}: ${money(f.savedUsd)}${share(f)}`);
     if (avail.length === 0)
         lines.push(billedUsd > 0 ? "- nothing left to fix" : "- no Claude Code sessions to measure yet");
     if (avail.length > 1)
