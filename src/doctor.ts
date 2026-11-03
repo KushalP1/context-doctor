@@ -27,6 +27,7 @@ import { withInvocation } from "./invocation.js";
 import { describeInstalls, modelSwitchReadiness, PRE_MODEL_SWITCH_SINCE } from "./modelswitch.js";
 import { describeCosts, subagentCostsPath, type SubagentCosts } from "./fanout.js";
 import { claudeCodePresent, claudeDir, claudeJsonPath } from "./claudedir.js";
+import { codexDir } from "./codexdir.js";
 import { periodSpend, readBudget } from "./budget.js";
 
 function claudeDesktopConfigPath(): string {
@@ -524,7 +525,7 @@ export async function runDoctor(): Promise<void> {
   }
 
   // Codex (OpenAI): MCP table in config.toml, hook in hooks.json, skill.
-  const codexHome = join(homedir(), ".codex");
+  const codexHome = codexDir();
   if (existsSync(codexHome)) {
     const toml = existsSync(join(codexHome, "config.toml")) ? readFileSync(join(codexHome, "config.toml"), "utf8") : "";
     // Parsed rather than searched for one exact header: a quoted key or a
@@ -537,7 +538,7 @@ export async function runDoctor(): Promise<void> {
         : { label: "Codex MCP", status: "fail", detail: "Codex detected but not wired — run: context-doctor install" }
       : launcherNamesMissingPackage(codexEntry)
         ? missingPackageCheck("Codex MCP")
-        : { label: "Codex MCP", status: "ok", detail: "wired in ~/.codex/config.toml" };
+        : { label: "Codex MCP", status: "ok", detail: `wired in ${tilde(join(codexHome, "config.toml"))}` };
     checks.push(codexMcp);
     const codexSkill = join(codexHome, "skills", "context-doctor", "SKILL.md");
     if (existsSync(codexSkill)) checks.push(skillCheck("Codex skill", [codexSkill]));
@@ -553,22 +554,22 @@ export async function runDoctor(): Promise<void> {
         checks.push(
           missing
             ? { label: "Codex hook", status: "fail", detail: `registered, but ${missing} no longer exists — re-run: context-doctor install` }
-            : { label: "Codex hook", status: "ok", detail: "registered in ~/.codex/hooks.json (Codex must trust it once: /hooks)" }
+            : { label: "Codex hook", status: "ok", detail: `registered in ${tilde(join(codexHome, "hooks.json"))} (Codex must trust it once: /hooks)` }
         );
       }
     } catch (e) {
-      checks.push({ label: "Codex hook", status: "fail", detail: `~/.codex/hooks.json unreadable (${(e as Error).message})` });
+      checks.push({ label: "Codex hook", status: "fail", detail: `${tilde(join(codexHome, "hooks.json"))} unreadable (${(e as Error).message})` });
     }
     // Autopilot reaches Codex through openai_base_url (OPENAI_BASE_URL no
     // longer routes it), and only on an API key.
     const route = codexRouting(homedir());
     const local = route.baseUrl && /^http:\/\/(127\.0\.0\.1|localhost):\d+\/v1\/?$/.test(route.baseUrl);
     if (local && route.auth !== "apikey") {
-      checks.push({ label: "Codex autopilot", status: "warn", detail: `openai_base_url points at ${route.baseUrl} while Codex signs in ${route.auth === "chatgpt" ? "with ChatGPT" : "without an API key"}: autopilot routes Codex only on an API key (the proxy relays ChatGPT traffic unedited meanwhile); remove the line from ~/.codex/config.toml` });
+      checks.push({ label: "Codex autopilot", status: "warn", detail: `openai_base_url points at ${route.baseUrl} while Codex signs in ${route.auth === "chatgpt" ? "with ChatGPT" : "without an API key"}: autopilot routes Codex only on an API key (the proxy relays ChatGPT traffic unedited meanwhile); remove the line from ${tilde(join(codexHome, "config.toml"))}` });
     } else if (local) {
       checks.push({ label: "Codex autopilot", status: "ok", detail: `Codex (API key) sends its requests through ${route.baseUrl}` });
     } else if (process.env.OPENAI_BASE_URL && route.auth === "apikey") {
-      checks.push({ label: "Codex autopilot", status: "warn", detail: "OPENAI_BASE_URL is set, but Codex no longer reads it: `context-doctor autopilot on` sets openai_base_url in ~/.codex/config.toml" });
+      checks.push({ label: "Codex autopilot", status: "warn", detail: `OPENAI_BASE_URL is set, but Codex no longer reads it: \`context-doctor autopilot on\` sets openai_base_url in ${tilde(join(codexHome, "config.toml"))}` });
     }
   } else {
     checks.push({ label: "Codex", status: "skip", detail: "not detected (ChatGPT's Codex agent, IDE extension or CLI)" });

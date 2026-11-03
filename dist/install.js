@@ -16,6 +16,7 @@ import { FANOUT_MATCHER } from "./fanout.js";
 import { antigravityAllSkillDirs, antigravityMcpConfigPath, antigravityPresent, antigravitySkillDirs } from "./antigravity.js";
 import { COPILOT_HOOK_EVENT, copilotHome, copilotHookFilePath, copilotMcpConfigPath, isOurCopilotEntry, vsCodePresent } from "./copilot.js";
 import { claudeCodePresent, claudeDir, claudeJsonPath } from "./claudedir.js";
+import { codexDir as codexHomeDir } from "./codexdir.js";
 import { scanCacheDir } from "./scan.js";
 import { editJsonText, parseSettingsText, sameJson } from "./settingsedit.js";
 function claudeDesktopConfigPath() {
@@ -442,7 +443,7 @@ function uninstallHook(attempt) {
     attempt("Claude Code session-start hook", () => uninstallHookFrom(claude, "Claude Code session-start hook", "SessionStart"));
     attempt("Claude Code model-switch warning", () => uninstallHookFrom(claude, "Claude Code model-switch warning", "PreModelSwitch"));
     attempt("Claude Code subagent price", () => uninstallHookFrom(claude, "Claude Code subagent price", "PreToolUse"));
-    attempt("Codex every-prompt hook", () => uninstallHookFrom(join(homedir(), ".codex", "hooks.json"), "Codex every-prompt hook"));
+    attempt("Codex every-prompt hook", () => uninstallHookFrom(join(codexDir(), "hooks.json"), "Codex every-prompt hook"));
     attempt("Gemini CLI every-prompt hook", () => uninstallHookFrom(geminiSettingsPath(), "Gemini CLI every-prompt hook", "BeforeAgent"));
     attempt("Cursor hooks", () => uninstallCursorHook());
 }
@@ -626,7 +627,8 @@ function removeSkillFolders(appHome) {
 // (~/.codex/skills/<name>/SKILL.md). One difference matters: Codex requires the
 // user to trust a new hook once, via /hooks inside Codex, before it runs.
 export function codexDir() {
-    return join(homedir(), ".codex");
+    // CODEX_HOME when set: where Codex reads its config, hooks and skills.
+    return codexHomeDir();
 }
 // Our key as TOML allows it to be written: bare or quoted, any spacing.
 const OUR_KEY = String.raw `\s*mcp_servers\s*\.\s*(?:context-doctor|"context-doctor"|'context-doctor')\s*`;

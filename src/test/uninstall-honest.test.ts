@@ -108,6 +108,27 @@ test("a malformed config for one app does not stop uninstall from removing the r
   assert.equal(readFileSync(join(home, ".gemini", "settings.json"), "utf8"), "{ broken", "the broken file is left as the user had it");
 });
 
+test("CODEX_HOME: install, doctor and uninstall use the Codex home Codex reads", async () => {
+  const home = mkdtempSync(join(tmpdir(), "ctxdoc-unin-codexhome-"));
+  const codex = join(home, "elsewhere", "codex");
+  mkdirSync(codex, { recursive: true });
+  writeFileSync(join(codex, "config.toml"), 'model = "gpt-5.6"\n');
+  const env = { ...sandboxEnv(home), CODEX_HOME: codex };
+  const go = (args: string[]) => new Promise<{ code: number; out: string }>((resolve) => {
+    execFile(process.execPath, [cliPath, ...args], { env, timeout: 30_000 }, (error, stdout) => resolve({ code: error ? 1 : 0, out: stdout }));
+  });
+  assert.equal((await go(["install"])).code, 0);
+  assert.match(readFileSync(join(codex, "config.toml"), "utf8"), /\[mcp_servers\.context-doctor\]/);
+  assert.ok(existsSync(join(codex, "hooks.json")) && existsSync(join(codex, "skills", "context-doctor", "SKILL.md")));
+  assert.ok(!existsSync(join(home, ".codex")), "not the default folder Codex does not read");
+  const doc = await go(["doctor"]);
+  assert.match(doc.out, /✓ Codex MCP/);
+  assert.match(doc.out, /✓ Codex hook/);
+  assert.equal((await go(["uninstall"])).code, 0);
+  assert.equal(readFileSync(join(codex, "config.toml"), "utf8"), 'model = "gpt-5.6"\n');
+  assert.ok(!existsSync(join(codex, "hooks.json")) && !existsSync(join(codex, "skills")));
+});
+
 test("a ~/.claude holding only context-doctor's files is not Claude Code: install skips it, uninstall removes the folder", async () => {
   // Codex only; `budget` (or the Codex hook's ledger) keeps its files in ~/.claude.
   const home = mkdtempSync(join(tmpdir(), "ctxdoc-unin-codex-"));

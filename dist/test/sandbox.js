@@ -12,16 +12,21 @@ import { join } from "node:path";
 /** Environment for a child process whose home is `home` on every platform. */
 export function sandboxEnv(home) {
     const env = { ...process.env, HOME: home, USERPROFILE: home, APPDATA: join(home, "AppData", "Roaming") };
-    // GitHub Copilot's home follows COPILOT_HOME when it is set, wherever HOME is.
+    // Copilot, Codex and Claude Code follow these when set, wherever HOME is:
+    // a developer running one test file from a shell that sets them must not
+    // have the test write into the real ones.
     delete env.COPILOT_HOME;
+    delete env.CODEX_HOME;
+    delete env.CLAUDE_CONFIG_DIR;
     return env;
 }
 /** Run `fn` with the current process's home redirected, restoring afterwards. */
 export async function withSandboxHome(home, fn) {
-    const keys = ["HOME", "USERPROFILE", "APPDATA", "COPILOT_HOME"];
+    const keys = ["HOME", "USERPROFILE", "APPDATA", "COPILOT_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"];
     const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
     Object.assign(process.env, sandboxEnv(home));
-    delete process.env.COPILOT_HOME;
+    for (const k of ["COPILOT_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"])
+        delete process.env[k];
     try {
         return await fn();
     }
