@@ -103,20 +103,32 @@ export function extractText(path) {
 export const EXTRACT_BUDGET_MS = 20_000;
 /**
  * Milliseconds on a monotonic clock. The budget is counted on it, never on
- * Date.now(): a CI runner's wall clock can jump forward (time sync after
- * boot), and a PDF was reported "not read: the time ran out" well inside a
- * 60 s budget, on a converter that had only failed its first form.
+ * Date.now(): a wall clock can jump forward (time sync after a boot), and a
+ * jump read as the budget running out.
  */
 export const monotonicNow = () => performance.now();
 /**
+ * The longest one tool may run: half the time left (at least 2 s), and never
+ * more than the 30 s the synchronous path gives a tool. One form of
+ * pdftotext hanging used to take the whole budget, so the next form was
+ * never tried: Windows runners reported a PDF as "not read: the time ran
+ * out" inside a 60 s budget that the synchronous read of the same file
+ * (30 s a tool) got through.
+ */
+function toolCap(left) {
+    return Math.min(left, 30_000, Math.max(2_000, left / 2));
+}
+/**
  * A command's stdout, or undefined, without blocking the event loop: killed
- * (SIGKILL) when `end` (on the monotonic clock) passes. `timedOut` says which
- * happened.
+ * (SIGKILL) when its share of the time (toolCap) runs out. `timedOut` is set
+ * only when `end` (on the monotonic clock) has passed: a tool stopped
+ * earlier is a failed tool, and the next one is tried.
  */
 function runAsync(cmd, args, end) {
-    const timeout = Math.ceil(end - monotonicNow());
-    if (timeout <= 0)
+    const left = Math.ceil(end - monotonicNow());
+    if (left <= 0)
         return Promise.resolve({ timedOut: true });
+    const timeout = Math.ceil(toolCap(left));
     return new Promise((resolve) => {
         let settled = false;
         const finish = (r) => {
@@ -132,7 +144,7 @@ function runAsync(cmd, args, end) {
         // deadline whatever the pipes do.
         const timer = setTimeout(() => {
             child?.kill("SIGKILL");
-            finish({ timedOut: true });
+            finish({ timedOut: monotonicNow() >= end - 50 });
         }, timeout);
         try {
             child = execFile(cmd, args, { encoding: "utf8", timeout, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024, windowsHide: true }, (err, stdout) => {

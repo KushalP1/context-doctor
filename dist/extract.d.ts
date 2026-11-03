@@ -31,9 +31,8 @@ export declare function extractText(path: string): {
 export declare const EXTRACT_BUDGET_MS = 20000;
 /**
  * Milliseconds on a monotonic clock. The budget is counted on it, never on
- * Date.now(): a CI runner's wall clock can jump forward (time sync after
- * boot), and a PDF was reported "not read: the time ran out" well inside a
- * 60 s budget, on a converter that had only failed its first form.
+ * Date.now(): a wall clock can jump forward (time sync after a boot), and a
+ * jump read as the budget running out.
  */
 export declare const monotonicNow: () => number;
 /**

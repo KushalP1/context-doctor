@@ -181,6 +181,28 @@ test("readSourcesAsync: a wall clock that jumps between two documents does not c
   }
 });
 
+test("one converter form that hangs takes its share of the budget, not all of it: the next form is tried", { skip: process.platform === "win32" && "a POSIX shell script stands in for the converter" }, async () => {
+  const { chmodSync } = await import("node:fs");
+  const { extractTextAsync, monotonicNow } = await import("../extract.js");
+  const bin = mkdtempSync(join(tmpdir(), "cd-extract-bin-"));
+  // Hangs on the first form (`-enc UTF-8 … -`), reads on the second.
+  writeFileSync(join(bin, "pdftotext"), '#!/bin/sh\nif [ "$1" = "-enc" ]; then exec sleep 30; fi\necho "Rotate the signing key"\n');
+  chmodSync(join(bin, "pdftotext"), 0o755);
+  const dir = mkdtempSync(join(tmpdir(), "cd-extract-hang1-"));
+  const path = join(dir, "manual.pdf");
+  writeFileSync(path, pdf(["Rotate the signing key"]));
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${bin}:${savedPath}`;
+  try {
+    const started = monotonicNow();
+    const got = await extractTextAsync(path, monotonicNow() + 6_000);
+    assert.ok("text" in got && /signing key/.test(got.text), JSON.stringify(got));
+    assert.ok(monotonicNow() - started < 5_000, "the first form stopped at its share (3 s)");
+  } finally {
+    process.env.PATH = savedPath;
+  }
+});
+
 test("readSourcesAsync reads the same sources as readSources, PDFs included", { skip: !canPdf && "no pdftotext and not macOS" }, async () => {
   const { readSourcesAsync } = await import("../pack.js");
   const dir = mkdtempSync(join(tmpdir(), "cd-extract-async-"));
