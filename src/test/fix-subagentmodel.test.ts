@@ -20,7 +20,7 @@ process.env.CONTEXT_DOCTOR_CACHE_DIR = mkdtempSync(join(tmpdir(), "cd-fsm-cache-
 /** A replay whose figures the plan tests choose. */
 function replay(savedUsd: number, billedUsd = 1000): SubagentModelReplay {
   return {
-    candidate: "claude-sonnet-5-5", agents: 200, requests: 9000, billedUsd, atCandidateUsd: billedUsd - savedUsd, savedUsd, unpriced: 0, movedFrom: { "claude-opus-5-5": 900 },
+    candidate: "claude-sonnet-5-5", agents: 200, requests: 9000, billedUsd, atCandidateUsd: billedUsd - savedUsd, savedUsd, unpriced: 0, movedFrom: { "claude-opus-5-5": 900 }, before: { "claude-opus-5-5": 450 },
     byType: [
       { type: "general-purpose", agents: 180, requests: 8000, billedUsd: 900, atCandidateUsd: 900 - savedUsd, atHaikuUsd: 30, over100k: 10, moves: true, readOnly: false },
       { type: "Explore", agents: 20, requests: 1000, billedUsd: 100, atCandidateUsd: 100, atHaikuUsd: 3, over100k: 0, moves: false, why: "built in, on the main conversation's model", readOnly: true },
@@ -128,7 +128,11 @@ test("since: the moved requests priced at the models they ran on before, against
 });
 
 test("CLI: fix offers it in a throwaway home, applies it only when named, undo removes exactly that", () => {
-  const { home, cwd } = history((cwd) => Array.from({ length: 12 }, (_, k) => ({ id: `e${k}`, type: "general-purpose", rows: Array.from({ length: 5 }, (_, i) => reply(at + k * 60_000 + i * 1000, "claude-opus-5-5", cwd)).flat() })));
+  const { home, cwd } = history((cwd) => [
+    ...Array.from({ length: 12 }, (_, k) => ({ id: `e${k}`, type: "general-purpose", rows: Array.from({ length: 5 }, (_, i) => reply(at + k * 60_000 + i * 1000, "claude-opus-5-5", cwd)).flat() })),
+    // As many requests from a Sonnet session: not moved, but half the mix "saved since" compares against.
+    { id: "s0", type: "general-purpose", rows: Array.from({ length: 60 }, (_, i) => reply(at + i * 1000, "claude-sonnet-5-5", cwd)).flat() },
+  ]);
   const settings = join(home, ".claude", "settings.json");
   const original = '{\n  "model": "opus"\n}\n';
   writeFileSync(settings, original);
@@ -136,11 +140,14 @@ test("CLI: fix offers it in a throwaway home, applies it only when named, undo r
   let r = run();
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /Subagents on Sonnet 5\.5, not Opus 5\.5/);
-  assert.match(r.stdout, /general-purpose\s+12/);
+  assert.match(r.stdout, /general-purpose\s+13/);
   assert.equal(readFileSync(settings, "utf8"), original, "nothing written without --apply");
   r = run("--apply", "subagent-model");
   assert.equal(r.status, 0, r.stderr + r.stdout);
   assert.equal(JSON.parse(readFileSync(settings, "utf8")).env.CLAUDE_CODE_SUBAGENT_MODEL, "claude-sonnet-5-5");
+  const mix = readFixRecords(home).find((x) => x.id === "subagent-model")!.modelsBefore!;
+  near(mix["claude-opus-5-5"], 0.5, "opus share");
+  near(mix["claude-sonnet-5-5"], 0.5, "sonnet share");
   r = run();
   assert.match(r.stdout, /✓ Subagent model: CLAUDE_CODE_SUBAGENT_MODEL=claude-sonnet-5-5 in .*settings\.json env since \d{4}-\d\d-\d\d: no subagent requests it moves yet/);
   r = run("undo", "subagent-model");

@@ -25,6 +25,8 @@ export interface SettingsSource {
     path: string;
     settings: Record<string, any>;
 }
+/** The platform's folder for managed (policy) configuration; undefined when context-doctor is told to ignore it. */
+export declare function managedDir(env?: NodeJS.ProcessEnv): string | undefined;
 /** Managed (policy) settings files: CLAUDE_CODE_MANAGED_SETTINGS_PATH, else the platform's place and its drop-in folder. */
 export declare function managedSettingsPaths(env?: NodeJS.ProcessEnv): string[];
 /** The settings files that apply in `cwd`, highest precedence first; unreadable ones are skipped. */

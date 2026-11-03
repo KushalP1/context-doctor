@@ -28,14 +28,15 @@
  * tokenizes differently and may take more or fewer steps for the same task.
  * Requests on a model no pricier than the candidate stay as billed.
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pick, rowsOf, slimUsage } from "./scan.js";
 import { pricingFor, usageCost } from "./pricing.js";
 import { realModel } from "./tokens.js";
 import { claudeDir } from "./claudedir.js";
 import { subagentTranscripts } from "./cachettl.js";
+import { managedDir } from "./effective.js";
 import { SUBAGENT_CANDIDATE, SUBAGENT_CANDIDATE_NAME } from "./subagentpay.js";
 export { SUBAGENT_CANDIDATE, SUBAGENT_CANDIDATE_NAME };
 /** The environment variable the lever writes. */
@@ -100,19 +101,51 @@ export const SUBAGENT_ROWS = {
         out.push({ t: "r", ...pick(e, ["uuid", "timestamp"]), id, model: m.model, usage: slimUsage(m.usage) });
     },
 };
-/** `name:` and `model:` from the frontmatter of the agent files in `dir`. */
-function definitionsIn(dir, into) {
-    let files;
+/** The `.md` files under `dir`, subfolders included (Claude Code reads agent folders recursively). */
+function markdownUnder(dir, out = [], seen = new Set()) {
+    let real;
     try {
-        files = readdirSync(dir).filter((f) => f.endsWith(".md"));
+        real = realpathSync(dir);
     }
     catch {
-        return;
+        return out;
     }
-    for (const f of files) {
+    if (seen.has(real))
+        return out;
+    seen.add(real);
+    let entries;
+    try {
+        entries = readdirSync(dir).sort();
+    }
+    catch {
+        return out;
+    }
+    for (const e of entries) {
+        const p = join(dir, e);
+        let st;
+        try {
+            st = statSync(p);
+        }
+        catch {
+            continue;
+        }
+        if (st.isDirectory())
+            markdownUnder(p, out, seen);
+        else if (st.isFile() && e.endsWith(".md"))
+            out.push(p);
+    }
+    return out;
+}
+/**
+ * `name:` and `model:` from the frontmatter of the agent files under `dir`,
+ * over what `into` holds (a later folder wins). Like Claude Code, a file
+ * without a `name` or a `description` is not an agent.
+ */
+function definitionsIn(dir, into) {
+    for (const path of markdownUnder(dir)) {
         let text;
         try {
-            text = readFileSync(join(dir, f), "utf8");
+            text = readFileSync(path, "utf8");
         }
         catch {
             continue;
@@ -121,10 +154,49 @@ function definitionsIn(dir, into) {
         if (fm === undefined)
             continue;
         const field = (k) => new RegExp(`^${k}:[ \\t]*(.*)$`, "m").exec(fm)?.[1].trim().replace(/^["']|["']$/g, "") || undefined;
-        const name = field("name") ?? basename(f, ".md");
-        if (!into.has(name))
-            into.set(name, { model: field("model"), where: join(dir, f) });
+        const name = field("name");
+        if (!name || !field("description"))
+            continue;
+        into.set(name, { model: field("model"), where: path });
     }
+}
+/**
+ * The project folders whose `.claude/agents` apply in `cwd`, outermost
+ * first: `cwd` and its parents up to the git root, never the home folder
+ * or above it (the 2.1.309 binary: closer folders win over outer ones).
+ */
+function projectAgentDirs(cwd, home) {
+    const dirs = [];
+    let d = resolve(cwd);
+    const h = resolve(home);
+    for (;;) {
+        if (d === h)
+            break;
+        dirs.push(join(d, ".claude", "agents"));
+        if (existsSync(join(d, ".git")))
+            break;
+        const up = dirname(d);
+        if (up === d)
+            break;
+        d = up;
+    }
+    return dirs.reverse();
+}
+/**
+ * The agent definitions Claude Code uses in `cwd`, as 2.1.309 merges them,
+ * lowest first: the user's (~/.claude/agents), the project's (outer folders
+ * first), then managed. Plugin agents are not read.
+ */
+export function agentDefinitions(cwd, home = homedir(), env = process.env) {
+    const defs = new Map();
+    definitionsIn(join(claudeDir(home, env), "agents"), defs);
+    if (cwd)
+        for (const d of projectAgentDirs(cwd, home))
+            definitionsIn(d, defs);
+    const managed = managedDir(env);
+    if (managed)
+        definitionsIn(join(managed, ".claude", "agents"), defs);
+    return defs;
 }
 /** How a type's model is chosen: whether CLAUDE_CODE_SUBAGENT_MODEL moves it, and why not. */
 export function variableMoves(type, defs, force = false) {
@@ -180,12 +252,23 @@ export function replaySubagentModels(opts) {
     const haiku = pricingFor(HAIKU);
     const base = opts.baseline ? blend(opts.baseline) : undefined;
     const until = opts.until ?? Infinity;
-    const paths = opts.paths ?? subagentTranscripts(opts.since, opts.home ?? homedir());
-    const defs = opts.definitions ?? new Map();
-    if (!opts.definitions)
-        definitionsIn(join(claudeDir(opts.home), "agents"), defs);
+    const home = opts.home ?? homedir();
+    const paths = opts.paths ?? subagentTranscripts(opts.since, home);
+    // Each project's agents, read the first time a subagent of that folder is met.
+    const defsByCwd = new Map();
+    const defsFor = (cwd) => {
+        if (opts.definitions)
+            return opts.definitions;
+        const key = typeof cwd === "string" ? cwd : "";
+        let d = defsByCwd.get(key);
+        if (!d)
+            defsByCwd.set(key, (d = agentDefinitions(key || undefined, home)));
+        return d;
+    };
     const types = new Map();
     const movedBy = new Map();
+    const beforeBy = new Map();
+    const add = (m, k, v) => m.set(k, (m.get(k) ?? 0) + v);
     const seen = new Set();
     let unpriced = 0;
     for (const p of paths) {
@@ -196,13 +279,12 @@ export function replaySubagentModels(opts) {
         catch {
             continue;
         }
-        const cwd = rows.find((r) => r?.t === "c")?.cwd;
-        // A project's own agents, looked up the first time a subagent of that project is met.
-        if (typeof cwd === "string" && !opts.definitions)
-            definitionsIn(join(cwd, ".claude", "agents"), defs);
         const type = agentTypeOf(p);
-        const how = variableMoves(type, defs, opts.force);
+        const how = variableMoves(type, defsFor(rows.find((r) => r?.t === "c")?.cwd), opts.force);
         const t = types.get(type) ?? types.set(type, { type, agents: 0, requests: 0, billedUsd: 0, atCandidateUsd: 0, atHaikuUsd: 0, over100k: 0, moves: how.moves, why: how.why, readOnly: READ_ONLY.has(type) }).get(type);
+        // One project's file may name a model where another's does not: the type moves where any of its runs does.
+        if (how.moves)
+            t.moves = true;
         // Per reply of this file: the prices its output top-ups are charged at.
         const priced = new Map();
         let counted = false;
@@ -214,6 +296,8 @@ export function replaySubagentModels(opts) {
                 t.billedUsd += (r.more * q.billed.outputPerM) / 1e6;
                 t.atCandidateUsd += (r.more * q.other.outputPerM) / 1e6;
                 t.atHaikuUsd += (r.more * haiku.outputPerM) / 1e6;
+                if (how.moves)
+                    add(beforeBy, q.model, (r.more * cand.outputPerM) / 1e6);
                 continue;
             }
             if (r?.t !== "r")
@@ -248,17 +332,19 @@ export function replaySubagentModels(opts) {
             if (promptTokens(u) > HAIKU_TIER)
                 t.over100k++;
             if (move)
-                movedBy.set(model, (movedBy.get(model) ?? 0) + billed);
+                add(movedBy, model, billed);
+            if (how.moves)
+                add(beforeBy, model, usageCost(u, cand).totalUsd);
             if (r.id)
-                priced.set(r.id, { billed: price, other });
+                priced.set(r.id, { billed: price, other, model });
         }
         if (counted)
             t.agents++;
     }
     const byType = [...types.values()].filter((t) => t.requests > 0).sort((a, b) => b.billedUsd - a.billedUsd);
     const sum = (k) => byType.reduce((s, t) => s + t[k], 0);
-    const movedFrom = Object.fromEntries([...movedBy.entries()].sort((a, b) => b[1] - a[1]));
-    return { candidate, agents: sum("agents"), requests: sum("requests"), billedUsd: sum("billedUsd"), atCandidateUsd: sum("atCandidateUsd"), savedUsd: sum("billedUsd") - sum("atCandidateUsd"), movedFrom, unpriced, byType };
+    const sorted = (m) => Object.fromEntries([...m.entries()].sort((a, b) => b[1] - a[1]));
+    return { candidate, agents: sum("agents"), requests: sum("requests"), billedUsd: sum("billedUsd"), atCandidateUsd: sum("atCandidateUsd"), savedUsd: sum("billedUsd") - sum("atCandidateUsd"), movedFrom: sorted(movedBy), before: sorted(beforeBy), unpriced, byType };
 }
 /** The models the moved requests ran on, for people: the one or two that carry 10%+ of the bill ("Fable 5.1 or Opus 5.5"). */
 export function movedFromNames(movedFrom) {
@@ -267,7 +353,7 @@ export function movedFromNames(movedFrom) {
     const names = [...new Set(all.filter(([, v]) => v >= 0.1 * total).slice(0, 2).map(([m]) => modelName(m)))];
     return names.length ? names.join(" or ") : undefined;
 }
-/** Each model's share of a bill by model (what a fix record keeps as the baseline). */
+/** Each model's share of a total by model (a fix record keeps the shares of `before` as the baseline). */
 export function shares(byModel) {
     const total = Object.values(byModel).reduce((s, v) => s + v, 0);
     return total > 0 ? Object.fromEntries(Object.entries(byModel).map(([m, v]) => [m, v / total])) : {};

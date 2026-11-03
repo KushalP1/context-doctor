@@ -49,6 +49,12 @@ export interface AgentDefinition {
     model?: string;
     where: string;
 }
+/**
+ * The agent definitions Claude Code uses in `cwd`, as 2.1.309 merges them,
+ * lowest first: the user's (~/.claude/agents), the project's (outer folders
+ * first), then managed. Plugin agents are not read.
+ */
+export declare function agentDefinitions(cwd: string | undefined, home?: string, env?: NodeJS.ProcessEnv): Map<string, AgentDefinition>;
 /** How a type's model is chosen: whether CLAUDE_CODE_SUBAGENT_MODEL moves it, and why not. */
 export declare function variableMoves(type: string, defs: Map<string, AgentDefinition>, force?: boolean): {
     moves: boolean;
@@ -77,8 +83,15 @@ export interface SubagentModelReplay {
     atCandidateUsd: number;
     /** billed - at candidate. */
     savedUsd: number;
-    /** The moved requests' bill by the model they ran on: what "saved since" compares against. */
+    /** The moved requests' bill by the model they ran on (the names in the plan's title). */
     movedFrom: Record<string, number>;
+    /**
+     * Every request of the types the variable moves, Sonnet-or-cheaper ones
+     * included, by the model it ran on, weighted by its tokens (priced at the
+     * candidate's rates): the mix "saved since" prices those types at after
+     * the change, when every one of them is on the candidate.
+     */
+    before: Record<string, number>;
     /** Requests on models with no price (left out of the dollars). */
     unpriced: number;
     byType: TypeReplay[];
@@ -91,7 +104,7 @@ export interface SubagentModelOptions {
     candidate?: string;
     /** CLAUDE_CODE_SUBAGENT_MODEL_FORCE is on: the variable moves every type but forks. */
     force?: boolean;
-    /** Agent definitions (default: ~/.claude/agents, then each subagent's project's .claude/agents). */
+    /** Agent definitions for every subagent (default: per subagent's folder, as agentDefinitions merges them). */
     definitions?: Map<string, AgentDefinition>;
     home?: string;
     /** Price every moved request at this mix of models (shares adding to 1) instead of the candidate: "saved since". */
@@ -109,7 +122,7 @@ export declare function agentTypeOf(transcript: string): string;
 export declare function replaySubagentModels(opts: SubagentModelOptions): SubagentModelReplay;
 /** The models the moved requests ran on, for people: the one or two that carry 10%+ of the bill ("Fable 5.1 or Opus 5.5"). */
 export declare function movedFromNames(movedFrom: Record<string, number>): string | undefined;
-/** Each model's share of a bill by model (what a fix record keeps as the baseline). */
+/** Each model's share of a total by model (a fix record keeps the shares of `before` as the baseline). */
 export declare function shares(byModel: Record<string, number>): Record<string, number>;
 /** A model id for people: "claude-opus-5-5" as "Opus 5.5". */
 export declare function modelName(model: string | undefined): string;

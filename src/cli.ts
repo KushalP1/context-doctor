@@ -1320,7 +1320,7 @@ async function main(): Promise<void> {
         continue;
       }
       const kind = id === "cache-ttl" ? "main" : id === "cache-ttl-subagents" ? "subagents" : undefined;
-      const r = await applyFix(f, { autopilotOn: () => autopilotOn(args.port ?? DEFAULT_AUTOPILOT_PORT) }, { oneHourShare: kind ? inputs.ttl?.[kind].oneHourShare : undefined, prune: prunePlan, modelsBefore: inputs.subagentModel ? shares(inputs.subagentModel.movedFrom) : undefined });
+      const r = await applyFix(f, { autopilotOn: () => autopilotOn(args.port ?? DEFAULT_AUTOPILOT_PORT) }, { oneHourShare: kind ? inputs.ttl?.[kind].oneHourShare : undefined, prune: prunePlan, modelsBefore: inputs.subagentModel ? shares(inputs.subagentModel.before) : undefined });
       results.push({ id, ...r });
     }
     // Naming fixes that are not there (or nothing at all, with "all") is not a silent success.

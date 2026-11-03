@@ -124,7 +124,7 @@ export interface FixRecord {
     oneHourShareBefore?: number;
     /** For prune: the project folder. */
     cwd?: string;
-    /** For subagent-model: the models the moved subagents ran on before the change, each one's share of their bill: the baseline "since" compares against. */
+    /** For subagent-model: the models the moved types' subagents ran on before the change, each one's share of their tokens (Sonnet-or-cheaper ones included): the baseline "since" compares against. */
     modelsBefore?: Record<string, number>;
 }
 export declare function fixRecordPath(home?: string): string;

@@ -209,8 +209,15 @@ export interface SubagentModelReplay {
   atCandidateUsd: number;
   /** billed - at candidate. */
   savedUsd: number;
-  /** The moved requests' bill by the model they ran on: what "saved since" compares against. */
+  /** The moved requests' bill by the model they ran on (the names in the plan's title). */
   movedFrom: Record<string, number>;
+  /**
+   * Every request of the types the variable moves, Sonnet-or-cheaper ones
+   * included, by the model it ran on, weighted by its tokens (priced at the
+   * candidate's rates): the mix "saved since" prices those types at after
+   * the change, when every one of them is on the candidate.
+   */
+  before: Record<string, number>;
   /** Requests on models with no price (left out of the dollars). */
   unpriced: number;
   byType: TypeReplay[];
@@ -281,6 +288,8 @@ export function replaySubagentModels(opts: SubagentModelOptions): SubagentModelR
   };
   const types = new Map<string, TypeReplay>();
   const movedBy = new Map<string, number>();
+  const beforeBy = new Map<string, number>();
+  const add = (m: Map<string, number>, k: string, v: number) => m.set(k, (m.get(k) ?? 0) + v);
   const seen = new Set<string>();
   let unpriced = 0;
   for (const p of paths) {
@@ -292,7 +301,7 @@ export function replaySubagentModels(opts: SubagentModelOptions): SubagentModelR
     // One project's file may name a model where another's does not: the type moves where any of its runs does.
     if (how.moves) t.moves = true;
     // Per reply of this file: the prices its output top-ups are charged at.
-    const priced = new Map<string, { billed: ModelPricing; other: ModelPricing }>();
+    const priced = new Map<string, { billed: ModelPricing; other: ModelPricing; model: string }>();
     let counted = false;
     for (const r of rows) {
       if (r?.t === "o") {
@@ -301,6 +310,7 @@ export function replaySubagentModels(opts: SubagentModelOptions): SubagentModelR
         t.billedUsd += (r.more * q.billed.outputPerM) / 1e6;
         t.atCandidateUsd += (r.more * q.other.outputPerM) / 1e6;
         t.atHaikuUsd += (r.more * haiku.outputPerM) / 1e6;
+        if (how.moves) add(beforeBy, q.model, (r.more * cand.outputPerM) / 1e6);
         continue;
       }
       if (r?.t !== "r") continue;
@@ -326,15 +336,16 @@ export function replaySubagentModels(opts: SubagentModelOptions): SubagentModelR
       t.atCandidateUsd += move ? usageCost(u, other).totalUsd : billed;
       t.atHaikuUsd += usageCost(u, haiku).totalUsd;
       if (promptTokens(u) > HAIKU_TIER) t.over100k++;
-      if (move) movedBy.set(model, (movedBy.get(model) ?? 0) + billed);
-      if (r.id) priced.set(r.id, { billed: price, other });
+      if (move) add(movedBy, model, billed);
+      if (how.moves) add(beforeBy, model, usageCost(u, cand).totalUsd);
+      if (r.id) priced.set(r.id, { billed: price, other, model });
     }
     if (counted) t.agents++;
   }
   const byType = [...types.values()].filter((t) => t.requests > 0).sort((a, b) => b.billedUsd - a.billedUsd);
   const sum = (k: "agents" | "requests" | "billedUsd" | "atCandidateUsd") => byType.reduce((s, t) => s + t[k], 0);
-  const movedFrom = Object.fromEntries([...movedBy.entries()].sort((a, b) => b[1] - a[1]));
-  return { candidate, agents: sum("agents"), requests: sum("requests"), billedUsd: sum("billedUsd"), atCandidateUsd: sum("atCandidateUsd"), savedUsd: sum("billedUsd") - sum("atCandidateUsd"), movedFrom, unpriced, byType };
+  const sorted = (m: Map<string, number>) => Object.fromEntries([...m.entries()].sort((a, b) => b[1] - a[1]));
+  return { candidate, agents: sum("agents"), requests: sum("requests"), billedUsd: sum("billedUsd"), atCandidateUsd: sum("atCandidateUsd"), savedUsd: sum("billedUsd") - sum("atCandidateUsd"), movedFrom: sorted(movedBy), before: sorted(beforeBy), unpriced, byType };
 }
 
 /** The models the moved requests ran on, for people: the one or two that carry 10%+ of the bill ("Fable 5.1 or Opus 5.5"). */
@@ -345,7 +356,7 @@ export function movedFromNames(movedFrom: Record<string, number>): string | unde
   return names.length ? names.join(" or ") : undefined;
 }
 
-/** Each model's share of a bill by model (what a fix record keeps as the baseline). */
+/** Each model's share of a total by model (a fix record keeps the shares of `before` as the baseline). */
 export function shares(byModel: Record<string, number>): Record<string, number> {
   const total = Object.values(byModel).reduce((s, v) => s + v, 0);
   return total > 0 ? Object.fromEntries(Object.entries(byModel).map(([m, v]) => [m, v / total])) : {};
