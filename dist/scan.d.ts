@@ -64,6 +64,8 @@ export interface Extractor<S = unknown> {
 }
 /** Where the cache lives (created only when something is written). */
 export declare function scanCacheDir(env?: NodeJS.ProcessEnv): string;
+/** A fingerprint of the bytes before `off` (its first and last few KB): what tells a file grown in place from one rewritten. */
+export declare function anchorOf(fd: number, off: number): string;
 /**
  * Read every transcript once for all the extractors that need it (each job:
  * an extractor set and its transcripts), so the analyses that follow find

@@ -32,7 +32,7 @@ import { claudeDir } from "./claudedir.js";
 import { claudeFileUsage, claudeUsageFiles, USAGE_ROWS } from "./limits.js";
 import { codexFileSpend, codexFiles, geminiFileSpend, geminiFiles, TOOL_NAME } from "./spend.js";
 import { pricingFor, usageCost } from "./pricing.js";
-import { rowsOf } from "./scan.js";
+import { anchorOf, rowsOf } from "./scan.js";
 import { realModel } from "./tokens.js";
 /** Beside the hook state and the ledger: ~/.claude/.context-doctor-budget.json. */
 export function budgetPath() {
@@ -223,7 +223,8 @@ function readFile(tool, file, since, size) {
     const r = [...last.values()];
     const fd = openSync(file, "r");
     try {
-        return { k, d, o: lineStart(fd, size), r: r.slice(-RECENT_REPLIES) };
+        const o = lineStart(fd, size);
+        return { k, d, o, a: anchorOf(fd, o), r: r.slice(-RECENT_REPLIES) };
     }
     finally {
         closeSync(fd);
@@ -232,18 +233,21 @@ function readFile(tool, file, since, size) {
 /**
  * A Claude Code transcript that grew: the whole lines after `e.o`, each
  * reply counted as claudeFileUsage counts it (once, its output settled on
- * its later rows, priced with usageCost), into `e`.
+ * its later rows, priced with usageCost), into `e`. False, `e` untouched,
+ * when what came before `e.o` is not what was read (rewritten in place).
  */
 function readAppended(e, file, since) {
     const fd = openSync(file, "r");
     try {
         const size = fstatSync(fd).size;
         const from = e.o ?? 0;
+        if (e.a === undefined || size < from || anchorOf(fd, from) !== e.a)
+            return false;
         const buf = Buffer.alloc(size - from);
         const n = readSync(fd, buf, 0, buf.length, from);
         const end = buf.subarray(0, n).lastIndexOf(10);
         if (end < 0)
-            return;
+            return true;
         const recent = e.r ?? [];
         for (const line of buf.subarray(0, end).toString("utf8").split("\n")) {
             if (!line.includes('"usage"'))
@@ -284,6 +288,8 @@ function readAppended(e, file, since) {
         }
         e.r = recent.slice(-RECENT_REPLIES);
         e.o = from + end + 1;
+        e.a = anchorOf(fd, e.o);
+        return true;
     }
     finally {
         closeSync(fd);
@@ -293,7 +299,7 @@ function readAppended(e, file, since) {
 function wellFormed(e) {
     return Boolean(e) && typeof e === "object" && Array.isArray(e.k) && Array.isArray(e.d) && e.k.length === e.d.length &&
         e.k.every((x) => typeof x === "string") && e.d.every((x) => typeof x === "number" && Number.isFinite(x)) &&
-        (e.r === undefined || (Array.isArray(e.r) && e.r.every((x) => Array.isArray(x) && x.length === 4)));
+        (e.a === undefined || typeof e.a === "string") && (e.r === undefined || (Array.isArray(e.r) && e.r.every((x) => Array.isArray(x) && x.length === 4)));
 }
 /**
  * What the period holding `now` has cost so far, across Claude Code, Codex
@@ -329,8 +335,7 @@ export function periodSpend(period, now = Date.now(), home = homedir(), warnAt) 
         }
         try {
             // Claude Code appends: a transcript that only grew is read from where the last read stopped.
-            if (e && tool === "claude" && e.o !== undefined && e.i === s.ino && s.size >= e.s) {
-                readAppended(e, file, start);
+            if (e && tool === "claude" && e.o !== undefined && e.i === s.ino && s.size >= e.s && readAppended(e, file, start)) {
                 kept[file] = { ...e, s: s.size, m: s.mtimeMs };
             }
             else

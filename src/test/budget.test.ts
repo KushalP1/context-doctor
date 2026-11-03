@@ -258,6 +258,19 @@ test("a forked Codex rollout's copy of its parent's requests counts once in the 
   });
 });
 
+test("a transcript rewritten in place, same inode and larger, is read again in full, not from where the last read stopped", async () => {
+  await inLedgerSandbox((home, transcript) => {
+    writeFileSync(transcript, [...reply(NOW - 3 * HOUR), ...reply(NOW - 2 * HOUR)].join("\n") + "\n");
+    assert.ok(Math.abs(periodSpend("day", NOW, home).usd - 0.4) < 1e-9);
+    // Rewritten (writeFileSync keeps the inode): two other replies, each $0.20 of input and $0.50 of output, then a third.
+    writeFileSync(transcript, [...reply(NOW - 3 * HOUR, { output: 50_000 }), ...reply(NOW - 2 * HOUR, { output: 50_000 }), ...reply(NOW - HOUR)].join("\n") + "\n");
+    const after = periodSpend("day", NOW, home).usd;
+    clearScanMemo();
+    const full = claudeSpend(periodStart("day", NOW), NOW + HOUR).reduce((s, i) => s + i.usd, 0);
+    assert.ok(Math.abs(after - 1.6) < 1e-9 && Math.abs(after - full) < 1e-9, `${after} vs ${full}`);
+  });
+});
+
 test("a ledger entry in a shape this version does not write is read again, not thrown on every prompt", async () => {
   await inLedgerSandbox((home, transcript) => {
     writeFileSync(transcript, reply(NOW - HOUR).join("\n") + "\n");

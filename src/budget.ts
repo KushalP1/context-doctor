@@ -33,7 +33,7 @@ import { claudeDir } from "./claudedir.js";
 import { claudeFileUsage, claudeUsageFiles, USAGE_ROWS } from "./limits.js";
 import { codexFileSpend, codexFiles, geminiFileSpend, geminiFiles, TOOL_NAME, type Tool } from "./spend.js";
 import { pricingFor, usageCost, type RecordedUsage } from "./pricing.js";
-import { rowsOf } from "./scan.js";
+import { anchorOf, rowsOf } from "./scan.js";
 import { realModel } from "./tokens.js";
 
 export type Period = "day" | "week";
@@ -129,9 +129,11 @@ export function periodEnd(period: Period, now = Date.now()): number {
  * where reading stopped (`o`, after the last whole line) and its last
  * replies (`r`: message id, index into k/d or -1, output so far, output
  * price per 1M), so an append is read from there: a reply's later rows are
- * met within its last few, and only settle its output.
+ * met within its last few, and only settle its output. `a` fingerprints the
+ * bytes before `o` (the shared scan's anchorOf): a transcript rewritten in
+ * place, same inode and no smaller, is read again in full, not from `o`.
  */
-interface FileEntry { t: Tool; s: number; m: number; i: number; k: string[]; d: number[]; o?: number; r?: Array<[string, number, number, number]> }
+interface FileEntry { t: Tool; s: number; m: number; i: number; k: string[]; d: number[]; o?: number; a?: string; r?: Array<[string, number, number, number]> }
 
 /** Replies remembered per transcript, to tell a later row of one from a new reply. */
 const RECENT_REPLIES = 64;
@@ -234,7 +236,8 @@ function readFile(tool: Tool, file: string, since: number, size: number): Omit<F
   const r = [...last.values()];
   const fd = openSync(file, "r");
   try {
-    return { k, d, o: lineStart(fd, size), r: r.slice(-RECENT_REPLIES) };
+    const o = lineStart(fd, size);
+    return { k, d, o, a: anchorOf(fd, o), r: r.slice(-RECENT_REPLIES) };
   } finally {
     closeSync(fd);
   }
@@ -243,17 +246,19 @@ function readFile(tool: Tool, file: string, since: number, size: number): Omit<F
 /**
  * A Claude Code transcript that grew: the whole lines after `e.o`, each
  * reply counted as claudeFileUsage counts it (once, its output settled on
- * its later rows, priced with usageCost), into `e`.
+ * its later rows, priced with usageCost), into `e`. False, `e` untouched,
+ * when what came before `e.o` is not what was read (rewritten in place).
  */
-function readAppended(e: FileEntry, file: string, since: number): void {
+function readAppended(e: FileEntry, file: string, since: number): boolean {
   const fd = openSync(file, "r");
   try {
     const size = fstatSync(fd).size;
     const from = e.o ?? 0;
+    if (e.a === undefined || size < from || anchorOf(fd, from) !== e.a) return false;
     const buf = Buffer.alloc(size - from);
     const n = readSync(fd, buf, 0, buf.length, from);
     const end = buf.subarray(0, n).lastIndexOf(10);
-    if (end < 0) return;
+    if (end < 0) return true;
     const recent = e.r ?? [];
     for (const line of buf.subarray(0, end).toString("utf8").split("\n")) {
       if (!line.includes('"usage"')) continue;
@@ -285,6 +290,8 @@ function readAppended(e: FileEntry, file: string, since: number): void {
     }
     e.r = recent.slice(-RECENT_REPLIES);
     e.o = from + end + 1;
+    e.a = anchorOf(fd, e.o);
+    return true;
   } finally {
     closeSync(fd);
   }
@@ -294,7 +301,7 @@ function readAppended(e: FileEntry, file: string, since: number): void {
 function wellFormed(e: FileEntry | undefined): e is FileEntry {
   return Boolean(e) && typeof e === "object" && Array.isArray(e!.k) && Array.isArray(e!.d) && e!.k.length === e!.d.length &&
     e!.k.every((x) => typeof x === "string") && e!.d.every((x) => typeof x === "number" && Number.isFinite(x)) &&
-    (e!.r === undefined || (Array.isArray(e!.r) && e!.r.every((x) => Array.isArray(x) && x.length === 4)));
+    (e!.a === undefined || typeof e!.a === "string") && (e!.r === undefined || (Array.isArray(e!.r) && e!.r.every((x) => Array.isArray(x) && x.length === 4)));
 }
 
 export interface PeriodSpend { start: number; end: number; usd: number; byTool: Partial<Record<Tool, number>> }
@@ -325,8 +332,7 @@ export function periodSpend(period: Period, now = Date.now(), home = homedir(), 
     if (e && e.t === tool && e.s === s.size && e.m === s.mtimeMs && e.i === s.ino) { kept[file] = e; continue; }
     try {
       // Claude Code appends: a transcript that only grew is read from where the last read stopped.
-      if (e && tool === "claude" && e.o !== undefined && e.i === s.ino && s.size >= e.s) {
-        readAppended(e, file, start);
+      if (e && tool === "claude" && e.o !== undefined && e.i === s.ino && s.size >= e.s && readAppended(e, file, start)) {
         kept[file] = { ...e, s: s.size, m: s.mtimeMs };
       } else kept[file] = { t: tool, s: s.size, m: s.mtimeMs, i: s.ino, ...readFile(tool, file, start, s.size) };
     } catch {

@@ -153,7 +153,8 @@ function persist(e, file = entryFile(e.path, e.id)) {
         catch { /* never written */ }
     }
 }
-function anchorOf(fd, off) {
+/** A fingerprint of the bytes before `off` (its first and last few KB): what tells a file grown in place from one rewritten. */
+export function anchorOf(fd, off) {
     const h = createHash("sha1");
     const read = (start, len) => {
         const buf = Buffer.alloc(len);
