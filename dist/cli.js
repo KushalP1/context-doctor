@@ -73,6 +73,31 @@ import { currentTtl, estimateCacheTtl, renderCacheTtl, setCacheTtl, settingKey, 
 import { claudeDir } from "./claudedir.js";
 import { renderSpend, renderSpendShare, spendReport } from "./spend.js";
 import { clearBudget, parseBudget, periodSpend, promptHookInstalled, readBudget, renderBudgetStatus, writeBudget } from "./budget.js";
+/**
+ * The commands that print JSON with --json. Any other command refuses the
+ * flag: it used to print its text report anyway and exit 0, so a script
+ * piping it into a JSON parser failed far from the cause.
+ */
+const JSON_COMMANDS = [
+    "analyze", "optimize", "session", "cursor", "savings", "fix", "spend", "budget", "limits", "subagents", "tasks",
+    "reads", "compactions", "cache-misses", "cache-ttl", "compact-window", "overhead", "accuracy", "recall", "handoff",
+    "pack", "cache-plan", "ci", "experiment", "ab",
+];
+/** An option's description, wrapped under the option column as the help text is (98 columns). */
+function optionText(text) {
+    const lines = [];
+    let line = "";
+    for (const word of text.split(" ")) {
+        if (line && 26 + line.length + 1 + word.length > 98) {
+            lines.push(line);
+            line = word;
+        }
+        else
+            line = line ? `${line} ${word}` : word;
+    }
+    lines.push(line);
+    return lines.join(`\n${" ".repeat(26)}`);
+}
 const HELP = `context-doctor — profile and optimize LLM context windows
 
 Start here:
@@ -251,7 +276,7 @@ Options:
                           Claude models (needs ANTHROPIC_API_KEY), tiktoken for GPT (if installed)
   --redact                Mask message previews and file paths in the report, so it can be
                           shared in a bug report without leaking conversation content
-  --json                  Machine-readable output
+  --json                  ${optionText(`(${JSON_COMMANDS.join(", ")}) Machine-readable output on stdout`)}
   --fail-over-budget      (analyze/session) Exit 1 when the .contextdoctorrc budget is
                           exceeded — lets CI gate a pull request on context size
   --out <file>            (optimize) Write result to file instead of stdout
@@ -263,7 +288,7 @@ Options:
   --max-tool-tokens <n>   (optimize) Token budget for trimmed tool results (default 300)
   --limit <n>             (accuracy, session --list, reads, tasks, subagents, spend) How many to
                           sample or list
-  --days <n>              (savings, compact-window, cache-ttl, overhead, reads, tasks, subagents,
+  --days <n>              (savings, fix, compact-window, cache-ttl, overhead, reads, tasks, subagents,
                           compactions, cache-misses, limits, spend)
                           Days of history to read (default 30; compactions 60)
   --block                 (budget) Over the budget, the every-prompt hook holds the prompt and
@@ -676,6 +701,9 @@ async function main() {
         console.log((topic && commandHelp(HELP, topic)) || HELP);
         return;
     }
+    if (args.json && args.command && !JSON_COMMANDS.includes(args.command)) {
+        usageError(`${args.command} has no --json output. Commands with one: ${JSON_COMMANDS.join(", ")}.`);
+    }
     // Run by hand in a terminal, these waited forever for JSON that only
     // Claude Code sends.
     if ((args.command === "hook" || args.command === "statusline") && process.stdin.isTTY) {
@@ -793,6 +821,10 @@ async function main() {
             process.exit(1);
         }
         if (args.list) {
+            if (args.json) {
+                console.log(JSON.stringify(chats.map((c) => ({ id: c.composerId, title: c.title ?? null, messages: c.messageCount })), null, 2));
+                return;
+            }
             for (const c of chats) {
                 console.log(`${String(c.messageCount).padStart(5)} msgs  ${(c.title ?? "(untitled)").slice(0, 48).padEnd(50)} ${c.composerId}`);
             }
@@ -826,6 +858,10 @@ async function main() {
     if (args.command === "session") {
         if (args.list) {
             const sessions = listSessions(args.limit ?? 20);
+            if (args.json) {
+                console.log(JSON.stringify(sessions.map((s) => ({ path: s.path, modifiedAt: s.modifiedAt.toISOString(), sizeBytes: s.sizeBytes })), null, 2));
+                return;
+            }
             if (sessions.length === 0) {
                 console.log("No sessions found under ~/.claude/projects or ~/.codex/sessions.");
                 return;
@@ -1050,6 +1086,10 @@ async function main() {
         const replaying = progressLine("Replaying your sessions at each window");
         const cw = estimateCompactWindows(windows.sort((a, b) => a - b), args.days ?? 30, undefined, reread, replaying.tick);
         replaying.clear();
+        if (args.json) {
+            console.log(JSON.stringify({ ...cw, current: current ?? null }, null, 2));
+            return;
+        }
         const limitFit = claudeLimitFit(limitsReport(cw.days, { claudeOnly: true }));
         console.log(renderCompactWindows(cw, current, (estimates) => limitSavingsLines(limitFit, estimates.map((e) => [`${Math.round(e.window / 1000)}k window`, Math.max(0, e.savedUsd)]), cw.days)));
         return;

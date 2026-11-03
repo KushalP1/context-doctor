@@ -1,22 +1,58 @@
-Auto-compact window: compact earlier, automatically (Claude Code's own setting)
-Last 30 days, 8 sessions with 10+ requests, at list prices
-──────────────────────────────────────────────────────────────────
-Now: not set: Claude Code compacts near the model's full window
-
-  window   input cost   saved            compactions
-    200k         $116   $19.89 (15%)       21 (4.9/week)
-    300k         $114   $22.38 (16%)        8 (1.9/week)
-    400k         $123   $13.31 (10%)        5 (1.2/week)
-    600k         $134   $2.47 (2%)          4 (0.9/week)
-    800k         $136   $0.00 (0%)          3 (0.7/week)
-  as now         $136                       3 (0.7/week; 1 while idle)
-
-"as now" is what you were billed (transcript usage at list price, as in
-`context-doctor savings`); each window saves the replay's share of it.
-Each simulated compaction also pays for ~3.6k tokens of files read again afterwards
-(measured on your compactions: context-doctor compactions).
-Each compaction replaces the session's history with a summary, so a smaller
-window trades detail for cost. Set one with:  context-doctor compact-window 400k
-Undo with:  context-doctor compact-window off
+{
+  "days": 30,
+  "sessions": 8,
+  "transcripts": 8,
+  "actualCompactions": 3,
+  "idleCompactions": 1,
+  "rereadTokens": 3576.4571428571426,
+  "estimates": [
+    {
+      "window": 200000,
+      "baselineUsd": 136.01985770000002,
+      "replayBaselineUsd": 101.35256065,
+      "withWindowUsd": 116.13253264710411,
+      "savedUsd": 19.88732505289591,
+      "savedPct": 0.14620898293217305,
+      "compactions": 21
+    },
+    {
+      "window": 300000,
+      "baselineUsd": 136.01985770000002,
+      "replayBaselineUsd": 101.35256065,
+      "withWindowUsd": 113.63757714959995,
+      "savedUsd": 22.382280550400072,
+      "savedPct": 0.16455156569686713,
+      "compactions": 8
+    },
+    {
+      "window": 400000,
+      "baselineUsd": 136.01985770000002,
+      "replayBaselineUsd": 101.35256065,
+      "withWindowUsd": 122.70916545501129,
+      "savedUsd": 13.31069224498873,
+      "savedPct": 0.09785844853878808,
+      "compactions": 5
+    },
+    {
+      "window": 600000,
+      "baselineUsd": 136.01985770000002,
+      "replayBaselineUsd": 101.35256065,
+      "withWindowUsd": 133.5466119129356,
+      "savedUsd": 2.473245787064422,
+      "savedPct": 0.018182975845477758,
+      "compactions": 4
+    },
+    {
+      "window": 800000,
+      "baselineUsd": 136.01985770000002,
+      "replayBaselineUsd": 101.35256065,
+      "withWindowUsd": 136.01985770000002,
+      "savedUsd": 0,
+      "savedPct": 0,
+      "compactions": 3
+    }
+  ],
+  "current": null
+}
 
 [exit 0]

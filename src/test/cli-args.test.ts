@@ -105,6 +105,29 @@ test("every documented command has its own help", () => {
   }
 });
 
+test("--json is JSON or an error: never a text report a script then fails to parse", () => {
+  // These printed their text report with exit 0.
+  for (const args of [["report"], ["autopilot", "status"], ["doctor"], ["instructions"], ["diff", "a", "b"]]) {
+    const r = run(...args, "--json");
+    assert.equal(r.status, 1, `${args.join(" ")}: ${r.stdout}`);
+    assert.equal(r.stdout, "");
+    assert.match(r.stderr, new RegExp(`${args[0]} has no --json output\\. Commands with one: .*spend`));
+  }
+  // These printed text lists under --json.
+  const s = run("session", "--list", "--json");
+  assert.equal(s.status, 0, s.stderr);
+  assert.deepEqual(JSON.parse(s.stdout), []);
+  const c = run("compact-window", "--json");
+  assert.equal(c.status, 0, c.stderr);
+  const cw = JSON.parse(c.stdout);
+  assert.equal(cw.sessions, 0);
+  assert.equal(cw.current, null);
+  // And each command's help says whether it has --json.
+  assert.match(run("spend", "--help").stdout, /--json {18}\(analyze, /);
+  assert.match(run("fix", "--help").stdout, /--days <n>/, "fix reads --days");
+  assert.ok(!/--json/.test(run("doctor", "--help").stdout));
+});
+
 test("analyze with no file says what is missing", () => {
   const r = run("analyze");
   assert.equal(r.status, 1);
