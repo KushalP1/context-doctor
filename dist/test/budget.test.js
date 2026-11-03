@@ -12,7 +12,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { levelOf, parseBudget, periodEnd, periodSpend, periodStart } from "../budget.js";
+import { budgetStatePath, levelOf, parseBudget, periodEnd, periodSpend, periodStart } from "../budget.js";
 import { claudeSpend } from "../spend.js";
 import { renderStatusLine } from "../statusline.js";
 import { clearScanMemo } from "../scan.js";
@@ -198,6 +198,55 @@ test("the ledger, read by appends, equals spend's full read: forks once, output 
         rmSync(home, { recursive: true, force: true });
         rmSync(cache, { recursive: true, force: true });
     }
+});
+/** `fn` in a throwaway home and cache, local time UTC, the run memo emptied. */
+async function inLedgerSandbox(fn) {
+    const { home, cache, transcript } = setup();
+    const saved = process.env.CONTEXT_DOCTOR_CACHE_DIR, savedTz = process.env.TZ;
+    process.env.CONTEXT_DOCTOR_CACHE_DIR = cache;
+    process.env.TZ = "UTC";
+    try {
+        await withSandboxHome(home, () => fn(home, transcript));
+    }
+    finally {
+        if (saved === undefined)
+            delete process.env.CONTEXT_DOCTOR_CACHE_DIR;
+        else
+            process.env.CONTEXT_DOCTOR_CACHE_DIR = saved;
+        if (savedTz === undefined)
+            delete process.env.TZ;
+        else
+            process.env.TZ = savedTz;
+        clearScanMemo();
+        rmSync(home, { recursive: true, force: true });
+        rmSync(cache, { recursive: true, force: true });
+    }
+}
+test("a reply streamed across midnight is yesterday's: its rows appended after the day's first read are not a new request", async () => {
+    await inLedgerSandbox((home, transcript) => {
+        const start = periodStart("day", NOW);
+        // Its first row a millisecond before midnight, the next two (output settling) after it.
+        const rows = reply(start - 1, { rows: 3, output: 5_000 });
+        writeFileSync(transcript, rows[0] + "\n");
+        assert.equal(periodSpend("day", NOW, home).usd, 0);
+        appendFileSync(transcript, rows.slice(1).join("\n") + "\n" + reply(NOW - HOUR).join("\n") + "\n");
+        const after = periodSpend("day", NOW, home).usd;
+        clearScanMemo();
+        const full = claudeSpend(start, NOW + HOUR).reduce((s, i) => s + i.usd, 0);
+        // Counted again as today's, it was $0.45: its $0.20 of input and $0.05 of output.
+        assert.ok(Math.abs(after - 0.2) < 1e-9 && Math.abs(after - full) < 1e-9, `${after} vs ${full}`);
+    });
+});
+test("a ledger entry in a shape this version does not write is read again, not thrown on every prompt", async () => {
+    await inLedgerSandbox((home, transcript) => {
+        writeFileSync(transcript, reply(NOW - HOUR).join("\n") + "\n");
+        assert.ok(Math.abs(periodSpend("day", NOW, home).usd - 0.2) < 1e-9);
+        const st = JSON.parse(readFileSync(budgetStatePath(), "utf8"));
+        st.files[transcript].k = null;
+        writeFileSync(budgetStatePath(), JSON.stringify(st));
+        assert.ok(Math.abs(periodSpend("day", NOW, home).usd - 0.2) < 1e-9);
+        assert.ok(Array.isArray(JSON.parse(readFileSync(budgetStatePath(), "utf8")).files[transcript].k), "written back whole");
+    });
 });
 test("the status line keeps its own cost without a budget, and shows the budget's part in its place with one", () => {
     const input = { model: { id: "claude-sonnet-5" }, context_window: { context_window_size: 200_000, current_usage: { input_tokens: 50_000 } }, cost: { total_cost_usd: 1.5 } };

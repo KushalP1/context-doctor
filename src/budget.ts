@@ -29,9 +29,10 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { statePath } from "./ledger.js";
 import { claudeDir } from "./claudedir.js";
-import { claudeFileUsage, claudeUsageFiles } from "./limits.js";
+import { claudeFileUsage, claudeUsageFiles, USAGE_ROWS } from "./limits.js";
 import { codexFileSpend, codexFiles, geminiFileSpend, geminiFiles, TOOL_NAME, type Tool } from "./spend.js";
 import { pricingFor, usageCost, type RecordedUsage } from "./pricing.js";
+import { rowsOf } from "./scan.js";
 import { realModel } from "./tokens.js";
 
 export type Period = "day" | "week";
@@ -206,12 +207,28 @@ function readFile(tool: Tool, file: string, since: number, size: number): Omit<F
     return { k, d };
   }
   const reqs = claudeFileUsage(file, since);
-  const r: NonNullable<FileEntry["r"]> = [];
+  const at = new Map<string, number>();
   reqs.forEach((q, i) => {
     k.push(keyOf(q.uuid));
     d.push(q.usd);
-    if (q.id) r.push([q.id, i, q.output, pricingFor(q.model)?.outputPerM ?? 0]);
+    if (q.id) at.set(q.id, i);
   });
+  // The last replies, those from before the period too: a reply streamed
+  // across midnight has its first row in yesterday, and its later rows,
+  // appended after this read, must still be known as its own (they were
+  // counted again as a new request).
+  const last = new Map<string, [string, number, number, number]>();
+  for (const row of rowsOf<Record<string, any>>(file, USAGE_ROWS)) {
+    const m = row?.message;
+    if (row?.type !== "assistant" || typeof m?.id !== "string") continue;
+    const out = Number(m.usage?.output_tokens) > 0 ? Number(m.usage.output_tokens) : 0;
+    const known = last.get(m.id);
+    if (known) { known[2] = Math.max(known[2], out); continue; }
+    const i = at.get(m.id) ?? -1;
+    last.set(m.id, [m.id, i, out, pricingFor(i >= 0 ? reqs[i].model : realModel(m.model))?.outputPerM ?? 0]);
+    if (last.size > RECENT_REPLIES) last.delete(last.keys().next().value!);
+  }
+  const r = [...last.values()];
   const fd = openSync(file, "r");
   try {
     return { k, d, o: lineStart(fd, size), r: r.slice(-RECENT_REPLIES) };
@@ -270,6 +287,13 @@ function readAppended(e: FileEntry, file: string, since: number): void {
   }
 }
 
+/** A ledger entry this version can use: a damaged one threw on every prompt until its transcript changed. */
+function wellFormed(e: FileEntry | undefined): e is FileEntry {
+  return Boolean(e) && typeof e === "object" && Array.isArray(e!.k) && Array.isArray(e!.d) && e!.k.length === e!.d.length &&
+    e!.k.every((x) => typeof x === "string") && e!.d.every((x) => typeof x === "number" && Number.isFinite(x)) &&
+    (e!.r === undefined || (Array.isArray(e!.r) && e!.r.every((x) => Array.isArray(x) && x.length === 4)));
+}
+
 export interface PeriodSpend { start: number; end: number; usd: number; byTool: Partial<Record<Tool, number>> }
 
 /**
@@ -293,7 +317,8 @@ export function periodSpend(period: Period, now = Date.now(), home = homedir(), 
   for (const [tool, file] of files) {
     let s;
     try { s = statSync(file); } catch { continue; }
-    const e = st.files[file];
+    // An entry not in the shape this version writes (edited, or another version's) is read again.
+    const e = wellFormed(st.files[file]) ? st.files[file] : undefined;
     if (e && e.t === tool && e.s === s.size && e.m === s.mtimeMs && e.i === s.ino) { kept[file] = e; continue; }
     try {
       // Claude Code appends: a transcript that only grew is read from where the last read stopped.

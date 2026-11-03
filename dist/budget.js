@@ -28,9 +28,10 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { statePath } from "./ledger.js";
 import { claudeDir } from "./claudedir.js";
-import { claudeFileUsage, claudeUsageFiles } from "./limits.js";
+import { claudeFileUsage, claudeUsageFiles, USAGE_ROWS } from "./limits.js";
 import { codexFileSpend, codexFiles, geminiFileSpend, geminiFiles, TOOL_NAME } from "./spend.js";
 import { pricingFor, usageCost } from "./pricing.js";
+import { rowsOf } from "./scan.js";
 import { realModel } from "./tokens.js";
 /** Beside the hook state and the ledger: ~/.claude/.context-doctor-budget.json. */
 export function budgetPath() {
@@ -189,13 +190,34 @@ function readFile(tool, file, since, size) {
         return { k, d };
     }
     const reqs = claudeFileUsage(file, since);
-    const r = [];
+    const at = new Map();
     reqs.forEach((q, i) => {
         k.push(keyOf(q.uuid));
         d.push(q.usd);
         if (q.id)
-            r.push([q.id, i, q.output, pricingFor(q.model)?.outputPerM ?? 0]);
+            at.set(q.id, i);
     });
+    // The last replies, those from before the period too: a reply streamed
+    // across midnight has its first row in yesterday, and its later rows,
+    // appended after this read, must still be known as its own (they were
+    // counted again as a new request).
+    const last = new Map();
+    for (const row of rowsOf(file, USAGE_ROWS)) {
+        const m = row?.message;
+        if (row?.type !== "assistant" || typeof m?.id !== "string")
+            continue;
+        const out = Number(m.usage?.output_tokens) > 0 ? Number(m.usage.output_tokens) : 0;
+        const known = last.get(m.id);
+        if (known) {
+            known[2] = Math.max(known[2], out);
+            continue;
+        }
+        const i = at.get(m.id) ?? -1;
+        last.set(m.id, [m.id, i, out, pricingFor(i >= 0 ? reqs[i].model : realModel(m.model))?.outputPerM ?? 0]);
+        if (last.size > RECENT_REPLIES)
+            last.delete(last.keys().next().value);
+    }
+    const r = [...last.values()];
     const fd = openSync(file, "r");
     try {
         return { k, d, o: lineStart(fd, size), r: r.slice(-RECENT_REPLIES) };
@@ -264,6 +286,12 @@ function readAppended(e, file, since) {
         closeSync(fd);
     }
 }
+/** A ledger entry this version can use: a damaged one threw on every prompt until its transcript changed. */
+function wellFormed(e) {
+    return Boolean(e) && typeof e === "object" && Array.isArray(e.k) && Array.isArray(e.d) && e.k.length === e.d.length &&
+        e.k.every((x) => typeof x === "string") && e.d.every((x) => typeof x === "number" && Number.isFinite(x)) &&
+        (e.r === undefined || (Array.isArray(e.r) && e.r.every((x) => Array.isArray(x) && x.length === 4)));
+}
 /**
  * What the period holding `now` has cost so far, across Claude Code, Codex
  * and Gemini CLI. Re-reads only the transcripts that changed since the last
@@ -290,7 +318,8 @@ export function periodSpend(period, now = Date.now(), home = homedir(), warnAt) 
         catch {
             continue;
         }
-        const e = st.files[file];
+        // An entry not in the shape this version writes (edited, or another version's) is read again.
+        const e = wellFormed(st.files[file]) ? st.files[file] : undefined;
         if (e && e.t === tool && e.s === s.size && e.m === s.mtimeMs && e.i === s.ino) {
             kept[file] = e;
             continue;
