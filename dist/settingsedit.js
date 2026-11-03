@@ -509,7 +509,15 @@ export function withLock(lockPath, fn, waitMs = 10_000, staleMs = 30_000) {
             break;
         }
         catch (e) {
-            if (e.code !== "EEXIST")
+            const code = e.code;
+            // Windows: a lock file the last holder is still deleting cannot be opened (EPERM, EACCES): it is held a moment longer.
+            if (process.platform === "win32" && (code === "EPERM" || code === "EACCES")) {
+                if (Date.now() > until)
+                    throw new SettingsError(`another context-doctor is changing settings (${tilde(lockPath)}); try again. Nothing was changed.`);
+                Atomics.wait(sleeper, 0, 0, 25);
+                continue;
+            }
+            if (code !== "EEXIST")
                 throw e;
             try {
                 if (Date.now() - statSync(lockPath).mtimeMs > staleMs) {
