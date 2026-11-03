@@ -407,8 +407,16 @@ export interface SpendOptions {
   now?: number;
 }
 
+/**
+ * The longest window: ten years, older than any history these tools keep.
+ * Unbounded, `--days 10000000` listed every empty day of it (51 s, and
+ * --json died on a string too long), and 1e9 days fell off the calendar.
+ */
+export const MAX_SPEND_DAYS = 3650;
+
 /** The last `days` days, every tool on this machine. A tool with nothing on disk is just absent. */
 export function spendReport(days = 30, opts: SpendOptions = {}): SpendReport {
+  days = Math.min(days, MAX_SPEND_DAYS);
   const until = opts.now ?? Date.now();
   const since = until - days * DAY;
   const home = opts.home ?? homedir();

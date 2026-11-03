@@ -256,6 +256,12 @@ test("nothing on disk: no tools, a plain sentence, and --share says so", async (
       assert.equal(r.tools.length, 0);
       assert.match(renderSpend(r), /^No usage in the last 30 days/);
       assert.match(renderSpendShare(r), /no AI coding usage/);
+      // A window past any history is ten years: every empty day of 1e7 took 51 s, 1e9 fell off the calendar.
+      for (const days of [1e7, 1e9]) {
+        const big = spendReport(days, { home });
+        assert.equal(big.days, 3650);
+        assert.ok(big.daily.length >= 3650 && big.daily.length <= 3652, `${big.daily.length} days`);
+      }
     }));
   } finally {
     rmSync(home, { recursive: true, force: true });

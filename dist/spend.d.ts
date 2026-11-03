@@ -164,6 +164,12 @@ export interface SpendOptions {
     onProgress?: (done: number, total: number) => void;
     now?: number;
 }
+/**
+ * The longest window: ten years, older than any history these tools keep.
+ * Unbounded, `--days 10000000` listed every empty day of it (51 s, and
+ * --json died on a string too long), and 1e9 days fell off the calendar.
+ */
+export declare const MAX_SPEND_DAYS = 3650;
 /** The last `days` days, every tool on this machine. A tool with nothing on disk is just absent. */
 export declare function spendReport(days?: number, opts?: SpendOptions): SpendReport;
 export declare const usd: (n: number) => string;
