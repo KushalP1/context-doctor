@@ -24,6 +24,7 @@ export function cleanEnv(home: string, extra: Record<string, string> = {}): Node
     HOME: home,
     USERPROFILE: home,
     APPDATA: join(home, "AppData", "Roaming"),
+    LOCALAPPDATA: join(home, "AppData", "Local"),
     CONTEXT_DOCTOR_NO_CALIBRATION: "1",
     CONTEXT_DOCTOR_NO_MANAGED_SETTINGS: "1",
     // The Claude Code versions a report names: fixed, not whatever this machine has installed.

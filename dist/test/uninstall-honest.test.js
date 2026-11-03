@@ -116,11 +116,20 @@ test("CODEX_HOME: install, doctor and uninstall use the Codex home Codex reads",
     assert.ok(!existsSync(join(codex, "hooks.json")) && !existsSync(join(codex, "skills")));
 });
 test("a ~/.claude holding only context-doctor's files is not Claude Code: install skips it, uninstall removes the folder", async () => {
-    // Codex only; `budget` (or the Codex hook's ledger) keeps its files in ~/.claude.
+    // Codex only. `budget` no longer makes a ~/.claude: its files go to our own state folder.
+    const fresh = mkdtempSync(join(tmpdir(), "ctxdoc-unin-codex-"));
+    mkdirSync(join(fresh, ".codex", "sessions"), { recursive: true });
+    assert.equal((await run(fresh, ["budget", "50/day"])).code, 0);
+    assert.ok(!existsSync(join(fresh, ".claude")), "no ~/.claude made for the budget");
+    const state = process.platform === "win32" ? join(fresh, "AppData", "Local", "context-doctor") : join(fresh, ".local", "state", "context-doctor");
+    assert.ok(existsSync(join(state, ".context-doctor-budget.json")));
+    assert.equal((await run(fresh, ["uninstall"])).code, 0);
+    assert.ok(!existsSync(state), "uninstall removes it, and the folder");
+    // A ~/.claude an older version made for the budget (only our files in it).
     const home = mkdtempSync(join(tmpdir(), "ctxdoc-unin-codex-"));
     mkdirSync(join(home, ".codex", "sessions"), { recursive: true });
-    assert.equal((await run(home, ["budget", "50/day"])).code, 0);
-    assert.ok(existsSync(join(home, ".claude", ".context-doctor-budget.json")));
+    mkdirSync(join(home, ".claude"));
+    writeFileSync(join(home, ".claude", ".context-doctor-budget.json"), JSON.stringify({ usd: 50, period: "day", block: false, at: 0 }));
     const i = await run(home, ["install"]);
     assert.equal(i.code, 0, i.err);
     assert.ok(!/Claude Code/.test(i.out), i.out);

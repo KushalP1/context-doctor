@@ -23,13 +23,13 @@
  * replies count once. Measured on the author's history: docs/spend.md.
  */
 
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { codexDir } from "./codexdir.js";
-import { statePath } from "./ledger.js";
-import { claudeDir } from "./claudedir.js";
+import { fallbackStateDir, statePath } from "./ledger.js";
+import { claudeCodePresent, claudeDir } from "./claudedir.js";
 import { claudeFileUsage, claudeUsageFiles, codexSessionsRoot, rolloutFiles, USAGE_ROWS } from "./limits.js";
 import { codexFileSpend, codexFiles, geminiFileSpend, geminiFiles, TOOL_NAME, type Tool } from "./spend.js";
 import { pricingFor, usageCost, type RecordedUsage } from "./pricing.js";
@@ -57,13 +57,19 @@ export function budgetStatePath(): string {
   return join(dirname(statePath()), ".context-doctor-budget-state.json");
 }
 
-/** "50/day", "$200/week", "7.5/d", "100/wk", "50/days": a budget, or an error to show. */
-export function parseBudget(arg: string): { usd: number; period: Period } | { error: string } {
+/**
+ * "50/day", "$200/week", "7.5/d", "100/wk", "50/days": a budget, or an
+ * error to show. Dollars are kept to the cent (50.555 was stored as given
+ * and shown as $50.55); `note` says so when the amount was rounded.
+ */
+export function parseBudget(arg: string): { usd: number; period: Period; note?: string } | { error: string } {
   const m = /^\$?(\d*\.?\d+)\s*\/\s*(days?|d|daily|weeks?|w|wks?|weekly)$/i.exec(arg.trim());
-  const usd = m ? Number(m[1]) : Number.NaN;
+  // Rounded in decimal ("50.555e2"), not in binary: 50.555 * 100 is 5055.4999...
+  const usd = m ? Math.round(Number(`${m[1]}e2`)) / 100 : Number.NaN;
   // Under a cent it read "your $0.00/day budget".
   if (!m || !(usd >= 0.01) || usd > 1_000_000) return { error: `"${arg}" is not a budget: give dollars per day or per week, e.g. 50/day or 200/week.` };
-  return { usd, period: /^d/i.test(m[2]) ? "day" : "week" };
+  const period: Period = /^d/i.test(m[2]) ? "day" : "week";
+  return { usd, period, ...(usd !== Number(m[1]) ? { note: `${m[1]} rounded to the cent: $${usd.toFixed(2)} a ${period}.` } : {}) };
 }
 
 export function readBudget(): Budget | undefined {
@@ -90,7 +96,8 @@ function writeWhole(path: string, value: unknown): void {
 }
 
 export function writeBudget(b: Budget): void {
-  writeWhole(budgetPath(), b);
+  // Only the budget's own fields: a parse result's note is not part of it.
+  writeWhole(budgetPath(), { usd: b.usd, period: b.period, block: b.block, at: b.at });
   // A new budget starts its thresholds afresh; the ledger stays (same period, same spend).
   const st = readState();
   if (st) writeWhole(budgetStatePath(), { ...st, warned: 0 });
@@ -99,8 +106,18 @@ export function writeBudget(b: Budget): void {
 /** Remove the budget and its ledger. True when there was one. */
 export function clearBudget(): boolean {
   const had = existsSync(budgetPath());
+  const dir = dirname(budgetPath());
+  // A folder that held only our files, which we made (0.41.0 made ~/.claude for the budget on a
+  // machine with only Codex), goes with them once empty; Claude Code's own folder never does.
+  let ours = false;
+  try {
+    const entries = readdirSync(dir);
+    ours = entries.length > 0 && entries.every((f) => f.startsWith(".context-doctor")) &&
+      (dir === fallbackStateDir() || (dir === claudeDir() && !claudeCodePresent() && !process.env.CLAUDE_CONFIG_DIR?.trim()));
+  } catch { /* no folder */ }
   rmSync(budgetPath(), { force: true });
   rmSync(budgetStatePath(), { force: true });
+  if (ours) try { rmdirSync(dir); } catch { /* other files of ours are still in it */ }
   return had;
 }
 

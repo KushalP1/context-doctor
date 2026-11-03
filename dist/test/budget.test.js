@@ -55,6 +55,9 @@ test("parseBudget: dollars a day or a week, and a plain error otherwise", () => 
     assert.deepEqual(parseBudget("50/days"), { usd: 50, period: "day" });
     assert.deepEqual(parseBudget("200/weeks"), { usd: 200, period: "week" });
     assert.deepEqual(parseBudget(".5/DAY"), { usd: 0.5, period: "day" });
+    // To the cent, rounded in decimal (50.555 * 100 is 5055.4999... in binary), and said.
+    assert.deepEqual(parseBudget("50.555/day"), { usd: 50.56, period: "day", note: "50.555 rounded to the cent: $50.56 a day." });
+    assert.deepEqual(parseBudget("50.50/day"), { usd: 50.5, period: "day" });
     // Under a cent is no budget: it read "your $0.00/day budget".
     for (const bad of ["50", "50/month", "0/day", "-5/day", "abc", "/day", "1e9/week", "0.001/day", "1.2.3/day"])
         assert.ok("error" in parseBudget(bad), bad);
@@ -342,6 +345,46 @@ test("requests on a model with no list price: the hook says once that the budget
         appendFileSync(transcript, reply(NOW - HOUR / 2, { model: "my-local-model" }).join("\n") + "\n");
         assert.equal(run(env, ["budget", "0.3/day"]).status, 0);
         assert.equal(JSON.parse(run(env, ["hook"], prompt()).out).systemMessage, "context-doctor: $0.20 spent today: 67% of your $0.30/day budget.", "said already this period");
+    }
+    finally {
+        rmSync(home, { recursive: true, force: true });
+        rmSync(cache, { recursive: true, force: true });
+    }
+});
+test("Codex alone: budget and the Codex hook make no ~/.claude; budget off removes the folder its files were in", () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-budget-codex-"));
+    const cache = mkdtempSync(join(tmpdir(), "cd-budget-cache-"));
+    try {
+        const env = cleanEnv(home, { CONTEXT_DOCTOR_CACHE_DIR: cache });
+        const dir = join(home, ".codex", "sessions", "2026", "10", "14");
+        mkdirSync(dir, { recursive: true });
+        // gpt-5.5 at $1.25 / 1M: 80k uncached is $0.10.
+        writeFileSync(join(dir, "rollout-a.jsonl"), [
+            { timestamp: new Date(NOW - HOUR).toISOString(), type: "turn_context", payload: { cwd: "/work/app", model: "gpt-5.5" } },
+            { timestamp: new Date(NOW - HOUR).toISOString(), type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: 80_000 }, last_token_usage: { input_tokens: 80_000 } } } },
+        ].map((r) => JSON.stringify(r)).join("\n") + "\n");
+        const set = run(env, ["budget", "0.15/day"]);
+        assert.equal(set.status, 0, set.err);
+        assert.match(set.out, /Today: \$0\.10 so far, 67%/);
+        assert.match(run(env, ["budget", "0.155/day"]).out, /^0\.155 rounded to the cent: \$0\.16 a day\.\n/);
+        assert.match(JSON.parse(run(env, ["hook"], prompt()).out).systemMessage, /\$0\.10 spent today: 63% of your \$0\.16\/day budget/);
+        assert.ok(!existsSync(join(home, ".claude")), "no ~/.claude: install would read it as Claude Code");
+        const state = process.platform === "win32" ? join(home, "AppData", "Local", "context-doctor") : join(home, ".local", "state", "context-doctor");
+        assert.ok(existsSync(join(state, ".context-doctor-budget-state.json")), "the ledger in our own state folder");
+        assert.match(run(env, ["budget", "off"]).out, /Budget off/);
+        assert.ok(!existsSync(state), "emptied, the folder goes too");
+        // A ~/.claude an older version made for the budget, only our files in it, goes the same way.
+        mkdirSync(join(home, ".claude"));
+        writeFileSync(join(home, ".claude", ".context-doctor-budget.json"), JSON.stringify({ usd: 50, period: "day", block: false, at: 0 }));
+        assert.match(run(env, ["budget"]).out, /Budget: \$50 a day/);
+        assert.match(run(env, ["budget", "off"]).out, /Budget off/);
+        assert.ok(!existsSync(join(home, ".claude")));
+        // Claude Code's own folder stays, emptied or not.
+        mkdirSync(join(home, ".claude"));
+        writeFileSync(join(home, ".claude.json"), "{}");
+        assert.equal(run(env, ["budget", "5/day"]).status, 0);
+        run(env, ["budget", "off"]);
+        assert.ok(existsSync(join(home, ".claude")));
     }
     finally {
         rmSync(home, { recursive: true, force: true });

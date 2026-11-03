@@ -1407,6 +1407,9 @@ async function main() {
             if ("error" in parsed)
                 usageError(`${parsed.error}${didYouMean(sub, ["off"])} ${usage}.`);
             writeBudget({ ...parsed, block: Boolean(args.block), at: Date.now() });
+            // Rounded to the cent: said, on stderr under --json so stdout stays JSON.
+            if (parsed.note)
+                (args.json ? console.error : console.log)(parsed.note);
         }
         else if (args.block) {
             usageError("--block goes with a budget: context-doctor budget 50/day --block.");

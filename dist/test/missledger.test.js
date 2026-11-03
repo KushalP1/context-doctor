@@ -6,7 +6,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -109,6 +109,7 @@ test("cache-misses shows the diagnosis, or how to start recording it", () => {
 });
 test("`statusline` writes the log in the sandboxed home, and not when told not to", () => {
     const home = mkdtempSync(join(tmpdir(), "ctxdoc-slmiss-"));
+    mkdirSync(join(home, ".claude")); // Claude Code's folder, there whenever its status line runs
     const input = { session_id: "abc", model: { id: "claude-opus-5-5" }, prompt_cache: pc(1, 120_000, Math.floor(Date.now() / 1000), ["tools_changed"]) };
     spawnSync(process.execPath, [cliPath, "statusline"], { input: JSON.stringify(input), env: sandboxEnv(home), encoding: "utf8" });
     const log = join(home, ".claude", ".context-doctor-misses.jsonl");

@@ -11,10 +11,12 @@
 import { join } from "node:path";
 /** Environment for a child process whose home is `home` on every platform. */
 export function sandboxEnv(home) {
-    const env = { ...process.env, HOME: home, USERPROFILE: home, APPDATA: join(home, "AppData", "Roaming") };
+    const env = { ...process.env, HOME: home, USERPROFILE: home, APPDATA: join(home, "AppData", "Roaming"), LOCALAPPDATA: join(home, "AppData", "Local") };
     // Copilot, Codex and Claude Code follow these when set, wherever HOME is:
     // a developer running one test file from a shell that sets them must not
-    // have the test write into the real ones.
+    // have the test write into the real ones. So does our own state without a
+    // ~/.claude (XDG_STATE_HOME, LOCALAPPDATA: ledger.ts fallbackStateDir).
+    delete env.XDG_STATE_HOME;
     delete env.COPILOT_HOME;
     delete env.CODEX_HOME;
     delete env.CLAUDE_CONFIG_DIR;
@@ -24,10 +26,10 @@ export function sandboxEnv(home) {
 }
 /** Run `fn` with the current process's home redirected, restoring afterwards. */
 export async function withSandboxHome(home, fn) {
-    const keys = ["HOME", "USERPROFILE", "APPDATA", "COPILOT_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"];
+    const keys = ["HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_STATE_HOME", "COPILOT_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"];
     const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
     Object.assign(process.env, sandboxEnv(home));
-    for (const k of ["COPILOT_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"])
+    for (const k of ["XDG_STATE_HOME", "COPILOT_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"])
         delete process.env[k];
     try {
         return await fn();

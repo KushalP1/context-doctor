@@ -19,7 +19,9 @@ const files = readdirSync("dist/test")
   .sort();
 
 // HOME for POSIX, USERPROFILE for Windows (os.homedir() reads that there).
-const env = { ...process.env, CONTEXT_DOCTOR_NO_CALIBRATION: "1", HOME: home, USERPROFILE: home };
+const env = { ...process.env, CONTEXT_DOCTOR_NO_CALIBRATION: "1", HOME: home, USERPROFILE: home, LOCALAPPDATA: join(home, "AppData", "Local") };
+// Our own state falls back to these on a machine without ~/.claude (ledger.ts fallbackStateDir): never the developer's own.
+delete env.XDG_STATE_HOME;
 // GitHub Copilot's home follows COPILOT_HOME wherever HOME is: never the real one.
 delete env.COPILOT_HOME;
 // The transcript cache follows these: never the developer's own (it lands in the throwaway home).

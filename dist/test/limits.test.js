@@ -68,6 +68,7 @@ test("a stale reading from a parallel session is never logged; a rise is logged 
 });
 test("`context-doctor statusline` records the readings beside its line, in the sandboxed home", () => {
     const home = mkdtempSync(join(tmpdir(), "cd-limits-sl-"));
+    mkdirSync(join(home, ".claude")); // Claude Code's folder, there whenever its status line runs
     const input = { model: { id: "claude-opus-5-5" }, context_window: { context_window_size: 1_000_000, current_usage: { input_tokens: 100_000 } }, rate_limits: { five_hour: { used_percentage: 23.5, resets_at: 1_900_000_000 }, seven_day: { used_percentage: 41.2, resets_at: 1_900_500_000 } } };
     const r = spawnSync(process.execPath, [cliPath, "statusline"], { input: JSON.stringify(input), env: sandboxEnv(home), encoding: "utf8" });
     assert.equal(r.status, 0);

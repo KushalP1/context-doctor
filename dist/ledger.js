@@ -17,6 +17,7 @@
  * what it drops into a single rollup entry instead of discarding it.
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { claudeDir } from "./claudedir.js";
 const EMPTY_CARRIED = {
@@ -78,8 +79,36 @@ export function foldTotals(entries) {
     }
     return out;
 }
+/**
+ * Where context-doctor keeps its own state on a machine without Claude Code's
+ * folder (Codex or Gemini CLI alone): $XDG_STATE_HOME/context-doctor,
+ * ~/.local/state/context-doctor, or %LOCALAPPDATA%\context-doctor on Windows.
+ * Creating ~/.claude for it (the budget, the hooks' ledger) made `install`
+ * see a Claude Code that is not there, and left the folder behind.
+ */
+export function fallbackStateDir() {
+    const xdg = process.env.XDG_STATE_HOME?.trim();
+    if (xdg)
+        return join(xdg, "context-doctor");
+    if (process.platform === "win32")
+        return join(process.env.LOCALAPPDATA?.trim() || join(homedir(), "AppData", "Local"), "context-doctor");
+    return join(homedir(), ".local", "state", "context-doctor");
+}
+/**
+ * The folder our state files live in: ~/.claude (or CLAUDE_CONFIG_DIR) when
+ * it is there, as always; otherwise the fallback folder. Once the fallback
+ * holds our files it stays theirs, so a Claude Code installed later does not
+ * strand the ledger and the budget in it.
+ */
+export function stateDir() {
+    const fallback = fallbackStateDir();
+    if (existsSync(fallback))
+        return fallback;
+    const claude = claudeDir();
+    return existsSync(claude) ? claude : fallback;
+}
 export function statePath() {
-    return process.env.CONTEXT_DOCTOR_HOOK_STATE ?? join(claudeDir(), ".context-doctor-hook-state.json");
+    return process.env.CONTEXT_DOCTOR_HOOK_STATE ?? join(stateDir(), ".context-doctor-hook-state.json");
 }
 export function ledgerPath() {
     return join(dirname(statePath()), ".context-doctor-ledger.jsonl");

@@ -16,6 +16,7 @@ import { FANOUT_MATCHER } from "./fanout.js";
 import { antigravityAllSkillDirs, antigravityMcpConfigPath, antigravityPresent, antigravitySkillDirs } from "./antigravity.js";
 import { COPILOT_HOOK_EVENT, copilotHome, copilotHookFilePath, copilotMcpConfigPath, isOurCopilotEntry, vsCodePresent } from "./copilot.js";
 import { claudeCodePresent, claudeDir, claudeJsonPath } from "./claudedir.js";
+import { fallbackStateDir } from "./ledger.js";
 import { codexDir as codexHomeDir } from "./codexdir.js";
 import { scanCacheDir } from "./scan.js";
 import { editJsonText, parseSettingsText, sameJson } from "./settingsedit.js";
@@ -1462,15 +1463,22 @@ export async function runUninstall() {
     attempt("GitHub Copilot folders", () => uninstallCopilotFolders());
     // Remove our bookkeeping files too — uninstall means gone. The hook's
     // per-session state is a directory, one small file per session.
-    for (const file of OUR_CLAUDE_FILES) {
-        const p = join(claudeDir(), file);
-        attempt(file, () => {
-            if (existsSync(p)) {
-                rmSync(p, { recursive: true, force: true });
-                done(`✓ Removed ${file}`);
-            }
-        });
+    // In ~/.claude, and in the folder they live in on a machine without it (ledger.ts fallbackStateDir).
+    for (const dir of [claudeDir(), fallbackStateDir()]) {
+        for (const file of OUR_CLAUDE_FILES) {
+            const p = join(dir, file);
+            attempt(file, () => {
+                if (existsSync(p)) {
+                    rmSync(p, { recursive: true, force: true });
+                    done(`✓ Removed ${file}`);
+                }
+            });
+        }
     }
+    try {
+        rmdirSync(fallbackStateDir());
+    }
+    catch { /* not empty, or never made */ }
     // The reports' transcript cache (scan.ts): records taken from your transcripts, rebuilt by the next report.
     attempt("transcript cache", () => {
         const dir = join(scanCacheDir(), "transcripts");

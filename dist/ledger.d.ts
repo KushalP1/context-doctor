@@ -55,6 +55,21 @@ export interface CarriedTotals {
  * rotations rather than only the first.
  */
 export declare function foldTotals(entries: LedgerEntry[]): CarriedTotals;
+/**
+ * Where context-doctor keeps its own state on a machine without Claude Code's
+ * folder (Codex or Gemini CLI alone): $XDG_STATE_HOME/context-doctor,
+ * ~/.local/state/context-doctor, or %LOCALAPPDATA%\context-doctor on Windows.
+ * Creating ~/.claude for it (the budget, the hooks' ledger) made `install`
+ * see a Claude Code that is not there, and left the folder behind.
+ */
+export declare function fallbackStateDir(): string;
+/**
+ * The folder our state files live in: ~/.claude (or CLAUDE_CONFIG_DIR) when
+ * it is there, as always; otherwise the fallback folder. Once the fallback
+ * holds our files it stays theirs, so a Claude Code installed later does not
+ * strand the ledger and the budget in it.
+ */
+export declare function stateDir(): string;
 export declare function statePath(): string;
 export declare function ledgerPath(): string;
 /** Longest string field kept in a ledger entry (a model name, a session id). */
