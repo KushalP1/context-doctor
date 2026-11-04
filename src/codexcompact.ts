@@ -1,0 +1,377 @@
+/**
+ * Codex's auto-compact limit: what an earlier compaction would have saved on
+ * the user's Codex rollouts, and the `codex-compact` lever of `fix`.
+ *
+ * Verified 2026-11-04 against codex-cli 0.153.4 (the ChatGPT app's binary)
+ * and openai/codex main (config.schema.json, protocol/src/openai_models.rs,
+ * models-manager/src/model_info.rs) and the config reference at
+ * developers.openai.com/codex/config-reference:
+ *  - `model_auto_compact_token_limit`, a top-level integer in
+ *    ~/.codex/config.toml (CODEX_HOME), is the token count that triggers an
+ *    automatic compaction. Unset, it is 90% of the model's context window
+ *    (244,800 on a 272k window: gpt-5.5, gpt-6); set, the smaller of the two,
+ *    so it can only bring compaction earlier. `..._scope` ("total", the
+ *    default, or "body_after_prefix") says what it counts.
+ *  - A rollout records each request as a `token_count` event (the last
+ *    request's input, cached input and output, and `model_context_window`,
+ *    95% of the window), and a compaction as a `compacted` item (its
+ *    replacement history) followed by a `context_compacted` event. On the
+ *    author's one compaction the next request's input fell from 243,893 to
+ *    22,507 tokens. The compaction's own request is not recorded.
+ *
+ * The replay walks each rollout's requests twice: as billed, and compacting
+ * whenever the context reaches the candidate limit. Context a simulated
+ * compaction removed is priced at each later request as that request billed
+ * it (cached tokens at the cached rate, the rest at the input rate), until a
+ * real compaction; the request after a simulated one pays the input rate on
+ * its whole (now small) context, and each simulated compaction pays one
+ * request reading the context and a summary at the output rate (an estimate:
+ * Codex does not record it). What the summary dropped, and the model reading
+ * files again because of it, is not priced.
+ */
+
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
+import { codexDir } from "./codexdir.js";
+import { codexEventKey, codexSessionsRoot, rolloutFiles } from "./limits.js";
+import { openAIUsage, pricingFor, usageCost } from "./pricing.js";
+import { pick, rowsOf, type Extractor } from "./scan.js";
+import { tilde } from "./claudedir.js";
+
+/** The config.toml key the lever writes. */
+export const CODEX_COMPACT_KEY = "model_auto_compact_token_limit";
+/** The limit `fix` offers, and the others the replay shows. */
+export const CODEX_COMPACT_LIMIT = 150_000;
+export const CODEX_COMPACT_LIMITS = [100_000, 150_000, 200_000];
+/** Codex's own trigger, unset: 90% of the context window. */
+const DEFAULT_SHARE = 0.9;
+/** The window a rollout records is 95% of the model's. */
+const RECORDED_SHARE = 0.95;
+/** A 272k window, when a rollout records none (gpt-5.5, gpt-6). */
+const DEFAULT_WINDOW = 272_000;
+/** Context right after a compaction when the user's own rollouts show none: system prompt, tools, summary, recent messages. */
+const AFTER_COMPACT = 25_000;
+/** Output a compaction's summary costs (an estimate: Codex does not record the compaction's request). */
+const SUMMARY_OUTPUT = 5_000;
+
+/**
+ * What the replay takes from a rollout: each model change, every request's
+ * usage (token_count: time, running total, the fork key, the window), and
+ * each compaction. No text.
+ */
+export const CODEX_COMPACT_ROWS: Extractor<null> = {
+  id: "codex-compact.1",
+  init: () => null,
+  line(line, row, out) {
+    if (!line.includes('"token_count"') && !line.includes('"turn_context"') && !line.includes('"compacted"') && !line.includes('"context_compacted"')) return;
+    let e: Record<string, any>;
+    try { e = row(); } catch { return; }
+    if (!e || typeof e !== "object") return;
+    if (e.type === "compacted") { out.push({ k: "c" }); return; }
+    const p = e.payload;
+    if (!p || typeof p !== "object") return;
+    if (e.type === "turn_context") {
+      if (typeof p.model === "string") out.push({ k: "model", model: p.model });
+      return;
+    }
+    if (e.type !== "event_msg") return;
+    if (p.type === "context_compacted") { out.push({ k: "c" }); return; }
+    if (p.type !== "token_count") return;
+    const last = p.info?.last_token_usage;
+    if (!last || typeof last !== "object") return;
+    const total = p.info?.total_token_usage?.total_tokens;
+    const win = p.info?.model_context_window;
+    out.push({ k: "t", ts: String(e.timestamp ?? ""), total: typeof total === "number" ? total : 0, key: codexEventKey(p.info?.total_token_usage, last), ...(typeof win === "number" && win > 0 ? { win } : {}), u: pick(last, ["input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens", "input_tokens_details", "prompt_tokens", "prompt_tokens_details", "completion_tokens"]) });
+  },
+};
+
+const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
+
+/** A request, with its rates and what it billed for its prompt; or a compaction. */
+type Step =
+  | { k: "r"; at: number; prompt: number; cached: number; out: number; inPerM: number; readPerM: number; outPerM: number; billedUsd: number; trigger: number; copy: boolean }
+  | { k: "c" };
+
+/** One rollout's requests and compactions; a request a forked rollout copied from its parent (`seen`) is marked, not dropped. */
+function readSteps(file: string, seen: Set<string>): Step[] {
+  const steps: Step[] = [];
+  let model: string | undefined;
+  let total = -1;
+  for (const r of rowsOf<any>(file, CODEX_COMPACT_ROWS)) {
+    if (r?.k === "model") { model = r.model; continue; }
+    if (r?.k === "c") {
+      // A compaction is written twice (the item and its event): one boundary.
+      if (steps[steps.length - 1]?.k !== "c") steps.push({ k: "c" });
+      continue;
+    }
+    if (r?.k !== "t") continue;
+    // A token_count event repeats the last request when only the limits were refreshed.
+    const runTotal = num(r.total);
+    if (num(r.u?.input_tokens) === 0 || (runTotal !== 0 && runTotal === total)) continue;
+    total = runTotal;
+    const at = Date.parse(r.ts);
+    if (!Number.isFinite(at)) continue;
+    const u = openAIUsage(r.u);
+    const price = pricingFor(model);
+    const copy = !!r.key && seen.has(r.key);
+    if (r.key) seen.add(r.key);
+    const window = num(r.win) ? num(r.win) / RECORDED_SHARE : DEFAULT_WINDOW;
+    steps.push({
+      k: "r", at, copy,
+      prompt: num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.cache_creation_input_tokens),
+      cached: num(u.cache_read_input_tokens),
+      out: num(u.output_tokens),
+      inPerM: price?.inputPerM ?? 0, readPerM: price?.cacheReadPerM ?? 0, outPerM: price?.outputPerM ?? 0,
+      billedUsd: price ? usageCost(u, price).promptUsd : 0,
+      trigger: DEFAULT_SHARE * window,
+    });
+  }
+  return steps;
+}
+
+/**
+ * One rollout at `limit`: as billed and with compaction at the limit, in USD
+ * over the requests in [since, until) that are not a fork's copy. Codex
+ * compacts when a turn's input and output reach the limit, which is never
+ * above its own trigger.
+ */
+function replay(steps: Step[], limit: number, since: number, until: number, after: number): { billed: number; sim: number; extra: number; actual: number } {
+  let billed = 0, sim = 0, extra = 0, actual = 0;
+  let removed = 0, fresh = false, prevAt: number | undefined;
+  for (const s of steps) {
+    if (s.k === "c") {
+      if (prevAt !== undefined && prevAt >= since && prevAt < until) actual++;
+      removed = 0; fresh = false;
+      continue;
+    }
+    const counted = s.at >= since && s.at < until && !s.copy;
+    prevAt = s.at;
+    let ctx = s.prompt - removed;
+    // The real context fell below what was removed (a rewind with no compaction recorded): back in step.
+    if (removed > 0 && ctx < after) { removed = 0; ctx = s.prompt; fresh = false; }
+    let cost = s.billedUsd;
+    if (fresh) cost = (ctx * s.inPerM) / 1e6;
+    else if (removed > 0) {
+      const fromCache = Math.min(removed, s.cached);
+      cost = Math.max(0, s.billedUsd - (fromCache * s.readPerM + (removed - fromCache) * s.inPerM) / 1e6);
+    }
+    fresh = false;
+    if (counted) { billed += s.billedUsd; sim += cost; }
+    if (ctx + s.out >= Math.min(limit, s.trigger) && limit < s.trigger) {
+      // Compacted after this turn: one request reading the context, a summary written; the next starts from `after`.
+      if (counted) { sim += (ctx * s.readPerM + SUMMARY_OUTPUT * s.outPerM) / 1e6; extra++; }
+      removed = s.prompt + s.out - after;
+      fresh = true;
+    }
+  }
+  return { billed, sim, extra, actual };
+}
+
+export interface CodexCompactEstimate {
+  limit: number;
+  savedUsd: number;
+  /** Of the input billed over the same requests. */
+  savedShare: number;
+  /** Compactions there would be over the period at this limit. */
+  compactions: number;
+}
+
+export interface CodexCompactReport {
+  days: number;
+  rollouts: number;
+  requests: number;
+  /** Input billed (prompt only) over the period's requests, forks' copies once. */
+  billedUsd: number;
+  /** Requests on a model with no price (left out of the dollars). */
+  unpriced: number;
+  /** Compactions that happened over the period. */
+  actualCompactions: number;
+  /** Context right after a compaction: the median of the user's own, or 25k. */
+  afterCompact: number;
+  estimates: CodexCompactEstimate[];
+}
+
+/** Codex rollouts written since `since`: the live ones and the archived. */
+export function codexRollouts(since: number, home = homedir()): string[] {
+  const roots = [codexSessionsRoot(home), join(codexDir(home), "archived_sessions")];
+  // Oldest first by name (rollout-YYYY-MM-DDThh-mm-ss-…): a parent before the forks that copy it.
+  return roots.filter((r) => existsSync(r)).flatMap((r) => rolloutFiles(r, since)).sort((a, b) => basename(a).localeCompare(basename(b)));
+}
+
+/** Replay Codex's rollouts of the last `days` at each limit. */
+export function replayCodexCompact(opts: { days: number; paths?: string[]; limits?: number[]; home?: string; now?: number }): CodexCompactReport {
+  const now = opts.now ?? Date.now();
+  const since = now - opts.days * 86_400_000;
+  const paths = opts.paths ?? codexRollouts(since, opts.home);
+  const seen = new Set<string>();
+  const all: Step[][] = [];
+  for (const p of paths) {
+    try { all.push(readSteps(p, seen)); } catch { /* unreadable: skipped */ }
+  }
+  // The context right after each of the user's own compactions.
+  const afters: number[] = [];
+  let requests = 0, unpriced = 0;
+  for (const steps of all) {
+    steps.forEach((s, i) => {
+      if (s.k === "c") { const n = steps[i + 1]; if (n?.k === "r") afters.push(n.prompt); return; }
+      if (s.at >= since && !s.copy) { requests++; if (!s.billedUsd && !s.inPerM) unpriced++; }
+    });
+  }
+  afters.sort((a, b) => a - b);
+  const after = afters.length ? afters[Math.floor(afters.length / 2)] : AFTER_COMPACT;
+  let billedUsd = 0, actual = 0;
+  const estimates = (opts.limits ?? CODEX_COMPACT_LIMITS).map((limit, i) => {
+    let billed = 0, sim = 0, extra = 0;
+    for (const steps of all) {
+      const r = replay(steps, limit, since, Infinity, after);
+      billed += r.billed; sim += r.sim; extra += r.extra;
+      if (i === 0) actual += r.actual;
+    }
+    if (i === 0) billedUsd = billed;
+    return { limit, savedUsd: billed - sim, savedShare: billed > 0 ? (billed - sim) / billed : 0, compactions: extra };
+  });
+  return { days: opts.days, rollouts: paths.length, requests, billedUsd, unpriced, actualCompactions: actual, afterCompact: after, estimates };
+}
+
+/**
+ * What a limit set at `since` saved: each compaction since that came before
+ * the old trigger (`previous`, or Codex's own), priced as the context it took
+ * off every later request until the session would have reached the old
+ * trigger, less the compaction's request and summary (an estimate, as in
+ * the replay).
+ */
+export function codexCompactSavedSince(since: number, previous: number | undefined, paths?: string[]): { usd: number; compactions: number } {
+  const seen = new Set<string>();
+  let usd = 0, compactions = 0;
+  for (const p of paths ?? codexRollouts(since)) {
+    let steps: Step[];
+    try { steps = readSteps(p, seen); } catch { continue; }
+    let last: Extract<Step, { k: "r" }> | undefined;
+    let episode: { pre: number; post?: number; trigger: number } | undefined;
+    let pending = false;
+    for (const s of steps) {
+      if (s.k === "c") { episode = undefined; pending = !!last && last.at >= since && !last.copy; continue; }
+      if (pending && last) {
+        pending = false;
+        const pre = last.prompt + last.out;
+        const trigger = Math.min(previous ?? Infinity, last.trigger);
+        if (pre < 0.9 * trigger) {
+          episode = { pre, post: s.prompt, trigger };
+          compactions++;
+          usd -= (pre * last.readPerM + SUMMARY_OUTPUT * last.outPerM) / 1e6;
+        }
+      } else if (episode?.post !== undefined && !s.copy) {
+        const would = episode.pre + Math.max(0, s.prompt - episode.post);
+        if (would >= episode.trigger) episode = undefined;
+        else usd += ((would - s.prompt) * s.readPerM) / 1e6;
+      }
+      last = s;
+    }
+  }
+  return { usd, compactions };
+}
+
+// -- config.toml, key by key ---------------------------------------------------------
+
+const HEADER = /^\s*\[/;
+const keyLine = (key: string) => new RegExp(String.raw`^\s*(?:${key}|"${key}"|'${key}')\s*=\s*([^#\r]*?)\s*(?:#[^\r]*)?\r?$`);
+/** A TOML integer as written (`150000`, `150_000`, `+150000`), or undefined. */
+const tomlInt = (raw: string): number | undefined => (/^[+-]?\d[\d_]*$/.test(raw.trim()) ? Number(raw.trim().replace(/_/g, "")) : undefined);
+
+/** The top-level value of `key` (before the first [table]): as written, and as a number when it is one. */
+export function topLevelValue(toml: string, key = CODEX_COMPACT_KEY): { raw: string; value?: number } | undefined {
+  const re = keyLine(key);
+  for (const line of toml.split("\n")) {
+    if (HEADER.test(line)) return undefined;
+    const m = re.exec(line);
+    if (m) return { raw: m[1], value: tomlInt(m[1]) };
+  }
+  return undefined;
+}
+
+/**
+ * Set (or with undefined, remove) a top-level integer key, touching no other
+ * byte: a line replaced keeps its line end; a new line goes after the last
+ * top-level key (or at the top), with the file's own line ends. A missing
+ * file (undefined) becomes the one line.
+ */
+export function setTopLevelInt(toml: string | undefined, key: string, value: number | undefined): string {
+  if (toml === undefined || toml === "") return value === undefined ? "" : `${key} = ${value}\n`;
+  const lines = toml.split("\n");
+  const cr = toml.includes("\r\n") ? "\r" : "";
+  const re = keyLine(key);
+  const header = lines.findIndex((l) => HEADER.test(l));
+  const end = header === -1 ? lines.length : header;
+  const at = lines.slice(0, end).findIndex((l) => re.test(l));
+  if (at >= 0) {
+    if (value === undefined) lines.splice(at, 1);
+    else lines[at] = `${key} = ${value}${lines[at].endsWith("\r") ? "\r" : ""}`;
+    return lines.join("\n");
+  }
+  if (value === undefined) return toml;
+  // After the last top-level key = value line, so a comment above a [table] stays with it.
+  let pos = 0;
+  for (let i = 0; i < end; i++) if (/^\s*[\w"'.-]+\s*=/.test(lines[i])) pos = i + 1;
+  lines.splice(pos, 0, `${key} = ${value}${cr}`);
+  return lines.join("\n");
+}
+
+/** `[profiles.<name>]` tables that set `key`, and the profile the file selects by default. */
+export function profileValues(toml: string, key = CODEX_COMPACT_KEY): Array<{ profile: string; raw: string; selected: boolean }> {
+  const re = keyLine(key);
+  const selected = /^\s*profile\s*=\s*["']([^"']+)["']/m.exec(toml.split(/\n\s*\[/)[0])?.[1];
+  const out: Array<{ profile: string; raw: string; selected: boolean }> = [];
+  let table: string | undefined;
+  for (const line of toml.split("\n")) {
+    if (HEADER.test(line)) {
+      table = /^\s*\[\s*profiles\.(?:"([^"]+)"|'([^']+)'|([\w-]+))\s*\]/.exec(line)?.slice(1).find((x) => x !== undefined);
+      continue;
+    }
+    const m = table !== undefined ? re.exec(line) : null;
+    if (m && table !== undefined) out.push({ profile: table, raw: m[1], selected: table === selected });
+  }
+  return out;
+}
+
+/** ~/.codex/config.toml (CODEX_HOME honoured for this user). */
+export function codexConfigPath(home?: string): string {
+  return join(codexDir(home), "config.toml");
+}
+
+/** The limit the user set at the top of config.toml, as written. */
+export function currentCodexCompact(home?: string): { raw: string; value?: number; where: string } | undefined {
+  const p = codexConfigPath(home);
+  let text: string;
+  try { text = readFileSync(p, "utf8"); } catch { return undefined; }
+  const v = topLevelValue(text);
+  return v ? { ...v, where: tilde(p) } : undefined;
+}
+
+/** What would keep a top-level limit from applying: a profile's own, a project's config.toml. */
+export function codexCompactOverrides(home?: string, cwd = process.cwd()): string[] {
+  const out: string[] = [];
+  const p = codexConfigPath(home);
+  try {
+    for (const v of profileValues(readFileSync(p, "utf8"))) out.push(`${CODEX_COMPACT_KEY} = ${v.raw} in [profiles.${v.profile}] of ${tilde(p)} (${v.selected ? "the profile it selects" : `when Codex runs with --profile ${v.profile}`})`);
+  } catch { /* none */ }
+  const project = join(cwd, ".codex", "config.toml");
+  if (project !== p) {
+    try {
+      const v = topLevelValue(readFileSync(project, "utf8"));
+      if (v) out.push(`${CODEX_COMPACT_KEY} = ${v.raw} in ${tilde(project)} (this project's)`);
+    } catch { /* none */ }
+  }
+  return out;
+}
+
+const usd = (n: number): string => (Math.abs(n) >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
+const k = (n: number) => `${Math.round(n / 1000)}k`;
+
+/** The lines under the lever in `fix`: each limit tried. */
+export function renderCodexLimits(r: CodexCompactReport, offered: number): string[] {
+  const weeks = r.days / 7;
+  const out = [`${"limit".padEnd(10)}${"saved".padStart(10)}   compactions a week (now ${(r.actualCompactions / weeks).toFixed(1)})`];
+  for (const e of r.estimates) out.push(`${k(e.limit).padEnd(10)}${usd(e.savedUsd).padStart(10)}   ${(e.compactions / weeks).toFixed(1)}${e.limit === offered ? "  ←" : ""}`);
+  return out;
+}

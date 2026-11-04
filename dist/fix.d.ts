@@ -38,7 +38,8 @@ import { type ProjectPlan } from "./prune.js";
 import { readLedger } from "./ledger.js";
 import { type SubagentModelReplay } from "./subagentmodel.js";
 import { type ToolOutputReplay } from "./tooloutput.js";
-export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model" | "tool-output";
+import { type CodexCompactReport } from "./codexcompact.js";
+export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model" | "tool-output" | "codex-compact";
 export interface Fix {
     id: FixId;
     title: string;
@@ -116,6 +117,13 @@ export interface FixInputs {
         value: string | number;
         where: string;
     };
+    /** Codex's rollouts replayed at earlier auto-compact limits (codexcompact.ts). */
+    codexCompact?: CodexCompactReport;
+    /** model_auto_compact_token_limit at the top of the user's config.toml, as written: never overwritten. */
+    codexCompactSet?: {
+        raw: string;
+        where: string;
+    };
 }
 export declare function planFixes(i: FixInputs): Fix[];
 export interface FixRecord {
@@ -141,6 +149,12 @@ export interface FixRecord {
     /** For subagent-model: the models the moved types' subagents ran on before the change, each one's share of their tokens (Sonnet-or-cheaper ones included): the baseline "since" compares against. */
     modelsBefore?: Record<string, number>;
 }
+/**
+ * ~/.claude/.context-doctor-fixes.json, as always. On a machine with no
+ * ~/.claude (Codex only), the state folder the ledger falls back to: `fix`
+ * must not make a ~/.claude there. Once records are in that folder they stay
+ * there, so a Claude Code installed later does not strand them.
+ */
 export declare function fixRecordPath(home?: string): string;
 /**
  * The records, strictly: an absent file is none; a file that is not ours to
@@ -199,9 +213,10 @@ export declare function compactWindowSavingsSince(since: number, previousWindow:
 export declare function savedSince(records: FixRecord[], opts?: {
     paths?: string[];
     subagentPaths?: string[];
+    codexPaths?: string[];
     ledger?: ReturnType<typeof readLedger>;
 }): SinceResult[];
-export declare function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], since: SinceResult[], command?: (s: string) => string, coldResume?: FixInputs["coldResume"], recordProblem?: string): string;
+export declare function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], since: SinceResult[], command?: (s: string) => string, coldResume?: FixInputs["coldResume"], recordProblem?: string, codexBilledUsd?: number): string;
 export declare function renderFixShare(days: number, billedUsd: number, fixes: Fix[]): string;
 export declare function parseFixIds(raw: string, fixes: Fix[]): {
     ids: FixId[];

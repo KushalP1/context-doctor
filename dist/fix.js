@@ -33,20 +33,22 @@
  * measure: it is offered with that said, applied only when named (never by
  * `--apply all`), and never over a value the user set.
  */
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { forEachLine, listSessions, isClaudeSession } from "./session.js";
 import { pricingFor } from "./pricing.js";
 import { contextWindowFor, realModel } from "./tokens.js";
 import { adviseTtl, estimateCacheTtl } from "./cachettl.js";
-import { ABSENT, getPath, parseSettingsText, readSettings, removeFile, sameJson, setJsonPath, SettingsError, settingsLockPath, withLock, writeAtomic } from "./settingsedit.js";
+import { ABSENT, getPath, parseSettingsText, readSettings, removeFile, sameJson, setJsonPath, SettingsError, settingsLockPath, withLock, withSettingsLock, writeAtomic } from "./settingsedit.js";
 import { compactWindowOverrides, processEnvWhere, settingsSources, shellSet, ttlOverrides } from "./effective.js";
 import { tilde } from "./claudedir.js";
 import { applyPrune, undoPrune } from "./prune.js";
-import { readLedger } from "./ledger.js";
+import { fallbackStateDir, readLedger } from "./ledger.js";
 import { claudeDir } from "./claudedir.js";
 import { movedFromNames, renderSubagentTypes, subagentModelSavedSince, SUBAGENT_CANDIDATE, SUBAGENT_CANDIDATE_NAME, SUBAGENT_MODEL_ENV } from "./subagentmodel.js";
 import { BASH_OUTPUT_DEFAULT, BASH_OUTPUT_KEY, breakEven, renderToolOutputCaps, toolOutputSavedSince } from "./tooloutput.js";
+import { CODEX_COMPACT_KEY, CODEX_COMPACT_LIMIT, codexCompactOverrides, codexCompactSavedSince, codexConfigPath, renderCodexLimits, setTopLevelInt, topLevelValue } from "./codexcompact.js";
 /** Below this a priced fix is not worth a setting. */
 const MIN_USD = 1;
 const money = (n) => (n >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
@@ -197,6 +199,27 @@ export function planFixes(i) {
             detail: renderToolOutputCaps(to),
         });
     }
+    const cx = i.codexCompact;
+    const cxOffer = cx?.estimates.find((e) => e.limit === CODEX_COMPACT_LIMIT);
+    if (i.codexCompactSet) {
+        fixes.push({ id: "codex-compact", title: "Codex: auto-compact limit", basis: "set", quality: "", change: CODEX_COMPACT_KEY, state: "applied", note: `${CODEX_COMPACT_KEY} = ${i.codexCompactSet.raw} in ${i.codexCompactSet.where}`, value: i.codexCompactSet.raw });
+    }
+    else if (cx && cxOffer && cxOffer.savedUsd >= MIN_USD && cxOffer.savedShare >= 0.02) {
+        const weeks = cx.days / 7;
+        fixes.push({
+            id: "codex-compact",
+            title: `Codex: compact earlier, at ${k(CODEX_COMPACT_LIMIT)} tokens`,
+            savedUsd: cxOffer.savedUsd,
+            savedShare: cxOffer.savedShare,
+            shareOf: "of Codex input",
+            basis: `your ${cx.requests.toLocaleString("en-US")} Codex requests replayed at a ${k(CODEX_COMPACT_LIMIT)} limit: ${(cxOffer.compactions / weeks).toFixed(1)} compactions a week instead of ${(cx.actualCompactions / weeks).toFixed(1)}, each paying a request and a ${k(5_000)}-token summary (an estimate: Codex does not record its compactions' own usage)`,
+            quality: "each compaction replaces the history with a summary: detail for money",
+            change: `${tilde(codexConfigPath())}: ${CODEX_COMPACT_KEY} = ${CODEX_COMPACT_LIMIT}`,
+            state: "available",
+            value: CODEX_COMPACT_LIMIT,
+            detail: renderCodexLimits(cx, CODEX_COMPACT_LIMIT),
+        });
+    }
     for (const f of fixes) {
         const o = i.overrides?.[f.id];
         if (o?.length && f.state === "available")
@@ -205,12 +228,26 @@ export function planFixes(i) {
     const rank = (f) => (f.state === "available" ? 0 : f.state === "applied" ? 2 : 3) + (f.savedUsd === undefined ? 1 : 0);
     return fixes.sort((a, b) => rank(a) - rank(b) || (b.savedUsd ?? 0) - (a.savedUsd ?? 0));
 }
+const RECORD_FILE = ".context-doctor-fixes.json";
+/**
+ * ~/.claude/.context-doctor-fixes.json, as always. On a machine with no
+ * ~/.claude (Codex only), the state folder the ledger falls back to: `fix`
+ * must not make a ~/.claude there. Once records are in that folder they stay
+ * there, so a Claude Code installed later does not strand them.
+ */
 export function fixRecordPath(home) {
-    return join(claudeDir(home), ".context-doctor-fixes.json");
+    const claude = claudeDir(home);
+    const own = join(claude, RECORD_FILE);
+    const fallback = join(home === undefined || home === homedir() ? fallbackStateDir() : join(home, ".local", "state", "context-doctor"), RECORD_FILE);
+    if (existsSync(own))
+        return own;
+    if (existsSync(fallback))
+        return fallback;
+    return existsSync(claude) ? own : fallback;
 }
-/** The lock of the user's settings.json, which cache-ttl, compact-window and autopilot take too. */
+/** The lock beside the records: in ~/.claude, the one of the user's settings.json, which cache-ttl, compact-window and autopilot take too. */
 function lockPath(home) {
-    return settingsLockPath(join(claudeDir(home), "settings.json"));
+    return settingsLockPath(fixRecordPath(home));
 }
 /**
  * The records, strictly: an absent file is none; a file that is not ours to
@@ -261,6 +298,9 @@ const YOURS = new Set(["subagent-model", "tool-output"]);
 const NAMED_ONLY = new Set(["subagent-model"]);
 /** What would keep this fix's value from taking effect, as Claude Code merges settings. */
 export function fixOverrides(id, deps = {}) {
+    // Codex reads its own config.toml: a profile's value, or a project's file.
+    if (id === "codex-compact")
+        return codexCompactOverrides(deps.home, deps.cwd);
     const env = deps.env ?? process.env;
     const sources = settingsSources({ home: deps.home, cwd: deps.cwd, env });
     if (id === "compact-window")
@@ -331,6 +371,84 @@ function applySetting(fix, home, at, extra) {
         return [`✓ ${fix.change}`];
     });
 }
+/**
+ * Set Codex's limit at the top of config.toml, under the records' lock and
+ * config.toml's own, and record it. A value already there is the user's:
+ * refused. The file's other bytes are left as they were.
+ */
+function applyCodexCompact(fix, home, at) {
+    const file = codexConfigPath(home);
+    const recordDir = dirname(fixRecordPath(home));
+    const made = !existsSync(recordDir);
+    mkdirSync(recordDir, { recursive: true });
+    try {
+        return withLock(lockPath(home), () => withSettingsLock(file, () => {
+            const records = loadFixRecords(home);
+            let text;
+            try {
+                text = readFileSync(file, "utf8");
+            }
+            catch (e) {
+                if (e.code !== "ENOENT")
+                    throw e;
+            }
+            const now = text === undefined ? undefined : topLevelValue(text);
+            const old = records.find((r) => r.id === fix.id);
+            if (now?.value === fix.value)
+                return [`${CODEX_COMPACT_KEY} is already ${fix.value} in ${tilde(file)}: nothing to change.`];
+            if (now && !old)
+                throw new SettingsError(`${CODEX_COMPACT_KEY} is ${now.raw} in ${tilde(file)}, a value you set: left as it is. Nothing was changed.`);
+            const after = setTopLevelInt(text, CODEX_COMPACT_KEY, Number(fix.value));
+            writeAtomic(file, after);
+            const before = text ?? null;
+            const rec = {
+                id: fix.id, at: old?.at ?? at, value: fix.value, file, key: [CODEX_COMPACT_KEY],
+                previous: old ? old.previous : now?.raw,
+                hadPrevious: old ? old.hadPrevious : now !== undefined,
+                before: old ? (old.after === before ? old.before : undefined) : before,
+                after,
+            };
+            writeFixRecords([...records.filter((r) => r.id !== fix.id), rec], home);
+            return [`✓ ${fix.change}`];
+        }));
+    }
+    catch (e) {
+        // A folder made for the record of a change that did not happen goes again.
+        if (made)
+            try {
+                rmdirSync(recordDir);
+            }
+            catch { /* it holds something */ }
+        throw e;
+    }
+}
+/** Undo Codex's limit: the whole file back when nothing touched it since, else the key, if it still holds fix's value. */
+function undoCodexCompact(r, home) {
+    const file = r.file ?? codexConfigPath(home);
+    return withSettingsLock(file, () => {
+        let text;
+        try {
+            text = readFileSync(file, "utf8");
+        }
+        catch (e) {
+            if (e.code !== "ENOENT")
+                throw e;
+        }
+        if (r.after !== undefined && r.before !== undefined && text === r.after) {
+            if (r.before === null)
+                removeFile(file);
+            else
+                writeAtomic(file, r.before);
+            return `✓ ${CODEX_COMPACT_KEY} ${r.hadPrevious ? `back to ${r.previous}` : "removed"}${r.before === null ? ` (and the ${tilde(file)} fix created)` : ""}`;
+        }
+        const now = text === undefined ? undefined : topLevelValue(text);
+        if (now?.value !== r.value)
+            return `– ${CODEX_COMPACT_KEY} was changed since fix set it (now ${now ? now.raw : "not set"}): left as it is`;
+        const prev = r.hadPrevious ? Number(String(r.previous).replace(/_/g, "")) : undefined;
+        writeAtomic(file, setTopLevelInt(text, CODEX_COMPACT_KEY, prev !== undefined && Number.isFinite(prev) ? prev : undefined));
+        return `✓ ${CODEX_COMPACT_KEY} ${r.hadPrevious ? `back to ${r.previous}` : "removed"}`;
+    });
+}
 /** Apply one fix; record it unless it changed nothing. Refusals (a damaged settings file, a damaged record) change nothing. */
 export async function applyFix(fix, deps = {}, context = {}) {
     const home = deps.home;
@@ -349,6 +467,13 @@ export async function applyFix(fix, deps = {}, context = {}) {
             const over = fixOverrides(fix.id, deps);
             if (over.length)
                 lines.push(`  ⚠ written, but it will not take effect while ${over.join("; ")} ${over.length === 1 ? "overrides" : "override"} it.`);
+            return { ok: over.length === 0, lines };
+        }
+        if (fix.id === "codex-compact") {
+            const lines = applyCodexCompact(fix, home, at);
+            const over = fixOverrides(fix.id, deps);
+            if (over.length)
+                lines.push(`  ⚠ written, but it will not take effect while ${over.join("; ")} ${over.length === 1 ? "sets" : "set"} it too.`);
             return { ok: over.length === 0, lines };
         }
         if (fix.id === "autopilot") {
@@ -450,6 +575,9 @@ export async function undoFixes(ids, deps = {}) {
         try {
             if (KEY_PATH[r.id]) {
                 lines.push(withLock(lockPath(home), () => undoSetting(r, home)));
+            }
+            else if (r.id === "codex-compact") {
+                lines.push(withLock(lockPath(home), () => undoCodexCompact(r, home)));
             }
             else if (r.id === "autopilot") {
                 if (deps.autopilotOff)
@@ -579,6 +707,10 @@ export function savedSince(records, opts = {}) {
             const s = subagentModelSavedSince(r.at, r.modelsBefore, opts.subagentPaths);
             out.push({ id: r.id, at: r.at, savedUsd: s.requests ? s.usd : undefined, detail: s.requests ? `estimated: ${s.requests.toLocaleString("en-US")} subagent requests, priced at the model they ran on before (${movedFromNames(r.modelsBefore ?? {})}) against as billed, the same token counts` : r.modelsBefore ? "no subagent requests it moves yet" : "applied; not priced" });
         }
+        else if (r.id === "codex-compact") {
+            const c = codexCompactSavedSince(r.at, typeof r.previous === "string" && Number.isFinite(Number(r.previous.replace(/_/g, ""))) ? Number(r.previous.replace(/_/g, "")) : undefined, opts.codexPaths);
+            out.push({ id: r.id, at: r.at, savedUsd: c.compactions ? c.usd : undefined, detail: c.compactions ? `${c.compactions} earlier Codex compaction${c.compactions === 1 ? "" : "s"}, the context each removed from later requests (estimated; what the summary dropped is not priced)` : "no earlier Codex compaction yet" });
+        }
         else if (r.id === "tool-output") {
             const paths = opts.paths || opts.subagentPaths ? [...(opts.paths ?? []), ...(opts.subagentPaths ?? [])] : undefined;
             const s = toolOutputSavedSince(r.at, typeof r.previous === "number" ? r.previous : BASH_OUTPUT_DEFAULT, paths);
@@ -606,18 +738,25 @@ const LABEL = {
     prune: "Unused MCP servers and skills",
     "subagent-model": "Subagent model",
     "tool-output": "Long Bash output",
+    "codex-compact": "Codex auto-compact limit",
 };
-export function renderFixPlan(days, billedUsd, fixes, since, command = (s) => `context-doctor ${s}`, coldResume, recordProblem) {
+export function renderFixPlan(days, billedUsd, fixes, since, command = (s) => `context-doctor ${s}`, coldResume, recordProblem, codexBilledUsd = 0) {
     const out = [];
     if (recordProblem)
         out.push(`⚠ ${recordProblem}`);
     out.push("context-doctor fix: what to change, ranked by what it saves you");
-    out.push(`Last ${days} days of your Claude Code sessions, ${money(billedUsd)} of input at list prices`);
+    // Codex's input named beside Claude Code's when there is some; alone on a machine with only Codex.
+    if (codexBilledUsd > 0 && billedUsd > 0)
+        out.push(`Last ${days} days of your sessions: Claude Code ${money(billedUsd)} of input, Codex ${money(codexBilledUsd)}, at list prices`);
+    else if (codexBilledUsd > 0)
+        out.push(`Last ${days} days of your Codex sessions, ${money(codexBilledUsd)} of input at list prices`);
+    else
+        out.push(`Last ${days} days of your Claude Code sessions, ${money(billedUsd)} of input at list prices`);
     out.push("─".repeat(66));
     const avail = fixes.filter((f) => f.state === "available");
     // No input billed: there is no history to measure, which is not "all applied".
     if (avail.length === 0)
-        out.push(...(billedUsd > 0 ? ["Nothing left to fix here: every lever that pays on your history is applied."] : noHistory(days, command)));
+        out.push(...(billedUsd + codexBilledUsd > 0 ? ["Nothing left to fix here: every lever that pays on your history is applied."] : noHistory(days, command)));
     avail.forEach((f, n) => {
         const usd = f.savedUsd !== undefined ? `${money(f.savedUsd)}${share(f)}` : "not priced";
         const head = `${n + 1}. ${f.title}`;

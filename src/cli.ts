@@ -32,6 +32,7 @@ import { prescan } from "./scan.js";
 import { REQUEST_ROWS } from "./coldresume.js";
 import { replaySubagentModels, shares, SUBAGENT_MODEL_ENV, SUBAGENT_MODEL_FORCE_ENV, SUBAGENT_ROWS } from "./subagentmodel.js";
 import { BASH_OUTPUT_ENV, BASH_OUTPUT_KEY, replayToolOutput, TOOL_OUTPUT_ROWS } from "./tooloutput.js";
+import { CODEX_COMPACT_ROWS, codexRollouts, currentCodexCompact, replayCodexCompact } from "./codexcompact.js";
 import { currentCompactWindow, estimateCompactWindows, MAX_WINDOW, MIN_WINDOW, parseWindow, renderCompactWindows, setCompactWindow, settingsPath } from "./compactwindow.js";
 import { tilde } from "./claudedir.js";
 import { renderPreferences, copyToClipboard, CHAT_PREFERENCES } from "./preferences.js";
@@ -379,6 +380,7 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
     { paths: claudeTranscripts(days), extractors: [savingsRows(!autopilotOnNow), REQUEST_ROWS, TOOL_OUTPUT_ROWS] },
     { paths: subagentTranscripts(Date.now() - days * 86_400_000), extractors: [REQUEST_ROWS, SUBAGENT_ROWS, TOOL_OUTPUT_ROWS] },
     ...(setWindow === undefined ? [{ paths: claudeTranscripts(60), extractors: [QUALITY_ROWS] }] : []),
+    { paths: codexRollouts(Date.now() - days * 86_400_000), extractors: [CODEX_COMPACT_ROWS] },
   ], replaying.tick);
   const report = estimateSavings(days, {}, undefined, replaying.tick, !autopilotOnNow);
   replaying.clear();
@@ -424,6 +426,9 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
       : shellSet(BASH_OUTPUT_ENV, sources, process.env)
         ? { name: BASH_OUTPUT_ENV, value: process.env[BASH_OUTPUT_ENV]!, where: underClaudeCode() ? "this Claude Code session's environment" : "the environment" }
         : undefined;
+  // Codex's auto-compact limit: its rollouts replayed at earlier limits; a limit the user set is theirs.
+  const codexCompact = replayCodexCompact({ days });
+  const cxSet = currentCodexCompact();
   const ts = effectiveEnv("ENABLE_TOOL_SEARCH", sources);
   const toolSearchOff = ts && /^(false|0|no|off)$/i.test(ts.value.trim()) ? ts.value : undefined;
   const servers = claudeMcpConfigs(cwd).filter((c) => !/context-doctor/i.test(c.name));
@@ -437,7 +442,7 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
   let recordProblem: string | undefined;
   try { loadFixRecords(); } catch (e) { recordProblem = (e as Error).message; }
   const sessions = report.sessions.length;
-  const ids: FixId[] = ["compact-window", "cache-ttl", "cache-ttl-subagents", "tool-search", "subagent-model", "tool-output"];
+  const ids: FixId[] = ["compact-window", "cache-ttl", "cache-ttl-subagents", "tool-search", "subagent-model", "tool-output", "codex-compact"];
   return {
     prunePlan,
     inputs: {
@@ -454,6 +459,8 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
       subagentModelSet,
       toolOutput,
       toolOutputSet,
+      ...(codexCompact.requests > 0 ? { codexCompact } : {}),
+      ...(cxSet ? { codexCompactSet: { raw: cxSet.raw, where: cxSet.where } } : {}),
       overrides: Object.fromEntries(ids.map((id) => [id, fixOverrides(id, { cwd })])),
       recordProblem,
       coldResume: { netUsd: Math.max(0, report.coldResumeNetUsd), returns: report.coldResumes, hooked: claudePluginEnabled() || /context-doctor|cli\.js"?\s+hook/.test(JSON.stringify(userSettings.hooks?.UserPromptSubmit ?? [])) },
@@ -1325,7 +1332,7 @@ async function main(): Promise<void> {
       if (unknown.length) usageError(`--apply: unknown fix ${unknown.join(", ")}. Fixes: ${available.map((f) => f.id).join(", ") || "none available"}.`);
       chosen = ids;
     }
-    if (!args.json) console.log(renderFixPlan(inputs.days, inputs.billedUsd, fixes, since, selfCommand, inputs.coldResume, inputs.recordProblem));
+    if (!args.json) console.log(renderFixPlan(inputs.days, inputs.billedUsd, fixes, since, selfCommand, inputs.coldResume, inputs.recordProblem, inputs.codexCompact?.billedUsd));
     if (args.apply === undefined && !args.json && process.stdin.isTTY && process.stdout.isTTY && available.length && !inputs.recordProblem) {
       const rl = (await import("node:readline/promises")).createInterface({ input: process.stdin, output: process.stdout });
       console.log("");
@@ -1349,7 +1356,7 @@ async function main(): Promise<void> {
     // Naming fixes that are not there (or nothing at all, with "all") is not a silent success.
     if (args.apply !== undefined && (chosen.length === 0 || results.some((r) => !r.ok))) process.exitCode = 1;
     if (args.json) {
-      console.log(JSON.stringify({ days: inputs.days, billedUsd: inputs.billedUsd, fixes, since, ...(args.apply !== undefined ? { applied: results } : {}), ...(inputs.recordProblem ? { recordProblem: inputs.recordProblem } : {}) }, null, 2));
+      console.log(JSON.stringify({ days: inputs.days, billedUsd: inputs.billedUsd, ...(inputs.codexCompact ? { codexBilledUsd: inputs.codexCompact.billedUsd } : {}), fixes, since, ...(args.apply !== undefined ? { applied: results } : {}), ...(inputs.recordProblem ? { recordProblem: inputs.recordProblem } : {}) }, null, 2));
       if (args.apply !== undefined && chosen.length === 0) console.error("--apply: no fix available to apply.");
       return;
     }
@@ -1357,7 +1364,7 @@ async function main(): Promise<void> {
     if (!results.length) return;
     console.log("");
     for (const r of results) console.log(r.lines.join("\n"));
-    if (results.some((r) => r.ok)) console.log(`\nNew Claude Code sessions pick these up. Undo: ${selfCommand("fix undo")}; ${selfCommand("fix")} later shows what each saved since.`);
+    if (results.some((r) => r.ok)) console.log(`\nNew ${results.every((r) => !r.ok || r.id === "codex-compact") ? "Codex" : results.some((r) => r.ok && r.id === "codex-compact") ? "Claude Code and Codex" : "Claude Code"} sessions pick these up. Undo: ${selfCommand("fix undo")}; ${selfCommand("fix")} later shows what each saved since.`);
     return;
   }
 
