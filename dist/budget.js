@@ -69,7 +69,7 @@ export function readBudget() {
     return undefined;
 }
 /** A whole file renamed into place, so two prompts at once never read half of one. */
-function writeWhole(path, value) {
+export function writeWhole(path, value) {
     const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     try {
         mkdirSync(dirname(path), { recursive: true });
@@ -358,10 +358,61 @@ function readAppended(e, file, since) {
     }
 }
 /** A ledger entry this version can use: a damaged one threw on every prompt until its transcript changed. */
-function wellFormed(e) {
+export function wellFormed(e) {
     return Boolean(e) && typeof e === "object" && Array.isArray(e.k) && Array.isArray(e.d) && e.k.length === e.d.length &&
         e.k.every((x) => typeof x === "string") && e.d.every((x) => typeof x === "number" && Number.isFinite(x)) &&
         (e.a === undefined || typeof e.a === "string") && (e.x === undefined || (Array.isArray(e.x) && e.x.every((y) => Array.isArray(y) && typeof y[0] === "number"))) && (e.r === undefined || (Array.isArray(e.r) && e.r.every((x) => Array.isArray(x) && x.length === 4)));
+}
+/** Above this, a transcript met for the first time goes through the shared scan even when `direct`: one buffer of all of it is too much. */
+const DIRECT_MAX_BYTES = 16 * 1024 * 1024;
+/**
+ * One transcript's entry brought up to date: kept when the file is as last
+ * read, read from where the last read stopped when a Claude Code transcript
+ * only grew, read in full otherwise. `read`: the bytes read, -1 when the
+ * entry was kept as it was. Undefined when the file cannot be read now.
+ * `direct`: a Claude Code transcript met for the first time is read here,
+ * not through the shared scan, which keeps a cache entry of it on disk (the
+ * session price reads one session, and writes nothing while it has nothing
+ * to say).
+ */
+export function refreshEntry(tool, file, prev, since, direct = false) {
+    let s;
+    try {
+        s = statSync(file);
+    }
+    catch {
+        return undefined;
+    }
+    // An entry not in the shape this version writes (edited, or another version's) is read again.
+    const e = wellFormed(prev) ? prev : undefined;
+    if (e && e.t === tool && e.s === s.size && e.m === s.mtimeMs && e.i === s.ino)
+        return { e, read: -1 };
+    try {
+        // Claude Code appends: a transcript that only grew is read from where the last read stopped.
+        if (e && tool === "claude" && e.o !== undefined && e.i === s.ino && s.size >= e.s) {
+            const from = e.o;
+            if (readAppended(e, file, since))
+                return { e: { ...e, s: s.size, m: s.mtimeMs }, read: s.size - from };
+        }
+        if (direct && tool === "claude" && s.size <= DIRECT_MAX_BYTES) {
+            // From the start, as an append to nothing: the same counting, without the scan.
+            const fd = openSync(file, "r");
+            let a;
+            try {
+                a = anchorOf(fd, 0);
+            }
+            finally {
+                closeSync(fd);
+            }
+            const blank = { t: tool, s: 0, m: 0, i: s.ino, k: [], d: [], o: 0, a, r: [] };
+            if (readAppended(blank, file, since))
+                return { e: { ...blank, s: s.size, m: s.mtimeMs }, read: s.size };
+        }
+        return { e: { t: tool, s: s.size, m: s.mtimeMs, i: s.ino, ...readFile(tool, file, since, s.size) }, read: s.size };
+    }
+    catch {
+        return undefined;
+    }
 }
 /**
  * What the period holding `now` has cost so far, across Claude Code, Codex
@@ -383,31 +434,12 @@ export function periodSpend(period, now = Date.now(), home = homedir(), warnAt) 
     let changed = fresh || st.cx?.at !== walked;
     const kept = {};
     for (const [tool, file] of files) {
-        let s;
-        try {
-            s = statSync(file);
-        }
-        catch {
-            continue;
-        }
-        // An entry not in the shape this version writes (edited, or another version's) is read again.
-        const e = wellFormed(st.files[file]) ? st.files[file] : undefined;
-        if (e && e.t === tool && e.s === s.size && e.m === s.mtimeMs && e.i === s.ino) {
-            kept[file] = e;
-            continue;
-        }
-        try {
-            // Claude Code appends: a transcript that only grew is read from where the last read stopped.
-            if (e && tool === "claude" && e.o !== undefined && e.i === s.ino && s.size >= e.s && readAppended(e, file, start)) {
-                kept[file] = { ...e, s: s.size, m: s.mtimeMs };
-            }
-            else
-                kept[file] = { t: tool, s: s.size, m: s.mtimeMs, i: s.ino, ...readFile(tool, file, start, s.size) };
-        }
-        catch {
+        const r = refreshEntry(tool, file, st.files[file], start);
+        if (!r)
             continue; // unreadable now: left out, read again next time
-        }
-        changed = true;
+        kept[file] = r.e;
+        if (r.read >= 0)
+            changed = true;
     }
     if (Object.keys(st.files).some((f) => !(f in kept)))
         changed = true;

@@ -49,6 +49,8 @@ export declare function parseBudget(arg: string): {
     error: string;
 };
 export declare function readBudget(): Budget | undefined;
+/** A whole file renamed into place, so two prompts at once never read half of one. */
+export declare function writeWhole(path: string, value: unknown): void;
 export declare function writeBudget(b: Budget): void;
 /** Remove the budget and its ledger. True when there was one. */
 export declare function clearBudget(): boolean;
@@ -56,6 +58,46 @@ export declare function clearBudget(): boolean;
 export declare function periodStart(period: Period, now?: number): number;
 /** When the period holding `now` ends (the next one starts). */
 export declare function periodEnd(period: Period, now?: number): number;
+/**
+ * One transcript as last read: size, time, inode; the period's requests in
+ * it as keys ("" for none) and dollars. A Claude Code transcript also keeps
+ * where reading stopped (`o`, after the last whole line) and its last
+ * replies (`r`: message id, index into k/d or -1, output so far, output
+ * price per 1M), so an append is read from there: a reply's later rows are
+ * met within its last few, and only settle its output. `a` fingerprints the
+ * bytes before `o` (the shared scan's anchorOf): a transcript rewritten in
+ * place, same inode and no smaller, is read again in full, not from `o`.
+ * `x` lists the requests on a model with no list price (index into k/d,
+ * model): in `d` at $0, and said so rather than silently left out.
+ */
+export interface FileEntry {
+    t: Tool;
+    s: number;
+    m: number;
+    i: number;
+    k: string[];
+    d: number[];
+    o?: number;
+    a?: string;
+    r?: Array<[string, number, number, number]>;
+    x?: Array<[number, string]>;
+}
+/** A ledger entry this version can use: a damaged one threw on every prompt until its transcript changed. */
+export declare function wellFormed(e: FileEntry | undefined): e is FileEntry;
+/**
+ * One transcript's entry brought up to date: kept when the file is as last
+ * read, read from where the last read stopped when a Claude Code transcript
+ * only grew, read in full otherwise. `read`: the bytes read, -1 when the
+ * entry was kept as it was. Undefined when the file cannot be read now.
+ * `direct`: a Claude Code transcript met for the first time is read here,
+ * not through the shared scan, which keeps a cache entry of it on disk (the
+ * session price reads one session, and writes nothing while it has nothing
+ * to say).
+ */
+export declare function refreshEntry(tool: Tool, file: string, prev: FileEntry | undefined, since: number, direct?: boolean): {
+    e: FileEntry;
+    read: number;
+} | undefined;
 export interface PeriodSpend {
     start: number;
     end: number;
