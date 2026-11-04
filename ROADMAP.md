@@ -273,7 +273,7 @@ the estimator to noise. Calibration needs a real tokenizer, not this data.
 
 Each release with the measurements behind it. Dollar figures are as measured when the release shipped, with the prices and counting of the time; the 0.32 audit fixed both, and the README's headline figures are the re-measured ones.
 
-## Shipped on main, not yet released
+## Shipped in 0.43.0: long tool output, `fix` for Codex, and a session's price
 
 From the research of 2026-11-04 ([above](#research-2026-11-04-what-is-left-after-the-cache-and-the-model)): items T1-T3, measured on the author's machine read-only.
 
