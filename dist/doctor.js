@@ -28,6 +28,7 @@ import { describeCosts, subagentCostsPath } from "./fanout.js";
 import { claudeCodePresent, claudeDir, claudeJsonPath } from "./claudedir.js";
 import { codexDir } from "./codexdir.js";
 import { periodSpend, readBudget } from "./budget.js";
+import { sessionPriceThresholds } from "./sessionprice.js";
 function claudeDesktopConfigPath() {
     switch (platform()) {
         case "darwin": return join(homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
@@ -764,6 +765,15 @@ export async function runDoctor() {
                 ? { label: "Spend budget", status: "ok", detail: `${usd} a ${b.period}${b.block ? ", prompts over it held" : ", warns at 50/80/100%"}${spent}` }
                 : { label: "Spend budget", status: "warn", detail: `${usd} a ${b.period}${spent}, but no every-prompt hook is registered to apply it: run context-doctor install` });
         }
+    }
+    // The session price: where the every-prompt hook speaks, and how to change or stop it.
+    {
+        const at = sessionPriceThresholds();
+        const hooked = checks.some((c) => ["Every-prompt hook", "Codex hook", "Gemini CLI hook"].includes(c.label) && c.status === "ok");
+        if (!at.length)
+            checks.push({ label: "Session price", status: "skip", detail: "off (CONTEXT_DOCTOR_NO_SESSION_PRICE=1)" });
+        else if (hooked)
+            checks.push({ label: "Session price", status: "ok", detail: `said once when a session passes ${at.map((t) => `$${t.toLocaleString("en-US")}`).join(", ").replace(/, ([^,]+)$/, " and $1")} (CONTEXT_DOCTOR_SESSION_PRICE to change; CONTEXT_DOCTOR_NO_SESSION_PRICE=1 for off)` });
     }
     checks.push(await checkMcpHandshake());
     // Autopilot: optional, so "off" is a skip, not a failure. When it is on, a
