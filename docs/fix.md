@@ -2,7 +2,7 @@
 
 [← README](../README.md)
 
-Most of context-doctor measures. The commands here change something: a setting each, measured on your own history first, written only when you say yes, and undone with one command. Except autopilot (a local proxy, terminal and IDE only), each is a setting Claude Code reads itself, so it works in every Claude Code surface, the desktop app included.
+Most of context-doctor measures. The commands here change something: a setting each, measured on your own history first, written only when you say yes, and undone with one command. Except autopilot (a local proxy, terminal and IDE only), each is a setting Claude Code (or Codex) reads itself, so it works in every surface, the desktop app included.
 
 ## One plan: `context-doctor fix`
 
@@ -24,6 +24,7 @@ context-doctor fix --share                  # the totals, no paths, to post
 | `prune`: MCP servers and skills this folder's project never used | its `.claude/settings.local.json` (as `overhead prune --write`) | none while they stay unused |
 | `subagent-model`: subagents on Sonnet 5.5 when they ran on a pricier model ([below](#the-subagents-model-subagent-model)) | `env.CLAUDE_CODE_SUBAGENT_MODEL = "claude-sonnet-5-5"` | **it changes the model your subagents run on**; not measured here, `context-doctor ab` can. Applied only when named: `--apply all` leaves it out |
 | `tool-output`: long Bash output to a file sooner ([below](#long-bash-output-tool-output)) | `bashOutputMaxChars` (8,000-20,000, from your history) | long output goes to a file the model can still open; it sees the first 2,000 characters and the path. In `--apply all`: nothing is lost, only moved |
+| `codex-compact`: Codex compacts earlier, at 150k tokens ([below](#codexs-auto-compact-limit-codex-compact)) | `model_auto_compact_token_limit` in `~/.codex/config.toml` | as `compact-window`: each compaction keeps a summary, not the full history |
 
 The `/compact` offer at cold returns is listed under "Advice you act on": it is the every-prompt hook's job, and `fix` says whether the hook is there to make it.
 
@@ -38,7 +39,8 @@ The `/compact` offer at cold returns is listed under "Advice you act on": it is 
 - the compact window: each automatic compaction since that came before the old window, priced as the context it took off every later request until the session would have reached the old window, less the compaction's own request and a 20k-token summary. An estimate: what the summary dropped is not priced;
 - autopilot: what the proxy recorded saving since;
 - the subagents' model: the subagent requests it moved, priced at the models they ran on before (the mix measured when it was set, by tokens, those already on Sonnet or cheaper included) against as billed. An estimate: the same token counts either way;
-- long Bash output: the results Claude Code moved to a file since that the cap before (30,000 characters, or yours) left inline, priced at the requests that re-read them no more. An estimate: a file the model opened again is not counted.
+- long Bash output: the results Claude Code moved to a file since that the cap before (30,000 characters, or yours) left inline, priced at the requests that re-read them no more. An estimate: a file the model opened again is not counted;
+- Codex's limit: each Codex compaction since that came before Codex's own trigger, priced as the context it took off every later request until the session would have reached that trigger, less the compaction's request and a 5k-token summary.
 
 **On the author's machine** (last 30 days, read-only, 2026-10-28): $2,781 of input; 1. compact earlier at 400k, $1,418 (51%); 2. the main conversation's cache at 1 hour, $197 (7%); autopilot is on but cannot reach the desktop app where all 34 sessions ran; advice: `/compact` at cold returns, $640 over 197 returns. The first had its own command since 0.25 and was still not applied: the reason `fix` exists. After the QA fixes `fix` takes 19 s there (was 35 s): with autopilot already on it skips autopilot's replay, with a window set it skips the compaction replay, and it reads every transcript for unused servers only when the project has servers or skills to prune.
 
@@ -83,6 +85,26 @@ Anthropic can also set a tool's threshold server-side (the binary reads a remote
 **Yours stays yours.** A `bashOutputMaxChars` in your `settings.json` is named and never overwritten (at 30,000 or less it shows as applied; larger, as your choice); so is a `BASH_MAX_OUTPUT_LENGTH` you set, which the setting would replace. A project's or managed `bashOutputMaxChars` wins over the user's file, and the plan says so.
 
 **On the author's machine** (last 30 days, read-only, 2026-11-04): 343 transcripts, 26,003 requests, $3,732 of input with subagents. Of 19,337 successful Bash results, 1,978 were over 8,000 characters: **$321 less, 9%**, paying unless the model opens over 83% of them (each opening ~$0.03). 12k: $210 (1,058 results); 16k: $132; 20k: $76. MCP: 33 of 2,478 text results over 10k tokens, $10 (not offered). `fix` with this replay takes 1.2 s warm. Workflow agents' transcripts (`subagents/workflows/`) are not read by any report yet.
+
+## Codex's auto-compact limit: `codex-compact`
+
+Codex re-sends the whole conversation on every request too, and compacts it only near the model's window. Its own setting moves that point, the same lever as Claude Code's auto-compact window.
+
+**What Codex does** (verified 2026-11-04 in codex-cli 0.153.4, the ChatGPT app's binary, and on openai/codex main: `config.schema.json`, `protocol/src/openai_models.rs`, `models-manager/src/model_info.rs`; the [config reference](https://developers.openai.com/codex/config-reference)): `model_auto_compact_token_limit`, a top-level integer in `~/.codex/config.toml` (`CODEX_HOME` honoured), is the token count at which Codex compacts the history on its own. Unset, it is 90% of the model's context window (244,800 on the 272k windows of gpt-5.5 and gpt-6); set, Codex takes the smaller of the two, so it only ever brings compaction earlier. `model_auto_compact_token_limit_scope` (`total`, the default, or `body_after_prefix`) says what it counts; `fix` leaves it alone.
+
+**What a rollout records.** Every request is a `token_count` event: the last request's input, cached input and output, and `model_context_window` (95% of the window). A compaction is a `compacted` item (the history it put in place) followed by a `context_compacted` event; the compaction's own request is not recorded. On the author's one compaction the next request's input fell from 243,893 tokens to 22,507.
+
+**How it is measured.** Every rollout of the period (live and archived; a forked rollout's copy of its parent's requests counted once, as `spend` does), replayed request by request at 100k, 150k and 200k: as billed, and compacting when a turn's input and output reach the limit. After a simulated compaction the context restarts at the size the user's own compactions left (the median; 25k when there are none), the request after it pays the input rate on all of it (nothing cached yet), and each later request is charged less the removed tokens at the rate it billed them (cached tokens at the cached rate, 10% of input; the rest at the input rate). Each simulated compaction pays a request reading the context and a 5,000-token summary at the output rate: an estimate, since Codex records neither. Prices are `pricing.ts`'s OpenAI rows; a model without one (gpt-6 for now) counts as unpriced. `fix` offers 150k when it saves at least $1 and 2% of Codex's input, and lists the others.
+
+**Quality.** As with `compact-window`: more compactions, each replacing history with a summary. What the summary dropped, and the files Codex reads again because of it, is not priced.
+
+**Edits, and undo.** Only the one line changes: put after your last top-level key (above the first `[table]`, so a comment above a table stays with it), with your file's own line ends; comments, tables and the rest stay byte for byte. Written atomically under the record's lock and a lock beside `config.toml`. `fix undo` puts the whole file back when nothing touched it since, removes the file if `fix` created it, and otherwise removes just the line if it still holds `fix`'s value. A value already at the top of `config.toml` is yours and never overwritten; a `[profiles.<name>]` table that sets its own (Codex may use it when run with `--profile`) and a project's `.codex/config.toml` that sets it are named as overrides.
+
+**With no Claude Code.** `fix` plans and applies this on a machine with only Codex: it makes no `~/.claude`, and keeps its record of what it applied in the state folder the ledger uses there (`$XDG_STATE_HOME/context-doctor`, else `~/.local/state/context-doctor`; `%LOCALAPPDATA%\context-doctor` on Windows).
+
+**On the author's machine** (2026-11-04, read-only): 4 rollouts, 6 requests and $0.05 of Codex input in the last 30 days, no compaction: nothing to save, so `fix` does not offer it there. Over the last year (123 rollouts, $7.63): 150k would have saved $1.24 (16%), 4 compactions instead of 1. The tests run the replay on synthetic rollouts.
+
+**Gemini CLI.** Its documented setting is `model.compressionThreshold` in `settings.json` (the share of the context window at which it compresses the history; default `0.5`, restart required; [configuration reference](https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/configuration.md)). Not measured and not offered: there is no Gemini CLI history on the author's machine to replay.
 
 ## The prompt cache's lifetime: `context-doctor cache-ttl`
 
