@@ -136,7 +136,7 @@ test("plan: offered over $1 and 2% of Codex's input, in --apply all; a limit you
   const f = fixes[0];
   assert.equal(f.title, "Codex: compact earlier, at 150k tokens");
   assert.equal(f.value, 150_000);
-  assert.match(f.change, /\.codex\/config\.toml: model_auto_compact_token_limit = 150000/);
+  assert.match(f.change.replace(/\\/g, "/"), /\.codex\/config\.toml: model_auto_compact_token_limit = 150000/);
   assert.match(f.basis, /your 400 Codex requests replayed at a 150k limit: 0\.9 compactions a week instead of 0\.2/);
   assert.match(f.quality, /detail for money/);
   const text = renderFixPlan(30, 0, fixes, [], undefined, undefined, undefined, 10);
@@ -221,7 +221,9 @@ test("a Codex-only machine: fix plans and applies Codex's limit, makes no ~/.cla
   assert.match(r.stdout, /New Codex sessions pick these up/);
   assert.equal(readFileSync(config, "utf8"), original.replace('model = "gpt-5.5"\n', 'model = "gpt-5.5"\nmodel_auto_compact_token_limit = 150000\n'));
   assert.ok(!existsSync(join(home, ".claude")), "no ~/.claude made");
-  assert.ok(existsSync(join(home, ".local", "state", "context-doctor", ".context-doctor-fixes.json")), "the record in the state folder");
+  // The state folder: ~/.local/state, or %LOCALAPPDATA% on Windows (ledger.ts fallbackStateDir).
+  const stateFolder = process.platform === "win32" ? join(home, "AppData", "Local", "context-doctor") : join(home, ".local", "state", "context-doctor");
+  assert.ok(existsSync(join(stateFolder, ".context-doctor-fixes.json")), "the record in the state folder");
   r = run();
   assert.match(r.stdout, /✓ Codex auto-compact limit: model_auto_compact_token_limit = 150000 in .*config\.toml since \d{4}-\d\d-\d\d: no earlier Codex compaction yet/);
   r = run("undo");
