@@ -24,7 +24,10 @@
  *    priced);
  *  - autopilot: what the proxy recorded saving since (its own ledger);
  *  - the subagents' model: the requests it moved, priced at the model they
- *    ran on before against as billed (the same token counts: an estimate).
+ *    ran on before against as billed (the same token counts: an estimate);
+ *  - long Bash output: the results moved to a file that the cap before left
+ *    inline, priced at the requests that re-read them no more (an estimate:
+ *    a file the model opens again is not counted).
  *
  * The subagents' model is the one lever with a quality cost `fix` cannot
  * measure: it is offered with that said, applied only when named (never by
@@ -43,6 +46,7 @@ import { applyPrune, undoPrune } from "./prune.js";
 import { readLedger } from "./ledger.js";
 import { claudeDir } from "./claudedir.js";
 import { movedFromNames, renderSubagentTypes, subagentModelSavedSince, SUBAGENT_CANDIDATE, SUBAGENT_CANDIDATE_NAME, SUBAGENT_MODEL_ENV } from "./subagentmodel.js";
+import { BASH_OUTPUT_DEFAULT, BASH_OUTPUT_KEY, breakEven, renderToolOutputCaps, toolOutputSavedSince } from "./tooloutput.js";
 /** Below this a priced fix is not worth a setting. */
 const MIN_USD = 1;
 const money = (n) => (n >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
@@ -167,6 +171,32 @@ export function planFixes(i) {
             detail: renderSubagentTypes(sm),
         });
     }
+    const to = i.toolOutput;
+    const toSet = i.toolOutputSet;
+    const best = to?.bash.find((b) => b.cap === to.recommended);
+    if (toSet) {
+        // A cap at or under the default is one: applied. A larger one, or the read-back variable, is a choice to see more: left alone.
+        const capped = toSet.name === BASH_OUTPUT_KEY && Number(toSet.value) <= BASH_OUTPUT_DEFAULT;
+        const less = best && best.savedUsd >= MIN_USD ? ` (a cap of ${k(best.cap)} characters would have cost ${money(best.savedUsd)} less)` : "";
+        fixes.push({ id: "tool-output", title: "Long Bash output", basis: "set", quality: "", change: BASH_OUTPUT_KEY, state: capped ? "applied" : "not-here", note: `${toSet.name}=${toSet.value} in ${toSet.where}${capped ? "" : `: left as you set it${less}`}`, value: toSet.value });
+    }
+    else if (to && best && best.savedUsd >= MIN_USD && to.billedUsd > 0 && best.savedUsd / to.billedUsd >= 0.02) {
+        const each = best.moved ? best.openUsd / best.moved : 0;
+        fixes.push({
+            id: "tool-output",
+            title: `Long Bash output to a file past ${k(best.cap)} characters`,
+            savedUsd: best.savedUsd,
+            savedShare: best.savedUsd / to.billedUsd,
+            // Main conversations and subagents alike: the cap applies to both.
+            shareOf: "of input, subagents included",
+            basis: `${best.moved.toLocaleString("en-US")} of ${best.results.toLocaleString("en-US")} Bash results were longer; the tokens past a 2,000-character preview priced at each later request that re-read them until a compaction (cache reads, one write); an estimate: a file the model opens again costs about ${money(each)} a time and is not counted, and the saving covers it opening up to ${pct(breakEven(best))} of them`,
+            quality: "long output goes to a file the model can still open; it sees the first 2,000 characters and the path, as it already does past 30,000",
+            change: `${where}: ${BASH_OUTPUT_KEY} = ${best.cap} (Claude Code 2.1.261+)`,
+            state: "available",
+            value: best.cap,
+            detail: renderToolOutputCaps(to),
+        });
+    }
     for (const f of fixes) {
         const o = i.overrides?.[f.id];
         if (o?.length && f.state === "available")
@@ -223,7 +253,10 @@ const KEY_PATH = {
     "cache-ttl-subagents": ["subagentPromptCacheTtl"],
     "tool-search": ["env", "ENABLE_TOOL_SEARCH"],
     "subagent-model": ["env", SUBAGENT_MODEL_ENV],
+    "tool-output": [BASH_OUTPUT_KEY],
 };
+/** Fixes that never overwrite a value already there: the user set it. */
+const YOURS = new Set(["subagent-model", "tool-output"]);
 /** Fixes with a quality cost not measured here: applied only when named, never by `--apply all`. */
 const NAMED_ONLY = new Set(["subagent-model"]);
 /** What would keep this fix's value from taking effect, as Claude Code merges settings. */
@@ -251,6 +284,10 @@ export function fixOverrides(id, deps = {}) {
                 out.push(`${SUBAGENT_MODEL_ENV}=${s.settings.env[SUBAGENT_MODEL_ENV]} in ${tilde(s.path)} env`);
         return out;
     }
+    if (id === "tool-output") {
+        // Merged settings: a project's or managed value wins over the user's (BASH_MAX_OUTPUT_LENGTH does not: the setting replaces it).
+        return sources.filter((s) => s.name !== "user" && s.settings[BASH_OUTPUT_KEY] !== undefined).map((s) => `${BASH_OUTPUT_KEY} ${JSON.stringify(s.settings[BASH_OUTPUT_KEY])} in ${tilde(s.path)}`);
+    }
     return [];
 }
 /** Set one key of the user's settings.json, under the lock, and record it (the first record's previous value is kept). */
@@ -270,7 +307,7 @@ function applySetting(fix, home, at, extra) {
         if (sameJson(now, fix.value))
             return [`${key.join(".")} is already ${JSON.stringify(fix.value)} in ${tilde(file)}: nothing to change.`];
         const old = records.find((r) => r.id === fix.id);
-        if (NAMED_ONLY.has(fix.id) && now !== undefined && !old)
+        if (YOURS.has(fix.id) && now !== undefined && !old)
             throw new SettingsError(`${key.join(".")} is ${JSON.stringify(now)} in ${tilde(file)}, a value you set: left as it is. Nothing was changed.`);
         const after = setJsonPath(cur.text, key, fix.value);
         writeAtomic(file, after);
@@ -542,6 +579,11 @@ export function savedSince(records, opts = {}) {
             const s = subagentModelSavedSince(r.at, r.modelsBefore, opts.subagentPaths);
             out.push({ id: r.id, at: r.at, savedUsd: s.requests ? s.usd : undefined, detail: s.requests ? `estimated: ${s.requests.toLocaleString("en-US")} subagent requests, priced at the model they ran on before (${movedFromNames(r.modelsBefore ?? {})}) against as billed, the same token counts` : r.modelsBefore ? "no subagent requests it moves yet" : "applied; not priced" });
         }
+        else if (r.id === "tool-output") {
+            const paths = opts.paths || opts.subagentPaths ? [...(opts.paths ?? []), ...(opts.subagentPaths ?? [])] : undefined;
+            const s = toolOutputSavedSince(r.at, typeof r.previous === "number" ? r.previous : BASH_OUTPUT_DEFAULT, paths);
+            out.push({ id: r.id, at: r.at, savedUsd: s.moved ? s.savedUsd : undefined, detail: s.moved ? `estimated: ${s.moved.toLocaleString("en-US")} Bash results moved to a file that were inline before, priced at the requests that would have re-read them; files the model opened again not counted` : "no Bash output over the cap since" });
+        }
         else if (r.id === "autopilot") {
             const ledger = opts.ledger ?? readLedger();
             const ev = ledger.filter((e) => e.ev === "proxy" && e.ts >= r.at);
@@ -563,6 +605,7 @@ const LABEL = {
     "tool-search": "MCP tool search",
     prune: "Unused MCP servers and skills",
     "subagent-model": "Subagent model",
+    "tool-output": "Long Bash output",
 };
 export function renderFixPlan(days, billedUsd, fixes, since, command = (s) => `context-doctor ${s}`, coldResume, recordProblem) {
     const out = [];

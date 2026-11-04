@@ -24,7 +24,10 @@
  *    priced);
  *  - autopilot: what the proxy recorded saving since (its own ledger);
  *  - the subagents' model: the requests it moved, priced at the model they
- *    ran on before against as billed (the same token counts: an estimate).
+ *    ran on before against as billed (the same token counts: an estimate);
+ *  - long Bash output: the results moved to a file that the cap before left
+ *    inline, priced at the requests that re-read them no more (an estimate:
+ *    a file the model opens again is not counted).
  *
  * The subagents' model is the one lever with a quality cost `fix` cannot
  * measure: it is offered with that said, applied only when named (never by
@@ -34,7 +37,8 @@ import { type CacheTtlReport, type CurrentTtl } from "./cachettl.js";
 import { type ProjectPlan } from "./prune.js";
 import { readLedger } from "./ledger.js";
 import { type SubagentModelReplay } from "./subagentmodel.js";
-export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model";
+import { type ToolOutputReplay } from "./tooloutput.js";
+export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model" | "tool-output";
 export interface Fix {
     id: FixId;
     title: string;
@@ -103,6 +107,14 @@ export interface FixInputs {
         netUsd: number;
         returns: number;
         hooked: boolean;
+    };
+    /** Every Bash and MCP result replayed at lower caps (tooloutput.ts). */
+    toolOutput?: ToolOutputReplay;
+    /** bashOutputMaxChars in the user's settings.json, or BASH_MAX_OUTPUT_LENGTH as the user set it (the setting would replace it): never overwritten. */
+    toolOutputSet?: {
+        name: string;
+        value: string | number;
+        where: string;
     };
 }
 export declare function planFixes(i: FixInputs): Fix[];

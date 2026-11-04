@@ -30,6 +30,7 @@ import { estimateSavings, renderSavings, renderShare, savingsRows } from "./savi
 import { prescan } from "./scan.js";
 import { REQUEST_ROWS } from "./coldresume.js";
 import { replaySubagentModels, shares, SUBAGENT_MODEL_ENV, SUBAGENT_MODEL_FORCE_ENV, SUBAGENT_ROWS } from "./subagentmodel.js";
+import { BASH_OUTPUT_ENV, BASH_OUTPUT_KEY, replayToolOutput, TOOL_OUTPUT_ROWS } from "./tooloutput.js";
 import { currentCompactWindow, estimateCompactWindows, MAX_WINDOW, MIN_WINDOW, parseWindow, renderCompactWindows, setCompactWindow, settingsPath } from "./compactwindow.js";
 import { tilde } from "./claudedir.js";
 import { renderPreferences, copyToClipboard, CHAT_PREFERENCES } from "./preferences.js";
@@ -370,8 +371,8 @@ async function measureFixInputs(days) {
     const setWindow = currentCompactWindow();
     // Each transcript read once for every replay below; what an earlier run kept is not read again (scan.ts).
     prescan([
-        { paths: claudeTranscripts(days), extractors: [savingsRows(!autopilotOnNow), REQUEST_ROWS] },
-        { paths: subagentTranscripts(Date.now() - days * 86_400_000), extractors: [REQUEST_ROWS, SUBAGENT_ROWS] },
+        { paths: claudeTranscripts(days), extractors: [savingsRows(!autopilotOnNow), REQUEST_ROWS, TOOL_OUTPUT_ROWS] },
+        { paths: subagentTranscripts(Date.now() - days * 86_400_000), extractors: [REQUEST_ROWS, SUBAGENT_ROWS, TOOL_OUTPUT_ROWS] },
         ...(setWindow === undefined ? [{ paths: claudeTranscripts(60), extractors: [QUALITY_ROWS] }] : []),
     ], replaying.tick);
     const report = estimateSavings(days, {}, undefined, replaying.tick, !autopilotOnNow);
@@ -409,6 +410,17 @@ async function measureFixInputs(days) {
         : shellSet(SUBAGENT_MODEL_ENV, sources, process.env, SUBAGENT_CANDIDATE)
             ? { value: shellSm, where: underClaudeCode() ? "this Claude Code session's environment (from the shell that started it, or a settings env removed since: a new session reads settings again)" : "the environment" }
             : undefined;
+    // Long Bash output: every result replayed at lower caps; a cap the user set (or the read-back variable the setting would replace) is theirs.
+    const toolOutput = replayToolOutput({ since: Date.now() - days * 86_400_000, paths: [...claudeTranscripts(days), ...subagentTranscripts(Date.now() - days * 86_400_000)] });
+    const userCap = sources.find((s) => s.name === "user")?.settings[BASH_OUTPUT_KEY];
+    const readBack = sources.find((s) => s.name === "user")?.settings.env?.[BASH_OUTPUT_ENV];
+    const toolOutputSet = userCap !== undefined && userCap !== null
+        ? { name: BASH_OUTPUT_KEY, value: userCap, where: tilde(join(claudeDir(), "settings.json")) }
+        : readBack !== undefined && readBack !== null && String(readBack).trim() !== ""
+            ? { name: BASH_OUTPUT_ENV, value: String(readBack), where: `${tilde(join(claudeDir(), "settings.json"))} env` }
+            : shellSet(BASH_OUTPUT_ENV, sources, process.env)
+                ? { name: BASH_OUTPUT_ENV, value: process.env[BASH_OUTPUT_ENV], where: underClaudeCode() ? "this Claude Code session's environment" : "the environment" }
+                : undefined;
     const ts = effectiveEnv("ENABLE_TOOL_SEARCH", sources);
     const toolSearchOff = ts && /^(false|0|no|off)$/i.test(ts.value.trim()) ? ts.value : undefined;
     const servers = claudeMcpConfigs(cwd).filter((c) => !/context-doctor/i.test(c.name));
@@ -433,7 +445,7 @@ async function measureFixInputs(days) {
         recordProblem = e.message;
     }
     const sessions = report.sessions.length;
-    const ids = ["compact-window", "cache-ttl", "cache-ttl-subagents", "tool-search", "subagent-model"];
+    const ids = ["compact-window", "cache-ttl", "cache-ttl-subagents", "tool-search", "subagent-model", "tool-output"];
     return {
         prunePlan,
         inputs: {
@@ -448,6 +460,8 @@ async function measureFixInputs(days) {
             prune: prunePlan,
             subagentModel,
             subagentModelSet,
+            toolOutput,
+            toolOutputSet,
             overrides: Object.fromEntries(ids.map((id) => [id, fixOverrides(id, { cwd })])),
             recordProblem,
             coldResume: { netUsd: Math.max(0, report.coldResumeNetUsd), returns: report.coldResumes, hooked: claudePluginEnabled() || /context-doctor|cli\.js"?\s+hook/.test(JSON.stringify(userSettings.hooks?.UserPromptSubmit ?? [])) },
