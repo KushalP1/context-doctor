@@ -10,6 +10,7 @@
  *   proxy    — proxy savings checkpoint      {ev: "proxy", saved, usd?, requests?}
  *   rollup   — totals folded in on rotation   {ev: "rollup", ...carried sums}
  *   session_rules — a Copilot session start got the standing rules {ev: "session_rules", app}
+ *   session_price — the hook said a session passed a price threshold {ev: "session_price", sid, usd, tok?, model?}
  *
  * The ledger is capped, and everything it feeds is a LIFETIME total. Simply
  * dropping old lines made those totals go backwards — measured: 1,692,000
@@ -18,7 +19,7 @@
  */
 export interface LedgerEntry {
     ts: number;
-    ev?: "check" | "optimize" | "proxy" | "rollup" | "cold_resume" | "precompact" | "session_rules";
+    ev?: "check" | "optimize" | "proxy" | "rollup" | "cold_resume" | "precompact" | "session_rules" | "session_price";
     sid?: string;
     tok?: number;
     warn?: boolean;

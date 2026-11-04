@@ -29,6 +29,7 @@ import { compactFacts, compactInstructions } from "./precompact.js";
 import { fanoutHook, subagentCosts } from "./fanout.js";
 import { claudeDir } from "./claudedir.js";
 import { budgetVerdict } from "./budget.js";
+import { renderSessionPrice, sessionPriceDue } from "./sessionprice.js";
 /** Default nudge threshold; a project budget or env var can lower/raise it. */
 const DEFAULT_WARN_TOKENS = 80_000;
 /**
@@ -168,9 +169,10 @@ export function hookInput(raw) {
     return out;
 }
 export async function runHook(app) {
-    // The spend budget's line for this prompt, until it is written. The ledger
-    // records a threshold as said before the rest of the hook runs, so a later
-    // failure must still let it out, or it was lost for the whole period.
+    // The spend budget's line for this prompt (and the session price's), until
+    // it is written. Each threshold is recorded as said before the rest of the
+    // hook runs, so a later failure must still let it out, or it was lost for
+    // the whole period (or session).
     let budgetNote;
     // A hook must never break the user's prompt: any failure exits silently.
     try {
@@ -284,6 +286,22 @@ export async function runHook(app) {
             }
             budgetNote = v?.message;
         }
+        // A session's own price (sessionprice.ts): once when it passes $25, $100
+        // and $500, a line to the user beside the budget's. Claimed before the
+        // rest of the hook runs, so it rides in `budgetNote` like the budget's.
+        let priceCold = false;
+        if (!cursor && (input.hook_event_name === undefined || input.hook_event_name === "UserPromptSubmit" || input.hook_event_name === "BeforeAgent") && input.transcript_path && existsSync(input.transcript_path)) {
+            try {
+                const sid = input.session_id ?? input.conversation_id ?? input.transcript_path;
+                const p = sessionPriceDue({ sessionId: sid, transcript: input.transcript_path, event: input.hook_event_name, model: input.model, rv: () => readSessionState(sid).rv });
+                if (p) {
+                    budgetNote = [budgetNote, renderSessionPrice(p)].filter(Boolean).join("\n");
+                    priceCold = p.coldUsd !== undefined;
+                    recordLedger({ ev: "session_price", sid: sid.slice(0, 12), usd: Math.round(p.usd * 100) / 100, ...(p.tokens !== undefined ? { tok: p.tokens } : {}), ...(p.model ? { model: p.model } : {}) });
+                }
+            }
+            catch { /* never worth a prompt */ }
+        }
         const sayBudget = () => { if (budgetNote)
             console.log(JSON.stringify({ systemMessage: budgetNote })); budgetNote = undefined; };
         const transcriptPath = input.transcript_path;
@@ -323,7 +341,8 @@ export async function runHook(app) {
         let cr = prev.cr;
         if (cold && cold.lastReplyAt !== prev.cr) {
             notes.push(renderColdResume(cold));
-            notice = [budgetNote, renderColdResumeNotice(cold)].filter(Boolean).join("\n");
+            // The session price's line already said this message re-writes the cache: once is enough.
+            notice = [budgetNote, priceCold ? undefined : renderColdResumeNotice(cold)].filter(Boolean).join("\n");
             cr = cold.lastReplyAt;
             recordLedger({ ev: "cold_resume", sid: sessionId.slice(0, 12), tok: cold.tokens, model: cold.model });
         }
