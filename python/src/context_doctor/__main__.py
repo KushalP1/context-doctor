@@ -51,7 +51,13 @@ def _walk(folder, hidden=None):
 # Files that hold credentials by convention, as the TypeScript `pack` skips them
 # (src/pack.ts secretFileReason): skipped even when named or tracked by git,
 # unless --include-secrets.
-_SECRET_NAMES = {".npmrc", ".pypirc", ".netrc", "_netrc", ".git-credentials", ".pgpass", ".htpasswd"}
+_SECRET_NAMES = {
+    ".npmrc", ".pypirc", ".netrc", "_netrc", ".git-credentials", ".pgpass", ".htpasswd", ".vault-token",
+    # The agents' own sign-ins: Claude Code's OAuth tokens (Linux, Windows), Gemini CLI's, Terraform's.
+    ".credentials.json", "oauth_creds.json", "credentials.tfrc.json",
+}
+# A file name that holds credentials inside one folder only: Codex's sign-in, Cargo's and RubyGems' tokens.
+_SECRET_IN_DIR = {".codex": {"auth.json"}, ".cargo": {"credentials", "credentials.toml"}, ".gem": {"credentials"}}
 _SECRET_EXT = {".pem", ".key", ".p12", ".pfx", ".keystore", ".jks"}
 
 
@@ -71,12 +77,18 @@ def secret_file_reason(path):
     parts = re.split(r"[\\/]+", path)
     if lower == "credentials" and len(parts) >= 2 and parts[-2] == ".aws":
         return "AWS credentials"
+    parent = parts[-2].lower() if len(parts) >= 2 else ""
+    if lower in _SECRET_IN_DIR.get(parent, ()):
+        return f"a credentials file ({parent}/{name})"
     return None
 
 
 def _sensitive_dirs():
     home = os.path.expanduser("~")
-    dirs = [os.path.join(home, d) for d in (".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", os.path.join(".config", "gcloud"), os.path.join("Library", "Keychains"), ".password-store")]
+    dirs = [os.path.join(home, d) for d in (".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", os.path.join(".config", "gcloud"), os.path.join(".config", "gh"), os.path.join(".config", "github-copilot"), os.path.join("Library", "Keychains"), ".password-store")]
+    # Where CLAUDE_CONFIG_DIR and CODEX_HOME put the agents' sign-ins.
+    dirs.append(os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", "").strip() or os.path.join(home, ".claude"), ".credentials.json"))
+    dirs.append(os.path.join(os.environ.get("CODEX_HOME", "").strip() or os.path.join(home, ".codex"), "auth.json"))
     dirs += ["/etc/shadow", "/etc/gshadow", "/etc/sudoers", "/etc/master.passwd", "/etc/ssh"]
     return sorted(set(dirs + [os.path.realpath(d) for d in dirs]))
 
@@ -123,7 +135,8 @@ def _read(paths, skipped=None, include_secrets=False):
         real = os.path.realpath(path)
         if real in seen:
             return None
-        why = None if include_secrets else secret_file_reason(path)
+        # The link's name and its target's: notes.md pointing at an .env is an .env.
+        why = None if include_secrets else (secret_file_reason(path) or secret_file_reason(real))
         if why:
             skipped.append(f"{path}: {why}, likely holding secrets; not packed{hint}")
             return None
@@ -163,6 +176,9 @@ def _read(paths, skipped=None, include_secrets=False):
                 s = source(full, _name(full))
                 if s:
                     yield s
+        elif os.path.exists(p) and not os.path.isfile(p):
+            # /dev/zero, a FIFO: read whole, it never ends.
+            skipped.append(f"{p}: not a regular file")
         else:
             s = source(p, p)
             if s:

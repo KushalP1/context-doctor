@@ -185,3 +185,19 @@ class PackSecrets(unittest.TestCase):
         self.assertTrue(any("an .env file" in n and "--include-secrets" in n for n in skipped), skipped)
         opted = list(_read([os.path.join(d, ".env")], [], include_secrets=True))
         self.assertIn("sk-live-123", opted[0].text)
+
+    def test_agent_sign_ins_are_skipped(self):
+        from context_doctor.__main__ import secret_file_reason
+        for f in ["h/.claude/.credentials.json", "h/.codex/auth.json", "h/.gemini/oauth_creds.json", "h/.cargo/credentials.toml", ".vault-token"]:
+            self.assertTrue(secret_file_reason(f), f)
+        for f in ["src/auth.json", "docs/credentials", "oauth.md"]:
+            self.assertIsNone(secret_file_reason(f), f)
+
+    def test_a_device_named_outright_is_not_read(self):
+        import os
+        from context_doctor.__main__ import _read
+        if not os.path.exists("/dev/zero"):
+            self.skipTest("no /dev/zero")
+        skipped = []
+        self.assertEqual(list(_read(["/dev/zero"], skipped)), [])
+        self.assertTrue(any("not a regular file" in n for n in skipped), skipped)
