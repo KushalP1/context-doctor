@@ -138,15 +138,16 @@ function readSteps(file: string, seen: Set<string>): Step[] {
  */
 function replay(steps: Step[], limit: number, since: number, until: number, after: number): { billed: number; sim: number; extra: number; actual: number } {
   let billed = 0, sim = 0, extra = 0, actual = 0;
-  let removed = 0, fresh = false, prevAt: number | undefined;
+  let removed = 0, fresh = false, prevCounted = false;
   for (const s of steps) {
     if (s.k === "c") {
-      if (prevAt !== undefined && prevAt >= since && prevAt < until) actual++;
+      // A compaction after a fork's copy of its parent's requests is the parent's, counted there.
+      if (prevCounted) actual++;
       removed = 0; fresh = false;
       continue;
     }
     const counted = s.at >= since && s.at < until && !s.copy;
-    prevAt = s.at;
+    prevCounted = counted;
     let ctx = s.prompt - removed;
     // The real context fell below what was removed (a rewind with no compaction recorded): back in step.
     if (removed > 0 && ctx < after) { removed = 0; ctx = s.prompt; fresh = false; }
@@ -214,7 +215,7 @@ export function replayCodexCompact(opts: { days: number; paths?: string[]; limit
   let requests = 0, unpriced = 0;
   for (const steps of all) {
     steps.forEach((s, i) => {
-      if (s.k === "c") { const n = steps[i + 1]; if (n?.k === "r") afters.push(n.prompt); return; }
+      if (s.k === "c") { const n = steps[i + 1]; if (n?.k === "r" && !n.copy) afters.push(n.prompt); return; }
       if (s.at >= since && !s.copy) { requests++; if (!s.billedUsd && !s.inPerM) unpriced++; }
     });
   }

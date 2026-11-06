@@ -86,6 +86,14 @@ test("replay: a long session pays; real compactions reset the arm and set the co
     const rr = replayCodexCompact({ days: 30, paths: [real], limits: [150_000] });
     assert.equal(rr.actualCompactions, 1);
     assert.equal(rr.afterCompact, 22_000);
+    // A fork copies the compaction with its parent's requests: still one, and its context after counted once.
+    const forked = rollout([[200_000, 190_000, 1_000], [240_000, 200_000, 1_000], "c", [22_000, 0, 500], [30_000, 22_000, 500]]);
+    const parent = file(forked, dir, "rollout-2026-11-02T12-00-00-p.jsonl");
+    const child = file([...forked, ...rollout([[60_000, 30_000, 500]], t0 + DAY).slice(2)], dir, "rollout-2026-11-02T13-00-00-f.jsonl");
+    const rf = replayCodexCompact({ days: 30, paths: [parent, child], limits: [150_000] });
+    assert.equal(rf.requests, 5);
+    assert.equal(rf.actualCompactions, 1, "the fork's copy of the compaction is not another");
+    assert.equal(rf.afterCompact, 22_000);
 });
 test("since: a compaction before the old trigger, priced at the requests after it until the session would have reached it", () => {
     const p = file(rollout([[150_000, 140_000, 1_000], "c", [25_000, 0, 500], [35_000, 25_000, 500], [45_000, 35_000, 500]]));

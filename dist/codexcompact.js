@@ -153,17 +153,18 @@ function readSteps(file, seen) {
  */
 function replay(steps, limit, since, until, after) {
     let billed = 0, sim = 0, extra = 0, actual = 0;
-    let removed = 0, fresh = false, prevAt;
+    let removed = 0, fresh = false, prevCounted = false;
     for (const s of steps) {
         if (s.k === "c") {
-            if (prevAt !== undefined && prevAt >= since && prevAt < until)
+            // A compaction after a fork's copy of its parent's requests is the parent's, counted there.
+            if (prevCounted)
                 actual++;
             removed = 0;
             fresh = false;
             continue;
         }
         const counted = s.at >= since && s.at < until && !s.copy;
-        prevAt = s.at;
+        prevCounted = counted;
         let ctx = s.prompt - removed;
         // The real context fell below what was removed (a rewind with no compaction recorded): back in step.
         if (removed > 0 && ctx < after) {
@@ -221,7 +222,7 @@ export function replayCodexCompact(opts) {
         steps.forEach((s, i) => {
             if (s.k === "c") {
                 const n = steps[i + 1];
-                if (n?.k === "r")
+                if (n?.k === "r" && !n.copy)
                     afters.push(n.prompt);
                 return;
             }
