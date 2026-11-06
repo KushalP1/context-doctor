@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -165,6 +165,32 @@ test("a damaged ledger is read again, not trusted; a state folder that cannot be
     writeFileSync(b.transcript, reply(NOW - MIN, 30));
     writeFileSync(b.dir, "not a folder");
     assert.equal(hook(b.env, prompt(b.transcript)), undefined);
+});
+test("the hook's pruning keeps a live session's markers: a threshold is not said again weeks on", () => {
+    const { home, transcript, env, dir } = setup();
+    writeFileSync(transcript, reply(NOW - 3 * MIN, 30));
+    assert.match(hook(env, prompt(transcript)) ?? "", /cost \$30\.06 so far/);
+    // Said three days ago; the session goes on.
+    for (const f of priceFiles(dir))
+        utimesSync(join(dir, f), new Date(NOW - 3 * 24 * HOUR), new Date(NOW - 3 * 24 * HOUR));
+    appendFileSync(transcript, reply(NOW - 2 * MIN, 1));
+    assert.equal(hook(env, prompt(transcript)), undefined);
+    // Meanwhile 210 files of other sessions, newer than the marker, and one more session's state is written: the folder is pruned.
+    for (let i = 0; i < 70; i++) {
+        for (const ext of [".json", ".price.json", ".spawns.jsonl"]) {
+            writeFileSync(join(dir, `other${String(i).padStart(10, "0")}${ext}`), "{}");
+            utimesSync(join(dir, `other${String(i).padStart(10, "0")}${ext}`), new Date(NOW - 24 * HOUR), new Date(NOW - 24 * HOUR));
+        }
+    }
+    const s2 = join(home, ".claude", "projects", "-work-app", "s2.jsonl");
+    writeFileSync(s2, pad(200) + reply(NOW - MIN, 0.01, { tokens: 10_000 }));
+    hook(env, prompt(s2, { session_id: "s2" }));
+    assert.ok(readdirSync(dir).length <= 200, `${readdirSync(dir).length} files`);
+    assert.ok(priceFiles(dir).some((f) => f.endsWith(".price-25")), "the live session's marker is kept");
+    assert.ok(!readdirSync(dir).some((f) => f.startsWith("other0000000000")), "the least recent sessions go, each whole");
+    assert.ok(readdirSync(dir).every((f) => !f.startsWith("other") || [".json", ".price.json", ".spawns.jsonl"].every((ext) => existsSync(join(dir, f.split(".")[0] + ext)))), "no session is left in part");
+    appendFileSync(transcript, reply(NOW - MIN, 1));
+    assert.equal(hook(env, prompt(transcript)), undefined, "$25 was said already");
 });
 test("Codex: a rollout's cost, its last request at the cached rate, and /compact", () => {
     const { home, env } = setup();

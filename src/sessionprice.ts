@@ -33,7 +33,7 @@
  * off: CONTEXT_DOCTOR_NO_SESSION_PRICE=1.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { statePath } from "./ledger.js";
@@ -72,6 +72,23 @@ function base(sessionId: string): string {
 }
 const ledgerFile = (b: string) => `${b}.price.json`;
 const claimFile = (b: string, usd: number) => `${b}.price-${usd}`;
+
+const DAY = 86_400_000;
+
+/**
+ * Whether a threshold was said: its marker is there. The marker of a
+ * session still in use is touched once a day, so the hook's pruning (the
+ * sessions touched least recently go, hook.ts) does not take it while the
+ * session goes on, and the threshold is not said twice.
+ */
+function said(path: string, now: number): boolean {
+  try {
+    if (now - statSync(path).mtimeMs > DAY) try { utimesSync(path, new Date(now), new Date(now)); } catch { /* read-only: said all the same */ }
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** True for exactly one caller per path: the file is created only if it is not there. */
 function claim(path: string): boolean {
@@ -128,7 +145,7 @@ export function sessionPriceDue(input: SessionPriceInput, now = Date.now(), env:
   if (!thresholds.length) return undefined;
   const b = base(input.sessionId);
   // Everything said: one stat from now on.
-  if (existsSync(claimFile(b, thresholds[thresholds.length - 1]))) return undefined;
+  if (said(claimFile(b, thresholds[thresholds.length - 1]), now)) return undefined;
   const app = appOf(input.transcript, input.event);
   const files: Array<[string, boolean]> = [[input.transcript, false]];
   if (app === "claude") {
@@ -166,7 +183,7 @@ export function sessionPriceDue(input: SessionPriceInput, now = Date.now(), env:
   const save = () => { try { writeWhole(ledgerFile(b), { f: kept }); } catch { /* read again next time */ } };
   const passed = thresholds.filter((t) => usd >= t);
   const top = passed[passed.length - 1];
-  if (top === undefined || existsSync(claimFile(b, top)) || !claim(claimFile(b, top))) {
+  if (top === undefined || said(claimFile(b, top), now) || !claim(claimFile(b, top))) {
     if (read >= SAVE_BYTES) save();
     return undefined;
   }

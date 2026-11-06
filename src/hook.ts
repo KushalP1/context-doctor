@@ -124,18 +124,40 @@ function readSessionState(sessionId: string): SessionState {
 /** Keep the directory from growing without bound as sessions come and go. */
 const MAX_STATE_FILES = 200;
 
+/**
+ * Past MAX_STATE_FILES, the sessions least recently touched go, each with
+ * all its files (named `<hash>.…`: its state, the session price's ledger and
+ * threshold markers, the subagent launch log). File by file, a live
+ * session's marker, written once when it passed $25, went first among
+ * newer files of other sessions, and the threshold was said again.
+ */
+function pruneStateDir(dir: string): void {
+  const files = readdirSync(dir);
+  if (files.length <= MAX_STATE_FILES) return;
+  const sessions = new Map<string, { files: string[]; t: number }>();
+  for (const f of files) {
+    let t = 0;
+    try { t = statSync(join(dir, f)).mtimeMs; } catch { /* gone meanwhile */ }
+    const key = f.split(".")[0];
+    const s = sessions.get(key) ?? { files: [], t: 0 };
+    s.files.push(f);
+    s.t = Math.max(s.t, t);
+    sessions.set(key, s);
+  }
+  let left = files.length;
+  for (const s of [...sessions.values()].sort((a, b) => a.t - b.t)) {
+    if (left <= MAX_STATE_FILES) break;
+    for (const f of s.files) rmSync(join(dir, f), { force: true });
+    left -= s.files.length;
+  }
+}
+
 function writeSessionState(sessionId: string, state: SessionState): void {
   const dir = stateDir();
   mkdirSync(dir, { recursive: true });
   writeFileSync(sessionStatePath(sessionId), JSON.stringify(state));
   try {
-    const files = readdirSync(dir);
-    if (files.length <= MAX_STATE_FILES) return;
-    const byAge = files
-      .map((f) => ({ f, t: statSync(join(dir, f)).mtimeMs }))
-      .sort((a, b) => b.t - a.t)
-      .slice(MAX_STATE_FILES);
-    for (const { f } of byAge) rmSync(join(dir, f), { force: true });
+    pruneStateDir(dir);
   } catch {
     /* pruning is housekeeping, never worth failing a prompt over */
   }
