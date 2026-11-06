@@ -7,7 +7,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { startProxy, stripToken } from "../proxy.js";
+import { exposureWarning, startProxy, stripToken } from "../proxy.js";
 
 let upstreamHits = 0;
 const upstream = http.createServer((req, res) => {
@@ -54,4 +54,23 @@ test("proxy token: good prefix is served and stripped, bad or missing prefix get
   assert.equal((await fetch(`${base}/health`)).status, 200);
   assert.equal((await fetch(`${base}/stats`)).status, 401);
   assert.equal((await fetch(`${base}/t/${TOKEN}/stats`)).status, 200);
+});
+
+test("listening beyond this machine with no token is warned about; loopback, or a token, is not", async () => {
+  for (const host of ["0.0.0.0", "::", "192.168.1.20", "[fe80::1]", "my-box.local"]) assert.match(exposureWarning(host) ?? "", /WARNING: listening on .* with no token/, host);
+  for (const host of ["127.0.0.1", "127.0.0.2", "localhost", "::1", "[::1]", "::ffff:127.0.0.1"]) assert.equal(exposureWarning(host), undefined, host);
+  assert.equal(exposureWarning("0.0.0.0", "s3cret"), undefined);
+  // And the proxy says it as it starts (here on loopback: nothing to say).
+  const logged: string[] = [];
+  const original = console.error;
+  console.error = (...a: unknown[]) => void logged.push(a.join(" "));
+  const proxy = startProxy({ port: 0, host: "127.0.0.1" });
+  try {
+    await new Promise<void>((r) => (proxy.listening ? r() : proxy.once("listening", () => r())));
+  } finally {
+    console.error = original;
+    proxy.close();
+  }
+  assert.ok(logged.some((l) => /listening on http:\/\/127\.0\.0\.1/.test(l)), logged.join("\n"));
+  assert.ok(!logged.some((l) => /WARNING/.test(l)), logged.join("\n"));
 });

@@ -49,4 +49,6 @@ With `--token`, every path except `/health` must start with `/t/<token>/`; anyth
 
 Your API key still rides in the request headers, as before. The token protects the relay, not the key; keep the tunnel HTTPS.
 
+The proxy listens on 127.0.0.1 unless told otherwise. Started with `--host` on any other address (`0.0.0.0` in a container, a LAN address) and no `--token`, it says so in a warning at startup: anyone who can reach that address can relay through it and read `/stats`.
+
 > **Note on desktop chat apps:** Claude Desktop and the ChatGPT app talk to their own backends — no tool can sit in that path. For those, use the [MCP integration](./chat-apps.md) (Claude Desktop gets the standing rules and a cheap `profile_context` sketch call) and the [per-account preferences](./chat-apps.md#claudeai-on-the-web-and-the-phone-apps).

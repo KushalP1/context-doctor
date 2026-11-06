@@ -92,6 +92,22 @@ export function isGeminiRequest(url, headers = {}) {
 export function logUrl(url) {
     return url.replace(/([?&](?:key|api[_-]?key|access_token|token)=)[^&#\s]*/gi, "$1…");
 }
+/**
+ * What to say when the proxy listens beyond this machine with no token:
+ * anyone who can reach the address can relay through it (with their own
+ * keys) and read /stats. Inside a container that is the point (`--host
+ * 0.0.0.0` with the port published to the host only), so it is said, not
+ * refused. Undefined on a loopback address or with a token.
+ */
+export function exposureWarning(host, token) {
+    if (token)
+        return undefined;
+    const h = host.trim().toLowerCase().replace(/^\[|\]$/g, "");
+    if (h === "localhost" || h === "::1" || /^127\.\d+\.\d+\.\d+$/.test(h) || /^::ffff:127\./.test(h))
+        return undefined;
+    return (`  WARNING: listening on ${host}, beyond this machine, with no token: anyone who can reach it can send requests through it and read /stats.\n` +
+        `  Add --token <secret> (or CONTEXT_DOCTOR_PROXY_TOKEN) unless only you can reach this address (a container whose port is published to localhost).`);
+}
 /** The model a Gemini request names in its path (…/models/<model>:generateContent). */
 export function geminiModelFromUrl(url) {
     return /\/models\/([^/:?]+):/.exec(url)?.[1];
@@ -712,6 +728,9 @@ export function startProxy(opts = {}) {
             ? `  Autopilot: stale re-runnable tool output is cleared only when the prompt cache is cold; savings are logged here.`
             : `  Every request's context is optimized in flight; savings are logged here.`);
         console.error(`  Cumulative savings: http://127.0.0.1:${port}${prefix}/stats`);
+        const exposed = exposureWarning(host, opts.token);
+        if (exposed)
+            console.error(exposed);
         if (opts.token) {
             console.error(`  Token required: every path except /health must start with /t/<token>/.`);
             console.error(`  Cursor with your own OpenAI key: expose this port on HTTPS (a tunnel), then Settings > Models > OpenAI API Key >`);

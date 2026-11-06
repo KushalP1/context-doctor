@@ -96,6 +96,14 @@ export declare function isGeminiRequest(url: string, headers?: http.IncomingHttp
  * service writes it beside settings.json): a key there outlives the request.
  */
 export declare function logUrl(url: string): string;
+/**
+ * What to say when the proxy listens beyond this machine with no token:
+ * anyone who can reach the address can relay through it (with their own
+ * keys) and read /stats. Inside a container that is the point (`--host
+ * 0.0.0.0` with the port published to the host only), so it is said, not
+ * refused. Undefined on a loopback address or with a token.
+ */
+export declare function exposureWarning(host: string, token?: string): string | undefined;
 /** The model a Gemini request names in its path (…/models/<model>:generateContent). */
 export declare function geminiModelFromUrl(url: string): string | undefined;
 export interface ProxyStats {
