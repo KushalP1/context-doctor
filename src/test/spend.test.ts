@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
-import { claudeSpend, codexSpend, cursorSpend, geminiSpend, renderSpend, renderSpendShare, spendReport, summarizeSpend } from "../spend.js";
+import { claudeSpend, codexSpend, cursorSpend, geminiSpend, projectFromDir, projectName, renderSpend, renderSpendShare, spendReport, summarizeSpend } from "../spend.js";
 import { claudeUsage, codexLimitData } from "../limits.js";
 import { estimateSavings } from "../savings.js";
 import { clearScanMemo } from "../scan.js";
@@ -361,6 +361,16 @@ test("a model priced only by its family is an estimate, said so; a <synthetic> r
     rmSync(home, { recursive: true, force: true });
     rmSync(cache, { recursive: true, force: true });
   }
+});
+
+test("project names less the home folder on macOS, Linux and Windows", () => {
+  assert.equal(projectFromDir("-Users-kp-tech-app"), "tech-app");
+  assert.equal(projectFromDir("-home-kp-tech-app"), "tech-app");
+  assert.equal(projectFromDir("-root-app"), "app");
+  assert.equal(projectFromDir("C--Users-kp-tech-app"), "tech-app");
+  assert.equal(projectFromDir("-srv-app"), "srv-app");
+  assert.equal(projectName("/home/kp/tech/app"), "tech-app");
+  assert.equal(projectName("C:\\Users\\kp\\tech\\app"), "tech-app");
 });
 
 test("nothing on disk: no tools, a plain sentence, and --share says so", async () => {

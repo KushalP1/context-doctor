@@ -71,22 +71,33 @@ export interface SpendItem {
   priced: boolean;
   /** Priced by its family's row, not one of its own (a new release, an id the table does not list): an estimate. */
   estimated?: boolean;
-  /** Claude Code: run by a subagent. */
+  /** Claude Code: run by a subagent (the Agent tool's). */
   subagent?: boolean;
+  /** Claude Code: run by a workflow agent: its run, "<session>/<run>". */
+  workflow?: string;
   /** Claude Code: the reply's row uuid, which a fork's copy shares. Codex: the event's codexEventKey, which a forked rollout's copy shares. */
   key?: string;
 }
 
-/** A project's name as `savings` shows it: the folder's path with "-" for separators, less "-Users-<you>-". */
+/**
+ * A project folder's name (its path with "-" for separators, as Claude Code
+ * names its projects/ folders) less the home folder: "-Users-<you>-" on
+ * macOS, "-home-<you>-" (or "-root-") on Linux, "C--Users-<you>-" on Windows.
+ * Only macOS's was stripped, so on Linux and Windows every project read
+ * "home-kp-app" or "C--Users-kp-app".
+ */
+export function projectFromDir(dir: string): string {
+  return dir.replace(/^(?:[A-Za-z]-)?-(?:Users|home)-[^-]+-/, "").replace(/^-root-/, "").replace(/^-/, "") || dir;
+}
+
+/** A project's name as `savings` shows it: the folder's path with "-" for separators, less the home folder. */
 export function projectName(folder: string): string {
-  const dir = folder.replace(/[^A-Za-z0-9]/g, "-");
-  return dir.replace(/^-Users-[^-]+-/, "").replace(/^-/, "") || dir;
+  return projectFromDir(folder.replace(/[^A-Za-z0-9]/g, "-"));
 }
 
 /** A Claude Code transcript's project: its folder under projects/, named as `savings` names it. */
 function claudeProject(top: string): string {
-  const dir = basename(dirname(top));
-  return dir.replace(/^-Users-[^-]+-/, "").replace(/^-/, "") || dir;
+  return projectFromDir(basename(dirname(top)));
 }
 
 /** `priceAs`: the id to price it by, when the model's own name is not one the table knows (Cursor's names for Claude). */
