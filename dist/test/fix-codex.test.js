@@ -1,7 +1,7 @@
 /** fix for Codex: its auto-compact limit replayed on rollouts, written key by key in config.toml, undone byte for byte, planned on a machine with no Claude Code. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -257,4 +257,38 @@ test("a Codex-only machine: fix plans and applies Codex's limit, makes no ~/.cla
     assert.equal(r.status, 0, r.stderr);
     assert.equal(readFileSync(config, "utf8"), original);
     assert.ok(!existsSync(join(home, ".claude")), "still no ~/.claude");
+});
+test("records kept in the state folder (Codex first, Claude Code later): a settings fix still waits for settings.json's own lock", async () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-cx-later-"));
+    mkdirSync(join(home, ".codex"));
+    const deps = { home, cwd: home, now: 5_000, env: {} };
+    const [cx] = planFixes({ ...base, codexCompact: report(4) });
+    assert.equal((await applyFix(cx, deps)).ok, true);
+    assert.equal(fixRecordPath(home), join(home, ".local", "state", "context-doctor", ".context-doctor-fixes.json"));
+    // Claude Code arrives; the records stay where they are.
+    mkdirSync(join(home, ".claude"));
+    const settings = join(home, ".claude", "settings.json");
+    writeFileSync(settings, '{\n  "a": 1\n}\n');
+    // Another writer (cache-ttl, compact-window, autopilot) holds settings.json's lock: it read the file and writes after a pause.
+    const ready = join(home, "ready");
+    const script = join(home, "writer.mjs");
+    const mod = JSON.stringify(new URL("../settingsedit.js", import.meta.url).href);
+    writeFileSync(script, [
+        `import { readFileSync, writeFileSync } from "node:fs";`,
+        `const { setJsonPath, withSettingsLock, writeAtomic } = await import(${mod});`,
+        `const [file, ready] = process.argv.slice(2);`,
+        `withSettingsLock(file, () => { const t = readFileSync(file, "utf8"); writeFileSync(ready, ""); const until = Date.now() + 800; while (Date.now() < until) {} writeAtomic(file, setJsonPath(t, ["promptCacheTtl"], "1h")); });`,
+    ].join("\n"));
+    const child = spawn(process.execPath, [script, settings, ready], { env: sandboxEnv(home), stdio: "ignore" });
+    const done = new Promise((res) => child.on("exit", (c) => res(c ?? 1)));
+    for (let i = 0; i < 200 && !existsSync(ready); i++)
+        await new Promise((r) => setTimeout(r, 25));
+    assert.ok(existsSync(ready), "the writer holds the lock");
+    const tool = { id: "tool-output", title: "", basis: "", quality: "", change: "bashOutputMaxChars", state: "available", value: 8000 };
+    assert.equal((await applyFix(tool, deps)).ok, true);
+    assert.equal(await done, 0);
+    const s = JSON.parse(readFileSync(settings, "utf8"));
+    assert.deepEqual([s.a, s.promptCacheTtl, s.bashOutputMaxChars], [1, "1h", 8000], "neither write lost");
+    assert.match((await undoFixes(undefined, deps)).join("\n"), /✓ bashOutputMaxChars removed/);
+    assert.deepEqual(JSON.parse(readFileSync(settings, "utf8")), { a: 1, promptCacheTtl: "1h" });
 });

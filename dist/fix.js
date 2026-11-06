@@ -335,7 +335,8 @@ function applySetting(fix, home, at, extra) {
     const key = KEY_PATH[fix.id];
     const file = join(claudeDir(home), "settings.json");
     mkdirSync(dirname(file), { recursive: true });
-    return withLock(lockPath(home), () => {
+    // The records' lock, and settings.json's own: the same file unless the records live in the state folder (a machine that had only Codex at first).
+    return withLock(lockPath(home), () => withSettingsLock(file, () => {
         const records = loadFixRecords(home);
         const cur = readSettings(file);
         const now = getPath(cur.data, key);
@@ -369,7 +370,7 @@ function applySetting(fix, home, at, extra) {
         };
         writeFixRecords([...records.filter((r) => r.id !== fix.id), rec], home);
         return [`✓ ${fix.change}`];
-    });
+    }));
 }
 /**
  * Set Codex's limit at the top of config.toml, under the records' lock and
@@ -508,6 +509,9 @@ export async function applyFix(fix, deps = {}, context = {}) {
 function undoSetting(r, home) {
     const key = r.key ?? KEY_PATH[r.id];
     const file = r.file ?? join(claudeDir(home), "settings.json");
+    return withSettingsLock(file, () => undoSettingLocked(r, key, file));
+}
+function undoSettingLocked(r, key, file) {
     const name = key.join(".");
     const cur = readSettings(file);
     const text = cur.text ?? null;

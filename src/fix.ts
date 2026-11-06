@@ -426,7 +426,8 @@ function applySetting(fix: Fix, home: string | undefined, at: number, extra: Par
   const key = KEY_PATH[fix.id]!;
   const file = join(claudeDir(home), "settings.json");
   mkdirSync(dirname(file), { recursive: true });
-  return withLock(lockPath(home), () => {
+  // The records' lock, and settings.json's own: the same file unless the records live in the state folder (a machine that had only Codex at first).
+  return withLock(lockPath(home), () => withSettingsLock(file, () => {
     const records = loadFixRecords(home);
     const cur = readSettings(file);
     const now = getPath(cur.data, key);
@@ -457,7 +458,7 @@ function applySetting(fix: Fix, home: string | undefined, at: number, extra: Par
     };
     writeFixRecords([...records.filter((r) => r.id !== fix.id), rec], home);
     return [`✓ ${fix.change}`];
-  });
+  }));
 }
 
 /**
@@ -569,6 +570,10 @@ export async function applyFix(fix: Fix, deps: FixDeps = {}, context: { oneHourS
 function undoSetting(r: FixRecord, home: string | undefined): string {
   const key = r.key ?? KEY_PATH[r.id]!;
   const file = r.file ?? join(claudeDir(home), "settings.json");
+  return withSettingsLock(file, () => undoSettingLocked(r, key, file));
+}
+
+function undoSettingLocked(r: FixRecord, key: string[], file: string): string {
   const name = key.join(".");
   const cur = readSettings(file);
   const text = cur.text ?? null;
