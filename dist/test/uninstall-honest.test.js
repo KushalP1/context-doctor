@@ -53,6 +53,8 @@ test("files install created are deleted once empty; the user's file loses only w
 test("install run twice: the second backup holds our own write, and the file is still recognised as ours", async () => {
     const home = apps();
     await run(home, ["install"]);
+    // A stale entry of ours (an older version's command), which the second run repairs: so it writes, and backs up.
+    writeFileSync(join(home, ".cursor", "mcp.json"), JSON.stringify({ mcpServers: { "context-doctor": { command: "npx", args: ["-y", "context-doctor@0.30.0", "mcp"] } } }));
     await run(home, ["install"]);
     assert.ok(existsSync(join(home, ".cursor", "mcp.json.context-doctor.backup")), "fixture: the second run backed up our own file");
     await run(home, ["uninstall"]);

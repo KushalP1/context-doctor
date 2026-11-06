@@ -125,8 +125,16 @@ for (const [name, contents] of [["hand-written", HAND_WRITTEN], ["minified", MIN
             assert.ok(s.includes('"ESC": "\\u00e9"') && s.includes('"cleanupPeriodDays": 30.0,'), s);
             assert.ok(readFileSync(files.gemini, "utf8").includes("// my theme"), "Gemini's comments are kept");
         }
+        const installed = Object.fromEntries(Object.keys(files).filter((k) => existsSync(files[k])).map((k) => [k, readFileSync(files[k], "utf8")]));
         const again = await run(home, ["install", "--statusline"]);
         assert.equal(again.code, 0, again.out + again.err);
+        // Nothing to do, and said so: no "added" or "installed" for what was already there, no file rewritten.
+        for (const [k, text] of Object.entries(installed))
+            assert.equal(readFileSync(files[k], "utf8"), text, `${k} rewritten by a second install`);
+        const ticks = again.out.split("\n").filter((l) => l.startsWith("✓"));
+        assert.ok(ticks.length >= 10, again.out);
+        for (const l of ticks)
+            assert.match(l, /already installed/, `a second install said it did something:\n${again.out}`);
         const un = await run(home, ["uninstall"]);
         assert.equal(un.code, 0, un.out + un.err);
         for (const [k, text] of Object.entries(contents))

@@ -251,6 +251,16 @@ function readText(path) {
     }
 }
 /**
+ * Whether a step changed any of `paths`, by their text before it ran: a
+ * second install said "MCP server added" for every app it left exactly as
+ * it was. `said(done, kept)` picks the line's verb.
+ */
+function changeWatch(...paths) {
+    const before = paths.map(readText);
+    const changed = () => paths.some((p, i) => readText(p) !== before[i]);
+    return { changed, said: (done, kept = "already installed, unchanged") => (changed() ? done : kept) };
+}
+/**
  * Write `data` into a JSON config the way a person would edit it: only the
  * keys and list items that differ are changed in the text (settingsedit.ts),
  * so indentation, one-line objects, minified files, CRLF, escapes, number
@@ -606,7 +616,9 @@ function installSkillInto(skillDest, appHome) {
     mkdirSync(skillDest, { recursive: true });
     // Written whole and renamed into place: two installs at once (or Claude
     // Code reading the skill) made Windows refuse a plain copy with EBUSY.
-    writeAtomic(join(skillDest, "SKILL.md"), readFileSync(skillSource, "utf8"));
+    const skill = readFileSync(skillSource, "utf8");
+    if (readText(join(skillDest, "SKILL.md")) !== skill)
+        writeAtomic(join(skillDest, "SKILL.md"), skill);
     if (appHome && missing.length > 0) {
         const all = [...new Set([...createdSkillFolders(appHome), ...missing])];
         writeAtomic(join(appHome, CREATED_MARKER), JSON.stringify({ created: all }) + "\n");
@@ -791,24 +803,28 @@ function installCodex(entry, failures) {
             backupOnce(configPath);
             writeFileSync(configPath, next);
         }
-        console.log(`✓ Codex: MCP server added (${configPath})`);
+        console.log(`✓ Codex: MCP server ${next !== current ? "added" : "already installed, unchanged"} (${configPath})`);
     }
     catch (e) {
         console.error(`✗ Codex MCP: ${e.message}`);
         failures.push("Codex MCP");
     }
     try {
+        const watch = changeWatch(join(dir, "skills", "context-doctor", "SKILL.md"));
         const skill = installSkillInto(join(dir, "skills", "context-doctor"), dir);
         if (skill)
-            console.log(`✓ Agent Skill installed for Codex (${skill})`);
+            console.log(`✓ Agent Skill ${watch.said("installed", "already installed, up to date")} for Codex (${skill})`);
     }
     catch (e) {
         console.error(`✗ Codex skill: ${e.message}`);
         failures.push("Codex skill");
     }
     try {
+        const watch = changeWatch(join(dir, "hooks.json"));
         const hook = installHookInto(join(dir, "hooks.json"), dir);
-        if (hook) {
+        if (hook && !watch.changed())
+            console.log(`✓ Codex every-prompt hook already installed, unchanged (${hook})`);
+        else if (hook) {
             console.log(`✓ Codex every-prompt hook installed (${hook})`);
             console.log("  Codex runs a new hook only after you trust it once: open Codex, type /hooks, and trust context-doctor.");
         }
@@ -935,12 +951,13 @@ function installCopilot(entry, failures) {
         }
         config.mcpServers = config.mcpServers ?? {};
         const want = copilotMcpEntry(entry);
-        if (JSON.stringify(config.mcpServers["context-doctor"]) !== JSON.stringify(want)) {
+        const stale = JSON.stringify(config.mcpServers["context-doctor"]) !== JSON.stringify(want);
+        if (stale) {
             config.mcpServers["context-doctor"] = want;
             writeJsonWithBackup(path, config);
         }
         mcpOk = true;
-        console.log(`✓ GitHub Copilot: MCP server added (${path})`);
+        console.log(`✓ GitHub Copilot: MCP server ${stale ? "added" : "already installed, unchanged"} (${path})`);
     }
     catch (e) {
         console.error(`✗ GitHub Copilot MCP: ${e.message}`);
@@ -971,12 +988,15 @@ function installCopilot(entry, failures) {
         const entries = current ?? [];
         const want = copilotHookEntry();
         const ours = entries.filter(isOurCopilotEntry);
-        if (!(ours.length === 1 && JSON.stringify(ours[0]) === JSON.stringify(want))) {
+        const upToDate = ours.length === 1 && JSON.stringify(ours[0]) === JSON.stringify(want);
+        if (!upToDate) {
             config.hooks[COPILOT_HOOK_EVENT] = [...entries.filter((e) => !isOurCopilotEntry(e)), want];
             mkdirSync(dirname(path), { recursive: true });
             writeFileSync(path, JSON.stringify(config, null, 2));
         }
-        console.log(`✓ GitHub Copilot session-start hook installed (${path}): each new or resumed session gets the standing context rules`);
+        console.log(upToDate
+            ? `✓ GitHub Copilot session-start hook already installed, unchanged (${path})`
+            : `✓ GitHub Copilot session-start hook installed (${path}): each new or resumed session gets the standing context rules`);
     }
     catch (e) {
         console.error(`✗ GitHub Copilot hook: ${e.message}`);
@@ -1102,10 +1122,13 @@ export function runInstall(options = {}) {
             if (config.mcpServers !== undefined && !isPlainObject(config.mcpServers))
                 throw new Error(`"mcpServers" in ${target.configPath} is not an object; fix it, then re-run. Nothing was changed.`);
             config.mcpServers = config.mcpServers ?? {};
-            // Always overwrite: re-running install is how a stale entry gets repaired.
-            config.mcpServers["context-doctor"] = entry;
-            writeJsonWithBackup(target.configPath, config);
-            console.log(`✓ ${target.name}: MCP server added (${target.configPath})`);
+            // Overwrite a stale entry (re-running install is how one gets repaired); leave a current one, and its file, alone.
+            const watch = changeWatch(target.configPath);
+            if (JSON.stringify(config.mcpServers["context-doctor"]) !== JSON.stringify(entry)) {
+                config.mcpServers["context-doctor"] = entry;
+                writeJsonWithBackup(target.configPath, config);
+            }
+            console.log(`✓ ${target.name}: MCP server ${watch.said("added")} (${target.configPath})`);
         }
         catch (e) {
             console.error(`✗ ${target.name}: ${e.message}`);
@@ -1113,9 +1136,10 @@ export function runInstall(options = {}) {
         }
     }
     try {
+        const watch = changeWatch(join(claudeDir(), "skills", "context-doctor", "SKILL.md"));
         const skillPath = viaPlugin ? null : installSkill();
         if (skillPath)
-            console.log(`✓ Agent Skill installed for Claude Code (${skillPath})`);
+            console.log(`✓ Agent Skill ${watch.said("installed", "already installed, up to date")} for Claude Code (${skillPath})`);
     }
     catch (e) {
         console.error(`✗ Agent Skill: ${e.message}`);
@@ -1127,9 +1151,10 @@ export function runInstall(options = {}) {
                 // A skills folder Antigravity did not have yet is ours to remove again.
                 if (!existsSync(dirname(dir)))
                     rememberAntigravityFolder(dirname(dir));
+                const watch = changeWatch(join(dir, "SKILL.md"));
                 const skillPath = installSkillInto(dir);
                 if (skillPath)
-                    console.log(`✓ Antigravity skill installed (${tilde(skillPath)})`);
+                    console.log(`✓ Antigravity skill ${watch.said("installed", "already installed, up to date")} (${skillPath})`);
             }
             catch (e) {
                 console.error(`✗ Antigravity skill: ${e.message}`);
@@ -1138,9 +1163,12 @@ export function runInstall(options = {}) {
         }
     }
     try {
+        const watch = changeWatch(join(claudeDir(), "settings.json"));
         const hookPath = viaPlugin ? null : installHook();
         if (hookPath) {
-            console.log(`✓ Claude Code every-prompt hook installed (${hookPath}) — heavy sessions get automatic hygiene guidance`);
+            console.log(watch.changed()
+                ? `✓ Claude Code every-prompt hook installed (${hookPath}) — heavy sessions get automatic hygiene guidance`
+                : `✓ Claude Code hooks already installed, unchanged (${hookPath})`);
             // npx resolves the package on every single prompt; a global install makes
             // the hook a plain exec instead, which is both faster and update-proof.
             if (hookUsesNpx()) {
@@ -1157,9 +1185,12 @@ export function runInstall(options = {}) {
     if (!viaPlugin && claudeCodePresent()) {
         try {
             const readiness = modelSwitchReadiness(claudeCodeInstallsFromEnv());
+            const watch = changeWatch(join(claudeDir(), "settings.json"));
             switch (installModelSwitchHook(readiness)) {
                 case "installed":
-                    console.log("✓ Claude Code model-switch warning installed (PreModelSwitch): before /model switches, the price of re-writing this context into the new model's cache");
+                    console.log(watch.changed()
+                        ? "✓ Claude Code model-switch warning installed (PreModelSwitch): before /model switches, the price of re-writing this context into the new model's cache"
+                        : "✓ Claude Code model-switch warning already installed, unchanged");
                     break;
                 case "old":
                     console.log(`– Claude Code model-switch warning skipped: ${describeInstalls(readiness.old)} predates PreModelSwitch (${PRE_MODEL_SWITCH_SINCE}) and would`);
@@ -1176,9 +1207,13 @@ export function runInstall(options = {}) {
         }
     }
     try {
+        const watch = changeWatch(cursorHooksPath());
         const cursorHook = installCursorHook();
-        if (cursorHook)
-            console.log(`✓ Cursor hooks installed (${cursorHook}: after each tool call, after a failed one, at chat start) — Cursor's agent gets the same guidance in heavy sessions`);
+        if (cursorHook) {
+            console.log(watch.changed()
+                ? `✓ Cursor hooks installed (${cursorHook}: after each tool call, after a failed one, at chat start) — Cursor's agent gets the same guidance in heavy sessions`
+                : `✓ Cursor hooks already installed, unchanged (${cursorHook})`);
+        }
     }
     catch (e) {
         console.error(`✗ Cursor hook: ${e.message}`);
@@ -1188,9 +1223,10 @@ export function runInstall(options = {}) {
     installCopilot(entry, failures);
     if (geminiCliPresent()) {
         try {
+            const watch = changeWatch(geminiSettingsPath());
             const hook = installHookInto(geminiSettingsPath(), join(homedir(), ".gemini"), "BeforeAgent");
             if (hook)
-                console.log(`✓ Gemini CLI every-prompt hook installed (${hook})`);
+                console.log(`✓ Gemini CLI every-prompt hook ${watch.said("installed")} (${hook})`);
         }
         catch (e) {
             console.error(`✗ Gemini CLI hook: ${e.message}`);
