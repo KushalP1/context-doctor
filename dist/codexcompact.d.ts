@@ -125,5 +125,13 @@ export declare function currentCodexCompact(home?: string): {
 export declare function codexCompactScope(home?: string): CodexCompactScope;
 /** What would keep a top-level limit from applying: a profile's own, a project's config.toml. */
 export declare function codexCompactOverrides(home?: string, cwd?: string): string[];
+/**
+ * The folders whose `.codex/config.toml` Codex layers over the user's, root
+ * first (codex-rs config/src/loader/mod.rs, discover_project_layers): from
+ * the project root (the closest folder holding a root marker; a `.git`
+ * folder counts only with a HEAD in it) down to `cwd`; with no root, `cwd`
+ * alone.
+ */
+export declare function projectConfigFolders(cwd: string, markers?: string[]): string[];
 /** The lines under the lever in `fix`: each limit tried. */
 export declare function renderCodexLimits(r: CodexCompactReport, offered: number): string[];

@@ -30,9 +30,9 @@
  * files again because of it, is not priced.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { codexDir } from "./codexdir.js";
 import { codexEventKey, codexSessionsRoot, rolloutFiles } from "./limits.js";
 import { openAIUsage, pricingFor, usageCost } from "./pricing.js";
@@ -450,17 +450,53 @@ export function codexCompactScope(home?: string): CodexCompactScope {
 export function codexCompactOverrides(home?: string, cwd = process.cwd()): string[] {
   const out: string[] = [];
   const p = codexConfigPath(home);
-  try {
-    for (const v of profileValues(readFileSync(p, "utf8"))) out.push(`${CODEX_COMPACT_KEY} = ${v.raw} in [profiles.${v.profile}] of ${tilde(p)} (${v.selected ? "the profile it selects" : `when Codex runs with --profile ${v.profile}`})`);
-  } catch { /* none */ }
-  const project = join(cwd, ".codex", "config.toml");
-  if (project !== p) {
+  let user: string | undefined;
+  try { user = readFileSync(p, "utf8"); } catch { /* none */ }
+  if (user !== undefined) {
+    for (const v of profileValues(user)) out.push(`${CODEX_COMPACT_KEY} = ${v.raw} in [profiles.${v.profile}] of ${tilde(p)} (${v.selected ? "the profile it selects" : `when Codex runs with --profile ${v.profile}`})`);
+  }
+  // Closest folder first: the one whose value Codex applies last.
+  for (const dir of [...projectConfigFolders(cwd, rootMarkers(user))].reverse()) {
+    const project = join(dir, ".codex", "config.toml");
+    if (resolve(project) === resolve(p)) continue;
     try {
       const v = topLevelValue(readFileSync(project, "utf8"));
-      if (v) out.push(`${CODEX_COMPACT_KEY} = ${v.raw} in ${tilde(project)} (this project's)`);
+      if (v) out.push(`${CODEX_COMPACT_KEY} = ${v.raw} in ${tilde(project)} (this project's, when Codex trusts it)`);
     } catch { /* none */ }
   }
   return out;
+}
+
+/** `project_root_markers` at the top of the user's config.toml (strings of a one-line array), else Codex's default, [".git"]. */
+function rootMarkers(toml: string | undefined): string[] {
+  const raw = toml === undefined ? undefined : topLevelValue(toml, "project_root_markers")?.raw.trim();
+  if (!raw || !raw.startsWith("[") || !raw.endsWith("]")) return [".git"];
+  return [...raw.matchAll(/"([^"]*)"|'([^']*)'/g)].map((m) => m[1] ?? m[2]);
+}
+
+/**
+ * The folders whose `.codex/config.toml` Codex layers over the user's, root
+ * first (codex-rs config/src/loader/mod.rs, discover_project_layers): from
+ * the project root (the closest folder holding a root marker; a `.git`
+ * folder counts only with a HEAD in it) down to `cwd`; with no root, `cwd`
+ * alone.
+ */
+export function projectConfigFolders(cwd: string, markers: string[] = [".git"]): string[] {
+  const dirs: string[] = [];
+  let dir = resolve(cwd);
+  for (;;) {
+    dirs.push(dir);
+    const isRoot = markers.some((m) => {
+      const at = join(dir, m);
+      try {
+        return m === ".git" && statSync(at).isDirectory() ? existsSync(join(at, "HEAD")) : existsSync(at);
+      } catch { return false; }
+    });
+    if (isRoot) return dirs.reverse();
+    const up = dirname(dir);
+    if (up === dir) return [resolve(cwd)];
+    dir = up;
+  }
 }
 
 const usd = (n: number): string => (Math.abs(n) >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);

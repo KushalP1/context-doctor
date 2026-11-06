@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { codexCompactOverrides, codexCompactSavedSince, codexCompactScope, profileValues, replayCodexCompact, setTopLevelInt, topLevelValue, type CodexCompactReport } from "../codexcompact.js";
+import { codexCompactOverrides, codexCompactSavedSince, codexCompactScope, profileValues, projectConfigFolders, replayCodexCompact, setTopLevelInt, topLevelValue, type CodexCompactReport } from "../codexcompact.js";
 import { applyFix, fixRecordPath, parseFixIds, planFixes, readFixRecords, renderFixPlan, renderFixShare, savedSince, undoFixes, type Fix, type FixInputs } from "../fix.js";
 import { sandboxEnv } from "./sandbox.js";
 
@@ -257,6 +257,35 @@ test("apply then undo: config.toml byte for byte, a missing one removed again, a
   assert.match(o.lines.join("\n"), /⚠ written, but it will not take effect while .*\[profiles\.fast\].* sets it too/);
   await undoFixes(undefined, deps);
   assert.equal(readFileSync(config, "utf8"), '[profiles.fast]\nmodel_auto_compact_token_limit = 90000\n');
+});
+
+test("a project's .codex/config.toml is looked for from the folder up to the repository root, as Codex layers them", () => {
+  const home = mkdtempSync(join(tmpdir(), "cd-cx-proj-home-"));
+  mkdirSync(join(home, ".codex"));
+  const outside = mkdtempSync(join(tmpdir(), "cd-cx-proj-"));
+  const root = join(outside, "repo");
+  const cwd = join(root, "pkg", "src");
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(join(root, ".git"));
+  writeFileSync(join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+  const set = (dir: string, value: number) => { mkdirSync(join(dir, ".codex"), { recursive: true }); writeFileSync(join(dir, ".codex", "config.toml"), `model_auto_compact_token_limit = ${value}\n`); };
+  set(root, 90_000);
+  set(join(root, "pkg"), 80_000);
+  set(outside, 70_000); // above the repository: not Codex's
+  assert.deepEqual(projectConfigFolders(cwd), [root, join(root, "pkg"), cwd]);
+  const named = codexCompactOverrides(home, cwd);
+  assert.equal(named.length, 2, named.join("\n"));
+  assert.ok(named[0].includes(`= 80000 in ${join(root, "pkg", ".codex", "config.toml")} (this project's, when Codex trusts it)`), named[0]);
+  assert.ok(named[1].includes(`= 90000 in ${join(root, ".codex", "config.toml")}`), named[1]);
+  // A worktree's .git is a file: the root too. A .git folder with no HEAD is not.
+  const wt = join(outside, "wt", "a");
+  mkdirSync(wt, { recursive: true });
+  writeFileSync(join(outside, "wt", ".git"), "gitdir: /elsewhere\n");
+  assert.deepEqual(projectConfigFolders(wt), [join(outside, "wt"), wt]);
+  // Other root markers, from the top of the user's config.toml.
+  writeFileSync(join(root, "pkg", ".hg"), "");
+  writeFileSync(join(home, ".codex", "config.toml"), 'project_root_markers = [".hg"]\n');
+  assert.deepEqual(codexCompactOverrides(home, cwd).map((x) => x.split(" in ")[0]), ["model_auto_compact_token_limit = 80000"]);
 });
 
 test("a Codex-only machine: fix plans and applies Codex's limit, makes no ~/.claude, and undo puts config.toml back", () => {
