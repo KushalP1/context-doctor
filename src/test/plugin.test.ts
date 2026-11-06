@@ -7,7 +7,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -65,6 +65,20 @@ test("the bundled MCP server answers from a directory with no node_modules", asy
   } finally {
     child.kill();
   }
+});
+
+test("the GitHub Action runs its own version unless `version:` names another", { skip: process.platform === "win32" && "the step is bash" }, () => {
+  const action = readFileSync(join(root, "action.yml"), "utf8");
+  assert.match(action, /version:\n\s+description: [^\n]+\n\s+required: false\n\s+default: ""/, "the default is empty: the Action's own version");
+  const fragment = /# version:start[^\n]*\n([\s\S]*?)# version:end/.exec(action)?.[1];
+  assert.ok(fragment, "action.yml marks the version step");
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  const run = (version: string, actionPath = root) =>
+    spawnSync("bash", ["-c", `${fragment}\necho "$CD_VERSION"`], { env: { ...process.env, CD_VERSION: version, GITHUB_ACTION_PATH: actionPath }, encoding: "utf8" }).stdout.trim();
+  assert.equal(run(""), pkg.version, "a pinned tag runs the release it names");
+  assert.equal(run("latest"), "latest");
+  assert.equal(run("0.40.0"), "0.40.0");
+  assert.equal(run("", mkdtempSync(join(tmpdir(), "cd-action-"))), "latest", "no package.json beside the Action: npm's newest");
 });
 
 test("MCP Registry: server.json matches package.json and the registry's limits", () => {

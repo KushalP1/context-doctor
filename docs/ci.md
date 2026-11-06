@@ -23,6 +23,8 @@ jobs:
           requests-per-day: "5000"    # optional: price the change
 ```
 
+The tag you pin is the version that runs: the tag above runs that release of context-doctor from npm, not whatever is newest. `version: latest` follows npm instead, and `version: 0.40.0` names another.
+
 It compares the memory files and their `@imports` at the PR head with the base branch, writes the table to the job summary, keeps one PR comment up to date, and fails over budget. Locally: `context-doctor ci --base origin/main`.
 
 **Conversation fixtures.**
