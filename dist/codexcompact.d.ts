@@ -92,11 +92,16 @@ export declare function topLevelValue(toml: string, key?: string): {
 /**
  * Set (or with undefined, remove) a top-level integer key, touching no other
  * byte: a line replaced keeps its line end; a new line goes after the last
- * top-level key (or at the top), with the file's own line ends. A missing
- * file (undefined) becomes the one line.
+ * top-level statement (or at the top, after a byte order mark), with the
+ * file's own line ends, never inside a multi-line string or array. A
+ * missing file (undefined) becomes the one line.
  */
 export declare function setTopLevelInt(toml: string | undefined, key: string, value: number | undefined): string;
-/** `[profiles.<name>]` tables that set `key`, and the profile the file selects by default. */
+/**
+ * Profiles that set `key`, and the profile the file selects by default:
+ * `[profiles.<name>]` tables, a `[profiles]` table's `<name>.key`, and a
+ * top-level `profiles.<name>.key`.
+ */
 export declare function profileValues(toml: string, key?: string): Array<{
     profile: string;
     raw: string;

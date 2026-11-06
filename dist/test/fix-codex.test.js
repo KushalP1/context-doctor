@@ -115,6 +115,35 @@ test("config.toml: the key set and removed byte for byte (comments, CRLF, tables
     assert.equal(setTopLevelInt("a = 1", K, 5), `a = 1\n${K} = 5`);
     assert.deepEqual(profileValues(`profile = "fast"\n${tables}[profiles."slow one"]\n${K} = 50000\n`), [{ profile: "fast", raw: "90000", selected: true }, { profile: "slow one", raw: "50000", selected: false }]);
 });
+test("config.toml: never inside a value that spans lines (an array, a multi-line string), after a byte order mark, profiles by dotted keys", () => {
+    const K = "model_auto_compact_token_limit";
+    // The line goes after the whole statement: inside the array Codex would not start; inside the string it changes the user's text and sets nothing.
+    for (const [before, value] of [
+        ['notify = [\n  "notify-send",\n  "Codex",\n]\n', 'model = "gpt-5.5"\n'],
+        ['developer_instructions = """\nBe terse.\nfoo = 1\n"""\n', ""],
+        ["instructions = '''\n[not a table]\n'''\n", ""],
+        ["pairs = [\n  [1, 2], # nested\n]\n", ""],
+        ['quote = """ends with a quote""""\n', ""],
+    ]) {
+        const toml = `${value}${before}\n[tui]\nx = 1\n`;
+        const set = setTopLevelInt(toml, K, 150_000);
+        assert.equal(set, `${value}${before}${K} = 150000\n\n[tui]\nx = 1\n`, before);
+        assert.deepEqual(topLevelValue(set), { raw: "150000", value: 150_000 });
+        assert.equal(setTopLevelInt(set, K, undefined), toml);
+    }
+    // A key or a [table] in a string is text: not the user's value, not the end of the top level.
+    const inString = `note = """\n${K} = 1\n[x]\n"""\n`;
+    assert.equal(topLevelValue(inString), undefined);
+    assert.equal(setTopLevelInt(inString, K, 5), `${inString}${K} = 5\n`);
+    // A byte order mark stays first.
+    const bom = "﻿# my config\n[tui]\n";
+    const withBom = setTopLevelInt(bom, K, 5);
+    assert.equal(withBom, `﻿${K} = 5\n# my config\n[tui]\n`);
+    assert.deepEqual(topLevelValue(withBom), { raw: "5", value: 5 });
+    assert.equal(setTopLevelInt(withBom, K, undefined), bom);
+    // A profile set by dotted keys is named too.
+    assert.deepEqual(profileValues(`profile = 'fast'\nprofiles.fast.${K} = 100000\n[profiles]\n"slow".${K} = 50_000 # mine\n`), [{ profile: "fast", raw: "100000", selected: true }, { profile: "slow", raw: "50_000", selected: false }]);
+});
 /** A report whose figures the plan tests choose. */
 function report(savedUsd, billedUsd = 10) {
     return { days: 30, rollouts: 3, requests: 400, billedUsd, unpriced: 0, actualCompactions: 1, afterCompact: 25_000, estimates: [100_000, 150_000, 200_000].map((limit) => ({ limit, savedUsd: limit === 150_000 ? savedUsd : savedUsd / 2, savedShare: (limit === 150_000 ? savedUsd : savedUsd / 2) / billedUsd, compactions: 4 })) };

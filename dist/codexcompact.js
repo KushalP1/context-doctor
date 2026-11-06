@@ -305,13 +305,76 @@ const HEADER = /^\s*\[/;
 const keyLine = (key) => new RegExp(String.raw `^\s*(?:${key}|"${key}"|'${key}')\s*=\s*([^#\r]*?)\s*(?:#[^\r]*)?\r?$`);
 /** A TOML integer as written (`150000`, `150_000`, `+150000`), or undefined. */
 const tomlInt = (raw) => (/^[+-]?\d[\d_]*$/.test(raw.trim()) ? Number(raw.trim().replace(/_/g, "")) : undefined);
+const BOM = "﻿";
+/**
+ * For each line, whether it starts a statement (a key, a [table], a comment
+ * or a blank) rather than continuing a value that spans lines: a multi-line
+ * string ("""…""", '''…''') or an array or inline table left open. A
+ * `[x]` or `key = 1` inside one of those is the value's text, not a table or
+ * a key, and a line put there would land inside the user's value.
+ */
+function statementStarts(lines) {
+    const out = [];
+    let depth = 0;
+    let ml;
+    for (const line of lines) {
+        out.push(depth === 0 && ml === undefined);
+        let i = 0;
+        while (i < line.length) {
+            const c = line[i];
+            if (ml !== undefined) {
+                if (ml === '"""' && c === "\\") {
+                    i += 2;
+                    continue;
+                }
+                if (line.startsWith(ml, i)) {
+                    // Up to two quotes more belong to the string: `""""` ends it with one.
+                    let j = i + 3;
+                    while (j < line.length && j < i + 5 && line[j] === ml[0])
+                        j++;
+                    ml = undefined;
+                    i = j;
+                }
+                else
+                    i++;
+                continue;
+            }
+            if (c === "#")
+                break;
+            if (c === '"' || c === "'") {
+                if (line.startsWith(c.repeat(3), i)) {
+                    ml = c.repeat(3);
+                    i += 3;
+                    continue;
+                }
+                let j = i + 1;
+                while (j < line.length && line[j] !== c)
+                    j += c === '"' && line[j] === "\\" ? 2 : 1;
+                i = j + 1;
+                continue;
+            }
+            if (c === "[" || c === "{")
+                depth++;
+            else if ((c === "]" || c === "}") && depth > 0)
+                depth--;
+            i++;
+        }
+    }
+    return out;
+}
+/** The lines, which of them start a statement, and the first [table] (lines.length when none). */
+function tomlLayout(toml) {
+    const lines = toml.split("\n");
+    const starts = statementStarts(lines);
+    const header = lines.findIndex((l, i) => starts[i] && HEADER.test(l));
+    return { lines, starts, header: header === -1 ? lines.length : header };
+}
 /** The top-level value of `key` (before the first [table]): as written, and as a number when it is one. */
 export function topLevelValue(toml, key = CODEX_COMPACT_KEY) {
     const re = keyLine(key);
-    for (const line of toml.split("\n")) {
-        if (HEADER.test(line))
-            return undefined;
-        const m = re.exec(line);
+    const { lines, starts, header } = tomlLayout(toml.startsWith(BOM) ? toml.slice(1) : toml);
+    for (let i = 0; i < header; i++) {
+        const m = starts[i] ? re.exec(lines[i]) : null;
         if (m)
             return { raw: m[1], value: tomlInt(m[1]) };
     }
@@ -320,50 +383,85 @@ export function topLevelValue(toml, key = CODEX_COMPACT_KEY) {
 /**
  * Set (or with undefined, remove) a top-level integer key, touching no other
  * byte: a line replaced keeps its line end; a new line goes after the last
- * top-level key (or at the top), with the file's own line ends. A missing
- * file (undefined) becomes the one line.
+ * top-level statement (or at the top, after a byte order mark), with the
+ * file's own line ends, never inside a multi-line string or array. A
+ * missing file (undefined) becomes the one line.
  */
 export function setTopLevelInt(toml, key, value) {
     if (toml === undefined || toml === "")
         return value === undefined ? "" : `${key} = ${value}\n`;
-    const lines = toml.split("\n");
+    const bom = toml.startsWith(BOM) ? BOM : "";
+    const { lines, starts, header: end } = tomlLayout(toml.slice(bom.length));
     const cr = toml.includes("\r\n") ? "\r" : "";
     const re = keyLine(key);
-    const header = lines.findIndex((l) => HEADER.test(l));
-    const end = header === -1 ? lines.length : header;
-    const at = lines.slice(0, end).findIndex((l) => re.test(l));
+    const at = lines.slice(0, end).findIndex((l, i) => starts[i] && re.test(l));
     if (at >= 0) {
         if (value === undefined)
             lines.splice(at, 1);
         else
             lines[at] = `${key} = ${value}${lines[at].endsWith("\r") ? "\r" : ""}`;
-        return lines.join("\n");
+        return bom + lines.join("\n");
     }
     if (value === undefined)
         return toml;
-    // After the last top-level key = value line, so a comment above a [table] stays with it.
+    // After the last top-level statement (all of its lines), so a comment above a [table] stays with it.
     let pos = 0;
-    for (let i = 0; i < end; i++)
-        if (/^\s*[\w"'.-]+\s*=/.test(lines[i]))
-            pos = i + 1;
+    for (let i = 0; i < end; i++) {
+        if (!starts[i] || !/^\s*[^\s#[]/.test(lines[i]))
+            continue;
+        pos = i + 1;
+        while (pos < end && !starts[pos])
+            pos++;
+    }
     lines.splice(pos, 0, `${key} = ${value}${cr}`);
-    return lines.join("\n");
+    return bom + lines.join("\n");
 }
-/** `[profiles.<name>]` tables that set `key`, and the profile the file selects by default. */
+/** A profile name as a TOML key part: bare, "quoted" or 'quoted'. */
+const PROFILE = String.raw `(?:"([^"]+)"|'([^']+)'|([\w-]+))`;
+/**
+ * Profiles that set `key`, and the profile the file selects by default:
+ * `[profiles.<name>]` tables, a `[profiles]` table's `<name>.key`, and a
+ * top-level `profiles.<name>.key`.
+ */
 export function profileValues(toml, key = CODEX_COMPACT_KEY) {
     const re = keyLine(key);
-    const selected = /^\s*profile\s*=\s*["']([^"']+)["']/m.exec(toml.split(/\n\s*\[/)[0])?.[1];
+    const { lines, starts, header } = tomlLayout(toml.startsWith(BOM) ? toml.slice(1) : toml);
+    const name = (m) => m?.slice(1, 4).find((x) => x !== undefined);
+    let selected;
+    for (let i = 0; i < header && selected === undefined; i++)
+        if (starts[i])
+            selected = /^\s*profile\s*=\s*["']([^"']+)["']/.exec(lines[i])?.[1];
+    const dotted = (prefix) => new RegExp(String.raw `^\s*${prefix}${PROFILE}\s*\.\s*(?:${key}|"${key}"|'${key}')\s*=\s*([^#\r]*?)\s*(?:#[^\r]*)?\r?$`);
+    const top = dotted(String.raw `profiles\s*\.\s*`);
+    const inProfiles = dotted("");
     const out = [];
+    // undefined: the top level; "": the [profiles] table; a name: [profiles.<name>]; null: any other table.
     let table;
-    for (const line of toml.split("\n")) {
+    lines.forEach((line, i) => {
+        if (!starts[i])
+            return;
         if (HEADER.test(line)) {
-            table = /^\s*\[\s*profiles\.(?:"([^"]+)"|'([^']+)'|([\w-]+))\s*\]/.exec(line)?.slice(1).find((x) => x !== undefined);
-            continue;
+            table = /^\s*\[\s*profiles\s*\]/.test(line) ? "" : name(new RegExp(String.raw `^\s*\[\s*profiles\s*\.\s*${PROFILE}\s*\]`).exec(line)) ?? null;
+            return;
         }
-        const m = table !== undefined ? re.exec(line) : null;
-        if (m && table !== undefined)
-            out.push({ profile: table, raw: m[1], selected: table === selected });
-    }
+        let profile, raw;
+        if (table) {
+            const m = re.exec(line);
+            if (m) {
+                profile = table;
+                raw = m[1];
+            }
+        }
+        else if (table === "" || table === undefined) {
+            const m = (table === "" ? inProfiles : top).exec(line);
+            if (m) {
+                profile = name(m);
+                raw = m[4];
+            }
+        }
+        if (profile !== undefined && raw !== undefined)
+            out.push({ profile, raw, selected: profile === selected });
+    });
     return out;
 }
 /** ~/.codex/config.toml (CODEX_HOME honoured for this user). */
