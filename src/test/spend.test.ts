@@ -301,6 +301,68 @@ test("a model with no list price: counted, its tokens shown, 'not priced' rather
   assert.match(renderSpendShare(r), /\nNot in it: 1 request \(80k tokens\) on models with no list price\.\n/);
 });
 
+test("Cursor's names for Claude are priced as the Claude version they stand for, not its family", { skip: DatabaseSync ? false : "no node:sqlite on this runtime" }, async () => {
+  const home = mkdtempSync(join(tmpdir(), "cd-spend-cursor-names-"));
+  const cache = mkdtempSync(join(tmpdir(), "cd-spend-cache-"));
+  try {
+    const user = cursorUser(home);
+    mkdirSync(join(user, "globalStorage"), { recursive: true });
+    const db = new DatabaseSync!(join(user, "globalStorage", "state.vscdb"));
+    db.exec("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)");
+    const put = (k: string, v: unknown) => db.prepare("INSERT OR REPLACE INTO cursorDiskKV VALUES (?, ?)").run(k, JSON.stringify(v));
+    const t = FIXTURE_NOW - DAY;
+    // Opus 4.1 is $15 / $75; the Opus family row, $5 / $25.
+    put("composerData:c1", { composerId: "c1", lastUpdatedAt: t, modelConfig: { modelName: "claude-4.1-opus-high-thinking" } });
+    put("bubbleId:c1:b1", { type: 2, tokenCount: { inputTokens: 1_000_000, outputTokens: 0 }, createdAt: iso(t) });
+    // An id Cursor would invent for a model the table has no row for: the family's price, said to be an estimate.
+    put("composerData:c2", { composerId: "c2", lastUpdatedAt: t, modelConfig: { modelName: "claude-9-opus" } });
+    put("bubbleId:c2:b1", { type: 2, tokenCount: { inputTokens: 1_000_000, outputTokens: 0 }, createdAt: iso(t) });
+    db.close();
+    await withSandboxHome(home, () => at(FIXTURE_NOW, cache, () => {
+      const items = cursorSpend(FIXTURE_NOW - 30 * DAY, FIXTURE_NOW);
+      const c1 = items.find((i) => i.session === "c1")!, c2 = items.find((i) => i.session === "c2")!;
+      assert.equal(c1.model, "claude-4.1-opus-high-thinking", "shown as Cursor names it");
+      close(c1.usd, 15, "Opus 4.1's own price");
+      assert.equal(c1.estimated, undefined);
+      close(c2.usd, 5, "the Opus family's price");
+      assert.equal(c2.estimated, true);
+    }));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cache, { recursive: true, force: true });
+  }
+});
+
+test("a model priced only by its family is an estimate, said so; a <synthetic> reply is no request at all", async () => {
+  const home = mkdtempSync(join(tmpdir(), "cd-spend-family-"));
+  const cache = mkdtempSync(join(tmpdir(), "cd-spend-family-cache-"));
+  try {
+    const t = FIXTURE_NOW - DAY;
+    const row = (id: string, model: string, input: number) => JSON.stringify({ type: "assistant", uuid: `u-${id}`, timestamp: iso(t), message: { id, model, role: "assistant", content: [{ type: "text", text: "ok" }], usage: { input_tokens: input, output_tokens: 0 } } });
+    const file = join(home, ".claude", "projects", "-work-app", "s1.jsonl");
+    mkdirSync(dirname(file), { recursive: true });
+    // Opus 5.5 by name ($4 in); "claude-opus-9" known only as Opus ($5 in, the family row); an interruption Claude Code wrote itself.
+    writeFileSync(file, [row("a", "claude-opus-5-5", 1_000_000), row("b", "claude-opus-9", 1_000_000), row("c", "<synthetic>", 1_000_000)].join("\n") + "\n");
+    await withSandboxHome(home, () => at(FIXTURE_NOW, cache, () => {
+      const items = claudeSpend(t - DAY, Infinity, [file]);
+      assert.deepEqual(items.map((i) => [i.model, i.usd, i.estimated ?? false]), [["claude-opus-5-5", 4, false], ["claude-opus-9", 5, true]], "<synthetic> is not a request, priced or not");
+      const r = summarizeSpend(items, 30, FIXTURE_NOW - 30 * DAY, FIXTURE_NOW);
+      assert.deepEqual(r.tools[0].estimated, { requests: 1, usd: 5, models: ["claude-opus-9"] });
+      assert.equal(r.tools[0].unpriced, 0);
+      const text = renderSpend(r);
+      assert.match(text, /^  claude-opus-9 +\$5\.00 +56%  estimate: its family's price$/m);
+      assert.match(text, /\n1 Claude Code request \(\$5\.00\) priced as its model's family, an estimate:\n  no list price of its own for claude-opus-9\.\n/);
+      assert.doesNotMatch(text, /synthetic|not priced/);
+      assert.match(renderSpendShare(r), /\nOf it, \$5\.00 is on models priced as their family, an estimate\.\n/);
+      // limits' usage fit leaves it out too.
+      assert.equal(claudeUsage(t - DAY, Infinity, [file]).length, 2);
+    }));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cache, { recursive: true, force: true });
+  }
+});
+
 test("nothing on disk: no tools, a plain sentence, and --share says so", async () => {
   const home = mkdtempSync(join(tmpdir(), "cd-spend-empty-"));
   const cache = mkdtempSync(join(tmpdir(), "cd-spend-cache-"));

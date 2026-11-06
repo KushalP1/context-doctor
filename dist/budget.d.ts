@@ -68,7 +68,8 @@ export declare function periodEnd(period: Period, now?: number): number;
  * bytes before `o` (the shared scan's anchorOf): a transcript rewritten in
  * place, same inode and no smaller, is read again in full, not from `o`.
  * `x` lists the requests on a model with no list price (index into k/d,
- * model): in `d` at $0, and said so rather than silently left out.
+ * model): in `d` at $0, and said so rather than silently left out. `y`
+ * lists those priced only by their model's family (an estimate), the same way.
  */
 export interface FileEntry {
     t: Tool;
@@ -81,6 +82,7 @@ export interface FileEntry {
     a?: string;
     r?: Array<[string, number, number, number]>;
     x?: Array<[number, string]>;
+    y?: Array<[number, string]>;
 }
 /** A ledger entry this version can use: a damaged one threw on every prompt until its transcript changed. */
 export declare function wellFormed(e: FileEntry | undefined): e is FileEntry;
@@ -106,6 +108,12 @@ export interface PeriodSpend {
     /** Requests on a model with no list price: counted here, not in `usd`. */
     unpriced?: {
         requests: number;
+        models: string[];
+    };
+    /** Requests on a model priced only by its family: in `usd`, an estimate. */
+    estimated?: {
+        requests: number;
+        usd: number;
         models: string[];
     };
 }

@@ -34,7 +34,14 @@
       },
       "unpriced": 0,
       "unpricedTokens": 0,
-      "unpricedModels": []
+      "unpricedModels": [],
+      "estimated": {
+        "requests": 3,
+        "usd": 0.05532,
+        "models": [
+          "gemini-3-pro"
+        ]
+      }
     },
     {
       "tool": "codex",

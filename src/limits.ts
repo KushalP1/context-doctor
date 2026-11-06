@@ -34,7 +34,7 @@ import { statePath } from "./ledger.js";
 import { forEachLine, listSessions, outputSettler, replyCounter, isClaudeSession } from "./session.js";
 import { subagentDir } from "./subagents.js";
 import { pick, rowsOf, slimUsage, type Extractor } from "./scan.js";
-import { CACHE_WRITE_5M, openAIUsage, pricingFor, usageCost, type ModelPricing, type RecordedUsage } from "./pricing.js";
+import { CACHE_WRITE_5M, isUnbilledModel, openAIUsage, pricingFor, usageCost, type ModelPricing, type RecordedUsage } from "./pricing.js";
 import { realModel } from "./tokens.js";
 
 const MIN = 60_000;
@@ -390,8 +390,9 @@ export interface ClaudeRequest extends UsagePoint {
  * The requests of one Claude Code transcript between `since` and `until`,
  * each reply once, its output settled on its last row. `runRows` is shared
  * by every file of one report, so a fork's copy of its parent's replies is
- * counted once, in the file met first (replyCounter). Throws when the
- * transcript cannot be read.
+ * counted once, in the file met first (replyCounter). Replies on
+ * `<synthetic>` (isUnbilledModel) are left out. Throws when the transcript
+ * cannot be read.
  */
 export function claudeFileUsage(file: string, since: number, until = Infinity, runRows?: Set<string>): ClaudeRequest[] {
   const out: ClaudeRequest[] = [];
@@ -413,6 +414,8 @@ export function claudeFileUsage(file: string, since: number, until = Infinity, r
     }
     if (seen !== "new") return;
     settle(e, true);
+    // A reply Claude Code made itself (an error, an interruption) never reached the API: no request, priced or not.
+    if (isUnbilledModel(m.model)) return;
     const ts = Date.parse(String(e.timestamp ?? ""));
     if (!Number.isFinite(ts) || ts < since || ts > until) return;
     const u = m.usage as RecordedUsage;

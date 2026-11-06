@@ -13,7 +13,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renam
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { budgetStatePath, levelOf, parseBudget, periodEnd, periodSpend, periodStart } from "../budget.js";
+import { budgetStatePath, levelOf, parseBudget, periodEnd, periodSpend, periodStart, renderBudgetStatus } from "../budget.js";
 import { claudeSpend } from "../spend.js";
 import { renderStatusLine } from "../statusline.js";
 import { clearScanMemo } from "../scan.js";
@@ -336,6 +336,27 @@ test("a threshold the ledger records as said still reaches the user when the res
     rmSync(home, { recursive: true, force: true });
     rmSync(cache, { recursive: true, force: true });
   }
+});
+
+test("a model priced only by its family is counted and named as an estimate; a <synthetic> reply is no request, first read or appended", async () => {
+  await inLedgerSandbox((home, transcript) => {
+    const start = periodStart("day", NOW);
+    // 100k uncached in: Sonnet 5 $0.20; claude-opus-9, known only as Opus ($5 / 1M), $0.50; <synthetic>, never billed.
+    writeFileSync(transcript, [...reply(NOW - 3 * HOUR), ...reply(NOW - 2 * HOUR, { model: "claude-opus-9" }), ...reply(NOW - 2 * HOUR, { model: "<synthetic>" })].join("\n") + "\n");
+    const first = periodSpend("day", NOW, home);
+    assert.ok(Math.abs(first.usd - 0.7) < 1e-9, `${first.usd}`);
+    assert.equal(first.unpriced, undefined, "<synthetic> is not an unpriced request");
+    assert.deepEqual(first.estimated && { ...first.estimated, usd: Math.round(first.estimated.usd * 100) / 100 }, { requests: 1, usd: 0.5, models: ["claude-opus-9"] });
+    // The same through an append.
+    appendFileSync(transcript, [...reply(NOW - HOUR, { model: "claude-opus-9" }), ...reply(NOW - HOUR, { model: "<synthetic>" })].join("\n") + "\n");
+    const after = periodSpend("day", NOW, home);
+    clearScanMemo();
+    const full = claudeSpend(start, NOW + HOUR).reduce((s, i) => s + i.usd, 0);
+    assert.ok(Math.abs(after.usd - 1.2) < 1e-9 && Math.abs(after.usd - full) < 1e-9, `${after.usd} vs ${full}`);
+    assert.equal(after.unpriced, undefined);
+    assert.equal(after.estimated?.requests, 2);
+    assert.match(renderBudgetStatus({ usd: 10, period: "day", block: false, at: 0 }, after, true), /\nAn estimate: \$1\.00 of it is on claude-opus-9, with no list price of its own, priced as its model's family\.\n/);
+  });
 });
 
 test("requests on a model with no list price: the hook says once that the budget does not count them, and `budget` says it each time", () => {

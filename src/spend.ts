@@ -37,8 +37,8 @@ import { homedir } from "node:os";
 import { existsSync, statSync } from "node:fs";
 import { claudeFileUsage, claudeUsageFiles, codexEventKey, codexSessionsRoot, rolloutFiles } from "./limits.js";
 import { listGeminiChats, readGeminiMessages } from "./gemini.js";
-import { cursorUsage, SqliteUnavailableError } from "./cursor.js";
-import { openAIUsage, pricingFor, usageCost, type RecordedUsage } from "./pricing.js";
+import { cursorClaudeId, cursorUsage, SqliteUnavailableError } from "./cursor.js";
+import { hasKnownPrice, isUnbilledModel, openAIUsage, pricingFor, usageCost, type RecordedUsage } from "./pricing.js";
 import { pick, rowsOf, type Extractor } from "./scan.js";
 import { formatTokens } from "./tokens.js";
 import { withInvocation } from "./invocation.js";
@@ -68,6 +68,8 @@ export interface SpendItem {
   readUsd: number;
   outputUsd: number;
   priced: boolean;
+  /** Priced by its family's row, not one of its own (a new release, an id the table does not list): an estimate. */
+  estimated?: boolean;
   /** Claude Code: run by a subagent. */
   subagent?: boolean;
   /** Claude Code: the reply's row uuid, which a fork's copy shares. Codex: the event's codexEventKey, which a forked rollout's copy shares. */
@@ -86,11 +88,12 @@ function claudeProject(top: string): string {
   return dir.replace(/^-Users-[^-]+-/, "").replace(/^-/, "") || dir;
 }
 
-function priced(base: Omit<SpendItem, "usd" | "inputUsd" | "writeUsd" | "readUsd" | "outputUsd" | "priced">, u: RecordedUsage): SpendItem {
-  const price = pricingFor(base.model);
+/** `priceAs`: the id to price it by, when the model's own name is not one the table knows (Cursor's names for Claude). */
+function priced(base: Omit<SpendItem, "usd" | "inputUsd" | "writeUsd" | "readUsd" | "outputUsd" | "priced">, u: RecordedUsage, priceAs = base.model): SpendItem {
+  const price = pricingFor(priceAs);
   if (!price) return { ...base, usd: 0, inputUsd: 0, writeUsd: 0, readUsd: 0, outputUsd: 0, priced: false };
   const c = usageCost(u, price);
-  return { ...base, usd: c.totalUsd, inputUsd: c.inputUsd, writeUsd: c.writeUsd, readUsd: c.readUsd, outputUsd: c.outputUsd, priced: true };
+  return { ...base, usd: c.totalUsd, inputUsd: c.inputUsd, writeUsd: c.writeUsd, readUsd: c.readUsd, outputUsd: c.outputUsd, priced: true, ...(hasKnownPrice(priceAs) ? {} : { estimated: true }) };
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +127,7 @@ export function claudeSpend(since: number, until = Infinity, tops?: string[], on
         tool: "claude", ts: r.ts, project, session, input: r.input, read: r.read, write: r.write, output: r.output,
         usd: r.usd, inputUsd, readUsd, writeUsd: Math.max(0, r.promptUsd - inputUsd - readUsd), outputUsd: Math.max(0, r.usd - r.promptUsd), priced: Boolean(price),
       };
+      if (price && !hasKnownPrice(r.model)) item.estimated = true;
       if (r.model) item.model = r.model;
       if (f.subagent || r.sidechain) item.subagent = true;
       if (r.uuid) item.key = r.uuid;
@@ -179,7 +183,7 @@ export function codexFileSpend(file: string, since: number, until = Infinity): S
     if (num(r.u?.input_tokens) === 0 || (runTotal !== 0 && runTotal === total)) continue;
     total = runTotal;
     const ts = Date.parse(r.ts);
-    if (!Number.isFinite(ts) || ts < since || ts > until) continue;
+    if (!Number.isFinite(ts) || ts < since || ts > until || isUnbilledModel(model)) continue;
     const u = openAIUsage(r.u);
     out.push(priced({ tool: "codex", ts, project: cwd ? projectName(cwd) : "codex", session: basename(file, ".jsonl"), ...(model ? { model } : {}), input: num(u.input_tokens), read: num(u.cache_read_input_tokens), write: num(u.cache_creation_input_tokens), output: num(u.output_tokens), ...(r.key ? { key: r.key } : {}) }, u));
   }
@@ -257,7 +261,7 @@ export function geminiFileSpend(file: string, since: number, until = Infinity): 
     model = r.model ?? model;
     // No time anywhere before it: the chat's last write.
     const ts = Date.parse(r.ts) || (mtime ??= statSync(file).mtimeMs);
-    if (ts < since || ts > until) continue;
+    if (ts < since || ts > until || isUnbilledModel(model)) continue;
     const u = geminiUsage(r.t);
     if (num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.output_tokens) === 0) continue;
     out.push(priced({ tool: "gemini", ts, project: /^[0-9a-f]{40,}$/.test(project) ? project.slice(0, 8) : project, session: basename(file).replace(/\.jsonl?$/, ""), ...(model ? { model } : {}), input: num(u.input_tokens), read: num(u.cache_read_input_tokens), write: 0, output: num(u.output_tokens) }, u));
@@ -284,9 +288,11 @@ export function geminiSpend(since: number, until = Infinity, home = homedir()): 
 export function cursorSpend(since: number, until = Infinity): SpendItem[] {
   const out: SpendItem[] = [];
   for (const r of cursorUsage(since)) {
-    if (r.ts > until) continue;
-    // No cache split: every input token at the uncached rate.
-    out.push(priced({ tool: "cursor", ts: r.ts, project: r.folder ? projectName(r.folder) : "(no folder)", session: r.composerId, ...(r.model ? { model: r.model } : {}), input: r.input, read: 0, write: 0, output: r.output }, { input_tokens: r.input, output_tokens: r.output }));
+    if (r.ts > until || isUnbilledModel(r.model)) continue;
+    // No cache split: every input token at the uncached rate. Cursor's own
+    // names for Claude ("claude-4.6-opus-high-thinking") are priced as the
+    // Claude id they stand for, shown as Cursor wrote them.
+    out.push(priced({ tool: "cursor", ts: r.ts, project: r.folder ? projectName(r.folder) : "(no folder)", session: r.composerId, ...(r.model ? { model: r.model } : {}), input: r.input, read: 0, write: 0, output: r.output }, { input_tokens: r.input, output_tokens: r.output }, cursorClaudeId(r.model) ?? r.model));
   }
   return out;
 }
@@ -309,6 +315,8 @@ export interface ToolSpend {
   unpriced: number;
   unpricedTokens: number;
   unpricedModels: string[];
+  /** Requests on a model the table prices only by its family (SpendItem.estimated): in `usd`, an estimate. */
+  estimated?: { requests: number; usd: number; models: string[] };
 }
 
 export interface SpendRow { usd: number; requests: number; byTool: Partial<Record<Tool, number>> }
@@ -362,6 +370,12 @@ export function summarizeSpend(items: SpendItem[], days: number, since: number, 
       t.unpricedTokens += it.input + it.read + it.write + it.output;
       const m = it.model ?? "unknown";
       if (!t.unpricedModels.includes(m)) t.unpricedModels.push(m);
+    } else if (it.estimated) {
+      const e = (t.estimated ??= { requests: 0, usd: 0, models: [] });
+      e.requests++;
+      e.usd += it.usd;
+      const m = it.model ?? "unknown";
+      if (!e.models.includes(m)) e.models.push(m);
     }
     add(projects, it.project, it);
     add(models, it.model ?? "unknown", it);
@@ -471,7 +485,9 @@ export function renderSpend(r: SpendReport, top = 8): string {
   list("By project", r.projects.slice(0, top).map((p) => ({ name: p.project, usd: p.usd, tail: toolsOf(p.byTool) })), r.projects.length - top);
   // A model with no list price reads "not priced", not a $0.00 that looks free.
   const unpricedModels = new Set(r.tools.flatMap((t) => t.unpricedModels));
-  list("By model", r.models.slice(0, top).map((m) => ({ name: m.model, usd: m.usd, ...(m.usd === 0 && unpricedModels.has(m.model) ? { tail: `not priced, ${m.requests.toLocaleString("en-US")} ${m.requests === 1 ? "request" : "requests"}` } : {}) })), r.models.length - top);
+  // One priced by its family's row reads as the estimate it is.
+  const estimatedModels = new Set(r.tools.flatMap((t) => t.estimated?.models ?? []));
+  list("By model", r.models.slice(0, top).map((m) => ({ name: m.model, usd: m.usd, ...(m.usd === 0 && unpricedModels.has(m.model) ? { tail: `not priced, ${m.requests.toLocaleString("en-US")} ${m.requests === 1 ? "request" : "requests"}` } : estimatedModels.has(m.model) ? { tail: "estimate: its family's price" } : {}) })), r.models.length - top);
 
   // The last two weeks of the window, a bar each, scaled to the busiest.
   const recent = r.daily.slice(-14);
@@ -498,6 +514,12 @@ export function renderSpend(r: SpendReport, top = 8): string {
     notes.push(`${t.unpriced.toLocaleString("en-US")} ${t.name} ${t.tool === "cursor" ? "replies" : "requests"} (${formatTokens(t.unpricedTokens)} tokens) not priced:`);
     notes.push(`  ${auto ? "on Auto, which Cursor bills from your plan with no list price" : `no list price for ${t.unpricedModels.slice(0, 3).join(", ")}`}.`);
   }
+  for (const t of r.tools) {
+    if (!t.estimated) continue;
+    const n = t.estimated.requests;
+    notes.push(`${n.toLocaleString("en-US")} ${t.name} ${t.tool === "cursor" ? (n === 1 ? "reply" : "replies") : n === 1 ? "request" : "requests"} (${usd(t.estimated.usd)}) priced as ${n === 1 ? "its" : "their"} model's family, an estimate:`);
+    notes.push(`  no list price of its own for ${t.estimated.models.slice(0, 3).join(", ")}${t.estimated.models.length > 3 ? " and others" : ""}.`);
+  }
   if (r.tools.some((t) => t.estimate)) notes.push("Cursor records no cache split: its input is priced uncached, an upper bound.");
   for (const s of r.skipped) notes.push(`${TOOL_NAME[s.tool]} not read: ${s.reason}.`);
   if (notes.length) lines.push("", ...notes);
@@ -519,6 +541,8 @@ export function renderSpendShare(r: SpendReport): string {
   // Requests on a model with no list price are not in the total: said, so the total is not read as all of it.
   const unpriced = r.tools.reduce((n, t) => n + t.unpriced, 0);
   if (unpriced) lines.push(`Not in it: ${unpriced.toLocaleString("en-US")} ${unpriced === 1 ? "request" : "requests"} (${formatTokens(r.tools.reduce((n, t) => n + t.unpricedTokens, 0))} tokens) on models with no list price.`);
+  const estimated = r.tools.reduce((n, t) => n + (t.estimated?.usd ?? 0), 0);
+  if (r.tools.some((t) => t.estimated)) lines.push(`Of it, ${usd(estimated)} is on models priced as their family, an estimate.`);
   const parts: Array<[string, number]> = [["cache writes", r.parts.writeUsd], ["cache reads", r.parts.readUsd], ["output", r.parts.outputUsd], ["uncached input", r.parts.inputUsd]];
   const [bigPart, bigUsd] = parts.sort((a, b) => b[1] - a[1])[0];
   const busiest = [...r.daily].sort((a, b) => b.usd - a.usd)[0];

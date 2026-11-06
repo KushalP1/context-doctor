@@ -53,6 +53,8 @@ export interface SpendItem {
     readUsd: number;
     outputUsd: number;
     priced: boolean;
+    /** Priced by its family's row, not one of its own (a new release, an id the table does not list): an estimate. */
+    estimated?: boolean;
     /** Claude Code: run by a subagent. */
     subagent?: boolean;
     /** Claude Code: the reply's row uuid, which a fork's copy shares. Codex: the event's codexEventKey, which a forked rollout's copy shares. */
@@ -108,6 +110,12 @@ export interface ToolSpend {
     unpriced: number;
     unpricedTokens: number;
     unpricedModels: string[];
+    /** Requests on a model the table prices only by its family (SpendItem.estimated): in `usd`, an estimate. */
+    estimated?: {
+        requests: number;
+        usd: number;
+        models: string[];
+    };
 }
 export interface SpendRow {
     usd: number;

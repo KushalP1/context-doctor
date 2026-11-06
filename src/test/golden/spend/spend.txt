@@ -15,7 +15,7 @@ By model
   claude-opus-5-5                       $80.65   59%
   claude-fable-5-1                      $39.15   29%
   claude-sonnet-5                       $17.00   12%
-  gemini-3-pro                           $0.06    0%
+  gemini-3-pro                           $0.06    0%  estimate: its family's price
   gpt-5.5                                $0.01    0%
 
 By day (last 14; all in --json)
@@ -44,6 +44,9 @@ Where it goes
      $26.56  work-app                   claude-sonnet-5    Sep 19  Claude Code
      $11.84  work-app                   claude-opus-5-5    Sep 25  Claude Code
      $10.97  work-app                   claude-opus-5-5    Sep 30  Claude Code
+
+3 Gemini CLI requests ($0.06) priced as their model's family, an estimate:
+  no list price of its own for gemini-3-pro.
 
 List prices, as an API key bills; on a subscription the same tokens come out
 of your plan's limits instead. Share yours: context-doctor spend --share

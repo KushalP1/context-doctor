@@ -121,8 +121,9 @@ export interface ClaudeRequest extends UsagePoint {
  * The requests of one Claude Code transcript between `since` and `until`,
  * each reply once, its output settled on its last row. `runRows` is shared
  * by every file of one report, so a fork's copy of its parent's replies is
- * counted once, in the file met first (replyCounter). Throws when the
- * transcript cannot be read.
+ * counted once, in the file met first (replyCounter). Replies on
+ * `<synthetic>` (isUnbilledModel) are left out. Throws when the transcript
+ * cannot be read.
  */
 export declare function claudeFileUsage(file: string, since: number, until?: number, runRows?: Set<string>): ClaudeRequest[];
 /**

@@ -32,7 +32,7 @@ import { fallbackStateDir, statePath } from "./ledger.js";
 import { claudeCodePresent, claudeDir } from "./claudedir.js";
 import { claudeFileUsage, claudeUsageFiles, codexSessionsRoot, rolloutFiles, USAGE_ROWS } from "./limits.js";
 import { codexFileSpend, codexFiles, geminiFileSpend, geminiFiles, TOOL_NAME, type Tool } from "./spend.js";
-import { pricingFor, usageCost, type RecordedUsage } from "./pricing.js";
+import { hasKnownPrice, isUnbilledModel, pricingFor, usageCost, type RecordedUsage } from "./pricing.js";
 import { anchorOf, rowsOf } from "./scan.js";
 import { realModel } from "./tokens.js";
 
@@ -150,9 +150,10 @@ export function periodEnd(period: Period, now = Date.now()): number {
  * bytes before `o` (the shared scan's anchorOf): a transcript rewritten in
  * place, same inode and no smaller, is read again in full, not from `o`.
  * `x` lists the requests on a model with no list price (index into k/d,
- * model): in `d` at $0, and said so rather than silently left out.
+ * model): in `d` at $0, and said so rather than silently left out. `y`
+ * lists those priced only by their model's family (an estimate), the same way.
  */
-export interface FileEntry { t: Tool; s: number; m: number; i: number; k: string[]; d: number[]; o?: number; a?: string; r?: Array<[string, number, number, number]>; x?: Array<[number, string]> }
+export interface FileEntry { t: Tool; s: number; m: number; i: number; k: string[]; d: number[]; o?: number; a?: string; r?: Array<[string, number, number, number]>; x?: Array<[number, string]>; y?: Array<[number, string]> }
 
 /** Replies remembered per transcript, to tell a later row of one from a new reply. */
 const RECENT_REPLIES = 64;
@@ -262,20 +263,22 @@ function lineStart(fd: number, size: number): number {
  * shared scan, so only what it has not cached), as the ledger keeps them.
  */
 function readFile(tool: Tool, file: string, since: number, size: number): Omit<FileEntry, "t" | "s" | "m" | "i"> {
-  const k: string[] = [], d: number[] = [], x: NonNullable<FileEntry["x"]> = [];
+  const k: string[] = [], d: number[] = [], x: NonNullable<FileEntry["x"]> = [], y: NonNullable<FileEntry["y"]> = [];
   if (tool !== "claude") {
     // A Codex request's key (a forked rollout repeats its parent's) kept short: 12 hex digits of its hash.
     for (const r of tool === "codex" ? codexFileSpend(file, since) : geminiFileSpend(file, since)) {
       if (!r.priced) x.push([k.length, r.model ?? "unknown"]);
+      else if (r.estimated) y.push([k.length, r.model ?? "unknown"]);
       k.push(r.key ? createHash("sha1").update(r.key).digest("hex").slice(0, 12) : "");
       d.push(r.usd);
     }
-    return { k, d, ...(x.length ? { x } : {}) };
+    return { k, d, ...(x.length ? { x } : {}), ...(y.length ? { y } : {}) };
   }
   const reqs = claudeFileUsage(file, since);
   const at = new Map<string, number>();
   reqs.forEach((q, i) => {
     if (!pricingFor(q.model)) x.push([i, q.model ?? "unknown"]);
+    else if (!hasKnownPrice(q.model)) y.push([i, q.model ?? "unknown"]);
     k.push(keyOf(q.uuid));
     d.push(q.usd);
     if (q.id) at.set(q.id, i);
@@ -299,7 +302,7 @@ function readFile(tool: Tool, file: string, since: number, size: number): Omit<F
   const fd = openSync(file, "r");
   try {
     const o = lineStart(fd, size);
-    return { k, d, o, a: anchorOf(fd, o), r: r.slice(-RECENT_REPLIES), ...(x.length ? { x } : {}) };
+    return { k, d, o, a: anchorOf(fd, o), r: r.slice(-RECENT_REPLIES), ...(x.length ? { x } : {}), ...(y.length ? { y } : {}) };
   } finally {
     closeSync(fd);
   }
@@ -343,9 +346,11 @@ function readAppended(e: FileEntry, file: string, since: number): boolean {
       const tokens = [u.input_tokens, u.cache_read_input_tokens, u.cache_creation_input_tokens].reduce((t: number, v) => t + (Number(v) > 0 ? Number(v) : 0), 0);
       const price = pricingFor(realModel(m.model));
       let index = -1;
-      if (Number.isFinite(ts) && ts >= since && tokens > 0) {
+      // A reply on <synthetic> was made by Claude Code itself, never billed: not a request at all.
+      if (Number.isFinite(ts) && ts >= since && tokens > 0 && !isUnbilledModel(m.model)) {
         index = e.k.length;
         if (!price) (e.x ??= []).push([index, realModel(m.model) ?? "unknown"]);
+        else if (!hasKnownPrice(realModel(m.model))) (e.y ??= []).push([index, realModel(m.model) ?? "unknown"]);
         e.k.push(keyOf(typeof row.uuid === "string" ? row.uuid : undefined));
         e.d.push(price ? usageCost(u, price).totalUsd : 0);
       }
@@ -364,7 +369,7 @@ function readAppended(e: FileEntry, file: string, since: number): boolean {
 export function wellFormed(e: FileEntry | undefined): e is FileEntry {
   return Boolean(e) && typeof e === "object" && Array.isArray(e!.k) && Array.isArray(e!.d) && e!.k.length === e!.d.length &&
     e!.k.every((x) => typeof x === "string") && e!.d.every((x) => typeof x === "number" && Number.isFinite(x)) &&
-    (e!.a === undefined || typeof e!.a === "string") && (e!.x === undefined || (Array.isArray(e!.x) && e!.x.every((y) => Array.isArray(y) && typeof y[0] === "number"))) && (e!.r === undefined || (Array.isArray(e!.r) && e!.r.every((x) => Array.isArray(x) && x.length === 4)));
+    (e!.a === undefined || typeof e!.a === "string") && (e!.x === undefined || (Array.isArray(e!.x) && e!.x.every((y) => Array.isArray(y) && typeof y[0] === "number"))) && (e!.y === undefined || (Array.isArray(e!.y) && e!.y.every((y) => Array.isArray(y) && typeof y[0] === "number"))) && (e!.r === undefined || (Array.isArray(e!.r) && e!.r.every((x) => Array.isArray(x) && x.length === 4)));
 }
 
 /** Above this, a transcript met for the first time goes through the shared scan even when `direct`: one buffer of all of it is too much. */
@@ -410,6 +415,8 @@ export interface PeriodSpend {
   start: number; end: number; usd: number; byTool: Partial<Record<Tool, number>>;
   /** Requests on a model with no list price: counted here, not in `usd`. */
   unpriced?: { requests: number; models: string[] };
+  /** Requests on a model priced only by its family: in `usd`, an estimate. */
+  estimated?: { requests: number; usd: number; models: string[] };
 }
 
 /**
@@ -444,14 +451,16 @@ export function periodSpend(period: Period, now = Date.now(), home = homedir(), 
   const byTool: Partial<Record<Tool, number>> = {};
   let unpriced = 0;
   const models = new Set<string>();
+  const estimated = { requests: 0, usd: 0, models: new Set<string>() };
   for (const file of Object.keys(kept).sort()) {
     const e = kept[file];
-    const x = new Map(e.x ?? []);
+    const x = new Map(e.x ?? []), y = new Map(e.y ?? []);
     e.k.forEach((key, i) => {
       if (key) { if (seen.has(key)) return; seen.add(key); }
       usd += e.d[i];
       byTool[e.t] = (byTool[e.t] ?? 0) + e.d[i];
       if (x.has(i)) { unpriced++; models.add(x.get(i)!); }
+      else if (y.has(i)) { estimated.requests++; estimated.usd += e.d[i]; estimated.models.add(y.get(i)!); }
     });
   }
   const level = warnAt ? warnAt(usd, st.warned) : 0;
@@ -461,7 +470,7 @@ export function periodSpend(period: Period, now = Date.now(), home = homedir(), 
   const unpricedNew = Boolean(warnAt) && unpriced > 0 && !st.unpricedSaid;
   if (unpricedNew) { st.unpricedSaid = true; changed = true; }
   if (changed) saveState({ ...st, files: kept, usd, byTool });
-  return { start, end: periodEnd(period, now), usd, byTool, ...(unpriced ? { unpriced: { requests: unpriced, models: [...models] } } : {}), ...(warn ? { warn } : {}), ...(unpricedNew ? { unpricedNew } : {}) };
+  return { start, end: periodEnd(period, now), usd, byTool, ...(unpriced ? { unpriced: { requests: unpriced, models: [...models] } } : {}), ...(estimated.requests ? { estimated: { requests: estimated.requests, usd: estimated.usd, models: [...estimated.models] } } : {}), ...(warn ? { warn } : {}), ...(unpricedNew ? { unpricedNew } : {}) };
 }
 
 // ---------------------------------------------------------------------------
@@ -556,6 +565,10 @@ export function renderBudgetStatus(b: Budget | undefined, s: PeriodSpend | undef
     `${span(b.period) === "today" ? "Today" : "This week"}: ${money(s.usd)} so far, ${Math.round((s.usd / b.usd) * 100)}%${byToolText(s.byTool)}. ${resets(b.period)}`,
   ];
   if (s.unpriced) lines.push(`Not counted: ${unpricedText(s.unpriced)}`);
+  if (s.estimated) {
+    const one = s.estimated.models.length === 1;
+    lines.push(`An estimate: ${money(s.estimated.usd)} of it is on ${s.estimated.models.slice(0, 2).join(", ")}${s.estimated.models.length > 2 ? " and others" : ""}, with no list price of ${one ? "its" : "their"} own, priced as ${one ? "its" : "their"} model's family.`);
+  }
   lines.push(hookInstalled
     ? `The every-prompt hook says so at ${THRESHOLDS.join("%, ").replace(/, (\d+)$/, " and $1")}%${b.block ? ", and holds prompts over it" : ""}. Cursor is not counted (context-doctor spend shows it).`
     : "No every-prompt hook is installed, so nothing will say so: run context-doctor install.");
