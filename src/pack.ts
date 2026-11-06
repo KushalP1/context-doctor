@@ -20,6 +20,8 @@ import { homedir } from "node:os";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { estimateTokens, formatTokens } from "./tokens.js";
 import { EXTRACT_BUDGET_MS, EXTRACTABLE, extractText, extractTextAsync, monotonicNow } from "./extract.js";
+import { claudeDir } from "./claudedir.js";
+import { codexDir } from "./codexdir.js";
 
 export interface PackSource {
   /** Name shown in chunk ids, e.g. a path relative to where the user is. */
@@ -455,7 +457,19 @@ function within(root: string, inner: string): boolean {
  * token verbatim. They are skipped even when named outright or tracked by
  * git; only the CLI's --include-secrets packs them.
  */
-const SECRET_NAMES = new Set([".npmrc", ".pypirc", ".netrc", "_netrc", ".git-credentials", ".pgpass", ".htpasswd"]);
+const SECRET_NAMES = new Set([
+  ".npmrc", ".pypirc", ".netrc", "_netrc", ".git-credentials", ".pgpass", ".htpasswd", ".vault-token",
+  // The agents' own sign-ins, which an injected instruction in a packed doc
+  // could otherwise ask for by name: Claude Code's OAuth tokens (Linux,
+  // Windows), Gemini CLI's, Terraform's.
+  ".credentials.json", "oauth_creds.json", "credentials.tfrc.json",
+]);
+/** A file name that holds credentials inside one folder only: Codex's sign-in, Cargo's and RubyGems' tokens. */
+const SECRET_IN_DIR: Array<[string, string[]]> = [
+  [".codex", ["auth.json"]],
+  [".cargo", ["credentials", "credentials.toml"]],
+  [".gem", ["credentials"]],
+];
 const SECRET_EXT = new Set([".pem", ".key", ".p12", ".pfx", ".keystore", ".jks"]);
 
 /** Why `path` looks like a secrets file, or undefined when it does not. */
@@ -470,6 +484,8 @@ export function secretFileReason(path: string): string | undefined {
   if (SECRET_EXT.has(extname(lower))) return `a key or certificate store (${extname(lower)})`;
   const parts = path.split(/[\\/]+/);
   if (lower === "credentials" && parts[parts.length - 2] === ".aws") return "AWS credentials";
+  const parent = (parts[parts.length - 2] ?? "").toLowerCase();
+  if (SECRET_IN_DIR.some(([dir, files]) => dir === parent && files.includes(lower))) return `a credentials file (${parent}/${name})`;
   return undefined;
 }
 
@@ -480,7 +496,9 @@ export function secretFileReason(path: string): string | undefined {
 function sensitiveDirs(): string[] {
   const home = homedir();
   const dirs = [
-    ...[".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", join(".config", "gcloud"), join("Library", "Keychains"), ".password-store"].map((d) => join(home, d)),
+    ...[".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", join(".config", "gcloud"), join(".config", "gh"), join(".config", "github-copilot"), join("Library", "Keychains"), ".password-store"].map((d) => join(home, d)),
+    // Where CLAUDE_CONFIG_DIR and CODEX_HOME put the agents' sign-ins.
+    join(claudeDir(), ".credentials.json"), join(codexDir(), "auth.json"),
     "/etc/shadow", "/etc/gshadow", "/etc/sudoers", "/etc/master.passwd", "/etc/ssh",
   ];
   // Compared against real paths: /etc is /private/etc on macOS, and a home
@@ -639,7 +657,8 @@ export function readSources(
       return;
     }
     if (!includeSecrets) {
-      const why = secretFileReason(p);
+      // The link's name and its target's: notes.md pointing at an .env is an .env.
+      const why = secretFileReason(p) ?? secretFileReason(realOf(p));
       if (why) {
         skipped.push(`${p}: ${why}, likely holding secrets; not packed${secretsHint}`);
         return;

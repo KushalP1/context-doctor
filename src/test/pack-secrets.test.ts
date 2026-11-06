@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,6 +74,40 @@ test("credential folders under home are refused unless secrets are allowed", asy
     assert.equal(r.skipped.filter((s) => /refused, .* holds credentials/.test(s)).length, 2, r.skipped.join("\n"));
     const allowed = readSources([join(home, ".ssh", "config")], { cwd: home, includeSecrets: true });
     assert.equal(allowed.sources.length, 1);
+  });
+});
+
+test("the agents' own sign-ins are refused, named outright, behind a link, or where CODEX_HOME puts them", async () => {
+  for (const f of ["h/.claude/.credentials.json", "h/.codex/auth.json", "h/.gemini/oauth_creds.json", "h/.cargo/credentials.toml", "h/.gem/credentials", ".vault-token"]) {
+    assert.ok(secretFileReason(f), f);
+  }
+  for (const f of ["src/auth.json", "docs/credentials", "oauth.md"]) assert.equal(secretFileReason(f), undefined, f);
+
+  const home = mkdtempSync(join(tmpdir(), "cd-pack-agents-"));
+  const codex = join(home, "codex-home");
+  mkdirSync(codex);
+  mkdirSync(join(home, ".config", "gh"), { recursive: true });
+  writeFileSync(join(codex, "auth.json"), '{"OPENAI_API_KEY":"sk-proj-x"}\n');
+  writeFileSync(join(home, ".config", "gh", "hosts.yml"), "github.com:\n  oauth_token: gho_x\n");
+  const repo = join(home, "repo");
+  mkdirSync(repo);
+  writeFileSync(join(repo, ".env"), "KEY=sk-live-x\n");
+  let linked = false;
+  try {
+    symlinkSync(join(repo, ".env"), join(repo, "notes.md"));
+    linked = true;
+  } catch { /* no symlinks without privileges on Windows */ }
+  await withSandboxHome(home, () => {
+    process.env.CODEX_HOME = codex;
+    try {
+      const r = readSources([join(codex, "auth.json"), join(home, ".config", "gh", "hosts.yml"), ...(linked ? [join(repo, "notes.md")] : [])], home);
+      assert.equal(r.sources.length, 0, r.sources.map((s) => s.text).join("\n"));
+      assert.ok(r.skipped.some((s) => /auth\.json: refused/.test(s)), r.skipped.join("\n"));
+      assert.ok(r.skipped.some((s) => /hosts\.yml: refused/.test(s)), r.skipped.join("\n"));
+      if (linked) assert.ok(r.skipped.some((s) => /notes\.md: an \.env file/.test(s)), r.skipped.join("\n"));
+    } finally {
+      delete process.env.CODEX_HOME;
+    }
   });
 });
 
