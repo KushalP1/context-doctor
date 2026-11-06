@@ -80,6 +80,18 @@ const manifest = {
       description: "Profile this conversation's context and apply the top fix. One click, no typing.",
       text: "Run profile_context on our conversation so far with a sketch, report the total and top findings, then apply the top fix.",
     },
+    {
+      name: "handoff",
+      description: "Write a short brief of this chat, save it, and continue in a new chat: the only way to cut a long chat's cost.",
+      arguments: ["focus"],
+      text: "Hand this chat off to a new one: write a dense brief (goal, decisions, state, open items, identifiers), save it with save_handoff, and tell me how to continue. The next chat will work on: ${arguments.focus}",
+    },
+    {
+      name: "ask_file",
+      description: "Answer from a big file or folder without reading it whole: pack_context returns only the parts the question needs.",
+      arguments: ["path", "question"],
+      text: "Answer from ${arguments.path} without reading it whole: ${arguments.question}. Call pack_context with that path and the question as query, and cite the chunk ids.",
+    },
   ],
   compatibility: { claude_desktop: ">=0.10.0", platforms: ["darwin", "win32", "linux"], runtimes: { node: ">=20" } },
 };

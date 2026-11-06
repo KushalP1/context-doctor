@@ -45,12 +45,13 @@ test("the bundled MCP server answers from a directory with no node_modules", asy
   const send = (m: unknown) => child.stdin.write(JSON.stringify(m) + "\n");
   const reply = new Promise<string>((resolve, reject) => {
     let out = "";
-    const t = setTimeout(() => reject(new Error(`no tools/list reply: ${out.slice(0, 200)}`)), 10_000);
-    child.stdout.on("data", (d) => { out += d; if (out.includes('"id":2')) { clearTimeout(t); resolve(out); } });
+    const t = setTimeout(() => reject(new Error(`no tools/list or prompts/list reply: ${out.slice(0, 200)}`)), 10_000);
+    child.stdout.on("data", (d) => { out += d; if (out.includes(`"id":2`) && out.includes(`"id":3`)) { clearTimeout(t); resolve(out); } });
   });
   send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } } });
   send({ jsonrpc: "2.0", method: "notifications/initialized" });
   send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+  send({ jsonrpc: "2.0", id: 3, method: "prompts/list" });
   try {
     const out = await reply;
     assert.match(out, /profile_context/);
@@ -62,6 +63,15 @@ test("the bundled MCP server answers from a directory with no node_modules", asy
     const listed = [...(/tools: \[([\s\S]*?)\n {2}\],/.exec(mcpb)?.[1] ?? "").matchAll(/name: "([a-z_]+)"/g)].map((m) => m[1]);
     assert.deepEqual(listed.sort(), tools.sort(), "scripts/build-mcpb.mjs lists the server's tools");
     assert.match(mcpb, new RegExp(`Adds ${["", "one", "two", "three", "four", "five", "six", "seven", "eight"][tools.length]} tools`));
+    // The prompts too: it listed context_checkup alone after handoff and ask_file were added.
+    const prompts = JSON.parse(out.split("\n").find((l) => l.includes('"id":3'))!).result.prompts as Array<{ name: string; arguments?: Array<{ name: string }> }>;
+    const promptBlock = /prompts: \[([\s\S]*?)\n {2}\],/.exec(mcpb)?.[1] ?? "";
+    const listedPrompts = [...promptBlock.matchAll(/name: "([a-z_]+)"/g)].map((m) => m[1]);
+    assert.deepEqual(listedPrompts.sort(), prompts.map((p) => p.name).sort(), "scripts/build-mcpb.mjs lists the server's prompts");
+    for (const p of prompts) {
+      const entry = new RegExp(`name: "${p.name}",[\\s\\S]*?(?=\\n {4}\\}|$)`).exec(promptBlock)?.[0] ?? "";
+      for (const a of p.arguments ?? []) assert.match(entry, new RegExp(`"${a.name}"`), `${p.name} lists its argument ${a.name}`);
+    }
   } finally {
     child.kill();
   }
