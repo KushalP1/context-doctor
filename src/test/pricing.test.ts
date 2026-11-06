@@ -1,5 +1,5 @@
 /**
- * Prices per Claude version (Anthropic's list, October 2026) and the one
+ * Prices per Claude version (Anthropic's list, read 2026-11-06) and the one
  * helper every report prices recorded usage with: cache writes by TTL.
  */
 
@@ -21,7 +21,7 @@ test("each Claude version at its own price; a major and its minor release never 
   assert.deepEqual(price("claude-opus-5"), [5, 25, 0.5]);
   for (const m of ["claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-opus-4-5-20251101"]) assert.deepEqual(price(m), [5, 25, 0.5], m);
   for (const m of ["claude-opus-4-1-20250805", "claude-opus-4-20250514", "claude-3-opus-20240229"]) assert.deepEqual(price(m), [15, 75, 1.5], m);
-  assert.deepEqual(price("claude-sonnet-5-5"), [2, 10, 0.2]);
+  assert.deepEqual(price("claude-sonnet-5-5"), [2, 10, 0.1]);
   assert.deepEqual(price("claude-sonnet-5"), [2, 10, 0.2]);
   for (const m of ["claude-sonnet-4-6", "claude-sonnet-4-5-20250929", "claude-sonnet-4-20250514", "claude-3-7-sonnet-20250219", "claude-3-5-sonnet-20241022"]) assert.deepEqual(price(m), [3, 15, 0.3], m);
   assert.deepEqual(price("claude-haiku-5-5"), [0.1, 0.5, 0.01]);
@@ -37,11 +37,11 @@ test("ids carry dates, [1m] and provider prefixes without changing the version t
   assert.deepEqual(price("claude-opus-5-5-20260801"), [4, 20, 0.2]);
   assert.deepEqual(price("claude-fable-5-1[1m]"), [10, 50, 0.25]);
   assert.deepEqual(price("claude-opus-4-5@20251101"), [5, 25, 0.5]);
-  assert.deepEqual(price("us.anthropic.claude-sonnet-5-5"), [2, 10, 0.2]);
+  assert.deepEqual(price("us.anthropic.claude-sonnet-5-5"), [2, 10, 0.1]);
   assert.equal(pricingFor("<synthetic>"), undefined);
-  // Non-Claude rows are untouched.
+  // Non-Claude ids by their own rows.
   assert.deepEqual(price("gpt-5"), [1.25, 10, 0.125]);
-  assert.deepEqual(price("gemini-2.5-flash"), [0.1, 0.4, 0.025]);
+  assert.deepEqual(price("gemini-2.5-flash"), [0.3, 2.5, 0.03]);
 });
 
 test("usageCost prices recorded usage with cache writes by TTL", () => {

@@ -3,20 +3,20 @@ Last 30 days, at list prices
 ────────────────────────────────────────────────────────────
 Claude Code          $137  255 requests      subagents $3.46
 Gemini CLI          $0.06  3 requests
-Codex              <$0.01  2 requests
+Codex               $0.01  2 requests
 Total                $137
 
 By project
   work-app                                $137  100%  Claude Code
   site                                   $0.06    0%  Gemini CLI
-  tech-app                              <$0.01    0%  Codex
+  tech-app                               $0.01    0%  Codex
 
 By model
   claude-opus-5-5                       $80.65   59%
   claude-fable-5-1                      $39.15   29%
   claude-sonnet-5                       $17.00   12%
   gemini-3-pro                           $0.06    0%
-  gpt-5.5                               <$0.01    0%
+  gpt-5.5                                $0.01    0%
 
 By day (last 14; all in --json)
   Sep 18      $0.00

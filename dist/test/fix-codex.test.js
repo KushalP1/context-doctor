@@ -14,8 +14,8 @@ const near = (a, b, what = "") => assert.ok(Math.abs(a - b) < 1e-9, `${what} ${a
 process.env.CONTEXT_DOCTOR_CACHE_DIR = mkdtempSync(join(tmpdir(), "cd-fcx-cache-"));
 const DAY = 86_400_000;
 const t0 = Date.now() - 2 * DAY;
-// gpt-5.5 in the price table: $1.25 in, $0.125 cached, $10 out.
-const IN = 1.25, READ = 0.125, OUT = 10;
+// gpt-5.5 in the price table: $5 in, $0.50 cached, $30 out.
+const IN = 5, READ = 0.5, OUT = 30;
 /** A rollout's lines: requests [input, cached, output], "c" for a compaction (the item and its event, as Codex writes them). */
 function rollout(steps, start = t0) {
     const lines = [

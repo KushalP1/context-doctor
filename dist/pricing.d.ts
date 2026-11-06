@@ -1,11 +1,16 @@
 /**
  * Per-model pricing for cost estimation, USD per million tokens.
  *
- * Anthropic prices are first-party API list rates, checked against
- * Anthropic's price list in October 2026. OpenAI/Google figures are
- * approximate public list prices and drift over time — all cost output is
- * labeled as an estimate. One table, one file, easy to update: PRs welcome
- * when prices change.
+ * List rates of each provider's first-party API (standard tier, global
+ * routing, no batch or fast mode), each family with the page it was read
+ * from and the date. Prices drift, so all cost output is labeled as an
+ * estimate. One table, one file, easy to update: PRs welcome when prices
+ * change.
+ *
+ * A row names one model (a "known" price, see knownPricingFor) unless it is
+ * listed in FALLBACKS: those price ids the table does not know by version,
+ * at a family's price, so a new release still gets a number. A model a
+ * provider prices only per minute, per image or not at all has no row.
  */
 export interface ModelPricing {
     /** USD per 1M input tokens. */
@@ -28,6 +33,21 @@ export declare const CACHE_WRITE_1H = 2;
 export declare const CACHE_WRITE_OPENAI_30M = 1.25;
 export declare const CACHE_WRITE_OPENAI_12H = 2.5;
 export declare function pricingFor(model?: string): ModelPricing | undefined;
+/**
+ * A model's price from a row for that model, not a family fallback: undefined
+ * for an id the table only knows by family (a new release, a typo like
+ * claude-opus-9, gpt-5-codex) and for one it does not know at all. What a
+ * report needs to say which models it priced by guess or not at all.
+ */
+export declare function knownPricingFor(model?: string): ModelPricing | undefined;
+/** Whether a model id has a price of its own in the table (see knownPricingFor). */
+export declare function hasKnownPrice(model?: string): boolean;
+/**
+ * Ids that are never billed, so never "unpriced": Claude Code writes
+ * `<synthetic>` on replies it makes itself (an error, an interruption)
+ * without calling the API.
+ */
+export declare function isUnbilledModel(model?: string): boolean;
 /**
  * A Claude model's price from a row for its own version, not a family
  * fallback: what a command that caps spending needs (`ab --budget`). An id

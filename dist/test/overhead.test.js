@@ -92,8 +92,8 @@ test("baselines per agent: Codex rollouts and Gemini CLI chats, OpenAI/Google pr
     assert.ok(c.median > 17_900 && c.median <= 18_000, "only the real prompt is subtracted, not AGENTS.md");
     assert.equal(c.requests, 2);
     assert.equal(c.coldStarts, 1);
-    // gpt-5: 1 warm read at $0.125/M + 1 cold write at 1.0 x $1.25/M (no premium), per 1k tokens.
-    assert.ok(Math.abs(c.usdPerKPerMonth - (1000 * (0.125 + 1.25)) / 1e6) < 1e-9);
+    // gpt-5.5: 1 warm read at $0.50/M + 1 cold write at 1.0 x $5/M (no premium), per 1k tokens.
+    assert.ok(Math.abs(c.usdPerKPerMonth - (1000 * (0.5 + 5)) / 1e6) < 1e-9);
     assert.ok(g.median > 11_990 && g.median <= 12_000);
     assert.equal(g.model, "gemini-3-pro");
 });

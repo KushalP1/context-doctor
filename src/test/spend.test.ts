@@ -64,8 +64,8 @@ function writeCodex(home: string, now: number): string {
   utimesSync(path, (t + 9_000) / 1000, (t + 9_000) / 1000);
   return path;
 }
-/** By hand, at gpt-5's $1.25 / $0.125 / $10: 400 uncached + 600 read + 100 out, then 200 + 900 + 100. */
-const CODEX_USD = (400 * 1.25 + 600 * 0.125 + 100 * 10 + 200 * 1.25 + 900 * 0.125 + 100 * 10) / 1e6;
+/** By hand, at gpt-5.5's $5 / $0.50 / $30: 400 uncached + 600 read + 100 out, then 200 + 900 + 100. */
+const CODEX_USD = (400 * 5 + 600 * 0.5 + 100 * 30 + 200 * 5 + 900 * 0.5 + 100 * 30) / 1e6;
 
 /** A Gemini CLI chat (a message written twice, one later rewound: still billed) and an older whole-document chat. */
 function writeGemini(home: string, now: number): void {
@@ -275,8 +275,8 @@ test("Codex: a forked rollout's copy of its parent's requests counts once, in sp
       const items = codexSpend(since, FIXTURE_NOW, home);
       assert.equal(items.length, 3, "two of the parent's, one of the fork's: the copies not again");
       assert.deepEqual(items.map((i) => i.ts), [t + 1_000, t + 9_000, f + 20_000], "at the parent's own times");
-      // Three distinct requests of 1,000 + 1,100 + 1,000 uncached in, 100 out each, at gpt-5.5's $1.25 / $10.
-      close(items.reduce((n, i) => n + i.usd, 0), (3_100 * 1.25 + 300 * 10) / 1e6, "priced once");
+      // Three distinct requests of 1,000 + 1,100 + 1,000 uncached in, 100 out each, at gpt-5.5's $5 / $30.
+      close(items.reduce((n, i) => n + i.usd, 0), (3_100 * 5 + 300 * 30) / 1e6, "priced once");
       const lim = codexLimitData(since, join(home, ".codex", "sessions"));
       assert.equal(lim.usage.length, 3, "limits' usage fit counts them once too");
       assert.ok(!lim.readings.some((r) => r.ts === f + 2), "the copies' stale limit readings are not readings at the fork's time");

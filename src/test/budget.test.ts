@@ -156,8 +156,8 @@ test("a week's budget counts from Monday, and Codex's spend counts with Claude C
     const dir = join(home, ".codex", "sessions", "2026", "10", "14");
     mkdirSync(dir, { recursive: true });
     const tc = (t: number, total: number) => JSON.stringify({ timestamp: new Date(t).toISOString(), type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: total }, last_token_usage: { input_tokens: 80_000, cached_input_tokens: 0, output_tokens: 0 } } } });
-    // gpt-5.5 at $1.25 / 1M: 80k uncached is $0.10.
-    writeFileSync(join(dir, "rollout-a.jsonl"), [JSON.stringify({ timestamp: new Date(NOW - 2 * HOUR).toISOString(), type: "turn_context", payload: { cwd: "/work/app", model: "gpt-5.5" } }), tc(NOW - 2 * HOUR, 80_000)].join("\n") + "\n");
+    // gpt-5 at $1.25 / 1M: 80k uncached is $0.10.
+    writeFileSync(join(dir, "rollout-a.jsonl"), [JSON.stringify({ timestamp: new Date(NOW - 2 * HOUR).toISOString(), type: "turn_context", payload: { cwd: "/work/app", model: "gpt-5" } }), tc(NOW - 2 * HOUR, 80_000)].join("\n") + "\n");
     const r = run(env, ["budget", "200/week", "--json"]);
     assert.equal(r.status, 0, r.err);
     const j = JSON.parse(r.out);
@@ -249,9 +249,9 @@ test("a forked Codex rollout's copy of its parent's requests counts once in the 
     const dir = join(home, ".codex", "sessions", "2026", "10", "14");
     mkdirSync(dir, { recursive: true });
     const iso = (t: number) => new Date(t).toISOString();
-    // gpt-5.5 at $1.25 / 1M: 80k uncached is $0.10.
+    // gpt-5 at $1.25 / 1M: 80k uncached is $0.10.
     const tc = (at: number, total: number) => ({ timestamp: iso(at), type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: total, total_tokens: total }, last_token_usage: { input_tokens: 80_000, total_tokens: 80_000 } } } });
-    const ctx = (at: number) => ({ timestamp: iso(at), type: "turn_context", payload: { cwd: "/work/app", model: "gpt-5.5" } });
+    const ctx = (at: number) => ({ timestamp: iso(at), type: "turn_context", payload: { cwd: "/work/app", model: "gpt-5" } });
     const write = (name: string, rows: unknown[]) => writeFileSync(join(dir, name), rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
     write("rollout-2026-10-14T10-00-00-parent.jsonl", [ctx(NOW - 3 * HOUR), tc(NOW - 3 * HOUR, 80_000), tc(NOW - 2 * HOUR, 160_000)]);
     // The fork: the parent's two copied at its own time, then one of its own.
@@ -278,9 +278,9 @@ test("Codex's folders: a new rollout counts at once, a resumed one in an older f
   await inLedgerSandbox((home) => {
     const sessions = join(home, ".codex", "sessions");
     const iso = (t: number) => new Date(t).toISOString();
-    // gpt-5.5 at $1.25 / 1M: 80k uncached is $0.10 a request.
+    // gpt-5 at $1.25 / 1M: 80k uncached is $0.10 a request.
     const lines = (at: number, total: number) => [
-      JSON.stringify({ timestamp: iso(at), type: "turn_context", payload: { cwd: "/work/app", model: "gpt-5.5" } }),
+      JSON.stringify({ timestamp: iso(at), type: "turn_context", payload: { cwd: "/work/app", model: "gpt-5" } }),
       JSON.stringify({ timestamp: iso(at), type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: total, total_tokens: total }, last_token_usage: { input_tokens: 80_000, total_tokens: 80_000 } } } }),
     ].join("\n") + "\n";
     const at = (rel: string, text: string) => { const p = join(sessions, rel); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, text); return p; };
@@ -363,9 +363,9 @@ test("Codex alone: budget and the Codex hook make no ~/.claude; budget off remov
     const env = cleanEnv(home, { CONTEXT_DOCTOR_CACHE_DIR: cache });
     const dir = join(home, ".codex", "sessions", "2026", "10", "14");
     mkdirSync(dir, { recursive: true });
-    // gpt-5.5 at $1.25 / 1M: 80k uncached is $0.10.
+    // gpt-5 at $1.25 / 1M: 80k uncached is $0.10.
     writeFileSync(join(dir, "rollout-a.jsonl"), [
-      { timestamp: new Date(NOW - HOUR).toISOString(), type: "turn_context", payload: { cwd: "/work/app", model: "gpt-5.5" } },
+      { timestamp: new Date(NOW - HOUR).toISOString(), type: "turn_context", payload: { cwd: "/work/app", model: "gpt-5" } },
       { timestamp: new Date(NOW - HOUR).toISOString(), type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: 80_000 }, last_token_usage: { input_tokens: 80_000 } } } },
     ].map((r) => JSON.stringify(r)).join("\n") + "\n");
     const set = run(env, ["budget", "0.15/day"]);

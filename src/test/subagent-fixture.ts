@@ -17,10 +17,10 @@ export function reply(at: number, model: string, cwd: string, id = `msg_sm${n++}
   const row = (out: number, k: number) => JSON.stringify({ type: "assistant", isSidechain: true, cwd, uuid: `${id}-${k}`, timestamp: new Date(at).toISOString(), message: { id, model, content: [{ type: "text", text: "ok" }], usage: usage(out) } });
   return [row(10, 0), row(1000, 1)];
 }
-// That reply at each price (Opus 5.5 $4/$20/$0.2, Sonnet 5.5 $2/$10/$0.2, Fable 5.1 $10/$50/$0.25):
+// That reply at each price (Opus 5.5 $4/$20/$0.2, Sonnet 5.5 $2/$10/$0.1, Fable 5.1 $10/$50/$0.25):
 // uncached + reads + writes (4k x 1.25 + 6k x 2 = 17k input-priced) + output.
 export const OPUS = (1000 * 4 + 200_000 * 0.2 + 17_000 * 4 + 1000 * 20) / 1e6;
-export const SONNET = (1000 * 2 + 200_000 * 0.2 + 17_000 * 2 + 1000 * 10) / 1e6;
+export const SONNET = (1000 * 2 + 200_000 * 0.1 + 17_000 * 2 + 1000 * 10) / 1e6;
 export const FABLE = (1000 * 10 + 200_000 * 0.25 + 17_000 * 10 + 1000 * 50) / 1e6;
 
 export interface Agent { id: string; type?: string; rows: string[] }

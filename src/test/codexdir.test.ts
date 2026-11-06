@@ -36,7 +36,7 @@ test("spend and budget read Codex's rollouts and hooks from CODEX_HOME", () => {
     mkdirSync(dir, { recursive: true });
     const at = (t: number) => new Date(t).toISOString();
     writeFileSync(join(dir, "rollout-a.jsonl"), [
-      { timestamp: at(NOW - 7_200_000), type: "turn_context", payload: { cwd: "/work/app", model: "gpt-5.5" } },
+      { timestamp: at(NOW - 7_200_000), type: "turn_context", payload: { cwd: "/work/app", model: "gpt-5" } },
       { timestamp: at(NOW - 7_200_000), type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: 80_000 }, last_token_usage: { input_tokens: 80_000, cached_input_tokens: 0, output_tokens: 0 } } } },
     ].map((r) => JSON.stringify(r)).join("\n") + "\n");
     writeFileSync(join(codex, "hooks.json"), JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: "context-doctor hook" }] }] } }));
@@ -47,7 +47,7 @@ test("spend and budget read Codex's rollouts and hooks from CODEX_HOME", () => {
     assert.equal(spend.status, 0, spend.stderr);
     const codexTool = JSON.parse(spend.stdout).tools.find((t: { tool: string }) => t.tool === "codex");
     assert.ok(codexTool, "Codex read from CODEX_HOME");
-    // gpt-5.5 at $1.25 / 1M: 80k uncached is $0.10.
+    // gpt-5 at $1.25 / 1M: 80k uncached is $0.10.
     assert.ok(Math.abs(codexTool.usd - 0.1) < 1e-9, `${codexTool.usd}`);
 
     const budget = run(["budget", "1/day"]);
