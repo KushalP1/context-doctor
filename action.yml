@@ -76,8 +76,9 @@ runs:
         GH_TOKEN: ${{ github.token }}
         PR: ${{ github.event.pull_request.number }}
       run: |
-        # One comment per PR, found by its marker and edited on each push (never another tool's comment).
-        id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --jq '.[] | select(.body | contains("<!-- context-doctor -->")) | .id' 2>/dev/null | tail -1)
+        # One comment per PR, found by its marker and edited on each push (never another tool's comment,
+        # nor a person's: anyone can paste the marker into a comment of their own).
+        id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- context-doctor -->"))) | .id' 2>/dev/null | tail -1)
         if [ -n "$id" ]; then
           gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$RUNNER_TEMP/context-doctor.md" >/dev/null
         else
