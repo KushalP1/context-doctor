@@ -295,7 +295,9 @@ test("the 20 MB total for a call is enforced while bytes arrive, and one time bu
     assert.ok(Date.now() - started < 3000, `the call stopped at its budget (${Date.now() - started} ms)`);
     assert.equal(slow.sources.length, 0);
     assert.match(slow.skipped.join("\n"), /hang1\.md: timed out/);
-    assert.match(slow.skipped.join("\n"), /late\.md: not read, the 0\.4 s allowed for one call ran out/);
+    // Skipped before it starts, or started just inside the budget and cut at
+    // its end: on a slow runner either can happen, and both keep the budget.
+    assert.match(slow.skipped.join("\n"), /late\.md: (not read, the 0\.4 s allowed for one call ran out|timed out)/);
   } finally {
     FILE_LIMITS.callMs = saved;
   }
