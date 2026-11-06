@@ -38,7 +38,9 @@ export function normalizeOutput(text, home) {
     const forms = [...new Set([real, home, JSON.stringify(real).slice(1, -1), JSON.stringify(home).slice(1, -1)])].sort((a, b) => b.length - a.length);
     const out = forms.reduce((t, f) => t.replace(new RegExp(esc(f), "g"), "~"), text);
     // Windows writes the same paths with backslashes (escaped in JSON).
-    return process.platform === "win32" ? out.replace(/\\\\/g, "/").replace(/\\/g, "/") : out;
+    // JSON escapes a separator as a pair; a lone backslash before a quote is
+    // JSON's escaped quote (a value like = \"claude-sonnet-5-5\"), not a path.
+    return process.platform === "win32" ? out.replace(/\\\\/g, "/").replace(/\\(?!")/g, "/") : out;
 }
 function rng(seed) {
     return () => {
