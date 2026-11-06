@@ -217,7 +217,7 @@ export declare function savedSince(records: FixRecord[], opts?: {
     ledger?: ReturnType<typeof readLedger>;
 }): SinceResult[];
 export declare function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], since: SinceResult[], command?: (s: string) => string, coldResume?: FixInputs["coldResume"], recordProblem?: string, codexBilledUsd?: number): string;
-export declare function renderFixShare(days: number, billedUsd: number, fixes: Fix[]): string;
+export declare function renderFixShare(days: number, billedUsd: number, fixes: Fix[], codexBilledUsd?: number): string;
 export declare function parseFixIds(raw: string, fixes: Fix[]): {
     ids: FixId[];
     unknown: string[];

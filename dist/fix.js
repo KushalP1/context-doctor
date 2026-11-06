@@ -810,13 +810,17 @@ export function renderFixPlan(days, billedUsd, fixes, since, command = (s) => `c
 function noHistory(days, command) {
     return [`No Claude Code sessions in the last ${days} days to measure yet, so no fix can be priced.`, `Use Claude Code for a while, then run this again: ${command("fix")}.`];
 }
-export function renderFixShare(days, billedUsd, fixes) {
+export function renderFixShare(days, billedUsd, fixes, codexBilledUsd = 0) {
     const avail = fixes.filter((f) => f.state === "available" && f.savedUsd !== undefined);
-    const lines = [`context-doctor fix on my last ${days} days of Claude Code (${money(billedUsd)} of input at list price):`];
+    // As the plan's first line: Codex's input beside Claude Code's, or alone on a machine with only Codex.
+    const of = codexBilledUsd > 0 && billedUsd > 0
+        ? `Claude Code and Codex (${money(billedUsd)} and ${money(codexBilledUsd)} of input at list price)`
+        : codexBilledUsd > 0 ? `Codex (${money(codexBilledUsd)} of input at list price)` : `Claude Code (${money(billedUsd)} of input at list price)`;
+    const lines = [`context-doctor fix on my last ${days} days of ${of}:`];
     for (const f of avail)
         lines.push(`- ${LABEL[f.id]}: ${money(f.savedUsd)}${share(f)}`);
     if (avail.length === 0)
-        lines.push(billedUsd > 0 ? "- nothing left to fix" : "- no Claude Code sessions to measure yet");
+        lines.push(billedUsd + codexBilledUsd > 0 ? "- nothing left to fix" : "- no Claude Code sessions to measure yet");
     if (avail.length > 1)
         lines.push("Each measured alone; they overlap, so do not add them up.");
     lines.push("Measured on my own sessions, locally: npx context-doctor fix");

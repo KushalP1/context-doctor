@@ -1255,7 +1255,7 @@ async function main() {
         const fixes = planFixes(inputs);
         const since = savedSince(readFixRecords());
         if (args.share) {
-            const text = renderFixShare(inputs.days, inputs.billedUsd, fixes);
+            const text = renderFixShare(inputs.days, inputs.billedUsd, fixes, inputs.codexCompact?.billedUsd);
             console.log(text);
             if (args.copy)
                 console.log(copyToClipboard(text) ? "\n(copied to the clipboard)" : "\n(no clipboard tool found; copy the lines above)");

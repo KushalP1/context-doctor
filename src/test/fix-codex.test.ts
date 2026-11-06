@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { codexCompactOverrides, codexCompactSavedSince, profileValues, replayCodexCompact, setTopLevelInt, topLevelValue, type CodexCompactReport } from "../codexcompact.js";
-import { applyFix, fixRecordPath, parseFixIds, planFixes, readFixRecords, renderFixPlan, savedSince, undoFixes, type FixInputs } from "../fix.js";
+import { applyFix, fixRecordPath, parseFixIds, planFixes, readFixRecords, renderFixPlan, renderFixShare, savedSince, undoFixes, type FixInputs } from "../fix.js";
 import { sandboxEnv } from "./sandbox.js";
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
@@ -174,6 +174,10 @@ test("plan: offered over $1 and 2% of Codex's input, in --apply all; a limit you
   assert.match(text, /1\. Codex: compact earlier, at 150k tokens\s+\$4\.00 \(40% of Codex input\)/);
   assert.match(text, /150k\s+\$4\.00   0\.9  ←/);
   assert.match(renderFixPlan(30, 50, fixes, [], undefined, undefined, undefined, 10), /Last 30 days of your sessions: Claude Code \$50\.00 of input, Codex \$10\.00, at list prices/);
+  // --share names Codex too: not "$0.00 of Claude Code" on a machine with only Codex.
+  assert.match(renderFixShare(30, 0, fixes, 10), /^context-doctor fix on my last 30 days of Codex \(\$10\.00 of input at list price\):\n- Codex auto-compact limit: \$4\.00 \(40% of Codex input\)\n/);
+  assert.match(renderFixShare(30, 50, fixes, 10), /^context-doctor fix on my last 30 days of Claude Code and Codex \(\$50\.00 and \$10\.00 of input at list price\):/);
+  assert.match(renderFixShare(30, 0, [], 10), /- nothing left to fix/);
   assert.deepEqual(parseFixIds("all", fixes).ids, ["codex-compact"]);
   assert.deepEqual(planFixes({ ...base, codexCompact: report(0.5) }), []);
   assert.deepEqual(planFixes({ ...base, codexCompact: report(1.5, 100) }), []);
@@ -246,6 +250,7 @@ test("a Codex-only machine: fix plans and applies Codex's limit, makes no ~/.cla
   assert.match(r.stdout, /Codex: compact earlier, at 150k tokens/);
   assert.match(r.stdout, /\[codex-compact\]/);
   assert.equal(readFileSync(config, "utf8"), original, "nothing written without --apply");
+  assert.match(run("--share").stdout, /of Codex \(\$[\d.]+ of input at list price\):\n- Codex auto-compact limit/);
   r = run("--apply", "codex-compact");
   assert.equal(r.status, 0, r.stderr + r.stdout);
   assert.match(r.stdout, /New Codex sessions pick these up/);
