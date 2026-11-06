@@ -139,6 +139,15 @@ export function isGeminiRequest(url: string, headers: http.IncomingHttpHeaders =
   );
 }
 
+/**
+ * A request path as the log may show it. Gemini's REST API takes its key in
+ * the query (`?key=AIza…`), and the log is a file on disk (autopilot's
+ * service writes it beside settings.json): a key there outlives the request.
+ */
+export function logUrl(url: string): string {
+  return url.replace(/([?&](?:key|api[_-]?key|access_token|token)=)[^&#\s]*/gi, "$1…");
+}
+
 /** The model a Gemini request names in its path (…/models/<model>:generateContent). */
 export function geminiModelFromUrl(url: string): string | undefined {
   return /\/models\/([^/:?]+):/.exec(url)?.[1];
@@ -621,7 +630,7 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
       }
 
       console.error(
-        `[context-doctor] ${req.method} ${url} → ${upstream.status} in ${Date.now() - upstreamStart}ms | ${note}` +
+        `[context-doctor] ${req.method} ${logUrl(url)} → ${upstream.status} in ${Date.now() - upstreamStart}ms | ${note}` +
         (stats.tokensSaved > 0 ? ` | session total: ${formatTokens(stats.tokensSaved)} tokens ≈ ${formatUsd(stats.estUsdSaved)} saved` : "")
       );
 
@@ -672,11 +681,12 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
       res.end();
     } catch (e) {
       if (upstreamAbort.signal.aborted) {
-        console.error(`[context-doctor] ${req.method} ${url}: client went away; upstream request cancelled`);
+        console.error(`[context-doctor] ${req.method} ${logUrl(url)}: client went away; upstream request cancelled`);
         res.destroy();
         return;
       }
-      console.error(`[context-doctor] error on ${url}: ${(e as Error).message}`);
+      // fetch's own message can carry the whole upstream URL, query included.
+      console.error(`[context-doctor] error on ${logUrl(url)}: ${logUrl((e as Error).message)}`);
       if (res.headersSent) {
         // Upstream failed mid-body. Status and part of the body are already
         // with the client; appending a JSON error and ending cleanly made a
@@ -687,7 +697,7 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
       }
       res.statusCode = 502;
       res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ error: `context-doctor proxy: ${(e as Error).message}` }));
+      res.end(JSON.stringify({ error: `context-doctor proxy: ${logUrl((e as Error).message)}` }));
     }
   });
 

@@ -1,7 +1,8 @@
 /** Gemini through the proxy: routing by header and path, and autopilot's view of generateContent bodies. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { geminiModelFromUrl, upstreamFor } from "../proxy.js";
+import http from "node:http";
+import { geminiModelFromUrl, logUrl, startProxy, upstreamFor } from "../proxy.js";
 import { AutoClearer, viewOf } from "../autoclear.js";
 test("Gemini requests go to Google; OpenAI's and Anthropic's look-alike paths do not", () => {
     const g = "https://generativelanguage.googleapis.com";
@@ -39,4 +40,38 @@ test("a cold Gemini request clears stale results and keeps the recent ones; the 
     assert.match(JSON.stringify(responses[0].functionResponse.response), /context-doctor|cleared/i);
     assert.equal(responses.at(-1).functionResponse.response.output, "x = 1\n".repeat(6000));
     assert.equal(responses[0].functionResponse.name, "read_file", "the part keeps its name, so the call stays paired");
+});
+test("a key in the query (Gemini's ?key=) never reaches the proxy's log", async () => {
+    assert.equal(logUrl("/v1beta/models/g:generateContent?alt=sse&key=AIzaSECRET"), "/v1beta/models/g:generateContent?alt=sse&key=…");
+    assert.equal(logUrl("/v1/models?api_key=s&x=1"), "/v1/models?api_key=…&x=1");
+    assert.equal(logUrl("/v1/messages"), "/v1/messages");
+    const upstream = http.createServer((req, res) => {
+        req.resume();
+        req.on("end", () => {
+            res.setHeader("content-type", "application/json");
+            res.end('{"candidates":[],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1}}');
+        });
+    });
+    await new Promise((r) => upstream.listen(0, "127.0.0.1", r));
+    const logged = [];
+    const original = console.error;
+    console.error = (...a) => void logged.push(a.join(" "));
+    const proxy = startProxy({ port: 0, autopilot: true, googleUpstream: `http://127.0.0.1:${upstream.address().port}` });
+    try {
+        await new Promise((r) => (proxy.listening ? r() : proxy.once("listening", () => r())));
+        const r = await fetch(`http://127.0.0.1:${proxy.address().port}/v1beta/models/gemini-3-pro:generateContent?key=AIzaSECRET`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(geminiBody(1)),
+        });
+        assert.equal(r.status, 200);
+        await r.text();
+    }
+    finally {
+        console.error = original;
+        proxy.close();
+        upstream.close();
+    }
+    assert.ok(logged.some((l) => /generateContent\?key=… → 200/.test(l)), logged.join("\n"));
+    assert.ok(!logged.some((l) => l.includes("AIzaSECRET")), logged.join("\n"));
 });

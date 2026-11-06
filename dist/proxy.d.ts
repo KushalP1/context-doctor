@@ -90,6 +90,12 @@ export declare function stripToken(url: string, token: string): string | undefin
  */
 export declare function upstreamFor(url: string, opts: ProxyOptions, headers?: http.IncomingHttpHeaders): string;
 export declare function isGeminiRequest(url: string, headers?: http.IncomingHttpHeaders): boolean;
+/**
+ * A request path as the log may show it. Gemini's REST API takes its key in
+ * the query (`?key=AIza…`), and the log is a file on disk (autopilot's
+ * service writes it beside settings.json): a key there outlives the request.
+ */
+export declare function logUrl(url: string): string;
 /** The model a Gemini request names in its path (…/models/<model>:generateContent). */
 export declare function geminiModelFromUrl(url: string): string | undefined;
 export interface ProxyStats {
