@@ -241,7 +241,7 @@ const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : typeof v === "st
  * when an `enabledMcpjsonServers` list exists and leaves it out (and
  * `enableAllProjectMcpServers` is not on): Claude Code does not start it.
  */
-function offFor(cwd: string, home: string): { off: Set<string>; mcpjsonAllowlist?: Set<string> } {
+function offFor(cwd: string, home: string): { off: Set<string>; mcpjsonAllowlist?: Set<string>; mcpjsonApproved: (name: string) => boolean } {
   const off = new Set<string>();
   let allow: Set<string> | undefined;
   let all = false;
@@ -269,7 +269,23 @@ function offFor(cwd: string, home: string): { off: Set<string>; mcpjsonAllowlist
     }
     if (entry?.enableAllProjectMcpServers === true) all = true;
   }
-  return { off, mcpjsonAllowlist: all ? undefined : allow };
+  return {
+    off,
+    mcpjsonAllowlist: all ? undefined : allow,
+    // Approved in so many words: a server nobody said yes to is one Claude Code asks about first.
+    mcpjsonApproved: (name) => !off.has(`mcp:${name}`) && (all || (allow?.has(name) ?? false)),
+  };
+}
+
+/**
+ * Whether Claude Code would start this project `.mcp.json` server without
+ * asking: the user approved it (enabledMcpjsonServers, or
+ * enableAllProjectMcpServers, in a settings file or ~/.claude.json) and has
+ * not switched it off. A `.mcp.json` arrives with a clone, so its commands
+ * are a stranger's until then: `overhead --mcp` launches only approved ones.
+ */
+export function mcpjsonServerApproved(name: string, cwd = process.cwd(), home = homedir()): boolean {
+  return offFor(cwd, home).mcpjsonApproved(name);
 }
 
 /** context-doctor's own server: its standing rules work with no calls at all. */

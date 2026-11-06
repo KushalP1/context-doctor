@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { copyFileSync, cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,7 +27,14 @@ test("overhead --mcp with no node_modules measures servers through the bundled S
   const home = mkdtempSync(join(tmpdir(), "ctxdoc-plugin-home-"));
   const cwd = mkdtempSync(join(tmpdir(), "ctxdoc-plugin-cwd-"));
   // The server to measure is our own, from the same dependency-free dist/.
-  writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { demo: { command: process.execPath, args: [join(plugin, "dist", "mcp.js")] } } }));
+  // `stranger` came with the folder and nobody approved it: it must not run.
+  const marker = join(cwd, "stranger-ran");
+  writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: {
+    demo: { command: process.execPath, args: [join(plugin, "dist", "mcp.js")] },
+    stranger: { command: process.execPath, args: ["-e", `require("fs").writeFileSync(${JSON.stringify(marker)}, "")`] },
+  } }));
+  mkdirSync(join(cwd, ".claude"));
+  writeFileSync(join(cwd, ".claude", "settings.local.json"), JSON.stringify({ enabledMcpjsonServers: ["demo"] }));
 
   const r = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
     execFile(process.execPath, [join(plugin, "dist", "cli.js"), "overhead", "--mcp"], { cwd, env: sandboxEnv(home), timeout: 60_000 }, (err, stdout, stderr) =>
@@ -37,6 +44,8 @@ test("overhead --mcp with no node_modules measures servers through the bundled S
   assert.equal(r.code, 0, r.stderr.slice(0, 400));
   assert.match(r.stdout, /FIXED OVERHEAD/);
   assert.match(r.stdout, /demo .*\d+ tools, ~[\d.]+k? tokens of definitions/, r.stdout);
+  assert.match(r.stdout, /stranger .*not approved in Claude Code: not launched/, r.stdout);
+  assert.equal(existsSync(marker), false, "an unapproved .mcp.json server was launched");
 });
 
 test("the npm package declares no runtime dependencies", () => {

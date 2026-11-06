@@ -280,7 +280,22 @@ function offFor(cwd, home) {
         if (entry?.enableAllProjectMcpServers === true)
             all = true;
     }
-    return { off, mcpjsonAllowlist: all ? undefined : allow };
+    return {
+        off,
+        mcpjsonAllowlist: all ? undefined : allow,
+        // Approved in so many words: a server nobody said yes to is one Claude Code asks about first.
+        mcpjsonApproved: (name) => !off.has(`mcp:${name}`) && (all || (allow?.has(name) ?? false)),
+    };
+}
+/**
+ * Whether Claude Code would start this project `.mcp.json` server without
+ * asking: the user approved it (enabledMcpjsonServers, or
+ * enableAllProjectMcpServers, in a settings file or ~/.claude.json) and has
+ * not switched it off. A `.mcp.json` arrives with a clone, so its commands
+ * are a stranger's until then: `overhead --mcp` launches only approved ones.
+ */
+export function mcpjsonServerApproved(name, cwd = process.cwd(), home = homedir()) {
+    return offFor(cwd, home).mcpjsonApproved(name);
 }
 /** context-doctor's own server: its standing rules work with no calls at all. */
 const OURS = /^context-doctor$/;

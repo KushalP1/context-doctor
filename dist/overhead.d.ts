@@ -80,8 +80,13 @@ export declare function overheadReport(opts?: {
     paths?: string[];
     onProgress?: (done: number, total: number, stage: "sessions" | "mcp") => void;
 }): OverheadReport;
-/** Launch each configured server and size its tool definitions, then add the findings they support. */
-export declare function measureMcpSizes(r: OverheadReport): Promise<void>;
+/**
+ * Launch each configured server and size its tool definitions, then add the
+ * findings they support. A project `.mcp.json` server is launched only once
+ * the user approved it in Claude Code: the file comes with the repository,
+ * and `overhead --mcp` in a fresh clone ran whatever command it named.
+ */
+export declare function measureMcpSizes(r: OverheadReport, home?: string): Promise<void>;
 /** Configured servers nobody called: their definitions ride on every request for nothing. */
 export declare function mcpFindings(m: McpSection, baseline?: Baseline): OverheadFinding[];
 export declare function renderOverhead(r: OverheadReport, home?: string): string;

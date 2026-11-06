@@ -24,6 +24,7 @@ import { cacheWriteSplit, formatUsd, pricingFor, writeMultiplier as ttlWriteMult
 import { isGeminiChat, readGeminiMessages } from "./gemini.js";
 import { claudeMcpConfigs, mcpUsage, measureServer, otherServerUses, serverUses } from "./mcpschema.js";
 import { claudeDir } from "./claudedir.js";
+import { mcpjsonServerApproved } from "./prune.js";
 import { REQUEST_ROWS } from "./coldresume.js";
 import { rowsOf } from "./scan.js";
 const TTL_MS = 3_600_000;
@@ -419,9 +420,16 @@ export function overheadReport(opts = {}) {
     const mcp = { configs: claudeMcpConfigs(cwd, home), usage: mcpUsage(opts.days ?? 30, claudePaths, tick("mcp")) };
     return { cwd, baseline, baselines, files, findings: overheadFindings(files, baselines), mcp };
 }
-/** Launch each configured server and size its tool definitions, then add the findings they support. */
-export async function measureMcpSizes(r) {
-    r.mcp.sizes = await Promise.all(r.mcp.configs.map((c) => measureServer(c)));
+/**
+ * Launch each configured server and size its tool definitions, then add the
+ * findings they support. A project `.mcp.json` server is launched only once
+ * the user approved it in Claude Code: the file comes with the repository,
+ * and `overhead --mcp` in a fresh clone ran whatever command it named.
+ */
+export async function measureMcpSizes(r, home = homedir()) {
+    r.mcp.sizes = await Promise.all(r.mcp.configs.map((c) => c.scope === ".mcp.json" && !mcpjsonServerApproved(c.name, r.cwd, home)
+        ? { name: c.name, error: "in this folder's .mcp.json, not approved in Claude Code: not launched" }
+        : measureServer(c)));
     r.findings.push(...mcpFindings(r.mcp, r.baseline));
 }
 /** Configured servers nobody called: their definitions ride on every request for nothing. */

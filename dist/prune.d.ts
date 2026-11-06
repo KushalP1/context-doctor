@@ -85,6 +85,14 @@ export interface PrunePlan {
 }
 /** The project's own settings file, where prune writes. */
 export declare function localSettingsPath(cwd: string): string;
+/**
+ * Whether Claude Code would start this project `.mcp.json` server without
+ * asking: the user approved it (enabledMcpjsonServers, or
+ * enableAllProjectMcpServers, in a settings file or ~/.claude.json) and has
+ * not switched it off. A `.mcp.json` arrives with a clone, so its commands
+ * are a stranger's until then: `overhead --mcp` launches only approved ones.
+ */
+export declare function mcpjsonServerApproved(name: string, cwd?: string, home?: string): boolean;
 export declare function planPrune(days?: number, opts?: {
     home?: string;
     usage?: Map<string, ProjectUse>;
