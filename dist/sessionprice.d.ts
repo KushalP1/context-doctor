@@ -43,8 +43,14 @@ export interface SessionPrice {
     /** The threshold just passed. */
     threshold: number;
     usd: number;
-    /** Subagents' part of `usd`. */
+    /** Subagents' part of `usd` (the Agent tool's). */
     subagentUsd: number;
+    /** Workflow agents' part of `usd`. */
+    workflowUsd?: number;
+    /** Requests on a model with no list price, not in `usd`. */
+    unpriced?: number;
+    /** The part of `usd` priced at its model's family's row (an estimate). */
+    estimatedUsd?: number;
     /** The main conversation's context at its last request, and its model. */
     tokens?: number;
     model?: string;

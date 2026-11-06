@@ -54,6 +54,23 @@ export interface PaybackReport {
     days: number;
     sessions: number;
     subagents: SubagentPayback[];
+    /**
+     * Workflow agents (subagents/workflows/<run>/): their bill, by run. Not
+     * weighed against the parent: a workflow is work the parent hands off
+     * whole, not a read it would otherwise do itself.
+     */
+    workflows?: {
+        runs: number;
+        agents: number;
+        costUsd: number;
+        atSonnetUsd: number;
+        byRun: Array<{
+            name: string;
+            agents: number;
+            costUsd: number;
+            start: number;
+        }>;
+    };
 }
 /** A subagent's bill (usage priced as the cache bills it), steps, startup context, start time and the tool output it read. */
 export declare function scanSubagent(path: string): {

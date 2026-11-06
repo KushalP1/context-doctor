@@ -5,7 +5,8 @@
  * Each tool keeps its own record of what it sent, and none adds them up:
  *
  *  - Claude Code: every reply's `usage` in its transcripts, the main
- *    conversation and each subagent's (`<session>/subagents/agent-*.jsonl`),
+ *    conversation, each subagent's (`<session>/subagents/agent-*.jsonl`)
+ *    and each workflow agent's (`<session>/subagents/workflows/<run>/`),
  *    read as `limits` reads them (claudeFileUsage): each reply once, its
  *    output settled on its last row, a fork's copy of its parent counted once.
  *  - Codex: the `token_count` events of its rollouts (~/.codex/sessions and
@@ -44,15 +45,23 @@ import { withInvocation } from "./invocation.js";
 const DAY = 86_400_000;
 export const TOOLS = ["claude", "codex", "gemini", "cursor"];
 export const TOOL_NAME = { claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI", cursor: "Cursor" };
-/** A project's name as `savings` shows it: the folder's path with "-" for separators, less "-Users-<you>-". */
+/**
+ * A project folder's name (its path with "-" for separators, as Claude Code
+ * names its projects/ folders) less the home folder: "-Users-<you>-" on
+ * macOS, "-home-<you>-" (or "-root-") on Linux, "C--Users-<you>-" on Windows.
+ * Only macOS's was stripped, so on Linux and Windows every project read
+ * "home-kp-app" or "C--Users-kp-app".
+ */
+export function projectFromDir(dir) {
+    return dir.replace(/^(?:[A-Za-z]-)?-(?:Users|home)-[^-]+-/, "").replace(/^-root-/, "").replace(/^-/, "") || dir;
+}
+/** A project's name as `savings` shows it: the folder's path with "-" for separators, less the home folder. */
 export function projectName(folder) {
-    const dir = folder.replace(/[^A-Za-z0-9]/g, "-");
-    return dir.replace(/^-Users-[^-]+-/, "").replace(/^-/, "") || dir;
+    return projectFromDir(folder.replace(/[^A-Za-z0-9]/g, "-"));
 }
 /** A Claude Code transcript's project: its folder under projects/, named as `savings` names it. */
 function claudeProject(top) {
-    const dir = basename(dirname(top));
-    return dir.replace(/^-Users-[^-]+-/, "").replace(/^-/, "") || dir;
+    return projectFromDir(basename(dirname(top)));
 }
 /** `priceAs`: the id to price it by, when the model's own name is not one the table knows (Cursor's names for Claude). */
 function priced(base, u, priceAs = base.model) {
@@ -97,7 +106,9 @@ export function claudeSpend(since, until = Infinity, tops, onProgress) {
                 item.estimated = true;
             if (r.model)
                 item.model = r.model;
-            if (f.subagent || r.sidechain)
+            if (f.run)
+                item.workflow = `${session}/${f.run}`;
+            else if (f.subagent || r.sidechain)
                 item.subagent = true;
             if (r.uuid)
                 item.key = r.uuid;
@@ -306,6 +317,8 @@ function add(map, key, it) {
     r.requests++;
     r.byTool[it.tool] = (r.byTool[it.tool] ?? 0) + it.usd;
 }
+/** "1 run", "12 runs": workflow runs. */
+const runsText = (n) => `${n.toLocaleString("en-US")} ${n === 1 ? "run" : "runs"}`;
 /** Add up priced requests into the report. */
 export function summarizeSpend(items, days, since, until, skipped = []) {
     const tools = new Map();
@@ -313,6 +326,7 @@ export function summarizeSpend(items, days, since, until, skipped = []) {
     const sessions = new Map();
     const sessionModels = new Map();
     const parts = { inputUsd: 0, writeUsd: 0, readUsd: 0, outputUsd: 0 };
+    const runs = new Set();
     for (const it of items) {
         const t = tools.get(it.tool) ?? tools.set(it.tool, { tool: it.tool, name: TOOL_NAME[it.tool], usd: 0, requests: 0, tokens: { input: 0, read: 0, write: 0, output: 0 }, unpriced: 0, unpricedTokens: 0, unpricedModels: [], ...(it.tool === "cursor" ? { estimate: true } : {}), ...(it.tool === "claude" ? { subagentUsd: 0 } : {}) }).get(it.tool);
         t.usd += it.usd;
@@ -323,6 +337,11 @@ export function summarizeSpend(items, days, since, until, skipped = []) {
         t.tokens.output += it.output;
         if (it.subagent && t.subagentUsd !== undefined)
             t.subagentUsd += it.usd;
+        if (it.workflow) {
+            t.workflowUsd = (t.workflowUsd ?? 0) + it.usd;
+            runs.add(it.workflow);
+            t.workflowRuns = runs.size;
+        }
         if (!it.priced) {
             t.unpriced++;
             t.unpricedTokens += it.input + it.read + it.write + it.output;
@@ -425,7 +444,7 @@ export function renderSpend(r, top = 8) {
     lines.push("─".repeat(60));
     for (const t of r.tools) {
         const unit = t.tool === "cursor" ? "replies" : "requests";
-        const notes = [t.estimate ? "estimate, no cache split" : t.subagentUsd ? `subagents ${usd(t.subagentUsd)}` : "", t.unpriced ? `${t.unpriced.toLocaleString("en-US")} not priced` : ""].filter(Boolean);
+        const notes = [t.estimate ? "estimate, no cache split" : t.subagentUsd ? `subagents ${usd(t.subagentUsd)}` : "", t.workflowUsd ? `workflows ${usd(t.workflowUsd)} (${runsText(t.workflowRuns ?? 0)})` : "", t.unpriced ? `${t.unpriced.toLocaleString("en-US")} not priced` : ""].filter(Boolean);
         const note = notes.length ? `  ${notes.join(", ")}` : "";
         lines.push(`${t.name.padEnd(14)}${`${t.estimate ? "~" : ""}${usd(t.usd)}`.padStart(11)}  ${`${t.requests.toLocaleString("en-US")} ${unit}`.padEnd(16)}${note}`);
     }
@@ -459,6 +478,8 @@ export function renderSpend(r, top = 8) {
     const claude = r.tools.find((t) => t.tool === "claude");
     if (claude?.subagentUsd)
         lines.push(`  Claude Code subagents ${usd(claude.subagentUsd)} (${share(claude.subagentUsd, r.usd)}): context-doctor subagents says which paid off`);
+    if (claude?.workflowUsd)
+        lines.push(`  Claude Code workflow agents ${usd(claude.workflowUsd)} (${share(claude.workflowUsd, r.usd)}), in ${runsText(claude.workflowRuns ?? 0)}`);
     lines.push("  Biggest sessions:");
     for (const s of r.sessions.slice(0, Math.min(top, 5))) {
         const when = shortDay(localDay(s.last));
@@ -501,6 +522,8 @@ export function renderSpendShare(r) {
     const claude = r.tools.find((t) => t.tool === "claude");
     if (claude?.subagentUsd)
         lines.push(`Claude Code subagents: ${usd(claude.subagentUsd)} of it.`);
+    if (claude?.workflowUsd)
+        lines.push(`Claude Code workflow agents: ${usd(claude.workflowUsd)} of it, in ${runsText(claude.workflowRuns ?? 0)}.`);
     // Requests on a model with no list price are not in the total: said, so the total is not read as all of it.
     const unpriced = r.tools.reduce((n, t) => n + t.unpriced, 0);
     if (unpriced)

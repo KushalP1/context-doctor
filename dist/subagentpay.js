@@ -27,6 +27,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { forEachLine, listSessions, outputSettler, replyCounter, isClaudeSession } from "./session.js";
+import { subagentFiles, workflowRunInfo } from "./subagents.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
 import { cacheWriteSplit, formatUsd, pricingFor, usageCost, writeMultiplier } from "./pricing.js";
 /**
@@ -171,8 +172,29 @@ export function subagentPayback(days = 30, paths, onProgress) {
     const sessions = paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
     const out = [];
     let withSubagents = 0;
+    const runs = new Map();
     for (const [index, parent] of sessions.entries()) {
         onProgress?.(index, sessions.length);
+        for (const f of subagentFiles(parent)) {
+            if (!f.run)
+                continue;
+            let w;
+            try {
+                w = scanSubagent(f.file);
+            }
+            catch {
+                continue;
+            }
+            // Each by its own start, as the Agent tool's below.
+            if (!(w.steps > 0) || (Number.isFinite(w.start) && w.start < since))
+                continue;
+            const key = `${parent}\u0000${f.run}`;
+            const r = runs.get(key) ?? runs.set(key, { name: workflowRunInfo(parent, f.run).name ?? f.run, agents: 0, costUsd: 0, atSonnetUsd: 0, start: w.start }).get(key);
+            r.agents++;
+            r.costUsd += w.costUsd;
+            r.atSonnetUsd += w.atSonnetUsd;
+            r.start = Math.min(r.start, w.start);
+        }
         const dir = join(parent.replace(/\.jsonl$/, ""), "subagents");
         if (!existsSync(dir))
             continue;
@@ -241,13 +263,28 @@ export function subagentPayback(days = 30, paths, onProgress) {
         if (out.length > before)
             withSubagents++;
     }
-    return { days, sessions: withSubagents, subagents: out };
+    const byRun = [...runs.values()].sort((a, b) => b.costUsd - a.costUsd);
+    const workflows = byRun.length
+        ? { runs: byRun.length, agents: byRun.reduce((n, r) => n + r.agents, 0), costUsd: byRun.reduce((n, r) => n + r.costUsd, 0), atSonnetUsd: byRun.reduce((n, r) => n + r.atSonnetUsd, 0), byRun: byRun.map(({ atSonnetUsd: _s, ...r }) => r) }
+        : undefined;
+    return { days, sessions: withSubagents, subagents: out, ...(workflows ? { workflows } : {}) };
+}
+/** The workflow agents' lines of `subagents`: what they cost, by run. */
+function renderWorkflows(w, top) {
+    const out = ["", `Workflow agents: ${w.agents} in ${w.runs} workflow run${w.runs === 1 ? "" : "s"}, ${formatUsd(w.costUsd)} at list price (each run's work handed off whole, so not weighed against the parent).`];
+    if (w.costUsd - w.atSonnetUsd >= 1)
+        out.push(`At ${SUBAGENT_CANDIDATE_NAME} (where they ran on a pricier model): ~${formatUsd(w.atSonnetUsd)}, token counts as recorded: an estimate.`);
+    for (const r of w.byRun.slice(0, top))
+        out.push(`  ${formatUsd(r.costUsd).padStart(9)}  ${String(r.agents).padStart(3)} agents  ${r.name.slice(0, 60)}`);
+    if (w.byRun.length > top)
+        out.push(`  … and ${w.byRun.length - top} more`);
+    return out;
 }
 export function renderPayback(r, top = 8) {
     const out = ["DO SUBAGENTS PAY FOR THEMSELVES?", "═".repeat(56)];
     const all = r.subagents;
     if (!all.length)
-        return [...out, `No subagents in the last ${r.days} days.`].join("\n");
+        return [...out, `No subagents in the last ${r.days} days.`, ...(r.workflows ? renderWorkflows(r.workflows, top) : [])].join("\n");
     const cost = all.reduce((s, a) => s + a.costUsd, 0);
     const inParent = all.reduce((s, a) => s + a.inParentUsd, 0);
     const paid = all.filter((a) => a.netUsd > 0);
@@ -277,5 +314,7 @@ export function renderPayback(r, top = 8) {
             out.push(`  −${formatUsd(-a.netUsd).padEnd(8)} ${String(a.steps).padStart(3)} steps, parent at ~${formatTokens(a.parentContextTokens)}, read ~${formatTokens(a.readTokens)}  ${a.task}`);
     }
     out.push("", "Counts context only: a subagent can still be worth it for parallel time or a clean window on a hard task.", "Subagents pay most when the parent is already large (every step there re-reads it) and least for short tasks from a small parent.");
+    if (r.workflows)
+        out.push(...renderWorkflows(r.workflows, top));
     return out.join("\n");
 }

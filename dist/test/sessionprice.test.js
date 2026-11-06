@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -133,6 +133,61 @@ test("after an idle that expired the cache: this message's re-write, and the col
     assert.match(said, /^context-doctor: this session has cost \$30\.12 so far; the cache expired while it was idle, so this message re-writes its ~300k tokens \(~\$0\.750\), and each one after re-reads them \(~\$0\.060\)\. \/compact, or a handoff/);
     assert.doesNotMatch(said, /idle \d+ (minutes|hours), so this message re-sent/, "one line about the re-write, not two");
 });
+test("when the price line has told the user to /compact, the model is not asked to offer it too", () => {
+    const { transcript, env } = setup();
+    writeFileSync(transcript, pad(200) + reply(NOW - 3 * HOUR, 20) + reply(NOW - 2 * HOUR, 10));
+    const r = spawnSync(process.execPath, [...frozenClock(NOW), cli, "hook"], { env: { ...env, CONTEXT_DOCTOR_WARN_TOKENS: "100000" }, input: prompt(transcript), encoding: "utf8", timeout: 60_000 });
+    const out = JSON.parse(r.stdout.trim());
+    assert.match(out.systemMessage, /this session has cost \$30\.12 so far; the cache expired/);
+    const model = String(out.hookSpecificOutput?.additionalContext ?? "");
+    assert.doesNotMatch(model, /Begin your reply with one short sentence offering/, "the cold-resume offer");
+    assert.doesNotMatch(model, /offer the user a compaction/, "the heavy-context offer");
+    assert.match(model, /This session's context is at ~300k tokens/, "the model still gets the facts");
+    // A later idle, with no price line due, gets the model's offer as before.
+    appendFileSync(transcript, reply(NOW - 90 * MIN, 1));
+    const later = spawnSync(process.execPath, [...frozenClock(NOW + 3 * HOUR), cli, "hook"], { env, input: prompt(transcript), encoding: "utf8", timeout: 60_000 });
+    assert.match(JSON.parse(later.stdout.trim()).hookSpecificOutput.additionalContext, /Begin your reply with one short sentence offering/);
+});
+/** A row as Claude Code writes it, with the session it belongs to and its model. */
+function ownRow(ts, usd, sessionId, model = "claude-sonnet-5", opts = {}) {
+    const id = opts.id ?? `msg_${n++}`;
+    return JSON.stringify({ type: "assistant", uuid: `u-${id}-${n++}`, sessionId, timestamp: new Date(ts).toISOString(), ...(opts.sidechain ? { isSidechain: true } : {}), message: { id, model, role: "assistant", content: [{ type: "text", text: "ok" }], usage: { input_tokens: 0, cache_read_input_tokens: 300_000, output_tokens: opts.output ?? Math.round(usd * 100_000) } } }) + "\n";
+}
+test("workflow agents bill to the session; a resumed session's copy of the old one is not its cost; family prices and unpriced models are named", () => {
+    const { transcript, env } = setup();
+    // A session resumed into s1: the old session's rows copied first, keeping its id ($50), then s1's own ($10).
+    writeFileSync(transcript, ownRow(NOW - 5 * HOUR, 25, "old") + ownRow(NOW - 4 * HOUR, 25, "old") + ownRow(NOW - 3 * MIN, 10, "s1"));
+    // A workflow run's agent ($20), its rows carrying s1's id; one reply on a model known only by its family, one on a model with no price.
+    const run = join(transcript.replace(/\.jsonl$/, ""), "subagents", "workflows", "wf_one");
+    mkdirSync(run, { recursive: true });
+    writeFileSync(join(run, "agent-w1.jsonl"), ownRow(NOW - 2 * MIN, 20, "s1", "claude-sonnet-5", { sidechain: true }) + ownRow(NOW - 2 * MIN, 0, "s1", "claude-sonnet-9", { sidechain: true, output: 0 }) + ownRow(NOW - 2 * MIN, 0, "s1", "my-local-model", { sidechain: true }));
+    const said = hook(env, prompt(transcript)) ?? "";
+    // $10.06 + $20.06 + claude-sonnet-9 at the Sonnet family's $0.30 per 1M cached read ($0.09).
+    assert.equal(said, "context-doctor: this session has cost $30.21 so far ($20.15 of it workflow agents; ~$0.09 priced as its model's family, an estimate; 1 request with no list price not counted); each message now re-reads ~300k tokens (~$0.060). /compact, or a handoff to a new session, cuts that.");
+});
+test("a finished subagent's entry keeps no recent replies: the price file stays small, and a later write is still counted right", async () => {
+    const { home, transcript } = setup();
+    const subs = join(transcript.replace(/\.jsonl$/, ""), "subagents");
+    mkdirSync(subs, { recursive: true });
+    writeFileSync(transcript, pad(600) + ownRow(NOW - HOUR, 1, "s1"));
+    const agent = join(subs, "agent-a.jsonl");
+    writeFileSync(agent, pad(100) + ownRow(NOW - 3 * HOUR, 2, "s1", undefined, { id: "msg_sub", sidechain: true }));
+    utimesSync(agent, new Date(NOW - 3 * HOUR), new Date(NOW - 3 * HOUR));
+    await withSandboxHome(home, () => {
+        clearScanMemo();
+        const env = { CONTEXT_DOCTOR_SESSION_PRICE: "4" };
+        assert.equal(sessionPriceDue({ sessionId: "s1", transcript }, NOW, env), undefined, "$3.12: below $4");
+        const file = JSON.parse(readFileSync(ledgerOf(join(home, ".claude", ".context-doctor-hook-state.d"), "s1"), "utf8"));
+        assert.equal(file.v, 2);
+        assert.ok(Array.isArray(file.f[transcript].r), "the live main conversation keeps its list");
+        assert.equal(file.f[agent].r, undefined, "the finished subagent keeps none");
+        // It writes again after all: the same reply's output settles (+$1), and a new reply ($1).
+        appendFileSync(agent, ownRow(NOW - MIN, 3, "s1", undefined, { id: "msg_sub", sidechain: true }) + ownRow(NOW - MIN, 1, "s1", undefined, { sidechain: true }));
+        const p = sessionPriceDue({ sessionId: "s1", transcript }, NOW, env);
+        const spent = claudeSpend(0, Infinity, [transcript]).reduce((a, it) => a + it.usd, 0);
+        assert.ok(p && Math.abs(p.usd - spent) < 1e-9 && Math.abs(p.usd - 5.18) < 1e-9, `${p?.usd} vs ${spent}`);
+    });
+});
 test("several hooks at once for one session: the threshold is said by exactly one", async () => {
     const { transcript, env } = setup();
     writeFileSync(transcript, reply(NOW - 2 * MIN, 20) + reply(NOW - MIN, 10));
@@ -216,7 +271,8 @@ test("Gemini CLI: BeforeAgent gets the line, with /compress", () => {
         rows.push({ id: `g${i}`, timestamp: at, type: "gemini", content: "ok", model: "gemini-3-pro", tokens: { input: 200_000, cached: 190_000, output: 1_000_000 } });
     writeFileSync(path, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
     const said = hook(env, JSON.stringify({ session_id: "abc", transcript_path: path, cwd: "/w", hook_event_name: "BeforeAgent", timestamp: at, prompt: "go" }));
-    assert.match(said ?? "", /^context-doctor: this session has cost \$36\.\d\d so far; each message now re-reads ~200k tokens \(~\$0\.040\)\. \/compress, or a handoff to a new session, cuts that\.$/);
+    // gemini-3-pro has no row of its own (the Gemini 3 Pro family's price): said to be an estimate.
+    assert.match(said ?? "", /^context-doctor: this session has cost \$36\.\d\d so far \(~\$36\.\d\d priced as its model's family, an estimate\); each message now re-reads ~200k tokens \(~\$0\.040\)\. \/compress, or a handoff to a new session, cuts that\.$/);
 });
 test("CONTEXT_DOCTOR_NO_SESSION_PRICE=1: silent, nothing written; other events never say it", () => {
     const { transcript, env, dir } = setup();

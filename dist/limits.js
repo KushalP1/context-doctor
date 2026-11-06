@@ -31,7 +31,7 @@ import { dirname, join } from "node:path";
 import { codexDir } from "./codexdir.js";
 import { statePath } from "./ledger.js";
 import { forEachLine, listSessions, outputSettler, replyCounter, isClaudeSession } from "./session.js";
-import { subagentDir } from "./subagents.js";
+import { subagentFiles } from "./subagents.js";
 import { pick, rowsOf, slimUsage } from "./scan.js";
 import { isUnbilledModel, openAIUsage, pricingFor, usageCost } from "./pricing.js";
 import { realModel } from "./tokens.js";
@@ -429,22 +429,21 @@ export function claudeFileUsage(file, since, until = Infinity, runRows) {
  * first), each followed by its subagents'.
  */
 export function claudeUsageFiles(since, tops) {
-    const mains = tops ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
+    // A session last written before `since` can still have subagents (a workflow run, a background
+    // agent) writing after it: those of the sessions written in the SUBAGENT_LOOKBACK_MS before count.
+    const listed = tops ? undefined : listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since - SUBAGENT_LOOKBACK_MS);
+    const mains = tops ?? listed.map((s) => s.path);
     const files = [];
-    for (const t of mains) {
-        files.push({ file: t, top: t, subagent: false });
-        const dir = subagentDir(t);
-        try {
-            for (const f of readdirSync(dir))
-                if (f.endsWith(".jsonl") && statSync(join(dir, f)).mtimeMs >= since)
-                    files.push({ file: join(dir, f), top: t, subagent: true });
-        }
-        catch {
-            /* no subagents */
-        }
+    for (const [i, t] of mains.entries()) {
+        if (!listed || listed[i].modifiedAt.getTime() >= since)
+            files.push({ file: t, top: t, subagent: false });
+        for (const f of subagentFiles(t, since))
+            files.push({ file: f.file, top: t, subagent: true, ...(f.run ? { run: f.run } : {}) });
     }
     return files;
 }
+/** How long before a period a session may have been last written and still have subagents running into it. */
+export const SUBAGENT_LOOKBACK_MS = 2 * 86_400_000;
 /**
  * Every Claude Code request between `since` and `until`, main threads and
  * subagents alike (both draw on the same limits), each reply once.

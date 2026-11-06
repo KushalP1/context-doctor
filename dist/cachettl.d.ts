@@ -71,7 +71,11 @@ interface Acc extends TtlReplay {
  * rows; a main transcript skips them. Returns the requests counted.
  */
 export declare function replayTtlTranscript(path: string, acc: Acc, since: number, until?: number, sidechains?: boolean, runRows?: Set<string>, otherIds?: Set<string>): number;
-/** Subagent transcripts of the main transcripts under ~/.claude/projects written since `since`. */
+/**
+ * Subagent transcripts of the sessions under ~/.claude/projects written
+ * since `since`: the Agent tool's and the workflow agents'
+ * (subagents/workflows/<run>/, subagentFiles).
+ */
 export declare function subagentTranscripts(since: number, home?: string): string[];
 export interface TtlOptions {
     /** Main transcripts (default: Claude Code transcripts written in the period). */

@@ -6,7 +6,8 @@
  * Read results (some failing), repeated identical calls, MCP tools, a
  * skill, slash commands, typed-while-working prompts, corrections, thinking
  * blocks, a reply written as several rows, a fork that copies its parent,
- * subagents, an older session only the 60-day check reaches, a desktop-app
+ * subagents, a workflow run's agents (subagents/workflows/<run>/, with the
+ * run's own record), an older session only the 60-day check reaches, a desktop-app
  * session, a CRLF file, a malformed row and a last line still being written.
  *
  * Deterministic: a seeded generator, fixed times before FIXTURE_NOW (the

@@ -38,6 +38,7 @@ import { pricingFor, usageCost } from "./pricing.js";
 import { realModel } from "./tokens.js";
 import { claudeDir } from "./claudedir.js";
 import { subagentTranscripts } from "./cachettl.js";
+import { workflowRunOf } from "./subagents.js";
 import { managedDir } from "./effective.js";
 import { SUBAGENT_CANDIDATE, SUBAGENT_CANDIDATE_NAME } from "./subagentpay.js";
 export { SUBAGENT_CANDIDATE, SUBAGENT_CANDIDATE_NAME };
@@ -56,6 +57,11 @@ const BUILT_IN = {
     fork: "inherit",
     "claude-code-guide": "haiku",
     "statusline-setup": "sonnet",
+    // A workflow agent (subagents/workflows/<run>/): read from the 2.1.317 binary, its model is the
+    // script's agent() `model`, then CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL, then this lever's
+    // CLAUDE_CODE_SUBAGENT_MODEL, then the main conversation's. Scripts seldom name one (none of the
+    // author's 9 runs did), so the variable moves them.
+    "workflow-subagent": undefined,
 };
 /** Types that only read (no Edit or Write): the ones a smaller model is most often enough for. */
 const READ_ONLY = new Set(["Explore", "Plan"]);
@@ -227,7 +233,8 @@ export function agentTypeOf(transcript) {
     catch {
         /* older Claude Code: no meta */
     }
-    return "unknown";
+    // A workflow agent's folder says what it is when its meta file is missing.
+    return workflowRunOf(transcript) ? "workflow-subagent" : "unknown";
 }
 const tokens = (v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
 const promptTokens = (u) => tokens(u?.input_tokens) + tokens(u?.cache_read_input_tokens) + tokens(u?.cache_creation_input_tokens);
@@ -377,6 +384,9 @@ export function renderSubagentTypes(r) {
         const head = `${t.type.slice(0, 19).padEnd(20)}${String(t.agents).padStart(6)}${usd(t.billedUsd).padStart(11)}`;
         out.push(head + (t.moves ? usd(t.atCandidateUsd).padStart(col.length + 3) : `   unchanged: ${t.why}`));
     }
+    // Workflow agents follow this variable too; Claude Code has one of their own, which this lever does not set.
+    if (r.byType.some((t) => t.type === "workflow-subagent"))
+        out.push("Workflow agents move with it unless the workflow's script names a model. For them alone: CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL (it also overrides a model the script names).");
     const ro = r.byType.filter((t) => t.readOnly);
     if (ro.length) {
         const billed = ro.reduce((s, t) => s + t.billedUsd, 0);

@@ -94,9 +94,11 @@ export declare function wellFormed(e: FileEntry | undefined): e is FileEntry;
  * `direct`: a Claude Code transcript met for the first time is read here,
  * not through the shared scan, which keeps a cache entry of it on disk (the
  * session price reads one session, and writes nothing while it has nothing
- * to say).
+ * to say). `own`: a Claude Code transcript's rows of other sessions are not
+ * counted (readAppended); only with `direct`, which reads every Claude Code
+ * transcript itself.
  */
-export declare function refreshEntry(tool: Tool, file: string, prev: FileEntry | undefined, since: number, direct?: boolean): {
+export declare function refreshEntry(tool: Tool, file: string, prev: FileEntry | undefined, since: number, direct?: boolean, own?: string): {
     e: FileEntry;
     read: number;
 } | undefined;

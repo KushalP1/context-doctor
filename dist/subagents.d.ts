@@ -37,9 +37,33 @@ export interface SubagentReport {
     totalCostUsd: number;
     /** Agents whose model has no price on file, so the total undercounts. */
     unpriced: number;
+    /** How many of `agents` are workflow agents (subagents/workflows/<run>/), in how many runs. */
+    workflowAgents?: number;
+    workflowRuns?: number;
 }
 /** Where Claude Code keeps a session's subagents: beside the transcript, under its id. */
 export declare function subagentDir(transcriptPath: string): string;
+/**
+ * Every subagent transcript of a session: the Agent tool's
+ * (`subagents/agent-*.jsonl`) and the workflow agents'
+ * (`subagents/workflows/<run>/agent-*.jsonl`, one folder per workflow run,
+ * the run's own record in `<session>/workflows/<run>.json`). Workflow agents
+ * bill to the session like any subagent, and every reader skipped their
+ * folder: on the author's machine, 804 transcripts and ~$1,354 in 30 days.
+ * `since`: only files written since then. `run`: the workflow run's id.
+ */
+export declare function subagentFiles(transcriptPath: string, since?: number): Array<{
+    file: string;
+    run?: string;
+}>;
+/** The workflow run a subagent transcript belongs to (its folder under subagents/workflows), or undefined. */
+export declare function workflowRunOf(file: string): string | undefined;
+/** A workflow run's own record, `<session>/workflows/<run>.json`: its name and default model, when Claude Code wrote one. */
+export declare function workflowRunInfo(transcriptPath: string, run: string): {
+    name?: string;
+    model?: string;
+    status?: string;
+};
 /** Account for every subagent of a session, or null when there are none. */
 export declare function subagentReport(transcriptPath: string): SubagentReport | null;
 export interface SubagentRenderOptions {

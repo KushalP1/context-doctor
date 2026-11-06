@@ -5,7 +5,8 @@
  * Each tool keeps its own record of what it sent, and none adds them up:
  *
  *  - Claude Code: every reply's `usage` in its transcripts, the main
- *    conversation and each subagent's (`<session>/subagents/agent-*.jsonl`),
+ *    conversation, each subagent's (`<session>/subagents/agent-*.jsonl`)
+ *    and each workflow agent's (`<session>/subagents/workflows/<run>/`),
  *    read as `limits` reads them (claudeFileUsage): each reply once, its
  *    output settled on its last row, a fork's copy of its parent counted once.
  *  - Codex: the `token_count` events of its rollouts (~/.codex/sessions and
@@ -55,12 +56,22 @@ export interface SpendItem {
     priced: boolean;
     /** Priced by its family's row, not one of its own (a new release, an id the table does not list): an estimate. */
     estimated?: boolean;
-    /** Claude Code: run by a subagent. */
+    /** Claude Code: run by a subagent (the Agent tool's). */
     subagent?: boolean;
+    /** Claude Code: run by a workflow agent: its run, "<session>/<run>". */
+    workflow?: string;
     /** Claude Code: the reply's row uuid, which a fork's copy shares. Codex: the event's codexEventKey, which a forked rollout's copy shares. */
     key?: string;
 }
-/** A project's name as `savings` shows it: the folder's path with "-" for separators, less "-Users-<you>-". */
+/**
+ * A project folder's name (its path with "-" for separators, as Claude Code
+ * names its projects/ folders) less the home folder: "-Users-<you>-" on
+ * macOS, "-home-<you>-" (or "-root-") on Linux, "C--Users-<you>-" on Windows.
+ * Only macOS's was stripped, so on Linux and Windows every project read
+ * "home-kp-app" or "C--Users-kp-app".
+ */
+export declare function projectFromDir(dir: string): string;
+/** A project's name as `savings` shows it: the folder's path with "-" for separators, less the home folder. */
 export declare function projectName(folder: string): string;
 /**
  * Claude Code's requests between `since` and `until`, main threads and
@@ -104,6 +115,9 @@ export interface ToolSpend {
     };
     /** Claude Code: what its subagents cost, inside `usd`. */
     subagentUsd?: number;
+    /** Claude Code: what its workflow agents cost, inside `usd`, and in how many workflow runs. */
+    workflowUsd?: number;
+    workflowRuns?: number;
     /** Cursor: priced without a cache split, an upper bound. */
     estimate?: boolean;
     /** Requests whose model has no list price, counted but not in `usd`. */

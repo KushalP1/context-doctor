@@ -11,6 +11,7 @@ import { execFile } from "node:child_process";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderSubagents, subagentDir, subagentReport } from "../subagents.js";
+import { renderPayback, subagentPayback } from "../subagentpay.js";
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
 function line(type, content, extra = {}, ts = "2026-09-18T10:00:00.000Z") {
     return JSON.stringify({ type, timestamp: ts, isSidechain: true, message: { role: type, content, ...extra } });
@@ -74,6 +75,30 @@ test("rendering names the invisible money and compares total against total", () 
     assert.match(out, /ended above 200k tokens of context/, "a subagent doing a main session's job is called out");
     assert.match(out, /do the whole audit/);
     assert.equal(renderSubagents(null), null);
+});
+test("workflow agents (subagents/workflows/<run>/) are the session's subagents too: in the report, named by run, and in `subagents`", () => {
+    const { transcript, subs } = session();
+    const recent = new Date(Date.now() - 3_600_000).toISOString();
+    writeFileSync(join(subs, "agent-aaa.jsonl"), [line("user", "an Agent tool task", {}, recent), line("assistant", "ok", usage(1_000, 0, 0, 10), recent)].join("\n") + "\n");
+    const run = join(subs, "workflows", "wf_abc-123");
+    mkdirSync(run, { recursive: true });
+    for (const k of [1, 2])
+        writeFileSync(join(run, `agent-w${k}.jsonl`), [line("user", `review part ${k}`, {}, recent), line("assistant", "ok", usage(100_000, 0, 0, 1_000, "claude-opus-5-5"), recent)].join("\n") + "\n");
+    mkdirSync(join(subs, "..", "workflows"), { recursive: true });
+    writeFileSync(join(subs, "..", "workflows", "wf_abc-123.json"), JSON.stringify({ workflowName: "nightly-review", status: "completed", defaultModel: "claude-opus-5-5" }));
+    const report = subagentReport(transcript);
+    assert.equal(report.agents.length, 3, "the workflow's two agents beside the Agent tool's one");
+    assert.equal(report.workflowAgents, 2);
+    assert.equal(report.workflowRuns, 1);
+    assert.match(renderSubagents(report) ?? "", /\n2 of them are workflow agents, in 1 workflow run\./);
+    // `subagents`: their bill by run, not weighed against the parent. Opus 5.5: $4 in, $20 out per 1M.
+    const pay = subagentPayback(30, [transcript]);
+    assert.equal(pay.workflows?.runs, 1);
+    assert.equal(pay.workflows?.agents, 2);
+    assert.ok(Math.abs((pay.workflows?.costUsd ?? 0) - 2 * (100_000 * 4 + 1_000 * 20) / 1e6) < 1e-9, `${pay.workflows?.costUsd}`);
+    assert.equal(pay.workflows?.byRun[0].name, "nightly-review", "named from the run's own record");
+    assert.ok(!pay.subagents.some((s) => s.id.startsWith("w")), "not in the payback comparison");
+    assert.match(renderPayback(pay), /\nWorkflow agents: 2 in 1 workflow run, \$0\.840 at list price/);
 });
 test("no subagents directory means nothing to say, not an error", () => {
     const project = mkdtempSync(join(tmpdir(), "ctxdoc-nosubs-"));

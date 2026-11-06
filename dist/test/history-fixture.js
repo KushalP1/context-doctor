@@ -6,7 +6,8 @@
  * Read results (some failing), repeated identical calls, MCP tools, a
  * skill, slash commands, typed-while-working prompts, corrections, thinking
  * blocks, a reply written as several rows, a fork that copies its parent,
- * subagents, an older session only the 60-day check reaches, a desktop-app
+ * subagents, a workflow run's agents (subagents/workflows/<run>/, with the
+ * run's own record), an older session only the 60-day check reaches, a desktop-app
  * session, a CRLF file, a malformed row and a last line still being written.
  *
  * Deterministic: a seeded generator, fixed times before FIXTURE_NOW (the
@@ -67,7 +68,7 @@ function sessionRows(s, cwd) {
     const base = (extra) => ({
         ...(s.sidechain ? { isSidechain: true } : {}),
         cwd,
-        sessionId: s.id,
+        sessionId: s.sessionId ?? s.id,
         version: s.version ?? "2.1.300",
         entrypoint: s.entrypoint ?? "cli",
         ...extra,
@@ -206,6 +207,18 @@ export function buildHistory(home, now = FIXTURE_NOW) {
         write(join(subDir, `agent-a${k}.jsonl`), sub.rows, sub.end);
         writeFileSync(join(subDir, `agent-a${k}.meta.json`), JSON.stringify({ agentType: "general-purpose", description: `task ${k}` }));
     }
+    // A workflow run of s4: two workflow agents on Opus 5.5 (the run's default model), 5-minute
+    // writes, sidechain rows carrying s4's session id as Claude Code writes them; one has no meta file.
+    const run = "wf_fixture-01";
+    const wfDir = join(subDir, "workflows", run);
+    for (const [k, seed] of [[1, 31], [2, 32]]) {
+        const wf = sessionRows({ id: `wf${k}`, start: now - 3 * DAY + (30 + k * 5) * MIN, requests: 9, seed, model: "claude-opus-5-5", oneHour: false, sidechain: true, sessionId: "s4" }, cwd);
+        write(join(wfDir, `agent-w${k}.jsonl`), wf.rows, wf.end);
+        if (k === 1)
+            writeFileSync(join(wfDir, `agent-w${k}.meta.json`), JSON.stringify({ agentType: "workflow-subagent", description: "review:docs", workflowPhase: "Review" }));
+    }
+    mkdirSync(join(project(home), "s4", "workflows"), { recursive: true });
+    writeFileSync(join(project(home), "s4", "workflows", `${run}.json`), JSON.stringify({ runId: run, workflowName: "fixture-review", status: "completed", agentCount: 2, defaultModel: "claude-opus-5-5" }));
     writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { github: { command: "github-mcp", args: [] }, unused: { command: "unused-mcp" } } }));
     // Five-hour window readings, as the status line records them.
     const limits = [];

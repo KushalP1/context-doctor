@@ -20,6 +20,7 @@ import { CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, pricingFor, usageCost,
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
 import { withInvocation } from "./invocation.js";
 import { sessionsLabel } from "./compactwindow.js";
+import { projectFromDir } from "./spend.js";
 /** System prompt and tool schemas: sent on every request, identical in both arms. */
 const FIXED_TOKENS = 54_000;
 const CLAUDE_CODE_TTL_MS = 3_600_000;
@@ -285,7 +286,7 @@ function settleReplay(path, rows, since, runRows, coldRows, replay) {
     const entrypoint = end?.entrypoint;
     return {
         path,
-        project: dir.replace(/^-Users-[^-]+-/, "").replace(/^-/, "") || dir,
+        project: projectFromDir(dir),
         model: end?.model,
         requests,
         billedWeighted: billed,

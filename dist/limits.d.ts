@@ -135,7 +135,10 @@ export declare function claudeUsageFiles(since: number, tops?: string[]): Array<
     file: string;
     top: string;
     subagent: boolean;
+    run?: string;
 }>;
+/** How long before a period a session may have been last written and still have subagents running into it. */
+export declare const SUBAGENT_LOOKBACK_MS: number;
 /**
  * Every Claude Code request between `since` and `until`, main threads and
  * subagents alike (both draw on the same limits), each reply once.

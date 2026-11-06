@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
-import { claudeSpend, codexSpend, cursorSpend, geminiSpend, renderSpend, renderSpendShare, spendReport, summarizeSpend } from "../spend.js";
+import { claudeSpend, codexSpend, cursorSpend, geminiSpend, projectFromDir, projectName, renderSpend, renderSpendShare, spendReport, summarizeSpend } from "../spend.js";
 import { claudeUsage, codexLimitData } from "../limits.js";
 import { estimateSavings } from "../savings.js";
 import { clearScanMemo } from "../scan.js";
@@ -104,7 +104,7 @@ test("Claude Code's spend equals limits' usage, and its main conversation's inpu
             // savings: the main conversation's input (output not), in sessions with 10+ requests.
             const s = estimateSavings(30, {}, undefined, undefined, false);
             const kept = new Set(s.sessions.map((x) => x.path.replace(/^.*[\\/]/, "").replace(/\.jsonl$/, "")));
-            const input = items.filter((i) => !i.subagent && kept.has(i.session)).reduce((n, i) => n + i.inputUsd + i.writeUsd + i.readUsd, 0);
+            const input = items.filter((i) => !i.subagent && !i.workflow && kept.has(i.session)).reduce((n, i) => n + i.inputUsd + i.writeUsd + i.readUsd, 0);
             assert.ok(s.billedUsd > 0);
             close(input, s.billedUsd, "savings' input bill");
             // The parts add up to the whole.
@@ -354,6 +354,15 @@ test("a model priced only by its family is an estimate, said so; a <synthetic> r
         rmSync(home, { recursive: true, force: true });
         rmSync(cache, { recursive: true, force: true });
     }
+});
+test("project names less the home folder on macOS, Linux and Windows", () => {
+    assert.equal(projectFromDir("-Users-kp-tech-app"), "tech-app");
+    assert.equal(projectFromDir("-home-kp-tech-app"), "tech-app");
+    assert.equal(projectFromDir("-root-app"), "app");
+    assert.equal(projectFromDir("C--Users-kp-tech-app"), "tech-app");
+    assert.equal(projectFromDir("-srv-app"), "srv-app");
+    assert.equal(projectName("/home/kp/tech/app"), "tech-app");
+    assert.equal(projectName("C:\\Users\\kp\\tech\\app"), "tech-app");
 });
 test("nothing on disk: no tools, a plain sentence, and --share says so", async () => {
     const home = mkdtempSync(join(tmpdir(), "cd-spend-empty-"));
