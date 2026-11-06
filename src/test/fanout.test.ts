@@ -74,6 +74,9 @@ test("what is said: the price on a type's first launch and on a burst, one note 
   const sonnet = estimateSubagent(costs, "Explore", "sonnet")!;
   const asked = fanoutMessage(sonnet, "sonnet", [line(0, "Explore", false)], line(0, "Explore", false));
   assert.ok(!/On Sonnet/.test(asked.systemMessage!) && asked.additionalContext === undefined, "already on Sonnet: no cheaper option");
+  assert.match(asked.systemMessage!, /^context-doctor: an Explore subagent on /, "an Explore, not a Explore");
+  const explore = estimateSubagent(costs, "Explore", undefined, "claude-opus-5-5");
+  if (explore?.cheaper) assert.match(fanoutMessage(explore, undefined, [line(0, "Explore")], line(0, "Explore")).additionalContext!, /on this machine an Explore subagent/);
   assert.deepEqual(fanoutMessage(undefined, undefined, [line(0)], line(0)), {}, "no estimate: nothing");
   assert.deepEqual(launchOf({ tool_name: "Bash", tool_input: {} }), undefined);
   assert.deepEqual(launchOf({ tool_name: "Task", tool_input: { subagent_type: "Explore" } }), { type: "Explore", alias: undefined }, "Task, the tool's name before 2.1.63");

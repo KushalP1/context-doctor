@@ -159,6 +159,8 @@ function aliasModel(alias, costs) {
     const seen = Object.entries(costs.byModel).filter(([m]) => a.family.test(m)).sort((x, y) => y[1].n - x[1].n)[0]?.[0];
     return seen ?? a.fallback;
 }
+/** "an Explore", "a general-purpose": the article for a subagent type (it read "a Explore subagent"). */
+const an = (type) => (/^[aeiou]/i.test(type) ? `an ${type}` : `a ${type}`);
 const short = (model) => {
     const m = /claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d{1,2}))?(?!\d)/i.exec(model ?? "");
     return m ? `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? `.${m[3]}` : ""}` : model ?? "its model";
@@ -279,10 +281,10 @@ export function fanoutMessage(est, alias, log, own) {
         const sonnet = cheaper ? ` On Sonnet: ~${formatUsd(cheaper.median)}${cheaper.measured ? "" : " at its price"}.` : "";
         out.systemMessage = showBurst
             ? `context-doctor: ${burst} subagents in 2 minutes, ~${formatUsd(est.median * burst)} together at your median of ~${formatUsd(est.median)} for ${own.type} on ${short(est.model)} (${runs}).${sonnet}`
-            : `context-doctor: a ${own.type} subagent on ${short(est.model)} costs ~${formatUsd(est.median)} at your median (p90 ${formatUsd(est.p90)}, ${runs}, list price).${sonnet}`;
+            : `context-doctor: ${an(own.type)} subagent on ${short(est.model)} costs ~${formatUsd(est.median)} at your median (p90 ${formatUsd(est.p90)}, ${runs}, list price).${sonnet}`;
     }
     if (cheaper && upTo.find((l) => l.c)?.id === own.id) {
-        out.additionalContext = `context-doctor: on this machine a ${own.type} subagent costs ~${formatUsd(est.median)} at the median on ${short(est.model)}, ~${formatUsd(cheaper.median)} on Sonnet. For search, reading or summarising, pass model: "sonnet" to the Agent tool.`;
+        out.additionalContext = `context-doctor: on this machine ${an(own.type)} subagent costs ~${formatUsd(est.median)} at the median on ${short(est.model)}, ~${formatUsd(cheaper.median)} on Sonnet. For search, reading or summarising, pass model: "sonnet" to the Agent tool.`;
     }
     return out;
 }
