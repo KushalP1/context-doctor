@@ -22,7 +22,15 @@ const golden = (stage: string, args: string[]) => readFileSync(join(here, "..", 
 
 function check(stage: string, home: string, env: Record<string, string>, label: string, commands = GOLDEN_COMMANDS): void {
   for (const args of commands) {
-    assert.equal(runReport(cli, home, args, env), golden(stage, args), `${label}: context-doctor ${args.join(" ")}`);
+    const got = runReport(cli, home, args, env);
+    const want = golden(stage, args);
+    if (got === want) continue;
+    // The first line that differs, in the message itself: CI shows only the
+    // message's first line, and a whole-file diff is cut before it.
+    const g = got.split("\n"), w = want.split("\n");
+    let i = 0;
+    while (i < Math.max(g.length, w.length) && g[i] === w[i]) i++;
+    assert.fail(`${label}: context-doctor ${args.join(" ")}: line ${i + 1}: got ${JSON.stringify(g[i])}, want ${JSON.stringify(w[i])}`);
   }
 }
 
