@@ -134,16 +134,20 @@ function readSteps(file: string, seen: Set<string>): Step[] {
  * One rollout at `limit`: as billed and with compaction at the limit, in USD
  * over the requests in [since, until) that are not a fork's copy. Codex
  * compacts when a turn's input and output reach the limit, which is never
- * above its own trigger.
+ * above its own trigger; with the `body_after_prefix` scope, when what the
+ * turn holds beyond the first request of its window (the session's start or
+ * the last compaction) reaches it (codex-rs session/context_window.rs).
  */
-function replay(steps: Step[], limit: number, since: number, until: number, after: number): { billed: number; sim: number; extra: number; actual: number } {
+function replay(steps: Step[], limit: number, since: number, until: number, after: number, scope: CodexCompactScope = "total"): { billed: number; sim: number; extra: number; actual: number } {
   let billed = 0, sim = 0, extra = 0, actual = 0;
   let removed = 0, fresh = false, prevCounted = false;
+  // The input of the window's first request: what body_after_prefix does not count.
+  let prefill: number | undefined;
   for (const s of steps) {
     if (s.k === "c") {
       // A compaction after a fork's copy of its parent's requests is the parent's, counted there.
       if (prevCounted) actual++;
-      removed = 0; fresh = false;
+      removed = 0; fresh = false; prefill = undefined;
       continue;
     }
     const counted = s.at >= since && s.at < until && !s.copy;
@@ -158,12 +162,17 @@ function replay(steps: Step[], limit: number, since: number, until: number, afte
       cost = Math.max(0, s.billedUsd - (fromCache * s.readPerM + (removed - fromCache) * s.inPerM) / 1e6);
     }
     fresh = false;
+    prefill ??= ctx;
     if (counted) { billed += s.billedUsd; sim += cost; }
-    if (ctx + s.out >= Math.min(limit, s.trigger) && limit < s.trigger) {
+    const reached = scope === "body_after_prefix"
+      ? ctx + s.out - prefill >= limit && ctx + s.out < s.trigger
+      : ctx + s.out >= Math.min(limit, s.trigger) && limit < s.trigger;
+    if (reached) {
       // Compacted after this turn: one request reading the context, a summary written; the next starts from `after`.
       if (counted) { sim += (ctx * s.readPerM + SUMMARY_OUTPUT * s.outPerM) / 1e6; extra++; }
       removed = s.prompt + s.out - after;
       fresh = true;
+      prefill = undefined;
     }
   }
   return { billed, sim, extra, actual };
@@ -178,8 +187,14 @@ export interface CodexCompactEstimate {
   compactions: number;
 }
 
+/** What the limit counts: the whole context (Codex's default) or what a window added after its first request. */
+export type CodexCompactScope = "total" | "body_after_prefix";
+export const CODEX_COMPACT_SCOPE_KEY = "model_auto_compact_token_limit_scope";
+
 export interface CodexCompactReport {
   days: number;
+  /** model_auto_compact_token_limit_scope as config.toml sets it at the top (the replay counts the limit that way). */
+  scope: CodexCompactScope;
   rollouts: number;
   requests: number;
   /** Input billed (prompt only) over the period's requests, forks' copies once. */
@@ -201,8 +216,9 @@ export function codexRollouts(since: number, home = homedir()): string[] {
 }
 
 /** Replay Codex's rollouts of the last `days` at each limit. */
-export function replayCodexCompact(opts: { days: number; paths?: string[]; limits?: number[]; home?: string; now?: number }): CodexCompactReport {
+export function replayCodexCompact(opts: { days: number; paths?: string[]; limits?: number[]; home?: string; now?: number; scope?: CodexCompactScope }): CodexCompactReport {
   const now = opts.now ?? Date.now();
+  const scope = opts.scope ?? codexCompactScope(opts.home);
   const since = now - opts.days * 86_400_000;
   const paths = opts.paths ?? codexRollouts(since, opts.home);
   const seen = new Set<string>();
@@ -225,14 +241,14 @@ export function replayCodexCompact(opts: { days: number; paths?: string[]; limit
   const estimates = (opts.limits ?? CODEX_COMPACT_LIMITS).map((limit, i) => {
     let billed = 0, sim = 0, extra = 0;
     for (const steps of all) {
-      const r = replay(steps, limit, since, Infinity, after);
+      const r = replay(steps, limit, since, Infinity, after, scope);
       billed += r.billed; sim += r.sim; extra += r.extra;
       if (i === 0) actual += r.actual;
     }
     if (i === 0) billedUsd = billed;
     return { limit, savedUsd: billed - sim, savedShare: billed > 0 ? (billed - sim) / billed : 0, compactions: extra };
   });
-  return { days: opts.days, rollouts: paths.length, requests, billedUsd, unpriced, actualCompactions: actual, afterCompact: after, estimates };
+  return { days: opts.days, scope, rollouts: paths.length, requests, billedUsd, unpriced, actualCompactions: actual, afterCompact: after, estimates };
 }
 
 /**
@@ -420,6 +436,14 @@ export function currentCodexCompact(home?: string): { raw: string; value?: numbe
   try { text = readFileSync(p, "utf8"); } catch { return undefined; }
   const v = topLevelValue(text);
   return v ? { ...v, where: tilde(p) } : undefined;
+}
+
+/** model_auto_compact_token_limit_scope at the top of config.toml: "body_after_prefix", else Codex's default, "total". */
+export function codexCompactScope(home?: string): CodexCompactScope {
+  let text: string;
+  try { text = readFileSync(codexConfigPath(home), "utf8"); } catch { return "total"; }
+  const raw = topLevelValue(text, CODEX_COMPACT_SCOPE_KEY)?.raw.trim().replace(/^["']|["']$/g, "");
+  return raw === "body_after_prefix" ? "body_after_prefix" : "total";
 }
 
 /** What would keep a top-level limit from applying: a profile's own, a project's config.toml. */

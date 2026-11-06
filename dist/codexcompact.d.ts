@@ -49,8 +49,13 @@ export interface CodexCompactEstimate {
     /** Compactions there would be over the period at this limit. */
     compactions: number;
 }
+/** What the limit counts: the whole context (Codex's default) or what a window added after its first request. */
+export type CodexCompactScope = "total" | "body_after_prefix";
+export declare const CODEX_COMPACT_SCOPE_KEY = "model_auto_compact_token_limit_scope";
 export interface CodexCompactReport {
     days: number;
+    /** model_auto_compact_token_limit_scope as config.toml sets it at the top (the replay counts the limit that way). */
+    scope: CodexCompactScope;
     rollouts: number;
     requests: number;
     /** Input billed (prompt only) over the period's requests, forks' copies once. */
@@ -72,6 +77,7 @@ export declare function replayCodexCompact(opts: {
     limits?: number[];
     home?: string;
     now?: number;
+    scope?: CodexCompactScope;
 }): CodexCompactReport;
 /**
  * What a limit set at `since` saved: each compaction since that came before
@@ -115,6 +121,8 @@ export declare function currentCodexCompact(home?: string): {
     value?: number;
     where: string;
 } | undefined;
+/** model_auto_compact_token_limit_scope at the top of config.toml: "body_after_prefix", else Codex's default, "total". */
+export declare function codexCompactScope(home?: string): CodexCompactScope;
 /** What would keep a top-level limit from applying: a profile's own, a project's config.toml. */
 export declare function codexCompactOverrides(home?: string, cwd?: string): string[];
 /** The lines under the lever in `fix`: each limit tried. */

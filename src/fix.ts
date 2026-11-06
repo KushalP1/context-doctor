@@ -286,7 +286,7 @@ export function planFixes(i: FixInputs): Fix[] {
       savedUsd: cxOffer.savedUsd,
       savedShare: cxOffer.savedShare,
       shareOf: "of Codex input",
-      basis: `your ${cx.requests.toLocaleString("en-US")} Codex requests replayed at a ${k(CODEX_COMPACT_LIMIT)} limit: ${(cxOffer.compactions / weeks).toFixed(1)} compactions a week instead of ${(cx.actualCompactions / weeks).toFixed(1)}, each paying a request and a ${k(5_000)}-token summary (an estimate: Codex does not record its compactions' own usage)`,
+      basis: `your ${cx.requests.toLocaleString("en-US")} Codex requests replayed at a ${k(CODEX_COMPACT_LIMIT)} limit: ${(cxOffer.compactions / weeks).toFixed(1)} compactions a week instead of ${(cx.actualCompactions / weeks).toFixed(1)}, each paying a request and a ${k(5_000)}-token summary (an estimate: Codex does not record its compactions' own usage)${cx.scope === "body_after_prefix" ? "; the limit counted as your model_auto_compact_token_limit_scope = \"body_after_prefix\" counts it: what a session added after the first request since its start or last compaction" : ""}`,
       quality: "each compaction replaces the history with a summary: detail for money",
       change: `${tilde(codexConfigPath())}: ${CODEX_COMPACT_KEY} = ${CODEX_COMPACT_LIMIT}`,
       state: "available",

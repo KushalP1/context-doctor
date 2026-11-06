@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { codexCompactOverrides, codexCompactSavedSince, profileValues, replayCodexCompact, setTopLevelInt, topLevelValue } from "../codexcompact.js";
+import { codexCompactOverrides, codexCompactSavedSince, codexCompactScope, profileValues, replayCodexCompact, setTopLevelInt, topLevelValue } from "../codexcompact.js";
 import { applyFix, fixRecordPath, parseFixIds, planFixes, readFixRecords, renderFixPlan, renderFixShare, savedSince, undoFixes } from "../fix.js";
 import { sandboxEnv } from "./sandbox.js";
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
@@ -65,6 +65,23 @@ test("replay: a compaction at the limit, the request after it uncached, the cont
     // Over Codex's own trigger (90% of 272k = 244.8k) a limit changes nothing.
     near(at300.savedUsd, 0);
     assert.equal(at300.compactions, 0);
+    // model_auto_compact_token_limit_scope = "body_after_prefix": the limit counts what the window added after its first request (140k).
+    const body = replayCodexCompact({ days: 30, paths: [p], limits: [150_000, 20_000], scope: "body_after_prefix" });
+    assert.equal(body.scope, "body_after_prefix");
+    near(body.estimates[0].savedUsd, 0, "150k of growth is never reached");
+    // At 20k: the third turn (160k + 1k out, 21k past the prefix) compacts; the fourth starts from 25k plus what it added, uncached.
+    const cut = 161_000 - 25_000;
+    near(body.estimates[1].savedUsd, billed(170_000, 160_000) - ((170_000 - cut) * IN) / 1e6 - (160_000 * READ + 5_000 * OUT) / 1e6, "body 20k");
+    assert.equal(body.estimates[1].compactions, 1);
+    // Read from the top of config.toml (quoted either way); anything else is Codex's default, total.
+    const home = mkdtempSync(join(tmpdir(), "cd-cx-scope-"));
+    mkdirSync(join(home, ".codex"));
+    assert.equal(codexCompactScope(home), "total");
+    writeFileSync(join(home, ".codex", "config.toml"), "model_auto_compact_token_limit_scope = 'body_after_prefix' # mine\n[tui]\n");
+    assert.equal(codexCompactScope(home), "body_after_prefix");
+    assert.equal(replayCodexCompact({ days: 30, paths: [p], home }).scope, "body_after_prefix");
+    writeFileSync(join(home, ".codex", "config.toml"), '[profiles.x]\nmodel_auto_compact_token_limit_scope = "body_after_prefix"\n');
+    assert.equal(codexCompactScope(home), "total");
 });
 test("replay: a long session pays; real compactions reset the arm and set the context after; forks are billed once", () => {
     const long = [];
@@ -154,7 +171,7 @@ test("config.toml: never inside a value that spans lines (an array, a multi-line
 });
 /** A report whose figures the plan tests choose. */
 function report(savedUsd, billedUsd = 10) {
-    return { days: 30, rollouts: 3, requests: 400, billedUsd, unpriced: 0, actualCompactions: 1, afterCompact: 25_000, estimates: [100_000, 150_000, 200_000].map((limit) => ({ limit, savedUsd: limit === 150_000 ? savedUsd : savedUsd / 2, savedShare: (limit === 150_000 ? savedUsd : savedUsd / 2) / billedUsd, compactions: 4 })) };
+    return { days: 30, scope: "total", rollouts: 3, requests: 400, billedUsd, unpriced: 0, actualCompactions: 1, afterCompact: 25_000, estimates: [100_000, 150_000, 200_000].map((limit) => ({ limit, savedUsd: limit === 150_000 ? savedUsd : savedUsd / 2, savedShare: (limit === 150_000 ? savedUsd : savedUsd / 2) / billedUsd, compactions: 4 })) };
 }
 const base = { days: 30, billedUsd: 0 };
 test("plan: offered over $1 and 2% of Codex's input, in --apply all; a limit you set is yours; a profile's is named", () => {
@@ -176,6 +193,8 @@ test("plan: offered over $1 and 2% of Codex's input, in --apply all; a limit you
     assert.match(renderFixShare(30, 50, fixes, 10), /^context-doctor fix on my last 30 days of Claude Code and Codex \(\$50\.00 and \$10\.00 of input at list price\):/);
     assert.match(renderFixShare(30, 0, [], 10), /- nothing left to fix/);
     assert.deepEqual(parseFixIds("all", fixes).ids, ["codex-compact"]);
+    assert.doesNotMatch(f.basis, /body_after_prefix/);
+    assert.match(planFixes({ ...base, codexCompact: { ...report(4), scope: "body_after_prefix" } })[0].basis, /the limit counted as your model_auto_compact_token_limit_scope = "body_after_prefix" counts it/);
     assert.deepEqual(planFixes({ ...base, codexCompact: report(0.5) }), []);
     assert.deepEqual(planFixes({ ...base, codexCompact: report(1.5, 100) }), []);
     const mine = planFixes({ ...base, codexCompact: report(4), codexCompactSet: { raw: "200_000", where: "~/.codex/config.toml" } });
