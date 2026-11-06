@@ -2,24 +2,26 @@
   "days": 30,
   "since": 1788264000000,
   "until": 1790856000000,
-  "usd": 136.86764749999986,
-  "requests": 260,
+  "usd": 141.76623729999991,
+  "requests": 278,
   "tools": [
     {
       "tool": "claude",
       "name": "Claude Code",
-      "usd": 136.80257749999987,
-      "requests": 255,
+      "usd": 141.70116729999992,
+      "requests": 273,
       "tokens": {
-        "input": 5699,
-        "read": 39683904,
-        "write": 18173318,
-        "output": 131539
+        "input": 6143,
+        "read": 41021498,
+        "write": 19062761,
+        "output": 140643
       },
       "unpriced": 0,
       "unpricedTokens": 0,
       "unpricedModels": [],
-      "subagentUsd": 3.457454799999999
+      "subagentUsd": 3.457454799999999,
+      "workflowUsd": 4.8985898,
+      "workflowRuns": 1
     },
     {
       "tool": "gemini",
@@ -62,10 +64,10 @@
   "projects": [
     {
       "project": "work-app",
-      "usd": 136.80257749999987,
-      "requests": 255,
+      "usd": 141.70116729999992,
+      "requests": 273,
       "byTool": {
-        "claude": 136.80257749999987
+        "claude": 141.70116729999992
       }
     },
     {
@@ -88,10 +90,10 @@
   "models": [
     {
       "model": "claude-opus-5-5",
-      "usd": 80.64679220000001,
-      "requests": 185,
+      "usd": 85.54538200000002,
+      "requests": 203,
       "byTool": {
-        "claude": 80.64679220000001
+        "claude": 85.54538200000002
       }
     },
     {
@@ -302,10 +304,10 @@
     },
     {
       "day": "2026-09-28",
-      "usd": 42.622015799999986,
-      "requests": 52,
+      "usd": 47.52060559999998,
+      "requests": 70,
       "byTool": {
-        "claude": 42.61226579999999,
+        "claude": 47.510855599999985,
         "codex": 0.00975
       }
     },
@@ -334,18 +336,18 @@
     }
   ],
   "parts": {
-    "inputUsd": 0.071672,
-    "writeUsd": 125.79560450000001,
-    "readUsd": 8.196460999999998,
-    "outputUsd": 2.8039099999999992
+    "inputUsd": 0.073448,
+    "writeUsd": 130.24281950000002,
+    "readUsd": 8.463979799999995,
+    "outputUsd": 2.9859899999999984
   },
   "sessions": [
     {
       "tool": "claude",
       "project": "work-app",
       "session": "s4",
-      "usd": 42.61226579999999,
-      "requests": 50,
+      "usd": 47.510855599999985,
+      "requests": 68,
       "first": 1790596842167,
       "last": 1790633785416,
       "model": "claude-fable-5-1"

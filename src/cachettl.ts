@@ -46,6 +46,7 @@ import { ABSENT, readSettings, setJsonPath, withSettingsLock, writeAtomic } from
 import { effectiveTtl, settingsSources, ttlOverrides } from "./effective.js";
 import { compareVersions, describeInstalls, type ClaudeCodeInstall } from "./modelswitch.js";
 import { claudeDir } from "./claudedir.js";
+import { subagentFiles } from "./subagents.js";
 
 /** The first Claude Code with the promptCacheTtl and subagentPromptCacheTtl settings (CHANGELOG). */
 export const CACHE_TTL_SINCE = "2.1.243";
@@ -186,7 +187,11 @@ function finish(acc: Acc): TtlReplay {
   return { ...r, oneHourShare: writes > 0 ? writes1h / writes : 0 };
 }
 
-/** Subagent transcripts of the main transcripts under ~/.claude/projects written since `since`. */
+/**
+ * Subagent transcripts of the sessions under ~/.claude/projects written
+ * since `since`: the Agent tool's and the workflow agents'
+ * (subagents/workflows/<run>/, subagentFiles).
+ */
 export function subagentTranscripts(since: number, home = homedir()): string[] {
   const root = join(claudeDir(home), "projects");
   const out: string[] = [];
@@ -204,24 +209,8 @@ export function subagentTranscripts(since: number, home = homedir()): string[] {
       continue;
     }
     for (const entry of entries) {
-      if (entry.endsWith(".jsonl")) continue;
-      const dir = join(root, project, entry, "subagents");
-      if (!existsSync(dir)) continue;
-      let files: string[];
-      try {
-        files = readdirSync(dir);
-      } catch {
-        continue;
-      }
-      for (const f of files) {
-        if (!f.endsWith(".jsonl")) continue;
-        const p = join(dir, f);
-        try {
-          if (statSync(p).mtimeMs >= since) out.push(p);
-        } catch {
-          /* gone */
-        }
-      }
+      if (entry.endsWith(".jsonl") || !existsSync(join(root, project, entry, "subagents"))) continue;
+      for (const f of subagentFiles(join(root, project, `${entry}.jsonl`), since)) out.push(f.file);
     }
   }
   return out;

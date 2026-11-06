@@ -14,7 +14,7 @@
  * never the whole content, so a session with 49 subagents stays fast.
  */
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { formatTokens } from "./tokens.js";
 import { formatUsd, pricingFor, usageCost } from "./pricing.js";
@@ -46,11 +46,59 @@ export interface SubagentReport {
   totalCostUsd: number;
   /** Agents whose model has no price on file, so the total undercounts. */
   unpriced: number;
+  /** How many of `agents` are workflow agents (subagents/workflows/<run>/), in how many runs. */
+  workflowAgents?: number;
+  workflowRuns?: number;
 }
 
 /** Where Claude Code keeps a session's subagents: beside the transcript, under its id. */
 export function subagentDir(transcriptPath: string): string {
   return join(transcriptPath.replace(/\.jsonl$/, ""), "subagents");
+}
+
+/**
+ * Every subagent transcript of a session: the Agent tool's
+ * (`subagents/agent-*.jsonl`) and the workflow agents'
+ * (`subagents/workflows/<run>/agent-*.jsonl`, one folder per workflow run,
+ * the run's own record in `<session>/workflows/<run>.json`). Workflow agents
+ * bill to the session like any subagent, and every reader skipped their
+ * folder: on the author's machine, 804 transcripts and ~$1,354 in 30 days.
+ * `since`: only files written since then. `run`: the workflow run's id.
+ */
+export function subagentFiles(transcriptPath: string, since = -Infinity): Array<{ file: string; run?: string }> {
+  const dir = subagentDir(transcriptPath);
+  const out: Array<{ file: string; run?: string }> = [];
+  const add = (file: string, run?: string) => {
+    try { if (since === -Infinity || statSync(file).mtimeMs >= since) out.push(run ? { file, run } : { file }); } catch { /* gone */ }
+  };
+  let names: string[];
+  try { names = readdirSync(dir); } catch { return out; }
+  for (const f of names) if (f.endsWith(".jsonl")) add(join(dir, f));
+  if (!names.includes("workflows")) return out;
+  let runs: string[];
+  try { runs = readdirSync(join(dir, "workflows")); } catch { return out; }
+  for (const run of runs) {
+    let agents: string[];
+    try { agents = readdirSync(join(dir, "workflows", run)); } catch { continue; }
+    for (const f of agents) if (f.endsWith(".jsonl")) add(join(dir, "workflows", run, f), run);
+  }
+  return out;
+}
+
+/** The workflow run a subagent transcript belongs to (its folder under subagents/workflows), or undefined. */
+export function workflowRunOf(file: string): string | undefined {
+  return /[\\/]subagents[\\/]workflows[\\/]([^\\/]+)[\\/][^\\/]+\.jsonl$/.exec(file)?.[1];
+}
+
+/** A workflow run's own record, `<session>/workflows/<run>.json`: its name and default model, when Claude Code wrote one. */
+export function workflowRunInfo(transcriptPath: string, run: string): { name?: string; model?: string; status?: string } {
+  try {
+    const j = JSON.parse(readFileSync(join(transcriptPath.replace(/\.jsonl$/, ""), "workflows", `${run}.json`), "utf8"));
+    const s = (v: unknown) => (typeof v === "string" && v ? v.slice(0, 80) : undefined);
+    return { ...(s(j?.workflowName) ? { name: s(j.workflowName) } : {}), ...(s(j?.defaultModel) ? { model: s(j.defaultModel) } : {}), ...(s(j?.status) ? { status: s(j.status) } : {}) };
+  } catch {
+    return {};
+  }
 }
 
 function n(v: unknown): number {
@@ -140,18 +188,13 @@ function summarize(path: string): SubagentSummary {
 
 /** Account for every subagent of a session, or null when there are none. */
 export function subagentReport(transcriptPath: string): SubagentReport | null {
-  const dir = subagentDir(transcriptPath);
-  if (!existsSync(dir)) return null;
-  let files: string[];
-  try {
-    files = readdirSync(dir).filter((f) => f.startsWith("agent-") && f.endsWith(".jsonl"));
-  } catch {
-    return null;
-  }
-  if (files.length === 0) return null;
+  // The Agent tool's subagents and the workflow agents alike: both bill to this session.
+  const found = subagentFiles(transcriptPath).filter((f) => basename(f.file).startsWith("agent-"));
+  if (found.length === 0) return null;
+  const runOf = new Map(found.map((f) => [f.file, f.run]));
 
-  const agents = files
-    .map((f) => join(dir, f))
+  const summarized = found
+    .map((f) => f.file)
     .filter((p) => {
       try {
         return statSync(p).size > 0;
@@ -159,10 +202,12 @@ export function subagentReport(transcriptPath: string): SubagentReport | null {
         return false;
       }
     })
-    .map(summarize)
-    .filter((a) => a.calls > 0)
-    .sort((a, b) => (b.estCostUsd ?? 0) - (a.estCostUsd ?? 0) || b.inputBilledTokens - a.inputBilledTokens);
+    .map((p) => ({ s: summarize(p), run: runOf.get(p) }))
+    .filter((a) => a.s.calls > 0)
+    .sort((a, b) => (b.s.estCostUsd ?? 0) - (a.s.estCostUsd ?? 0) || b.s.inputBilledTokens - a.s.inputBilledTokens);
+  const agents = summarized.map((a) => a.s);
   if (agents.length === 0) return null;
+  const runs = new Set(summarized.flatMap((a) => (a.run ? [a.run] : [])));
 
   return {
     agents,
@@ -170,6 +215,7 @@ export function subagentReport(transcriptPath: string): SubagentReport | null {
     totalOutput: agents.reduce((t, a) => t + a.outputTokens, 0),
     totalCostUsd: agents.reduce((t, a) => t + (a.estCostUsd ?? 0), 0),
     unpriced: agents.filter((a) => a.estCostUsd === undefined).length,
+    ...(runs.size ? { workflowAgents: summarized.filter((a) => a.run).length, workflowRuns: runs.size } : {}),
   };
 }
 
@@ -200,6 +246,7 @@ export function renderSubagents(report: SubagentReport | null, parentInputUsd?: 
     `${report.agents.length} subagent(s) made ${report.agents.reduce((t, a) => t + a.calls, 0)} API calls: ` +
       `${formatTokens(report.totalInputBilled)} input billed, ${formatTokens(report.totalOutput)} output, ~${cost}.`
   );
+  if (report.workflowAgents) lines.push(`${report.workflowAgents} of them are workflow agents, in ${report.workflowRuns} workflow run${report.workflowRuns === 1 ? "" : "s"}.`);
   if (parentInputUsd !== undefined && parentInputUsd > 0 && report.totalCostUsd > 0) {
     const ratio = report.totalCostUsd / parentInputUsd;
     lines.push(

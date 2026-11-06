@@ -24,6 +24,24 @@
       "state": "available"
     },
     {
+      "id": "subagent-model",
+      "title": "Subagents on Sonnet 5.5, not Opus 5.5",
+      "savedUsd": 2.4492949,
+      "savedShare": 0.29311654224535855,
+      "shareOf": "of subagents",
+      "basis": "42 subagent requests priced at Sonnet 5.5 with the token counts they had ($8.36 billed for all 4 subagents); an estimate: another model tokenizes and works differently",
+      "quality": "this changes the model your subagents run on (workflow-subagent, general-purpose); the quality cost is not measured here: context-doctor ab can measure it (its tasks with --model claude-sonnet-5-5 and without)",
+      "change": "~/.claude/settings.json: env.CLAUDE_CODE_SUBAGENT_MODEL = \"claude-sonnet-5-5\"",
+      "state": "available",
+      "value": "claude-sonnet-5-5",
+      "detail": [
+        "by type               runs  as billed   at Sonnet 5.5",
+        "workflow-subagent        2      $4.90           $2.45",
+        "general-purpose          2      $3.46           $3.46",
+        "Workflow agents move with it unless the workflow's script names a model. For them alone: CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL (it also overrides a model the script names)."
+      ]
+    },
+    {
       "id": "prune",
       "title": "Switch off 1 unused MCP server or skill in this project",
       "basis": "none used in 8 sessions of this project in 30 days: unused",

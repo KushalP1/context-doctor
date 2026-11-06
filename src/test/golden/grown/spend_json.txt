@@ -2,43 +2,45 @@
   "days": 30,
   "since": 1788264000000,
   "until": 1790856000000,
-  "usd": 142.76770139999996,
-  "requests": 275,
+  "usd": 147.66629119999996,
+  "requests": 293,
   "tools": [
     {
       "tool": "claude",
       "name": "Claude Code",
-      "usd": 142.76770139999996,
-      "requests": 275,
+      "usd": 147.66629119999996,
+      "requests": 293,
       "tokens": {
-        "input": 6114,
-        "read": 40998296,
-        "write": 18971749,
-        "output": 141656
+        "input": 6558,
+        "read": 42335890,
+        "write": 19861192,
+        "output": 150760
       },
       "unpriced": 0,
       "unpricedTokens": 0,
       "unpricedModels": [],
-      "subagentUsd": 3.9013036999999993
+      "subagentUsd": 3.9013036999999993,
+      "workflowUsd": 4.8985898,
+      "workflowRuns": 1
     }
   ],
   "projects": [
     {
       "project": "work-app",
-      "usd": 142.76770139999996,
-      "requests": 275,
+      "usd": 147.66629119999996,
+      "requests": 293,
       "byTool": {
-        "claude": 142.76770139999996
+        "claude": 147.66629119999996
       }
     }
   ],
   "models": [
     {
       "model": "claude-opus-5-5",
-      "usd": 86.16806720000002,
-      "requests": 201,
+      "usd": 91.066657,
+      "requests": 219,
       "byTool": {
-        "claude": 86.16806720000002
+        "claude": 91.066657
       }
     },
     {
@@ -233,10 +235,10 @@
     },
     {
       "day": "2026-09-28",
-      "usd": 42.61226579999999,
-      "requests": 50,
+      "usd": 47.510855599999985,
+      "requests": 68,
       "byTool": {
-        "claude": 42.61226579999999
+        "claude": 47.510855599999985
       }
     },
     {
@@ -265,18 +267,18 @@
     }
   ],
   "parts": {
-    "inputUsd": 0.026191999999999997,
-    "writeUsd": 131.32013000000003,
-    "readUsd": 8.448589399999994,
-    "outputUsd": 2.972789999999999
+    "inputUsd": 0.027968,
+    "writeUsd": 135.767345,
+    "readUsd": 8.716108199999994,
+    "outputUsd": 3.154869999999998
   },
   "sessions": [
     {
       "tool": "claude",
       "project": "work-app",
       "session": "s4",
-      "usd": 43.05611469999999,
-      "requests": 54,
+      "usd": 47.954704499999984,
+      "requests": 72,
       "first": 1790596842167,
       "last": 1790694228466,
       "model": "claude-fable-5-1"

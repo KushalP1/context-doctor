@@ -9,7 +9,15 @@ Last 30 days of your Claude Code sessions, $127 of input at list prices
    measured: your terminal and IDE sessions replayed through the shipped autopilot code (1 desktop-app sessions it cannot reach left out)
    quality:  clears only tool output the model has already read, only when the cache is cold, so a request never costs more; recall finds anything cleared
    changes:  a local proxy service on 127.0.0.1:8787; ~/.claude/settings.json env.ANTHROPIC_BASE_URL   [autopilot]
-3. Switch off 1 unused MCP server or skill in this project   not priced
+3. Subagents on Sonnet 5.5, not Opus 5.5            $2.45 (29% of subagents)
+   measured: 42 subagent requests priced at Sonnet 5.5 with the token counts they had ($8.36 billed for all 4 subagents); an estimate: another model tokenizes and works differently
+   quality:  this changes the model your subagents run on (workflow-subagent, general-purpose); the quality cost is not measured here: context-doctor ab can measure it (its tasks with --model claude-sonnet-5-5 and without)
+   changes:  ~/.claude/settings.json: env.CLAUDE_CODE_SUBAGENT_MODEL = "claude-sonnet-5-5"   [subagent-model]
+     by type               runs  as billed   at Sonnet 5.5
+     workflow-subagent        2      $4.90           $2.45
+     general-purpose          2      $3.46           $3.46
+     Workflow agents move with it unless the workflow's script names a model. For them alone: CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL (it also overrides a model the script names).
+4. Switch off 1 unused MCP server or skill in this project   not priced
    measured: none used in 8 sessions of this project in 30 days: unused
    quality:  none while they stay unused; undo brings them back
    changes:  ~/work/app/.claude/settings.local.json   [prune]
@@ -20,7 +28,7 @@ Advice you act on
   /compact when you come back to a big session after the cache expired: $3.05 over 13 returns.
   Nothing points those moments out yet: context-doctor install (or the Claude Code plugin) adds the hook that does.
 
-Apply: context-doctor fix in a terminal asks about each one; or context-doctor fix --apply compact-window,autopilot,prune
+Apply: context-doctor fix in a terminal asks about each one; or context-doctor fix --apply compact-window,autopilot,subagent-model,prune
 Undo everything fix applied: context-doctor fix undo. Dollars at list price; on a subscription the same tokens come out of your usage limit.
 
 [exit 0]

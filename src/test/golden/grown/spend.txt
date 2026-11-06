@@ -1,38 +1,39 @@
 What your AI coding cost, across every tool here
 Last 30 days, at list prices
 ────────────────────────────────────────────────────────────
-Claude Code          $143  275 requests      subagents $3.90
+Claude Code          $148  293 requests      subagents $3.90, workflows $4.90 (1 run)
 
 By project
-  work-app                                $143  100%
+  work-app                                $148  100%
 
 By model
-  claude-opus-5-5                       $86.17   60%
+  claude-opus-5-5                       $91.07   62%
   claude-fable-5-1                      $39.15   27%
   claude-sonnet-5                       $17.44   12%
 
 By day (last 14; all in --json)
   Sep 18      $0.00
-  Sep 19     $26.56  ▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮
+  Sep 19     $26.56  ▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮
   Sep 20      $0.00
   Sep 21      $0.00
   Sep 22      $2.12  ▮
   Sep 23      $0.00
   Sep 24      $0.00
-  Sep 25     $11.84  ▮▮▮▮▮▮▮▮
+  Sep 25     $11.84  ▮▮▮▮▮▮▮
   Sep 26      $0.00
   Sep 27      $0.00
-  Sep 28     $42.61  ▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮
+  Sep 28     $47.51  ▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮
   Sep 29      $5.82  ▮▮▮▮
-  Sep 30     $12.12  ▮▮▮▮▮▮▮▮▮
+  Sep 30     $12.12  ▮▮▮▮▮▮▮▮
   Oct 01      $2.95  ▮▮
 
 Where it goes
-  cache writes $131 (92%), cache reads $8.45 (6%)
-  output $2.97 (2%), uncached input $0.03 (0%)
+  cache writes $136 (92%), cache reads $8.72 (6%)
+  output $3.15 (2%), uncached input $0.03 (0%)
   Claude Code subagents $3.90 (3%): context-doctor subagents says which paid off
+  Claude Code workflow agents $4.90 (3%), in 1 run
   Biggest sessions:
-     $43.06  work-app                   claude-fable-5-1   Sep 29
+     $47.95  work-app                   claude-fable-5-1   Sep 29
      $28.79  work-app                   claude-opus-5-5    Sep 12
      $26.56  work-app                   claude-sonnet-5    Sep 19
      $15.07  work-app                   claude-opus-5-5    Oct 01

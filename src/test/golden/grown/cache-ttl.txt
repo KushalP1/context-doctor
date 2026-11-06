@@ -6,10 +6,10 @@ Main conversation: 247 requests in 8 sessions, 56% of cache writes at 1 hour
   all at 5 minutes            $143   costs $7.23 (5%)
   all at 1 hour               $137   costs $1.21 (1%); 9 cold re-writes kept warm
 
-Subagents: 28 requests in 2 subagent transcripts, 0% of cache writes at 1 hour
-  as billed                  $3.78
-  all at 5 minutes           $3.78   saves $0 (0%)
-  all at 1 hour              $3.60   saves $0.18 (5%); 4 cold re-writes kept warm
+Subagents: 46 requests in 4 subagent transcripts, 0% of cache writes at 1 hour
+  as billed                  $8.49
+  all at 5 minutes           $8.49   saves $0 (0%)
+  all at 1 hour              $9.25   costs $0.75 (9%); 7 cold re-writes kept warm
 
 No change pays: the lifetimes as billed are within 2% of the cheaper one.
 

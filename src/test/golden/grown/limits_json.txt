@@ -26,25 +26,25 @@
       "elsewhere": 13,
       "elsewherePct": 91,
       "resolution": 1,
-      "requests": 65,
-      "usd": 22.0455515,
+      "requests": 80,
+      "usd": 25.8768003,
       "usable": false,
       "mainModel": "claude-opus-5-5",
       "byType": {
         "r2": 0,
-        "looRmse": 7.560173261005895,
-        "relError": 1.0800247515722707
+        "looRmse": 11.594917457380632,
+        "relError": 1.6564167796258045
       },
       "perMillion": {
-        "cache read": 0,
-        "cache write": 6.915517425599976
+        "cache read": 0.6139062023715487,
+        "cache write": 3.302831779968022
       },
-      "pctPerUsd": 0.9896686805159786,
+      "pctPerUsd": 0.7306603198721103,
       "byPrice": {
         "r2": 0,
-        "looRmse": 5.670889753336276,
-        "relError": 0.8101271076194679,
-        "relSe": 0.3886500155252137
+        "looRmse": 7.97593845814081,
+        "relError": 1.1394197797344014,
+        "relSe": 0.4612893431785285
       },
       "slopeRelSe": null,
       "why": "5 stretches of readings with usage beside them; 8 make a fit worth quoting"

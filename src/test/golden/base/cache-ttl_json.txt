@@ -12,13 +12,13 @@
     "unpriced": 0
   },
   "subagents": {
-    "transcripts": 2,
-    "requests": 24,
-    "billedUsd": 3.3573448000000004,
-    "at5mUsd": 3.3573448,
-    "at1hUsd": 2.9441588000000003,
+    "transcripts": 4,
+    "requests": 42,
+    "billedUsd": 8.073854599999999,
+    "at5mUsd": 8.073854599999999,
+    "at1hUsd": 8.5927956,
     "oneHourShare": 0,
-    "keptWarmAt1h": 4,
+    "keptWarmAt1h": 7,
     "wentColdAt5m": 0,
     "unpriced": 0
   },
