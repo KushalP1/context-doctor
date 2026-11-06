@@ -147,3 +147,36 @@ test("doctor writes the spend budget as `budget` does: $12.50 and $1,000, not $1
   writeFileSync(join(home, ".claude", ".context-doctor-budget.json"), JSON.stringify({ usd: 1000, period: "week", block: true, at: Date.now() }));
   assert.match((await doctor(home)).out, /Spend budget\s+\$1,000 a week, prompts over it held/);
 });
+
+test("models with no list price of their own in the last 30 days are named, <synthetic> is not; none at all, no line", async () => {
+  const home = mkdtempSync(join(tmpdir(), "ctxdoc-doc-price-"));
+  const empty = await doctor(home);
+  assert.doesNotMatch(empty.out, /Model prices/, "nothing ran: nothing to say");
+
+  const now = Date.now();
+  const iso = (dt: number) => new Date(now - dt).toISOString();
+  const project = join(home, ".claude", "projects", "-tmp-app");
+  mkdirSync(project, { recursive: true });
+  const reply = (n: number, model: string) => JSON.stringify({
+    type: "assistant", uuid: `a${n}`, sessionId: "s1", cwd: "/tmp/app", timestamp: iso(3_600_000 - n * 1000),
+    message: { id: `m${n}`, type: "message", role: "assistant", model, content: [{ type: "text", text: "ok" }], usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100, cache_creation_input_tokens: 0 } },
+  });
+  writeFileSync(join(project, "s1.jsonl"), [
+    JSON.stringify({ type: "user", uuid: "u0", sessionId: "s1", cwd: "/tmp/app", timestamp: iso(3_700_000), message: { role: "user", content: "hi" } }),
+    reply(1, "claude-sonnet-5"), reply(2, "claude-opus-97"), reply(3, "claude-opus-97"), reply(4, "<synthetic>"),
+  ].join("\n") + "\n");
+  const known = await doctor(home);
+  assert.match(known.out, /Model prices\s+no list price on file for claude-opus-97 \(2 requests\)/, known.out);
+  assert.doesNotMatch(known.out, /synthetic|claude-sonnet-5 \(/, known.out);
+  assert.match(known.out, /A newer context-doctor may know them/);
+
+  const codex = join(home, ".codex", "sessions", "2026", "11", "01");
+  mkdirSync(codex, { recursive: true });
+  writeFileSync(join(codex, "rollout-x.jsonl"), [
+    { timestamp: iso(7_200_000), type: "session_meta", payload: { id: "x", cwd: "/tmp/app" } },
+    { timestamp: iso(7_100_000), type: "turn_context", payload: { cwd: "/tmp/app", model: "gpt-97-max" } },
+    { timestamp: iso(7_000_000), type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: 110 }, last_token_usage: { input_tokens: 100, cached_input_tokens: 0, output_tokens: 10, total_tokens: 110 } }, rate_limits: null } },
+  ].map((r) => JSON.stringify(r)).join("\n") + "\n");
+  const both = await doctor(home);
+  assert.match(both.out, /claude-opus-97 \(2 requests\), gpt-97-max \(1 request\)/, both.out);
+});

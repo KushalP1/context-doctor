@@ -26,6 +26,15 @@ export declare function skillCheck(label: string, files: string[], okDetail?: st
  */
 export declare function cacheTtlCheck(home?: string, env?: NodeJS.ProcessEnv): Check | undefined;
 /**
+ * Models Claude Code (subagents included) and Codex ran in the last `days`
+ * that the price table has no row for: priced by a family fallback (an
+ * estimate) or not at all, in spend, savings, fix and the budget alike.
+ * Read through spend's own readers, so the transcript cache they keep makes
+ * a second doctor cheap. Undefined when nothing ran in the period; ids that
+ * are never billed (`<synthetic>`) are not named.
+ */
+export declare function unpricedModelsCheck(days?: number, now?: number, home?: string): Check | undefined;
+/**
  * Devin (Cognition): the Devin CLI, and Devin Desktop (formerly Windsurf).
  * Checked against docs.devin.ai (2026-10-20): the CLI runs hooks from
  * ~/.claude/settings.json in Claude Code's format while its

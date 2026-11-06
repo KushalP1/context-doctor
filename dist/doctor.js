@@ -29,6 +29,8 @@ import { claudeCodePresent, claudeDir, claudeJsonPath } from "./claudedir.js";
 import { codexDir } from "./codexdir.js";
 import { periodSpend, readBudget } from "./budget.js";
 import { sessionPriceThresholds } from "./sessionprice.js";
+import { claudeSpend, codexSpend } from "./spend.js";
+import { hasKnownPrice, isUnbilledModel } from "./pricing.js";
 function claudeDesktopConfigPath() {
     switch (platform()) {
         case "darwin": return join(homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
@@ -282,6 +284,43 @@ export function cacheTtlCheck(home = homedir(), env = process.env) {
     if (old.length)
         return { label, status: "warn", detail: `${set}; ${describeInstalls(old)} predates the setting (${CACHE_TTL_SINCE}) and ignores it` };
     return { label, status: "ok", detail: `${set} (context-doctor cache-ttl; off removes it)` };
+}
+/**
+ * Models Claude Code (subagents included) and Codex ran in the last `days`
+ * that the price table has no row for: priced by a family fallback (an
+ * estimate) or not at all, in spend, savings, fix and the budget alike.
+ * Read through spend's own readers, so the transcript cache they keep makes
+ * a second doctor cheap. Undefined when nothing ran in the period; ids that
+ * are never billed (`<synthetic>`) are not named.
+ */
+export function unpricedModelsCheck(days = 30, now = Date.now(), home = homedir()) {
+    const label = "Model prices";
+    const since = now - days * 86_400_000;
+    const seen = new Map();
+    const add = (items) => {
+        for (const i of items)
+            if (i.model)
+                seen.set(i.model, (seen.get(i.model) ?? 0) + 1);
+    };
+    try {
+        add(claudeSpend(since, now));
+    }
+    catch { /* unreadable: the rest still counts */ }
+    try {
+        add(codexSpend(since, now, home));
+    }
+    catch { /* unreadable: the rest still counts */ }
+    if (seen.size === 0)
+        return undefined;
+    const unknown = [...seen].filter(([m]) => !hasKnownPrice(m) && !isUnbilledModel(m)).sort((a, b) => b[1] - a[1]);
+    if (!unknown.length)
+        return { label, status: "ok", detail: `every model used in the last ${days} days has a list price on file` };
+    const named = unknown.slice(0, 5).map(([m, n]) => `${m} (${n.toLocaleString("en-US")} request${n === 1 ? "" : "s"})`).join(", ") + (unknown.length > 5 ? ` and ${unknown.length - 5} more` : "");
+    return {
+        label,
+        status: "warn",
+        detail: `no list price on file for ${named} in the last ${days} days: their dollars (spend, savings, fix, budget) are estimated from the model family or missing. A newer context-doctor may know them: npm install -g context-doctor@latest`,
+    };
 }
 /**
  * Devin (Cognition): the Devin CLI, and Devin Desktop (formerly Windsurf).
@@ -774,6 +813,12 @@ export async function runDoctor() {
             checks.push({ label: "Session price", status: "skip", detail: "off (CONTEXT_DOCTOR_NO_SESSION_PRICE=1)" });
         else if (hooked)
             checks.push({ label: "Session price", status: "ok", detail: `said once when a session passes ${at.map((t) => `$${t.toLocaleString("en-US")}`).join(", ").replace(/, ([^,]+)$/, " and $1")} (CONTEXT_DOCTOR_SESSION_PRICE to change; CONTEXT_DOCTOR_NO_SESSION_PRICE=1 for off)` });
+    }
+    // Models in the last 30 days with no list price of their own: their dollars everywhere are a guess or missing.
+    {
+        const c = unpricedModelsCheck();
+        if (c)
+            checks.push(c);
     }
     checks.push(await checkMcpHandshake());
     // Autopilot: optional, so "off" is a skip, not a failure. When it is on, a
