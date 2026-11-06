@@ -12,7 +12,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
-import { parseCursorChat, queryRows } from "../cursor.js";
+import { cursorClaudeId, parseCursorChat, queryRows } from "../cursor.js";
+import { hasKnownPrice, knownPricingFor, pricingFor } from "../pricing.js";
 const require = createRequire(import.meta.url);
 let DatabaseSync;
 try {
@@ -141,4 +142,29 @@ test("one malformed row does not hide every Cursor chat", { skip }, async () => 
                 process.env[key] = value;
         }
     }
+});
+test("Cursor's names for Claude map to the Claude ids the price table knows by version", () => {
+    const cases = [
+        ["claude-4.6-opus-high-thinking", "claude-opus-4-6"],
+        ["claude-4.5-sonnet-thinking", "claude-sonnet-4-5"],
+        ["claude-4-sonnet", "claude-sonnet-4"],
+        ["claude-4.1-opus", "claude-opus-4-1"],
+        ["claude-4.5-haiku", "claude-haiku-4-5"],
+        ["claude-3.7-sonnet", "claude-3-7-sonnet"],
+        ["claude-3.5-sonnet", "claude-3-5-sonnet"],
+        ["claude-5.5-opus-max", "claude-opus-5-5"],
+        // Fast mode bills at a premium of its own: left to the family's price, an estimate.
+        ["claude-4.6-opus-fast", undefined],
+        ["claude-opus-4-6", undefined],
+        ["gpt-5", undefined],
+        ["default", undefined],
+    ];
+    for (const [name, id] of cases)
+        assert.equal(cursorClaudeId(name), id, name);
+    for (const [name, id] of cases)
+        if (id)
+            assert.ok(hasKnownPrice(id), `${id} has a row of its own`);
+    // Opus 4.1 is $15 in by name; Cursor's name alone found only the Opus family's $5.
+    assert.equal(knownPricingFor(cursorClaudeId("claude-4.1-opus")).inputPerM, 15);
+    assert.equal(pricingFor("claude-4.1-opus").inputPerM, 5);
 });

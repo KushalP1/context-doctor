@@ -68,6 +68,16 @@ export interface CursorReply {
     folder?: string;
 }
 /**
+ * The Claude id a Cursor model name stands for, so it gets that version's
+ * list price rather than its family's: Cursor puts the version first and
+ * adds its own modes ("claude-4.6-opus-high-thinking" is claude-opus-4-6,
+ * "claude-3.7-sonnet" claude-3-7-sonnet). Thinking and effort levels bill as
+ * output at the same rates. Undefined for anything else, and for a "fast"
+ * variant, which Anthropic bills at a premium of its own (left to the
+ * family's price, an estimate).
+ */
+export declare function cursorClaudeId(name: string | undefined): string | undefined;
+/**
  * Every Cursor reply with token counts since `since`. Only chats updated
  * since then are read, each by its key range (on the author's 3 GB history
  * the chat list takes ~0.1 s, one chat's replies ~40 ms), and each chat's

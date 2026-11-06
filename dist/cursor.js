@@ -294,6 +294,26 @@ function cursorFolders() {
     }
     return out;
 }
+/**
+ * The Claude id a Cursor model name stands for, so it gets that version's
+ * list price rather than its family's: Cursor puts the version first and
+ * adds its own modes ("claude-4.6-opus-high-thinking" is claude-opus-4-6,
+ * "claude-3.7-sonnet" claude-3-7-sonnet). Thinking and effort levels bill as
+ * output at the same rates. Undefined for anything else, and for a "fast"
+ * variant, which Anthropic bills at a premium of its own (left to the
+ * family's price, an estimate).
+ */
+export function cursorClaudeId(name) {
+    const m = /^claude-(\d+)(?:\.(\d{1,2}))?-(opus|sonnet|haiku|fable|mythos)((?:-[a-z0-9]+)*)$/i.exec(name ?? "");
+    if (!m || /-fast\b/i.test(m[4]))
+        return undefined;
+    const [, major, minor, family] = m;
+    const fam = family.toLowerCase();
+    // Claude 3's ids put the version first too (claude-3-5-sonnet); from Claude 4 on, the family does.
+    return Number(major) < 4
+        ? `claude-${major}${minor ? `-${minor}` : ""}-${fam}`
+        : `claude-${fam}-${major}${minor ? `-${minor}` : ""}`;
+}
 /** A time Cursor wrote: epoch ms (as a number or digits) or an ISO string. */
 function cursorTime(v) {
     const n = typeof v === "number" ? v : typeof v === "string" ? (/^\d+$/.test(v) ? Number(v) : Date.parse(v)) : Number.NaN;
