@@ -16,12 +16,12 @@
  * up; with it on, an unused server costs about its tool names, not its
  * schemas. Usage of ToolSearch in the transcripts says whether that is so.
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { listSessions, isClaudeSession } from "./session.js";
 import { rowsOf } from "./scan.js";
-import { subagentDir } from "./subagents.js";
+import { subagentFiles } from "./subagents.js";
 import { estimateTokens } from "./tokens.js";
 import { claudeJsonPath } from "./claudedir.js";
 const CLAUDE = "claude-opus-5";
@@ -185,14 +185,10 @@ export function mcpUsage(days = 30, paths, onProgress) {
             }
         };
         scan(path);
-        let agents = [];
-        try {
-            agents = readdirSync(subagentDir(path)).filter((f) => f.endsWith(".jsonl"));
-        }
-        catch { /* no subagents */ }
-        for (const a of agents) {
+        // Subagents and workflow agents call MCP tools too.
+        for (const a of subagentFiles(path)) {
             try {
-                scan(join(subagentDir(path), a));
+                scan(a.file);
             }
             catch { /* one unreadable subagent must not sink the report */ }
         }

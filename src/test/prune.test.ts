@@ -27,7 +27,7 @@ function machine(sessions = 3) {
     mkdirSync(join(home, ".claude", "skills", s), { recursive: true });
     writeFileSync(join(home, ".claude", "skills", s, "SKILL.md"), `---\nname: ${s}\ndescription: The ${s} skill does a thing\n---\n`);
   }
-  writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { github: { command: "gh-mcp" }, "my.db": { command: "db" }, "context-doctor": { command: "npx" } } }));
+  writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { github: { command: "gh-mcp" }, "my.db": { command: "db" }, linear: { command: "linear-mcp" }, "context-doctor": { command: "npx" } } }));
   writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { figma: { command: "figma" } } }));
   const paths: string[] = [];
   const now = new Date().toISOString();
@@ -47,6 +47,10 @@ function machine(sessions = 3) {
   const sub = join(paths[0].replace(/\.jsonl$/, ""), "subagents");
   mkdirSync(sub, { recursive: true });
   writeFileSync(join(sub, "agent-a.jsonl"), JSON.stringify({ type: "assistant", isSidechain: true, cwd, timestamp: now, message: { role: "assistant", content: [{ type: "tool_use", id: "k", name: "Skill", input: { skill: "pdf-tools" } }] } }) + "\n");
+  // A workflow run's agent of the second session used the linear server, which nothing else did.
+  const run = join(paths[1].replace(/\.jsonl$/, ""), "subagents", "workflows", "wf_1");
+  mkdirSync(run, { recursive: true });
+  writeFileSync(join(run, "agent-w.jsonl"), JSON.stringify({ type: "assistant", isSidechain: true, cwd, timestamp: now, message: { role: "assistant", content: [{ type: "tool_use", id: "f", name: "mcp__linear__list_issues", input: {} }] } }) + "\n");
   return { home, cwd, paths };
 }
 
@@ -59,7 +63,7 @@ test("the plan: what each project used, what it did not, and how each would be s
   assert.equal(use.skillUses.get("pdf-tools"), 1, "a subagent's use counts");
   const plan = planPrune(30, { home, usage, cwds: [cwd] }).plans[0];
   assert.equal(plan.thin, false);
-  assert.deepEqual(plan.used.map((u) => u.name).sort(), ["github", "pdf-tools", "sql-helper"]);
+  assert.deepEqual(plan.used.map((u) => u.name).sort(), ["github", "linear", "pdf-tools", "sql-helper"], "a workflow agent's use counts");
   assert.deepEqual(plan.unused.map((u) => `${u.name}:${u.entry}`).sort(), ["figma:disabledMcpjsonServers", "my.db:deniedMcpServers", "release-notes:skillOverrides"]);
   assert.ok(!JSON.stringify(plan).includes("context-doctor"), "our own server and skill are left alone");
   assert.ok(!JSON.stringify(plan).includes("Gmail"), "an app-provided connector is never proposed");
@@ -86,7 +90,7 @@ test("--write switches them off in settings.local.json, keeps the original and t
     assert.deepEqual(after.permissions, original.permissions);
     const again = planPrune(30, { home, usage: projectUsage(30, paths), cwds: [cwd] }).plans[0];
     assert.deepEqual(again.alreadyOff.sort(), ["figma", "my.db"]);
-    assert.deepEqual(again.used.map((u) => u.name).sort(), ["github", "pdf-tools", "sql-helper"]);
+    assert.deepEqual(again.used.map((u) => u.name).sort(), ["github", "linear", "pdf-tools", "sql-helper"]);
     const undo = undoPrune(cwd)!;
     assert.deepEqual(undo.removed.sort(), ["figma", "my.db"]);
     const restored = JSON.parse(readFileSync(file, "utf8"));

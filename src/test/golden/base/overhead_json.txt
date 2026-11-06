@@ -44,14 +44,14 @@
     ],
     "usage": {
       "calls": {
-        "github": 26
+        "github": 29
       },
       "names": {
-        "mcp__github__get_issue": 23,
+        "mcp__github__get_issue": 26,
         "mcp__github__pr": 3
       },
       "resources": {
-        "github": 2
+        "github": 3
       },
       "sessions": 8,
       "toolSearchSessions": 8

@@ -22,7 +22,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { listSessions, isClaudeSession } from "./session.js";
 import { rowsOf, type Extractor } from "./scan.js";
-import { subagentDir } from "./subagents.js";
+import { subagentFiles } from "./subagents.js";
 import { estimateTokens } from "./tokens.js";
 // Type only: erased at compile time, so dist/ never loads the SDK at startup.
 import type { Client } from "./mcpclient.js";
@@ -225,10 +225,9 @@ export function mcpUsage(days = 30, paths?: string[], onProgress?: (done: number
       }
     };
     scan(path);
-    let agents: string[] = [];
-    try { agents = readdirSync(subagentDir(path)).filter((f) => f.endsWith(".jsonl")); } catch { /* no subagents */ }
-    for (const a of agents) {
-      try { scan(join(subagentDir(path), a)); } catch { /* one unreadable subagent must not sink the report */ }
+    // Subagents and workflow agents call MCP tools too.
+    for (const a of subagentFiles(path)) {
+      try { scan(a.file); } catch { /* one unreadable subagent must not sink the report */ }
     }
     if (searched) toolSearchSessions++;
   }

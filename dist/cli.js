@@ -7,7 +7,7 @@
  *
  * `-` reads from stdin, so you can pipe: `cat chat.json | context-doctor analyze -`
  */
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
@@ -41,7 +41,7 @@ import { measureAccuracy, renderAccuracy } from "./accuracy.js";
 import { renderDiff } from "./diff.js";
 import { renderExperiment, runExperiment } from "./experiment.js";
 import { runStatusLine } from "./statusline.js";
-import { renderSubagents, subagentDir, subagentReport } from "./subagents.js";
+import { renderSubagents, subagentFiles, subagentReport } from "./subagents.js";
 import { findPreset, PRESETS, RC_FILENAME } from "./config.js";
 import { runWatch } from "./watch.js";
 import { exactTokenCount } from "./exact.js";
@@ -1580,12 +1580,7 @@ async function main() {
         const mains = claudeTranscripts(args.days ?? 30);
         prescan([
             { paths: mains, extractors: [REQUEST_ROWS, MCP_ROWS] },
-            { paths: mains.flatMap((p) => { try {
-                    return readdirSync(subagentDir(p)).filter((f) => f.endsWith(".jsonl")).map((f) => join(subagentDir(p), f));
-                }
-                catch {
-                    return [];
-                } }), extractors: [MCP_ROWS] },
+            { paths: mains.flatMap((p) => subagentFiles(p).map((f) => f.file)), extractors: [MCP_ROWS] },
         ], sessions.tick);
         const report = overheadReport({
             days: args.days,

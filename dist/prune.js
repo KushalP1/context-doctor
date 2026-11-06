@@ -33,7 +33,7 @@ import { dirname, join, resolve } from "node:path";
 import { statePath } from "./ledger.js";
 import { listSessions, isClaudeSession } from "./session.js";
 import { rowsOf } from "./scan.js";
-import { subagentDir } from "./subagents.js";
+import { subagentFiles } from "./subagents.js";
 import { claudeMcpConfigs, countMcpRow, serverUses } from "./mcpschema.js";
 import { estimateTokens, formatTokens } from "./tokens.js";
 import { formatUsd } from "./pricing.js";
@@ -148,13 +148,9 @@ export function projectUsage(days = 30, paths, now = Date.now()) {
         };
         try {
             scan(path);
-            let agents = [];
-            try {
-                agents = readdirSync(subagentDir(path)).filter((f) => f.endsWith(".jsonl"));
-            }
-            catch { /* none */ }
-            for (const a of agents)
-                scan(join(subagentDir(path), a));
+            // Subagents and workflow agents (subagents/workflows/<run>/) use servers too.
+            for (const a of subagentFiles(path))
+                scan(a.file);
         }
         catch {
             continue;

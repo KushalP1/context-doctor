@@ -8,7 +8,7 @@ the whole overhead ~$18.74 a month.
 MCP servers
 ────────────────────────────────────────────────────────
 Tool search was used in 8 of 8 sessions: Claude Code defers MCP definitions, so a server costs about its tool names until the model looks one up.
-  github                 user          33 calls  size: run with --mcp
+  github                 user          37 calls  size: run with --mcp
   unused                 user           0 calls  size: run with --mcp
   `context-doctor overhead --mcp` launches the 2 configured server(s) once to size their definitions.
 

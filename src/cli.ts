@@ -42,7 +42,7 @@ import { measureAccuracy, renderAccuracy } from "./accuracy.js";
 import { renderDiff } from "./diff.js";
 import { renderExperiment, runExperiment } from "./experiment.js";
 import { runStatusLine } from "./statusline.js";
-import { renderSubagents, subagentDir, subagentReport } from "./subagents.js";
+import { renderSubagents, subagentDir, subagentFiles, subagentReport } from "./subagents.js";
 import { findPreset, PRESETS, RC_FILENAME } from "./config.js";
 import { runWatch } from "./watch.js";
 import { exactTokenCount } from "./exact.js";
@@ -1624,7 +1624,7 @@ async function main(): Promise<void> {
     const mains = claudeTranscripts(args.days ?? 30);
     prescan([
       { paths: mains, extractors: [REQUEST_ROWS, MCP_ROWS] },
-      { paths: mains.flatMap((p) => { try { return readdirSync(subagentDir(p)).filter((f) => f.endsWith(".jsonl")).map((f) => join(subagentDir(p), f)); } catch { return []; } }), extractors: [MCP_ROWS] },
+      { paths: mains.flatMap((p) => subagentFiles(p).map((f) => f.file)), extractors: [MCP_ROWS] },
     ], sessions.tick);
     const report = overheadReport({
       days: args.days,

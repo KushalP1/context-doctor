@@ -3,7 +3,7 @@ UNUSED MCP SERVERS AND SKILLS, BY PROJECT
 Last 30 days of Claude Code sessions (subagents included).
 
 ~/work/app  (this folder): 8 sessions
-  used    server github (29)
+  used    server github (33)
   unused  server unused (user): deniedMcpServers
 
 Switch off the 1 unused here, for this project only: context-doctor overhead prune --write
