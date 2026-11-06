@@ -53,4 +53,17 @@ test("render: the current window is shown even with no history to replay", () =>
     assert.match(text, /Now: 250k/);
     assert.match(text, /No sessions with 10\+ requests/);
     assert.match(renderCompactWindows(empty), /Now: not set/);
+    // The file it is set in follows CLAUDE_CONFIG_DIR, as Claude Code does.
+    const dir = mkdtempSync(join(tmpdir(), "cd-cw-config-"));
+    const saved = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = dir;
+    try {
+        assert.ok(renderCompactWindows(empty, 250_000).includes(`Now: 250k (set in ${join(dir, "settings.json")})`), renderCompactWindows(empty, 250_000));
+    }
+    finally {
+        if (saved === undefined)
+            delete process.env.CLAUDE_CONFIG_DIR;
+        else
+            process.env.CLAUDE_CONFIG_DIR = saved;
+    }
 });

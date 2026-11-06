@@ -235,7 +235,8 @@ export function setJsonPath(text: string | undefined, path: string[], value: unk
   const root = skipWs(text, text.startsWith("﻿") ? 1 : 0);
   const edit = (t: string, objStart: number, keys: string[]): string => {
     const o = scanObject(t, objStart);
-    const idx = o.members.findIndex((m) => m.key === keys[0]);
+    // A key written twice: the last one, the one JSON.parse (and Claude Code) reads.
+    const idx = o.members.map((m) => m.key).lastIndexOf(keys[0]);
     const m = idx >= 0 ? o.members[idx] : undefined;
     if (keys.length > 1) {
       if (m) {
@@ -302,7 +303,7 @@ function scanArray(t: string, start: number): Arr {
 function arrayAt(t: string, path: string[]): Arr {
   let at = skipWs(t, t.startsWith("﻿") ? 1 : 0);
   for (const k of path) {
-    const m = t[at] === "{" ? scanObject(t, at).members.find((x) => x.key === k) : undefined;
+    const m = t[at] === "{" ? scanObject(t, at).members.filter((x) => x.key === k).pop() : undefined;
     if (!m) throw new SettingsError(`"${path.join(".")}" is not in the settings file. Nothing was changed.`);
     at = m.valueStart;
   }

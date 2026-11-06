@@ -66,6 +66,12 @@ test("round trips are byte-exact, and apply edits only its key (formatting, CRLF
     const set = setJsonPath(t, ["env", "ENABLE_TOOL_SEARCH"], "auto");
     assert.equal(set, '{\r\n\t"a": [1, 2],\r\n\t"b": "\\u00e9",\r\n\t"env": {\r\n\t\t"ENABLE_TOOL_SEARCH": "auto"\r\n\t}\r\n}\r\n');
     assert.equal(setJsonPath(set, ["env"], ABSENT), t);
+    // A key written twice: the edit goes to the one JSON.parse reads (the last), so it takes effect.
+    const twice = '{\n  "bashOutputMaxChars": 50000,\n  "env": {"A": "1"},\n  "env": {"B": "2"},\n  "bashOutputMaxChars": 60000\n}\n';
+    const edited = setJsonPath(twice, ["bashOutputMaxChars"], 8000);
+    assert.equal(JSON.parse(edited).bashOutputMaxChars, 8000);
+    assert.ok(edited.includes('"bashOutputMaxChars": 50000'), "the first is left as written");
+    assert.deepEqual(JSON.parse(setJsonPath(twice, ["env", "C"], "3")).env, { B: "2", C: "3" });
 });
 test("undo leaves a value the user changed since; a second apply keeps the first previous value; raw previous values come back", async () => {
     let { home: h, file } = home('{\n  "a": 1\n}');

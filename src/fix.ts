@@ -205,7 +205,7 @@ export function planFixes(i: FixInputs): Fix[] {
       title: `Switch off ${names.length} unused MCP server${names.length === 1 ? "" : "s"} or skill${names.length === 1 ? "" : "s"} in this project`,
       basis: `none used in ${i.prune.sessions} sessions of this project in ${i.days} days: ${names.slice(0, 5).join(", ")}${names.length > 5 ? ", …" : ""}`,
       quality: "none while they stay unused; undo brings them back",
-      change: `${i.prune.cwd}/.claude/settings.local.json`,
+      change: join(i.prune.cwd, ".claude", "settings.local.json"),
       state: "available",
     });
   }

@@ -66,6 +66,10 @@ test("the plan ranks priced fixes by dollars, lists applied ones apart, and leav
   assert.ok(!/\/(Users|home|tmp)\//.test(share), "no paths in the share text");
   assert.deepEqual(parseFixIds("all", fixes).ids, ["compact-window", "cache-ttl", "tool-search"]);
   assert.deepEqual(parseFixIds("cache-ttl,nope", fixes), { ids: ["cache-ttl"], unknown: ["nope"] });
+  // The project's file in the platform's own separators (not "C:\proj/.claude/..." on Windows).
+  const cwd = join(tmpdir(), "proj");
+  const [prune] = planFixes({ ...base, prune: { cwd, sessions: 9, unused: [{ kind: "mcp", name: "docs", scope: "project", entry: "disabledMcpjsonServers" }], used: [], thin: false, alreadyOff: [] } });
+  assert.equal(prune.change, join(cwd, ".claude", "settings.local.json"));
 });
 
 test("apply then undo leaves settings.json byte for byte as it was; autopilot goes through its own commands", async () => {

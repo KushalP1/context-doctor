@@ -30,7 +30,7 @@ import { compactWindowOverrides, effectiveCompactWindow, settingsSources } from 
 import { withInvocation } from "./invocation.js";
 import { idleCompactMinTokens, isIdleCompactNotice, REQUEST_ROWS } from "./coldresume.js";
 import { rowsOf } from "./scan.js";
-import { claudeDir } from "./claudedir.js";
+import { claudeDir, tilde } from "./claudedir.js";
 /** Claude Code compacts at about this share of the window (970k of 1M, measured). */
 const TRIGGER_SHARE = 0.97;
 /** Context right after a compaction: system prompt, tools and the summary (median 75,447, measured). */
@@ -282,7 +282,7 @@ export function renderCompactWindows(r, current, limitLines) {
     // Counted and said exactly as `savings` says it, so the two screens agree.
     lines.push(`Last ${r.days} days, ${sessionsLabel(r.sessions, r.transcripts ?? r.sessions)}, at list prices`);
     lines.push("─".repeat(66));
-    lines.push(`Now: ${current ? `${k(current)} (set in ~/.claude/settings.json)` : "not set: Claude Code compacts near the model's full window"}`);
+    lines.push(`Now: ${current ? `${k(current)} (set in ${tilde(settingsPath())})` : "not set: Claude Code compacts near the model's full window"}`);
     if (r.sessions === 0) {
         lines.push("No sessions with 10+ requests in the window to replay.");
         return withInvocation(lines.join("\n"));
