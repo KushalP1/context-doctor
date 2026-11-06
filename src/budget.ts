@@ -30,7 +30,8 @@ import { dirname, join } from "node:path";
 import { codexDir } from "./codexdir.js";
 import { fallbackStateDir, statePath } from "./ledger.js";
 import { claudeCodePresent, claudeDir } from "./claudedir.js";
-import { claudeFileUsage, claudeUsageFiles, codexSessionsRoot, rolloutFiles, USAGE_ROWS } from "./limits.js";
+import { claudeFileUsage, codexSessionsRoot, rolloutFiles, SUBAGENT_LOOKBACK_MS, USAGE_ROWS } from "./limits.js";
+import { subagentFiles } from "./subagents.js";
 import { codexFileSpend, codexFiles, geminiFileSpend, geminiFiles, TOOL_NAME, type Tool } from "./spend.js";
 import { hasKnownPrice, isUnbilledModel, pricingFor, usageCost, type RecordedUsage } from "./pricing.js";
 import { anchorOf, rowsOf } from "./scan.js";
@@ -101,6 +102,43 @@ export function writeBudget(b: Budget): void {
   // A new budget starts its thresholds afresh; the ledger stays (same period, same spend).
   const st = readState();
   if (st) writeWhole(budgetStatePath(), { ...st, warned: 0 });
+  clearSaid();
+}
+
+/**
+ * The thresholds said this period, one marker file each
+ * (~/.claude/.context-doctor-budget-said.d/<period start>-<percent>). The
+ * ledger records them too, but it is read, then written: two prompts at once
+ * (two sessions) could both read "not said" and both say it.
+ */
+function saidDir(): string {
+  return join(dirname(budgetStatePath()), ".context-doctor-budget-said.d");
+}
+
+/** True for exactly one caller: the marker of `level` (and of the lower thresholds, so a stale lower one is not said after it) did not exist. */
+function claimSaid(start: number, level: number): boolean {
+  const create = (t: number): boolean => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        writeFileSync(join(saidDir(), `${start}-${t}`), "", { flag: "wx", mode: 0o600 });
+        return true;
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT" || attempt) return (e as NodeJS.ErrnoException).code !== "EEXIST";
+        try { mkdirSync(saidDir(), { recursive: true }); } catch { return true; }
+      }
+    }
+    return true;
+  };
+  const mine = create(level);
+  for (const t of THRESHOLDS) if (t < level) create(t);
+  return mine;
+}
+
+/** A new period, budget or none: the markers of other periods (or all) go. */
+function clearSaid(keep?: number): void {
+  try {
+    for (const f of readdirSync(saidDir())) if (keep === undefined || !f.startsWith(`${keep}-`)) rmSync(join(saidDir(), f), { force: true });
+  } catch { /* none */ }
 }
 
 /** Remove the budget and its ledger. True when there was one. */
@@ -117,6 +155,7 @@ export function clearBudget(): boolean {
   } catch { /* no folder */ }
   rmSync(budgetPath(), { force: true });
   rmSync(budgetStatePath(), { force: true });
+  rmSync(saidDir(), { recursive: true, force: true });
   if (ours) try { rmdirSync(dir); } catch { /* other files of ours are still in it */ }
   return had;
 }
@@ -194,8 +233,15 @@ function saveState(st: BudgetState): void {
   try { writeWhole(budgetStatePath(), st); } catch { /* a read-only folder: worked out again next time */ }
 }
 
-/** Claude Code's main transcripts written since `since`, without listing Codex's or Gemini's too. */
-function claudeTops(since: number): string[] {
+/**
+ * Claude Code's transcripts written since `since`, without listing Codex's or
+ * Gemini's too: each main transcript written since then, and the subagents
+ * (workflow agents included) written since then of every session written in
+ * the SUBAGENT_LOOKBACK_MS before it. A subagent still running after
+ * midnight, its session quiet meanwhile, was not counted until the session
+ * itself was written again.
+ */
+function claudePeriodFiles(since: number): string[] {
   const root = join(claudeDir(), "projects");
   const out: string[] = [];
   let dirs: string[];
@@ -205,7 +251,12 @@ function claudeTops(since: number): string[] {
     try { names = readdirSync(join(root, d)); } catch { continue; }
     for (const n of names) {
       if (!n.endsWith(".jsonl")) continue;
-      try { if (statSync(join(root, d, n)).mtimeMs >= since) out.push(join(root, d, n)); } catch { /* vanished */ }
+      const top = join(root, d, n);
+      let m: number;
+      try { m = statSync(top).mtimeMs; } catch { continue; /* vanished */ }
+      if (m < since - SUBAGENT_LOOKBACK_MS) continue;
+      if (m >= since) out.push(top);
+      for (const f of subagentFiles(top, since)) out.push(f.file);
     }
   }
   return out;
@@ -312,20 +363,54 @@ function readFile(tool: Tool, file: string, since: number, size: number): Omit<F
  * A Claude Code transcript that grew: the whole lines after `e.o`, each
  * reply counted as claudeFileUsage counts it (once, its output settled on
  * its later rows, priced with usageCost), into `e`. False, `e` untouched,
- * when what came before `e.o` is not what was read (rewritten in place).
+ * when what came before `e.o` is not what was read (rewritten in place), or
+ * when the entry no longer keeps its last replies (`r`, dropped for a
+ * finished subagent): then a later row of a reply would not be known as one.
+ * Read in blocks, so a long transcript never needs one buffer of all of it.
+ * `own`: count only the rows of this session, by their `sessionId`: a
+ * session resumed or forked into a new one starts with a copy of the old
+ * one's rows, which keep its id (seen on the author's machine), and were
+ * counted as the new session's spend.
  */
-function readAppended(e: FileEntry, file: string, since: number): boolean {
+function readAppended(e: FileEntry, file: string, since: number, own?: string): boolean {
   const fd = openSync(file, "r");
   try {
     const size = fstatSync(fd).size;
     const from = e.o ?? 0;
-    if (e.a === undefined || size < from || anchorOf(fd, from) !== e.a) return false;
-    const buf = Buffer.alloc(size - from);
-    const n = readSync(fd, buf, 0, buf.length, from);
-    const end = buf.subarray(0, n).lastIndexOf(10);
-    if (end < 0) return true;
-    const recent = e.r ?? [];
-    for (const line of buf.subarray(0, end).toString("utf8").split("\n")) {
+    if (e.a === undefined || e.r === undefined || size < from || anchorOf(fd, from) !== e.a) return false;
+    const recent = e.r;
+    let pos = from;
+    let carry: Buffer = Buffer.alloc(0);
+    while (pos < size) {
+      const block = Buffer.alloc(Math.min(READ_BLOCK, size - pos));
+      const n = readSync(fd, block, 0, block.length, pos);
+      if (n <= 0) break;
+      pos += n;
+      const buf: Buffer = carry.length ? Buffer.concat([carry, block.subarray(0, n)]) : block.subarray(0, n);
+      const end = buf.lastIndexOf(10);
+      if (end < 0) { carry = buf; continue; }
+      carry = buf.subarray(end + 1);
+      countLines(e, recent, buf.subarray(0, end).toString("utf8"), since, own);
+    }
+    e.r = recent.slice(-RECENT_REPLIES);
+    // After the last whole line: a half-written one is read next time.
+    e.o = pos - carry.length;
+    e.a = anchorOf(fd, e.o);
+    return true;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Lines read at a time by readAppended. */
+const READ_BLOCK = 8 * 1024 * 1024;
+
+/** Whole lines of a Claude Code transcript counted into `e` (readAppended). */
+function countLines(e: FileEntry, recent: NonNullable<FileEntry["r"]>, text: string, since: number, own?: string): void {
+  {
+    for (const line of text.split("\n")) {
+      // Only the last replies matter (a reply's rows are written together): a whole transcript read at once stays linear.
+      if (recent.length > 2 * RECENT_REPLIES) recent.splice(0, recent.length - RECENT_REPLIES);
       if (!line.includes('"usage"')) continue;
       let row: Record<string, any>;
       try { row = JSON.parse(line); } catch { continue; }
@@ -347,7 +432,9 @@ function readAppended(e: FileEntry, file: string, since: number): boolean {
       const price = pricingFor(realModel(m.model));
       let index = -1;
       // A reply on <synthetic> was made by Claude Code itself, never billed: not a request at all.
-      if (Number.isFinite(ts) && ts >= since && tokens > 0 && !isUnbilledModel(m.model)) {
+      // A row of another session (`own`): a copy of its history, its spend, not this session's.
+      const copied = own !== undefined && typeof row.sessionId === "string" && row.sessionId !== own;
+      if (Number.isFinite(ts) && ts >= since && tokens > 0 && !isUnbilledModel(m.model) && !copied) {
         index = e.k.length;
         if (!price) (e.x ??= []).push([index, realModel(m.model) ?? "unknown"]);
         else if (!hasKnownPrice(realModel(m.model))) (e.y ??= []).push([index, realModel(m.model) ?? "unknown"]);
@@ -356,12 +443,6 @@ function readAppended(e: FileEntry, file: string, since: number): boolean {
       }
       if (typeof m.id === "string") recent.push([m.id, index, out, price?.outputPerM ?? 0]);
     }
-    e.r = recent.slice(-RECENT_REPLIES);
-    e.o = from + end + 1;
-    e.a = anchorOf(fd, e.o);
-    return true;
-  } finally {
-    closeSync(fd);
   }
 }
 
@@ -372,9 +453,6 @@ export function wellFormed(e: FileEntry | undefined): e is FileEntry {
     (e!.a === undefined || typeof e!.a === "string") && (e!.x === undefined || (Array.isArray(e!.x) && e!.x.every((y) => Array.isArray(y) && typeof y[0] === "number"))) && (e!.y === undefined || (Array.isArray(e!.y) && e!.y.every((y) => Array.isArray(y) && typeof y[0] === "number"))) && (e!.r === undefined || (Array.isArray(e!.r) && e!.r.every((x) => Array.isArray(x) && x.length === 4)));
 }
 
-/** Above this, a transcript met for the first time goes through the shared scan even when `direct`: one buffer of all of it is too much. */
-const DIRECT_MAX_BYTES = 16 * 1024 * 1024;
-
 /**
  * One transcript's entry brought up to date: kept when the file is as last
  * read, read from where the last read stopped when a Claude Code transcript
@@ -383,9 +461,11 @@ const DIRECT_MAX_BYTES = 16 * 1024 * 1024;
  * `direct`: a Claude Code transcript met for the first time is read here,
  * not through the shared scan, which keeps a cache entry of it on disk (the
  * session price reads one session, and writes nothing while it has nothing
- * to say).
+ * to say). `own`: a Claude Code transcript's rows of other sessions are not
+ * counted (readAppended); only with `direct`, which reads every Claude Code
+ * transcript itself.
  */
-export function refreshEntry(tool: Tool, file: string, prev: FileEntry | undefined, since: number, direct = false): { e: FileEntry; read: number } | undefined {
+export function refreshEntry(tool: Tool, file: string, prev: FileEntry | undefined, since: number, direct = false, own?: string): { e: FileEntry; read: number } | undefined {
   let s;
   try { s = statSync(file); } catch { return undefined; }
   // An entry not in the shape this version writes (edited, or another version's) is read again.
@@ -395,15 +475,15 @@ export function refreshEntry(tool: Tool, file: string, prev: FileEntry | undefin
     // Claude Code appends: a transcript that only grew is read from where the last read stopped.
     if (e && tool === "claude" && e.o !== undefined && e.i === s.ino && s.size >= e.s) {
       const from = e.o;
-      if (readAppended(e, file, since)) return { e: { ...e, s: s.size, m: s.mtimeMs }, read: s.size - from };
+      if (readAppended(e, file, since, direct ? own : undefined)) return { e: { ...e, s: s.size, m: s.mtimeMs }, read: s.size - from };
     }
-    if (direct && tool === "claude" && s.size <= DIRECT_MAX_BYTES) {
+    if (direct && tool === "claude") {
       // From the start, as an append to nothing: the same counting, without the scan.
       const fd = openSync(file, "r");
       let a: string;
       try { a = anchorOf(fd, 0); } finally { closeSync(fd); }
       const blank: FileEntry = { t: tool, s: 0, m: 0, i: s.ino, k: [], d: [], o: 0, a, r: [] };
-      if (readAppended(blank, file, since)) return { e: { ...blank, s: s.size, m: s.mtimeMs }, read: s.size };
+      if (readAppended(blank, file, since, own)) return { e: { ...blank, s: s.size, m: s.mtimeMs }, read: s.size };
     }
     return { e: { t: tool, s: s.size, m: s.mtimeMs, i: s.ino, ...readFile(tool, file, since, s.size) }, read: s.size };
   } catch {
@@ -432,7 +512,7 @@ export function periodSpend(period: Period, now = Date.now(), home = homedir(), 
   const st: BudgetState = fresh ? { start, files: {}, warned: 0, usd: 0, byTool: {} } : prev;
   const walked = st.cx?.at;
   const files: Array<[Tool, string]> = [
-    ...claudeUsageFiles(start, claudeTops(start)).map((f) => ["claude", f.file] as [Tool, string]),
+    ...claudePeriodFiles(start).map((f) => ["claude", f] as [Tool, string]),
     ...codexPeriodFiles(st, start, now, home).map((f) => ["codex", f] as [Tool, string]),
     ...geminiFiles(start, home).map((f) => ["gemini", f] as [Tool, string]),
   ];
@@ -464,8 +544,14 @@ export function periodSpend(period: Period, now = Date.now(), home = homedir(), 
     });
   }
   const level = warnAt ? warnAt(usd, st.warned) : 0;
-  const warn = level > st.warned ? level : undefined;
-  if (warn) { st.warned = warn; changed = true; }
+  let warn = level > st.warned ? level : undefined;
+  if (warn) {
+    st.warned = warn;
+    changed = true;
+    // Said by exactly one of several prompts at once: the one that creates the threshold's marker.
+    if (!claimSaid(start, warn)) warn = undefined;
+  }
+  if (fresh) clearSaid(start);
   // The hook (warnAt) says once a period that part of it has no price.
   const unpricedNew = Boolean(warnAt) && unpriced > 0 && !st.unpricedSaid;
   if (unpricedNew) { st.unpricedSaid = true; changed = true; }

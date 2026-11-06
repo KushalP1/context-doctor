@@ -311,7 +311,7 @@ export async function runHook(app?: "copilot"): Promise<void> {
     // A session's own price (sessionprice.ts): once when it passes $25, $100
     // and $500, a line to the user beside the budget's. Claimed before the
     // rest of the hook runs, so it rides in `budgetNote` like the budget's.
-    let priceCold = false;
+    let priceCold = false, priceSaid = false;
     if (!cursor && (input.hook_event_name === undefined || input.hook_event_name === "UserPromptSubmit" || input.hook_event_name === "BeforeAgent") && input.transcript_path && existsSync(input.transcript_path)) {
       try {
         const sid = input.session_id ?? input.conversation_id ?? input.transcript_path;
@@ -319,6 +319,7 @@ export async function runHook(app?: "copilot"): Promise<void> {
         if (p) {
           budgetNote = [budgetNote, renderSessionPrice(p)].filter(Boolean).join("\n");
           priceCold = p.coldUsd !== undefined;
+          priceSaid = true;
           recordLedger({ ev: "session_price", sid: sid.slice(0, 12), usd: Math.round(p.usd * 100) / 100, ...(p.tokens !== undefined ? { tok: p.tokens } : {}), ...(p.model ? { model: p.model } : {}) });
         }
       } catch { /* never worth a prompt */ }
@@ -356,11 +357,14 @@ export async function runHook(app?: "copilot"): Promise<void> {
     if (cold && cold.tokens >= (autoCompactsAt(cold.model ?? input.model) ?? Infinity)) cold = undefined;
     let cr = prev.cr;
     if (cold && cold.lastReplyAt !== prev.cr) {
-      notes.push(renderColdResume(cold));
-      // The session price's line already said this message re-writes the cache: once is enough.
-      notice = [budgetNote, priceCold ? undefined : renderColdResumeNotice(cold)].filter(Boolean).join("\n");
       cr = cold.lastReplyAt;
-      recordLedger({ ev: "cold_resume", sid: sessionId.slice(0, 12), tok: cold.tokens, model: cold.model });
+      // The session price's line already told the user this message re-writes the cache and that
+      // /compact cuts it: once is enough, so neither the notice nor the model's offer goes out too.
+      if (!priceCold) {
+        notes.push(renderColdResume(cold));
+        notice = [budgetNote, renderColdResumeNotice(cold)].filter(Boolean).join("\n");
+        recordLedger({ ev: "cold_resume", sid: sessionId.slice(0, 12), tok: cold.tokens, model: cold.model });
+      }
     }
     const emit = (lines: string[]): void => {
       if (lines.length === 0 && !notice) return;
@@ -446,7 +450,8 @@ export async function runHook(app?: "copilot"): Promise<void> {
     if (topFinding) {
       lines.push(`Largest recoverable waste: ${topFinding.message} (${topFinding.suggestion})`);
     }
-    if (liveTokens > threshold * 2) {
+    // Not when the session price's line just said /compact to the user: the reply would say it again.
+    if (liveTokens > threshold * 2 && !priceSaid) {
       lines.push(cursor
         ? "If the task changes, suggest the user start a new chat from a short summary of this one."
         : "If it fits the flow, offer the user a compaction of the older history.");

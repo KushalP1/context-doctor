@@ -228,6 +228,40 @@ async function inLedgerSandbox(fn: (home: string, transcript: string) => void): 
   }
 }
 
+test("workflow agents count; so does a subagent still writing after midnight while its session, last written yesterday, stays quiet", async () => {
+  await inLedgerSandbox((home, transcript) => {
+    const start = periodStart("day", NOW);
+    // The session: yesterday's reply only, its file last written before midnight.
+    writeFileSync(transcript, reply(start - HOUR).join("\n") + "\n");
+    utimesSync(transcript, new Date(start - HOUR), new Date(start - HOUR));
+    // Its workflow run's agent and an Agent tool subagent, both writing today ($0.20 each).
+    const subs = join(transcript.replace(/\.jsonl$/, ""), "subagents");
+    mkdirSync(join(subs, "workflows", "wf_1"), { recursive: true });
+    writeFileSync(join(subs, "workflows", "wf_1", "agent-w.jsonl"), reply(NOW - 2 * HOUR).join("\n") + "\n");
+    writeFileSync(join(subs, "agent-a.jsonl"), reply(NOW - HOUR).join("\n") + "\n");
+    const s = periodSpend("day", NOW, home);
+    assert.ok(Math.abs(s.usd - 0.4) < 1e-9, `${s.usd}: both of today's subagent requests, none of yesterday's`);
+    clearScanMemo();
+    assert.ok(Math.abs(claudeSpend(start, NOW + HOUR).reduce((n, i) => n + i.usd, 0) - 0.4) < 1e-9, "spend agrees");
+  });
+});
+
+test("a threshold is said once even when two prompts read the ledger before either wrote it", async () => {
+  await inLedgerSandbox((home, transcript) => {
+    writeFileSync(transcript, reply(NOW - HOUR).join("\n") + "\n");
+    const warnAt = (usd: number) => levelOf(usd, 0.3);
+    const before = existsSync(budgetStatePath()) ? readFileSync(budgetStatePath(), "utf8") : undefined;
+    assert.equal(periodSpend("day", NOW, home, warnAt).warn, 50, "$0.20 of $0.30");
+    // A second prompt that read the ledger as it was before the first one wrote it.
+    if (before === undefined) rmSync(budgetStatePath(), { force: true }); else writeFileSync(budgetStatePath(), before);
+    assert.equal(periodSpend("day", NOW, home, warnAt).warn, undefined, "said already");
+    // The next threshold is still said, once.
+    appendFileSync(transcript, reply(NOW - HOUR / 2).join("\n") + "\n");
+    assert.equal(periodSpend("day", NOW, home, warnAt).warn, 100);
+    assert.equal(periodSpend("day", NOW, home, warnAt).warn, undefined);
+  });
+});
+
 test("a reply streamed across midnight is yesterday's: its rows appended after the day's first read are not a new request", async () => {
   await inLedgerSandbox((home, transcript) => {
     const start = periodStart("day", NOW);

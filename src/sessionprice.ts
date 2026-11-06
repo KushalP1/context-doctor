@@ -33,14 +33,14 @@
  * off: CONTEXT_DOCTOR_NO_SESSION_PRICE=1.
  */
 
-import { mkdirSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { statePath } from "./ledger.js";
 import { refreshEntry, wellFormed, writeWhole, type FileEntry } from "./budget.js";
 import { codexFileSpend, geminiFileSpend, type Tool } from "./spend.js";
 import { isGeminiChat } from "./gemini.js";
-import { subagentDir } from "./subagents.js";
+import { subagentFiles } from "./subagents.js";
 import { tailUsage } from "./statusline.js";
 import { autoCompactsAt, detectColdResume, withResumeVerdict, type ResumeVerdict } from "./coldresume.js";
 import { formatUsd, pricingFor } from "./pricing.js";
@@ -71,6 +71,10 @@ function base(sessionId: string): string {
   return join(statePath().replace(/\.json$/, "") + ".d", createHash("sha1").update(sessionId).digest("hex").slice(0, 16));
 }
 const ledgerFile = (b: string) => `${b}.price.json`;
+/** The price file's format: 2 counts only the session's own rows and may leave a finished subagent's `r` out. */
+const LEDGER_VERSION = 2;
+/** A subagent transcript not written for this long is done: its entry keeps no recent replies. */
+const FINISHED_MS = 60 * 60_000;
 const claimFile = (b: string, usd: number) => `${b}.price-${usd}`;
 
 const DAY = 86_400_000;
@@ -115,8 +119,14 @@ export interface SessionPrice {
   /** The threshold just passed. */
   threshold: number;
   usd: number;
-  /** Subagents' part of `usd`. */
+  /** Subagents' part of `usd` (the Agent tool's). */
   subagentUsd: number;
+  /** Workflow agents' part of `usd`. */
+  workflowUsd?: number;
+  /** Requests on a model with no list price, not in `usd`. */
+  unpriced?: number;
+  /** The part of `usd` priced at its model's family's row (an estimate). */
+  estimatedUsd?: number;
   /** The main conversation's context at its last request, and its model. */
   tokens?: number;
   model?: string;
@@ -147,22 +157,23 @@ export function sessionPriceDue(input: SessionPriceInput, now = Date.now(), env:
   // Everything said: one stat from now on.
   if (said(claimFile(b, thresholds[thresholds.length - 1]), now)) return undefined;
   const app = appOf(input.transcript, input.event);
-  const files: Array<[string, boolean]> = [[input.transcript, false]];
-  if (app === "claude") {
-    // Subagents bill to the session that started them.
-    const dir = subagentDir(input.transcript);
-    try { for (const f of readdirSync(dir)) if (f.endsWith(".jsonl")) files.push([join(dir, f), true]); } catch { /* no subagents */ }
-  }
+  // Each file and whose it is: the main conversation, a subagent, a workflow agent.
+  const files: Array<[string, "main" | "sub" | "workflow"]> = [[input.transcript, "main"]];
+  // Subagents and workflow agents bill to the session that started them.
+  if (app === "claude") for (const f of subagentFiles(input.transcript)) files.push([f.file, f.run ? "workflow" : "sub"]);
   let saved: Record<string, FileEntry> = {};
   try {
-    const raw = JSON.parse(readFileSync(ledgerFile(b), "utf8"))?.f;
-    if (raw && typeof raw === "object") saved = raw;
+    const raw = JSON.parse(readFileSync(ledgerFile(b), "utf8"));
+    // Version 2 counts only this session's own rows: an older file counted a resumed session's copy of the old one.
+    if (raw?.v === LEDGER_VERSION && raw.f && typeof raw.f === "object") saved = raw.f;
   } catch { /* none yet, or damaged: read again */ }
+  // A Claude Code session's own rows carry its id (the transcript's name); a resumed or forked session's copy of the old one's keep the old id.
+  const own = app === "claude" ? basename(input.transcript, ".jsonl") : undefined;
   const kept: Record<string, FileEntry> = {};
   let read = 0;
   for (const [file] of files) {
     const prev = saved[file];
-    const r = refreshEntry(app, file, wellFormed(prev) && prev.t === app ? prev : undefined, 0, true);
+    const r = refreshEntry(app, file, wellFormed(prev) && prev.t === app ? prev : undefined, 0, true, own);
     if (!r) continue;
     kept[file] = r.e;
     // Only a Claude Code entry saves a read: Codex's and Gemini's are read whole on a change (through the scan's cache).
@@ -170,17 +181,32 @@ export function sessionPriceDue(input: SessionPriceInput, now = Date.now(), env:
   }
   // Each reply once: a fork's copy shares its key with the reply it copied.
   const seen = new Set<string>();
-  let usd = 0, subagentUsd = 0;
-  for (const [file, sub] of files) {
+  let usd = 0, subagentUsd = 0, workflowUsd = 0, unpriced = 0, estimatedUsd = 0;
+  for (const [file, whose] of files) {
     const e = kept[file];
     if (!e) continue;
+    const x = new Set((e.x ?? []).map(([i]) => i)), y = new Set((e.y ?? []).map(([i]) => i));
     e.k.forEach((key, i) => {
       if (key) { if (seen.has(key)) return; seen.add(key); }
       usd += e.d[i];
-      if (sub) subagentUsd += e.d[i];
+      if (whose === "sub") subagentUsd += e.d[i];
+      if (whose === "workflow") workflowUsd += e.d[i];
+      if (x.has(i)) unpriced++;
+      if (y.has(i)) estimatedUsd += e.d[i];
     });
   }
-  const save = () => { try { writeWhole(ledgerFile(b), { f: kept }); } catch { /* read again next time */ } };
+  const save = () => {
+    // A subagent done writing (nothing for FINISHED_MS) keeps no list of its last replies: with
+    // hundreds of agents the list was most of the file, read on every prompt. Should it grow
+    // after all, it is read again whole (readAppended will not resume without the list).
+    const out: Record<string, FileEntry> = {};
+    for (const [file, whose] of files) {
+      const e = kept[file];
+      if (!e) continue;
+      out[file] = whose !== "main" && e.r && now - e.m > FINISHED_MS ? (({ r: _r, ...rest }) => rest)(e) : e;
+    }
+    try { writeWhole(ledgerFile(b), { v: LEDGER_VERSION, f: out }); } catch { /* read again next time */ }
+  };
   const passed = thresholds.filter((t) => usd >= t);
   const top = passed[passed.length - 1];
   if (top === undefined || said(claimFile(b, top), now) || !claim(claimFile(b, top))) {
@@ -190,7 +216,7 @@ export function sessionPriceDue(input: SessionPriceInput, now = Date.now(), env:
   // Passed two at once (a first look at a long session): said once, for the higher.
   for (const t of passed.slice(0, -1)) claim(claimFile(b, t));
   save();
-  return { app, threshold: top, usd, subagentUsd, ...perMessage(app, input, now) };
+  return { app, threshold: top, usd, subagentUsd, ...(workflowUsd > 0 ? { workflowUsd } : {}), ...(unpriced ? { unpriced } : {}), ...(estimatedUsd > 0 ? { estimatedUsd } : {}), ...perMessage(app, input, now) };
 }
 
 /** The main conversation's context now, and what the next message pays for it. */
@@ -225,7 +251,17 @@ const dollars = (n: number) => (n >= 100 ? `$${Math.round(n).toLocaleString("en-
 
 /** The line for the user (the hook's systemMessage). */
 export function renderSessionPrice(p: SessionPrice): string {
-  const subs = p.subagentUsd >= 0.005 ? ` (${dollars(p.subagentUsd)} of it subagents)` : "";
+  // What the figure holds, briefly: its subagents and workflow agents, a part priced by family, and what it leaves out.
+  const agents = [
+    p.subagentUsd >= 0.005 ? `${dollars(p.subagentUsd)} of it subagents` : "",
+    (p.workflowUsd ?? 0) >= 0.005 ? `${dollars(p.workflowUsd!)}${p.subagentUsd >= 0.005 ? "" : " of it"} workflow agents` : "",
+  ].filter(Boolean).join(", ");
+  const parts = [
+    agents,
+    (p.estimatedUsd ?? 0) >= 0.005 ? `~${dollars(p.estimatedUsd!)} priced as its model's family, an estimate` : "",
+    p.unpriced ? `${p.unpriced.toLocaleString("en-US")} request${p.unpriced === 1 ? "" : "s"} with no list price not counted` : "",
+  ].filter(Boolean);
+  const subs = parts.length ? ` (${parts.join("; ")})` : "";
   const head = `context-doctor: this session has cost ${dollars(p.usd)} so far${subs}`;
   if (p.tokens === undefined || p.readUsd === undefined) return `${head}.`;
   const compact = p.app === "gemini" ? "/compress" : "/compact";
