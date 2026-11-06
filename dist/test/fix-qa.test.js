@@ -286,6 +286,16 @@ test("the overlap caveat travels with the plan and the share text; cache-ttl's s
     assert.match(plan, /Do not add them up/);
     assert.match(plan, /⚠ would not take effect: FORCE_PROMPT_CACHING_5M=1/);
     assert.match(renderFixShare(30, 1000, fixes), /do not add them up/);
+    assert.match(plan, /compact-window and cache-ttl: compacting earlier and the main conversation's cache lifetime both change what is written to the cache\./);
+    // Every pair that overlaps is named, long output with the compaction and the cache lifetimes included; Codex's limit with none.
+    const priced = (id, usd) => ({ ...fx(id), savedUsd: usd });
+    const all = [priced("compact-window", 500), priced("subagent-model", 400), priced("tool-output", 300), priced("cache-ttl", 200), priced("cache-ttl-subagents", 50), priced("autopilot", 40), priced("codex-compact", 5)];
+    const lines = renderFixPlan(30, 1000, all, []).split("\n").filter((l) => / and [a-z-]+: /.test(l)).map((l) => l.trim().split(":")[0]);
+    assert.deepEqual(lines, ["compact-window and cache-ttl", "compact-window and tool-output", "compact-window and autopilot", "tool-output and autopilot", "tool-output and cache-ttl", "tool-output and cache-ttl-subagents", "tool-output and subagent-model", "subagent-model and cache-ttl-subagents"]);
+    // Levers that share nothing: no caveat.
+    const apart = [priced("compact-window", 500), priced("codex-compact", 5)];
+    assert.doesNotMatch(renderFixPlan(30, 1000, apart, []), /add them up/);
+    assert.doesNotMatch(renderFixShare(30, 1000, apart), /add them up/);
     // The same subagent reply in two files is billed once.
     const dir = mkdtempSync(join(tmpdir(), "cd-fixqa-sub-"));
     const row = JSON.stringify({ type: "assistant", isSidechain: true, uuid: "x1", timestamp: new Date(Date.now() - 3600e3).toISOString(), message: { id: "msg_same", model: "claude-opus-5-5", content: [], usage: { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 30000, output_tokens: 5 } } });

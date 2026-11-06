@@ -40,7 +40,8 @@ import { dirname, join } from "node:path";
 import { forEachLine, listSessions, isClaudeSession } from "./session.js";
 import { pricingFor } from "./pricing.js";
 import { contextWindowFor, realModel } from "./tokens.js";
-import { adviseTtl, estimateCacheTtl, type CacheTtlReport, type CurrentTtl, type TtlKind } from "./cachettl.js";
+import { adviseTtl, CACHE_TTL_SINCE, estimateCacheTtl, type CacheTtlReport, type CurrentTtl, type TtlKind } from "./cachettl.js";
+import { compareVersions, describeInstalls, type ClaudeCodeInstall } from "./modelswitch.js";
 import { ABSENT, getPath, parseSettingsText, readSettings, removeFile, sameJson, setJsonPath, SettingsError, settingsLockPath, withLock, withSettingsLock, writeAtomic } from "./settingsedit.js";
 import { compactWindowOverrides, processEnvWhere, settingsSources, shellSet, ttlOverrides } from "./effective.js";
 import { tilde } from "./claudedir.js";
@@ -48,7 +49,7 @@ import { applyPrune, undoPrune, type ProjectPlan } from "./prune.js";
 import { fallbackStateDir, readLedger } from "./ledger.js";
 import { claudeDir } from "./claudedir.js";
 import { movedFromNames, renderSubagentTypes, subagentModelSavedSince, SUBAGENT_CANDIDATE, SUBAGENT_CANDIDATE_NAME, SUBAGENT_MODEL_ENV, type SubagentModelReplay } from "./subagentmodel.js";
-import { BASH_OUTPUT_DEFAULT, BASH_OUTPUT_KEY, breakEven, renderToolOutputCaps, toolOutputSavedSince, type ToolOutputReplay } from "./tooloutput.js";
+import { BASH_OUTPUT_DEFAULT, BASH_OUTPUT_KEY, BASH_OUTPUT_SINCE, breakEven, renderToolOutputCaps, toolOutputSavedSince, type ToolOutputReplay } from "./tooloutput.js";
 import { CODEX_COMPACT_KEY, CODEX_COMPACT_LIMIT, codexCompactOverrides, codexCompactSavedSince, codexConfigPath, renderCodexLimits, setTopLevelInt, topLevelValue, type CodexCompactReport } from "./codexcompact.js";
 
 export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model" | "tool-output" | "codex-compact";
@@ -74,6 +75,8 @@ export interface Fix {
   value?: number | string;
   /** What would keep it from taking effect (environment, project or managed settings, per-model values). */
   overriddenBy?: string[];
+  /** Installed Claude Code versions older than the setting: they ignore it (named, not blocked). */
+  tooOld?: string;
   /** More lines under it in the plan (the subagents' model: per agent type). */
   detail?: string[];
 }
@@ -109,9 +112,21 @@ export interface FixInputs {
   toolOutputSet?: { name: string; value: string | number; where: string };
   /** Codex's rollouts replayed at earlier auto-compact limits (codexcompact.ts). */
   codexCompact?: CodexCompactReport;
+  /** The Claude Code installs found here (CLI and desktop app), to name the ones a setting is too new for. */
+  claudeCodeInstalls?: ClaudeCodeInstall[];
   /** model_auto_compact_token_limit at the top of the user's config.toml, as written: never overwritten. */
   codexCompactSet?: { raw: string; where: string };
 }
+
+/**
+ * The Claude Code version that first reads each setting a fix writes, from
+ * its changelog (2.1.243 added promptCacheTtl and subagentPromptCacheTtl,
+ * 2.1.261 bashOutputMaxChars). CLAUDE_CODE_SUBAGENT_MODEL and
+ * ENABLE_TOOL_SEARCH are read by 2.1.62 already (the oldest binary checked;
+ * the subagent variable ahead of agent definitions there). autoCompactWindow
+ * is not in 2.1.62 and the changelog does not say when it came: not named.
+ */
+const SINCE: Partial<Record<FixId, string>> = { "cache-ttl": CACHE_TTL_SINCE, "cache-ttl-subagents": CACHE_TTL_SINCE, "tool-output": BASH_OUTPUT_SINCE };
 
 /** Below this a priced fix is not worth a setting. */
 const MIN_USD = 1;
@@ -282,6 +297,9 @@ export function planFixes(i: FixInputs): Fix[] {
   for (const f of fixes) {
     const o = i.overrides?.[f.id];
     if (o?.length && f.state === "available") f.overriddenBy = o;
+    const since = SINCE[f.id];
+    const old = since && f.state === "available" ? (i.claudeCodeInstalls ?? []).filter((c) => compareVersions(c.version, since) < 0) : [];
+    if (old.length) f.tooOld = `${describeInstalls(old)} ${old.length === 1 ? "predates" : "predate"} this setting (Claude Code ${since}+) and ${old.length === 1 ? "ignores" : "ignore"} it: update ${old.length === 1 ? "it" : "them"} for it to take effect there`;
   }
   const rank = (f: Fix) => (f.state === "available" ? 0 : f.state === "applied" ? 2 : 3) + (f.savedUsd === undefined ? 1 : 0);
   return fixes.sort((a, b) => rank(a) - rank(b) || (b.savedUsd ?? 0) - (a.savedUsd ?? 0));
@@ -779,6 +797,28 @@ const LABEL: Record<FixId, string> = {
   "codex-compact": "Codex auto-compact limit",
 };
 
+/**
+ * Priced levers that save part of the same dollars, and why: each is
+ * replayed alone on the history as billed, so applying both saves less than
+ * the two figures added. Codex's limit shares nothing with Claude Code's.
+ */
+const OVERLAPS: Array<[FixId, FixId, string]> = [
+  ["compact-window", "cache-ttl", "compacting earlier and the main conversation's cache lifetime both change what is written to the cache"],
+  ["compact-window", "tool-output", "an earlier compaction drops long Bash output sooner, so there is less left to move to a file"],
+  ["compact-window", "autopilot", "compacting earlier and autopilot both take old tool output out of the context"],
+  ["tool-output", "autopilot", "output moved to a file is no longer there for autopilot to clear"],
+  ["tool-output", "cache-ttl", "the main conversation's cache lifetime changes how often long output is written to the cache again"],
+  ["tool-output", "cache-ttl-subagents", "the subagents' cache lifetime changes how often their long output is written to the cache again"],
+  ["tool-output", "subagent-model", "long output in subagents is priced at the subagents' model, which subagent-model changes"],
+  ["subagent-model", "cache-ttl-subagents", "the subagents' cache is priced at their model's rates, which subagent-model changes"],
+];
+
+/** The overlap lines for the priced fixes in a plan, "a and b: why;" each. */
+export function overlaps(fixes: Fix[]): string[] {
+  const priced = new Set(fixes.filter((f) => f.savedUsd !== undefined).map((f) => f.id));
+  return OVERLAPS.filter(([a, b]) => priced.has(a) && priced.has(b)).map(([a, b, why]) => `${a} and ${b}: ${why}.`);
+}
+
 export function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], since: SinceResult[], command = (s: string) => `context-doctor ${s}`, coldResume?: FixInputs["coldResume"], recordProblem?: string, codexBilledUsd = 0): string {
   const out: string[] = [];
   if (recordProblem) out.push(`⚠ ${recordProblem}`);
@@ -800,10 +840,12 @@ export function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], sin
     out.push(`   changes:  ${f.change}   [${f.id}]`);
     for (const d of f.detail ?? []) out.push(`     ${d}`);
     if (f.overriddenBy?.length) out.push(`   ⚠ would not take effect: ${f.overriddenBy.join("; ")}`);
+    if (f.tooOld) out.push(`   ⚠ ${f.tooOld}`);
   });
-  if (avail.filter((f) => f.savedUsd !== undefined).length > 1) {
-    out.push("   Each figure is measured alone. Do not add them up: the levers overlap (compacting earlier and");
-    out.push("   the cache lifetime both change what is written to the cache), so together they save less.");
+  const pairs = overlaps(avail);
+  if (pairs.length) {
+    out.push("   Each figure is measured alone. Do not add them up: the levers overlap, so together they save less:");
+    for (const p of pairs) out.push(`     ${p}`);
   }
   const applied = fixes.filter((f) => f.state === "applied");
   if (applied.length) {
@@ -852,7 +894,7 @@ export function renderFixShare(days: number, billedUsd: number, fixes: Fix[], co
   const lines = [`context-doctor fix on my last ${days} days of ${of}:`];
   for (const f of avail) lines.push(`- ${LABEL[f.id]}: ${money(f.savedUsd!)}${share(f)}`);
   if (avail.length === 0) lines.push(billedUsd + codexBilledUsd > 0 ? "- nothing left to fix" : "- no Claude Code sessions to measure yet");
-  if (avail.length > 1) lines.push("Each measured alone; they overlap, so do not add them up.");
+  if (overlaps(avail).length) lines.push("Each measured alone; they overlap, so do not add them up.");
   lines.push("Measured on my own sessions, locally: npx context-doctor fix");
   return lines.join("\n");
 }

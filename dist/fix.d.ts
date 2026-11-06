@@ -34,6 +34,7 @@
  * `--apply all`), and never over a value the user set.
  */
 import { type CacheTtlReport, type CurrentTtl } from "./cachettl.js";
+import { type ClaudeCodeInstall } from "./modelswitch.js";
 import { type ProjectPlan } from "./prune.js";
 import { readLedger } from "./ledger.js";
 import { type SubagentModelReplay } from "./subagentmodel.js";
@@ -61,6 +62,8 @@ export interface Fix {
     value?: number | string;
     /** What would keep it from taking effect (environment, project or managed settings, per-model values). */
     overriddenBy?: string[];
+    /** Installed Claude Code versions older than the setting: they ignore it (named, not blocked). */
+    tooOld?: string;
     /** More lines under it in the plan (the subagents' model: per agent type). */
     detail?: string[];
 }
@@ -119,6 +122,8 @@ export interface FixInputs {
     };
     /** Codex's rollouts replayed at earlier auto-compact limits (codexcompact.ts). */
     codexCompact?: CodexCompactReport;
+    /** The Claude Code installs found here (CLI and desktop app), to name the ones a setting is too new for. */
+    claudeCodeInstalls?: ClaudeCodeInstall[];
     /** model_auto_compact_token_limit at the top of the user's config.toml, as written: never overwritten. */
     codexCompactSet?: {
         raw: string;
@@ -216,6 +221,8 @@ export declare function savedSince(records: FixRecord[], opts?: {
     codexPaths?: string[];
     ledger?: ReturnType<typeof readLedger>;
 }): SinceResult[];
+/** The overlap lines for the priced fixes in a plan, "a and b: why;" each. */
+export declare function overlaps(fixes: Fix[]): string[];
 export declare function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], since: SinceResult[], command?: (s: string) => string, coldResume?: FixInputs["coldResume"], recordProblem?: string, codexBilledUsd?: number): string;
 export declare function renderFixShare(days: number, billedUsd: number, fixes: Fix[], codexBilledUsd?: number): string;
 export declare function parseFixIds(raw: string, fixes: Fix[]): {

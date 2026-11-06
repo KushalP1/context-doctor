@@ -164,6 +164,16 @@ test("plan: offered over $1 and 2% with the preview said plainly, in --apply all
     // A project's value wins over the user's: named.
     const over = planFixes({ ...base, toolOutput: replay(300), overrides: { "tool-output": ["bashOutputMaxChars 50000 in /p/.claude/settings.json"] } });
     assert.match(renderFixPlan(30, 2000, over, []), /⚠ would not take effect: bashOutputMaxChars 50000 in \/p\/\.claude\/settings\.json/);
+    // An installed Claude Code older than the setting is named on the fix, which is still offered.
+    const ttl = { days: 30, main: { transcripts: 3, requests: 100, billedUsd: 1000, at5mUsd: 1200, at1hUsd: 900, oneHourShare: 0.7, keptWarmAt1h: 5, wentColdAt5m: 0, unpriced: 0 }, subagents: { transcripts: 0, requests: 0, billedUsd: 0, at5mUsd: 0, at1hUsd: 0, oneHourShare: 0, keptWarmAt1h: 0, wentColdAt5m: 0, unpriced: 0 } };
+    const installs = [{ path: "/opt/claude", version: "2.1.250", source: "cli" }, { path: "app", version: "2.1.240", source: "desktop app" }, { path: "/usr/claude", version: "2.1.309", source: "cli" }];
+    const old = planFixes({ ...base, toolOutput: replay(300), ttl, currentTtl: { overrides: [] }, subagentModel: undefined, claudeCodeInstalls: installs });
+    const to = old.find((x) => x.id === "tool-output");
+    assert.equal(to.state, "available");
+    assert.equal(to.tooOld, "Claude Code 2.1.250 (/opt/claude), Claude Code 2.1.240 (desktop app) predate this setting (Claude Code 2.1.261+) and ignore it: update them for it to take effect there");
+    assert.equal(old.find((x) => x.id === "cache-ttl").tooOld, "Claude Code 2.1.240 (desktop app) predates this setting (Claude Code 2.1.243+) and ignores it: update it for it to take effect there");
+    assert.match(renderFixPlan(30, 2000, old, []), /\[tool-output\]\n(?:     .*\n)*   ⚠ Claude Code 2\.1\.250 \(\/opt\/claude\), Claude Code 2\.1\.240 \(desktop app\) predate this setting/);
+    assert.equal(planFixes({ ...base, toolOutput: replay(300), claudeCodeInstalls: [installs[2]] })[0].tooOld, undefined);
 });
 test("apply then undo: settings.json byte for byte; a value already there is never overwritten; overrides named", async () => {
     const home = mkdtempSync(join(tmpdir(), "cd-to-rt-"));
@@ -239,6 +249,8 @@ test("CLI: fix offers it in a throwaway home, --apply writes it, undo removes ex
     assert.match(r.stdout, /Long Bash output to a file past 8k characters/);
     assert.match(r.stdout, /\[tool-output\]/);
     assert.equal(readFileSync(settings, "utf8"), original, "nothing written without --apply");
+    const older = spawnSync(process.execPath, [cli, "fix"], { encoding: "utf8", cwd, env: { ...sandboxEnv(home), BASH_MAX_OUTPUT_LENGTH: "", CONTEXT_DOCTOR_CACHE_DIR: mkdtempSync(join(tmpdir(), "cd-to-c-")), CONTEXT_DOCTOR_NO_MANAGED_SETTINGS: "1", CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS: "2.1.250" }, input: "" });
+    assert.match(older.stdout, /⚠ Claude Code 2\.1\.250 \(CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS\) predates this setting \(Claude Code 2\.1\.261\+\)/);
     r = run("--apply", "tool-output");
     assert.equal(r.status, 0, r.stderr + r.stdout);
     assert.equal(JSON.parse(readFileSync(settings, "utf8")).bashOutputMaxChars, 8000);

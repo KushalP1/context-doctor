@@ -13,8 +13,8 @@ Last 30 days of your Claude Code sessions, $127 of input at list prices
    measured: none used in 8 sessions of this project in 30 days: unused
    quality:  none while they stay unused; undo brings them back
    changes:  ~/work/app/.claude/settings.local.json   [prune]
-   Each figure is measured alone. Do not add them up: the levers overlap (compacting earlier and
-   the cache lifetime both change what is written to the cache), so together they save less.
+   Each figure is measured alone. Do not add them up: the levers overlap, so together they save less:
+     compact-window and autopilot: compacting earlier and autopilot both take old tool output out of the context.
 
 Advice you act on
   /compact when you come back to a big session after the cache expired: $3.05 over 13 returns.

@@ -41,6 +41,8 @@ import { type Extractor } from "./scan.js";
 export declare const BASH_OUTPUT_KEY = "bashOutputMaxChars";
 /** The environment variable the setting replaces (a value the user set there is theirs). */
 export declare const BASH_OUTPUT_ENV = "BASH_MAX_OUTPUT_LENGTH";
+/** The first Claude Code that reads the setting (its docs; older versions ignore it). */
+export declare const BASH_OUTPUT_SINCE = "2.1.261";
 /** Claude Code's inline ceiling for a successful command, unset. */
 export declare const BASH_OUTPUT_DEFAULT = 30000;
 /** What Claude Code clamps the setting to. */

@@ -471,6 +471,8 @@ async function measureFixInputs(days) {
             ...(cxSet ? { codexCompactSet: { raw: cxSet.raw, where: cxSet.where } } : {}),
             overrides: Object.fromEntries(ids.map((id) => [id, fixOverrides(id, { cwd })])),
             recordProblem,
+            // The installs a setting is too new for are named on its fix.
+            claudeCodeInstalls: claudeCodeInstallsFromEnv(),
             coldResume: { netUsd: Math.max(0, report.coldResumeNetUsd), returns: report.coldResumes, hooked: claudePluginEnabled() || /context-doctor|cli\.js"?\s+hook/.test(JSON.stringify(userSettings.hooks?.UserPromptSubmit ?? [])) },
         },
     };
