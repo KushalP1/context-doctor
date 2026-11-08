@@ -26,6 +26,7 @@
  * instead of printing a number.
  */
 import { type Extractor } from "./scan.js";
+import { type ModelPricing, type Modifiers } from "./pricing.js";
 /** Claude Code's two windows, as its status line input names them. */
 export declare const CLAUDE_WINDOWS: readonly ["five_hour", "seven_day"];
 /** One reading of one window: how much of it was used at `ts`. */
@@ -116,14 +117,22 @@ export interface ClaudeRequest extends UsagePoint {
     sidechain?: boolean;
     /** The prompt's part of `usd` (input, cache writes, cache reads): what `savings` bills. */
     promptUsd: number;
+    /** The rates it billed at (requestCost: its tier, fast mode, US-only, its date); absent when unpriced. */
+    rates?: ModelPricing;
+    /** What fast mode, US-only, a long prompt's tier and web searches added to its list price, inside `usd`. */
+    modifiers: Modifiers;
+    /** Priced by family, or past the day its row's price changed: an estimate. */
+    estimated?: boolean;
+    /** Its row's price changed on this day, before the request. */
+    changedOn?: string;
 }
 /**
  * The requests of one Claude Code transcript between `since` and `until`,
- * each reply once, its output settled on its last row. `runRows` is shared
- * by every file of one report, so a fork's copy of its parent's replies is
- * counted once, in the file met first (replyCounter). Replies on
- * `<synthetic>` (isUnbilledModel) are left out. Throws when the transcript
- * cannot be read.
+ * each reply once, its output settled on its last row (billed at the
+ * reply's own rates, requestCost's). `runRows` is shared by every file of
+ * one report, so a fork's copy of its parent's replies is counted once, in
+ * the file met first (replyCounter). Replies on `<synthetic>`
+ * (isUnbilledModel) are left out. Throws when the transcript cannot be read.
  */
 export declare function claudeFileUsage(file: string, since: number, until?: number, runRows?: Set<string>): ClaudeRequest[];
 /**

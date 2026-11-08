@@ -3,9 +3,12 @@
  *
  * List rates of each provider's first-party API (standard tier, global
  * routing, no batch or fast mode), each family with the page it was read
- * from and the date. Prices drift, so all cost output is labeled as an
- * estimate. One table, one file, easy to update: PRs welcome when prices
- * change.
+ * from and the date. What a request recorded can bill it differently (fast
+ * mode, US-only inference, a long prompt's tier, web searches) and a row's
+ * price can end on a known day: requestCost applies all of it, per request,
+ * from the row's billing options. Prices drift, so all cost output is
+ * labeled as an estimate. One table, one file, easy to update: PRs welcome
+ * when prices change.
  *
  * A row names one model (a "known" price, see knownPricingFor) unless it is
  * listed in FALLBACKS: those price ids the table does not know by version,
@@ -59,34 +62,55 @@ function gemini(name) {
     return new RegExp(`(?<![\\w.-])${escapeRe(name)}(?![\\w.])(?!-(?:[\\w.]+-)*(?:lite|image|tts|live|audio|transcribe|translate)\\b)`, "i");
 }
 /** A row that prices ids the table does not know by name, at a family's price. */
-const FALLBACK = true;
+const FALLBACK = { fallback: true };
+/** Claude 4.6 and later. */
+const GEO = { geo: true };
+/**
+ * OpenAI's long-context column: a prompt over 272k input tokens bills the
+ * whole request at 2x input, cached input and cache writes and 1.5x output.
+ * Checked row by row against the page (2026-11-08): every model with a
+ * "Long context" price, and only those, is 2x / 1.5x of its short one.
+ */
+const OPENAI_LONG = (r) => ({ over: 272_000, rates: rate(r.inputPerM * 2, r.outputPerM * 1.5, r.cacheReadPerM * 2) });
+const openaiLong = (inputPerM, outputPerM, cacheReadPerM) => {
+    const r = rate(inputPerM, outputPerM, cacheReadPerM);
+    return [r, { long: OPENAI_LONG(r) }];
+};
 const PRICING = [
     // Anthropic: platform.claude.com/docs/en/about-claude/pricing ("Model
-    // pricing"; 5-minute writes 1.25x, 1-hour writes 2x), read 2026-11-06.
+    // pricing"; 5-minute writes 1.25x, 1-hour writes 2x), read 2026-11-06,
+    // its modifiers read 2026-11-08 (pricing.md):
+    //  - "Data residency pricing": for Claude 4.6 and later, `inference_geo:
+    //    "us"` is 1.1x on input, output, cache writes and reads, and on Haiku
+    //    5.5's over-100k prices too (GEO). Earlier models reject the parameter.
+    //  - "Fast mode pricing": Opus 5.5 $8 / $40, Opus 5 and Opus 4.8 $10 / $50,
+    //    "across the full context window"; caching multipliers and data
+    //    residency apply on top (Opus 5.5's reads 0.05x: $0.40).
+    //  - "Long context pricing": only Haiku 5.5 is priced by prompt length.
     // Specific Claude versions first: the family rows below are only a
     // fallback for ids this table does not know yet.
-    [claude("fable|mythos", 5, 1), rate(10, 50, 0.25)],
-    [claude("fable|mythos", 5), rate(10, 50, 1)],
-    [claude("opus", 5, 5), rate(4, 20, 0.2)],
-    [claude("opus", 5), rate(5, 25, 0.5)],
-    [claude("opus", 4, 8), rate(5, 25, 0.5)],
-    [claude("opus", 4, 7), rate(5, 25, 0.5)],
-    [claude("opus", 4, 6), rate(5, 25, 0.5)],
+    [claude("fable|mythos", 5, 1), rate(10, 50, 0.25), GEO],
+    [claude("fable|mythos", 5), rate(10, 50, 1), GEO],
+    [claude("opus", 5, 5), rate(4, 20, 0.2), { geo: true, fast: rate(8, 40, 0.4) }],
+    [claude("opus", 5), rate(5, 25, 0.5), { geo: true, fast: rate(10, 50, 1) }],
+    [claude("opus", 4, 8), rate(5, 25, 0.5), { geo: true, fast: rate(10, 50, 1) }],
+    [claude("opus", 4, 7), rate(5, 25, 0.5), GEO],
+    [claude("opus", 4, 6), rate(5, 25, 0.5), GEO],
     [claude("opus", 4, 5), rate(5, 25, 0.5)],
     [claude("opus", 4, 1), rate(15, 75, 1.5)],
     [claude("opus", 4), rate(15, 75, 1.5)],
     // Sonnet 5.5's cache hits are 5% of input ($0.10), Sonnet 5's 10%.
-    [claude("sonnet", 5, 5), rate(2, 10, 0.1)],
-    [claude("sonnet", 5), rate(2, 10, 0.2)],
-    // Haiku 5.5's rates hold for prompts up to 100k tokens; a longer prompt
-    // bills the whole request at $0.50 / $2.50 / $0.05, a tier this per-token
-    // table does not model.
-    [claude("haiku", 5, 5), rate(0.1, 0.5, 0.01)],
+    [claude("sonnet", 5, 5), rate(2, 10, 0.1), GEO],
+    [claude("sonnet", 5), rate(2, 10, 0.2), GEO],
+    // Haiku 5.5's rates hold for prompts up to 100,000 tokens; a longer prompt
+    // (cache reads and writes count toward it) bills the whole request at
+    // $0.50 / $2.50 / $0.05, writes at their multipliers of $0.50.
+    [claude("haiku", 5, 5), rate(0.1, 0.5, 0.01), { geo: true, long: { over: 100_000, rates: rate(0.5, 2.5, 0.05) } }],
     [claude("haiku", 4, 5), rate(1, 5, 0.1)],
     // Sonnet 4.6, 4.5 and 4 are all $3 / $15 / $0.30, the family row's price;
     // rows of their own so a spending cap can tell a known version from a
     // guess (knownPricingFor).
-    [claude("sonnet", 4, 6), rate(3, 15, 0.3)],
+    [claude("sonnet", 4, 6), rate(3, 15, 0.3), GEO],
     [claude("sonnet", 4, 5), rate(3, 15, 0.3)],
     [claude("sonnet", 4), rate(3, 15, 0.3)],
     // Retired Claude 3 models, no longer on the page: their last list price.
@@ -95,42 +119,44 @@ const PRICING = [
     [/claude-3-haiku/i, rate(0.25, 1.25, 0.03)],
     [/claude-3-[57]-sonnet/i, rate(3, 15, 0.3)],
     // Claude Mythos Preview (claude-mythos-preview) has no list price on the
-    // page; the Fable/Mythos family row prices it as a fallback.
-    [CLAUDE_FAMILY[0], rate(10, 50, 1), FALLBACK],
-    [CLAUDE_FAMILY[1], rate(5, 25, 0.5), FALLBACK],
-    [CLAUDE_FAMILY[2], rate(3, 15, 0.3), FALLBACK],
-    [CLAUDE_FAMILY[3], rate(1, 5, 0.1), FALLBACK],
+    // page; the Fable/Mythos family row prices it as a fallback. A version the
+    // table does not know yet is a new one: 4.6 or later, so US-only applies.
+    [CLAUDE_FAMILY[0], rate(10, 50, 1), { ...FALLBACK, ...GEO }],
+    [CLAUDE_FAMILY[1], rate(5, 25, 0.5), { ...FALLBACK, ...GEO }],
+    [CLAUDE_FAMILY[2], rate(3, 15, 0.3), { ...FALLBACK, ...GEO }],
+    [CLAUDE_FAMILY[3], rate(1, 5, 0.1), { ...FALLBACK, ...GEO }],
     // OpenAI: developers.openai.com/api/docs/pricing (Standard, the "Short"
-    // context column), read 2026-11-06. Prompts over 272k input tokens bill
-    // the whole request at 2x input and cache rates and 1.5x output on GPT-5.4
-    // and later (per model page), a tier this table does not model. Cache
-    // writes are 1.25x input on GPT-5.6 and later (CACHE_WRITE_OPENAI_30M).
-    // Models with no cached-input price (the -pro ones) read at full input.
-    [openai("gpt-6-astra"), rate(10, 50, 1)],
+    // context column), read 2026-11-06; its "Long context" columns (prompts
+    // over 272k input tokens, OPENAI_LONG) read 2026-11-08. Cache writes are
+    // 1.25x input on GPT-5.6 and later (CACHE_WRITE_OPENAI_30M). Models with
+    // no cached-input price (the -pro ones) read at full input. Not modelled:
+    // Fast mode (priority processing; Codex records only its thread's
+    // `service_tier`, not each request's) and the 10% regional uplift.
+    [openai("gpt-6-astra"), ...openaiLong(10, 50, 1)],
     [openai("gpt-6-astra-law"), rate(10, 50, 1)],
-    [openai("gpt-6.1-sol"), rate(2, 10, 0.1)],
-    [openai("gpt-6.1-terra"), rate(1, 5, 0.05)],
-    [openai("gpt-6-sol"), rate(2, 10, 0.2)],
-    [openai("gpt-6-luna"), rate(0.1, 0.5, 0.01)],
+    [openai("gpt-6.1-sol"), ...openaiLong(2, 10, 0.1)],
+    [openai("gpt-6.1-terra"), ...openaiLong(1, 5, 0.05)],
+    [openai("gpt-6-sol"), ...openaiLong(2, 10, 0.2)],
+    [openai("gpt-6-luna"), ...openaiLong(0.1, 0.5, 0.01)],
     [openai("gpt-6-cyber"), rate(20, 100, 2)],
-    [openai("gpt-6-rosalind"), rate(15, 75, 1.5)],
+    [openai("gpt-6-rosalind"), ...openaiLong(15, 75, 1.5)],
     [openai("gpt-rosalind-research"), rate(5, 25, 0.5)],
     [openai("gpt-rosalind-discovery"), rate(5, 25, 0.5)],
-    // GPT-5.6 Sol's $4 / $20 is promotional "until November 30, 2026"; the
-    // page does not say what follows. The gpt-5.6 alias routes to Sol (model
-    // page, read 2026-11-06).
-    [openai("gpt-5.6-sol"), rate(4, 20, 0.4)],
-    [openai("gpt-5.6"), rate(4, 20, 0.4)],
-    [openai("gpt-5.6-terra"), rate(2, 12, 0.2)],
-    [openai("gpt-5.6-luna"), rate(0.2, 1.2, 0.02)],
+    // GPT-5.6 Sol's $4 / $20 is promotional "until November 30, 2026" (read
+    // again 2026-11-08); the page does not say what follows. The gpt-5.6 alias
+    // routes to Sol (model page, read 2026-11-06).
+    [openai("gpt-5.6-sol"), rate(4, 20, 0.4), { long: OPENAI_LONG(rate(4, 20, 0.4)), changes: "2026-12-01" }],
+    [openai("gpt-5.6"), rate(4, 20, 0.4), { long: OPENAI_LONG(rate(4, 20, 0.4)), changes: "2026-12-01" }],
+    [openai("gpt-5.6-terra"), ...openaiLong(2, 12, 0.2)],
+    [openai("gpt-5.6-luna"), ...openaiLong(0.2, 1.2, 0.02)],
     [openai("gpt-5.6-cyber"), rate(12.5, 75, 1.25)],
-    [openai("gpt-5.5"), rate(5, 30, 0.5)],
-    [openai("gpt-5.5-pro"), rate(30, 180, 30)],
+    [openai("gpt-5.5"), ...openaiLong(5, 30, 0.5)],
+    [openai("gpt-5.5-pro"), ...openaiLong(30, 180, 30)],
     [openai("gpt-5.5-cyber"), rate(12.5, 75, 1.25)],
-    [openai("gpt-5.4"), rate(2.5, 15, 0.25)],
+    [openai("gpt-5.4"), ...openaiLong(2.5, 15, 0.25)],
     [openai("gpt-5.4-mini"), rate(0.75, 4.5, 0.075)],
     [openai("gpt-5.4-nano"), rate(0.2, 1.25, 0.02)],
-    [openai("gpt-5.4-pro"), rate(30, 180, 30)],
+    [openai("gpt-5.4-pro"), ...openaiLong(30, 180, 30)],
     [openai("gpt-5.3-codex"), rate(1.75, 14, 0.175)],
     [openai("gpt-5.2"), rate(1.75, 14, 0.175)],
     [openai("gpt-5.2-pro"), rate(21, 168, 21)],
@@ -155,20 +181,23 @@ const PRICING = [
     [/gpt-4-turbo/i, rate(10, 30, 10), FALLBACK],
     [/o[13](-|$)/i, rate(2, 8, 1), FALLBACK],
     // Google: ai.google.dev/gemini-api/docs/pricing (paid tier, Standard, text),
-    // read 2026-11-06.
-    // Gemini 4 Argon's $2 / $10 / $0.10 hold through 2026-11-30; from
-    // 2026-12-01 it is $4 / $20 / $0.20.
-    [gemini("gemini-4-argon"), rate(2, 10, 0.1)],
-    // 3.6 and 3.8 Flash double from 2027-01-01 ($1.50 / $7.50 / $0.15).
-    [gemini("gemini-3.8-flash"), rate(0.75, 3.75, 0.075)],
-    [gemini("gemini-3.6-flash"), rate(0.75, 3.75, 0.075)],
+    // read 2026-11-06; the dates and the Pro tiers read again 2026-11-08.
+    // Gemini 4 Argon's $2 / $10 / $0.10 hold "through November 30, 2026";
+    // "starting December 1, 2026" it is $4 / $20 / $0.20.
+    [gemini("gemini-4-argon"), rate(2, 10, 0.1), { changes: "2026-12-01", then: rate(4, 20, 0.2) }],
+    // 3.6 and 3.8 Flash double "starting January 1, 2027" ($1.50 / $7.50 / $0.15).
+    [gemini("gemini-3.8-flash"), rate(0.75, 3.75, 0.075), { changes: "2027-01-01", then: rate(1.5, 7.5, 0.15) }],
+    [gemini("gemini-3.6-flash"), rate(0.75, 3.75, 0.075), { changes: "2027-01-01", then: rate(1.5, 7.5, 0.15) }],
     [gemini("gemini-3.5-flash-lite"), rate(0.3, 2.5, 0.03)],
     [gemini("gemini-3.1-flash-lite"), rate(0.25, 1.5, 0.025)],
-    // 3.1 Pro and 2.5 Pro bill prompts over 200k at $4 / $18 / $0.40 and
-    // $2.50 / $15 / $0.25, a tier this table does not model.
-    [gemini("gemini-3.1-pro"), rate(2, 12, 0.2)],
+    // 3.1 Pro and 2.5 Pro bill a prompt over 200k tokens at $4 / $18 / $0.40
+    // and $2.50 / $15 / $0.25. From December 1, 2026 every gemini-2.5-pro
+    // request is routed to 3.8 Flash and billed at its rates ($0.75 / $3.75 /
+    // $0.075 then). gemini-2.5-flash is routed to 3.5 Flash-Lite that day, at
+    // the same $0.30 / $2.50 / $0.03: no change to say.
+    [gemini("gemini-3.1-pro"), rate(2, 12, 0.2), { long: { over: 200_000, rates: rate(4, 18, 0.4) } }],
     [gemini("gemini-3-flash"), rate(0.5, 3, 0.05)],
-    [gemini("gemini-2.5-pro"), rate(1.25, 10, 0.125)],
+    [gemini("gemini-2.5-pro"), rate(1.25, 10, 0.125), { long: { over: 200_000, rates: rate(2.5, 15, 0.25) }, changes: "2026-12-01", then: rate(0.75, 3.75, 0.075) }],
     [gemini("gemini-2.5-flash"), rate(0.3, 2.5, 0.03)],
     [gemini("gemini-2.5-flash-lite"), rate(0.1, 0.4, 0.01)],
     // Fallbacks for Gemini ids not on the page (gemini-3-pro, a new 3.x Flash,
@@ -184,6 +213,7 @@ function row(model) {
         return undefined;
     return PRICING.find(([pattern]) => pattern.test(model));
 }
+/** A model's list row, as the page lists it today (no tier, mode or date applied). */
 export function pricingFor(model) {
     return row(model)?.[1];
 }
@@ -195,7 +225,7 @@ export function pricingFor(model) {
  */
 export function knownPricingFor(model) {
     const r = row(model);
-    return r && !r[2] ? r[1] : undefined;
+    return r && !r[2]?.fallback ? r[1] : undefined;
 }
 /** Whether a model id has a price of its own in the table (see knownPricingFor). */
 export function hasKnownPrice(model) {
@@ -255,9 +285,9 @@ export function writeMultiplier(fiveMinute, oneHour, twelveHour = 0) {
     return total > 0 ? (fiveMinute * CACHE_WRITE_5M + oneHour * CACHE_WRITE_1H + twelveHour * CACHE_WRITE_OPENAI_12H) / total : CACHE_WRITE_5M;
 }
 /**
- * What one recorded request cost: uncached input, cache writes priced by
- * TTL, cache reads, output. The one place recorded usage is priced, so every
- * report agrees with the others and with the bill.
+ * Recorded usage at given rates: uncached input, cache writes priced by
+ * TTL, cache reads, output. The rates a request was billed at (its tier,
+ * fast mode, US-only, its date) are requestCost's to decide.
  */
 export function usageCost(usage, pricing) {
     const { fiveMinute, oneHour, twelveHour } = cacheWriteSplit(usage);
@@ -268,6 +298,112 @@ export function usageCost(usage, pricing) {
     const outputUsd = perM(count(usage?.output_tokens), pricing.outputPerM);
     const promptUsd = inputUsd + writeUsd + readUsd;
     return { inputUsd, writeUsd, readUsd, outputUsd, promptUsd, totalUsd: promptUsd + outputUsd };
+}
+/** US-only inference on Claude 4.6 and later: 1.1x on every token category (Anthropic, "Data residency pricing", read 2026-11-08). */
+export const US_ONLY_MULTIPLIER = 1.1;
+/**
+ * Claude's web search tool: $10 per 1,000 searches, on top of its tokens
+ * (Anthropic, "Web search tool", read 2026-11-08). A token price, so not
+ * under the US-only multiplier. Web fetch has no charge beyond its tokens;
+ * code execution bills container time (1,550 free hours a month, then $0.05
+ * an hour), which usage does not record per request: not modelled.
+ */
+export const WEB_SEARCH_USD = 10 / 1000;
+/** The tokens a request's prompt holds: uncached input, cache reads and cache writes (what a long-prompt tier counts). */
+export function promptTokens(usage) {
+    return count(usage?.input_tokens) + count(usage?.cache_read_input_tokens) + count(usage?.cache_creation_input_tokens);
+}
+/** UTC midnight of a "YYYY-MM-DD" day. */
+const dayStart = (day) => Date.parse(`${day}T00:00:00Z`);
+const scaled = (p, k) => (k === 1 ? p : { inputPerM: p.inputPerM * k, outputPerM: p.outputPerM * k, cacheReadPerM: p.cacheReadPerM * k });
+/** The rate card for one of `model`'s requests at time `at`, with the modifiers its usage records. Undefined for a model with no price. */
+export function rateCard(model, usage, at = Date.now()) {
+    const r = row(model);
+    if (!r)
+        return undefined;
+    const [, list, b = {}] = r;
+    const expired = b.changes !== undefined && at >= dayStart(b.changes);
+    const base = expired && b.then ? b.then : list;
+    const long = expired && b.then ? undefined : b.long;
+    const fast = usage?.speed === "fast" && b.fast ? b.fast : undefined;
+    const geo = usage?.inference_geo === "us" && b.geo ? US_ONLY_MULTIPLIER : 1;
+    const card = { rates: scaled(fast ?? base, geo), list: base };
+    if (long && !fast) {
+        card.over = long.over;
+        card.longRates = scaled(long.rates, geo);
+    }
+    if (fast)
+        card.fast = true;
+    if (geo !== 1)
+        card.geo = true;
+    if (b.fallback || expired)
+        card.estimated = true;
+    if (expired)
+        card.changedOn = b.changes;
+    if (/claude/i.test(model))
+        card.webSearch = true;
+    return card;
+}
+/** A card's rates for a prompt of `prompt` tokens: its long tier's past `over`. */
+export function ratesAt(card, prompt) {
+    return card.over !== undefined && prompt > card.over ? card.longRates : card.rates;
+}
+export const NO_MODIFIERS = Object.freeze({ fastUsd: 0, geoUsd: 0, longUsd: 0, webSearchUsd: 0, webSearches: 0 });
+/**
+ * What one recorded request cost, as billed: its model's row at the time it
+ * ran, its prompt's tier, fast mode, US-only inference, cache writes by TTL,
+ * and per-use tool fees. The one place a request's price is decided, so
+ * every report agrees with the others and with the bill. `at`: when it ran.
+ * Undefined for a model with no price.
+ */
+export function requestCost(model, usage, at = Date.now()) {
+    const card = rateCard(model, usage, at);
+    if (!card)
+        return undefined;
+    const prompt = promptTokens(usage);
+    const rates = ratesAt(card, prompt);
+    const c = usageCost(usage, rates);
+    const searches = card.webSearch ? count(usage?.server_tool_use?.web_search_requests) : 0;
+    const m = { ...NO_MODIFIERS, webSearches: searches, webSearchUsd: searches * WEB_SEARCH_USD };
+    if (card.fast || card.geo || rates !== card.rates || card.over !== undefined) {
+        // Each modifier measured from the step before it: list row, its tier, fast mode, US-only.
+        const geo = card.geo ? US_ONLY_MULTIPLIER : 1;
+        const preGeo = c.totalUsd / geo;
+        const list = usageCost(usage, card.list).totalUsd;
+        const tiered = card.longRates && prompt > card.over ? usageCost(usage, scaled(card.longRates, 1 / geo)).totalUsd : list;
+        m.longUsd = tiered - list;
+        m.fastUsd = card.fast ? preGeo - tiered : 0;
+        m.geoUsd = c.totalUsd - preGeo;
+    }
+    return { ...c, totalUsd: c.totalUsd + m.webSearchUsd, rates, modifiers: m, ...(card.estimated ? { estimated: true } : {}), ...(card.changedOn ? { changedOn: card.changedOn } : {}) };
+}
+/** `a` plus `b`, part by part. */
+export function addModifiers(a, b) {
+    a.fastUsd += b.fastUsd;
+    a.geoUsd += b.geoUsd;
+    a.longUsd += b.longUsd;
+    a.webSearchUsd += b.webSearchUsd;
+    a.webSearches += b.webSearches;
+    return a;
+}
+/**
+ * When a model's price in the table stops being its list price: the day
+ * (YYYY-MM-DD) and, when the page said, the price from then. Undefined for
+ * a row with no end date. What `doctor` and the budget say once it has passed.
+ */
+export function priceChange(model) {
+    const b = row(model)?.[2];
+    return b?.changes ? { on: b.changes, ...(b.then ? { then: b.then } : {}) } : undefined;
+}
+/** "gemini-4-argon's price changed on 2026-12-01; a newer context-doctor knows the new one": said for each model priced past its row's date. */
+export function priceChangedText(models) {
+    const byDay = new Map();
+    for (const [m, on] of models) {
+        const l = byDay.get(on) ?? byDay.set(on, []).get(on);
+        if (!l.includes(m))
+            l.push(m);
+    }
+    return [...byDay].map(([on, ms]) => `${ms.slice(0, 3).join(", ")}${ms.length > 3 ? " and others" : ""}: price changed on ${on}`).join("; ") + "; a newer context-doctor knows the new one";
 }
 /**
  * OpenAI usage, in any of its shapes, as RecordedUsage: Responses

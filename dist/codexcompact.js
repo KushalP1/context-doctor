@@ -34,7 +34,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { codexDir } from "./codexdir.js";
 import { codexEventKey, codexSessionsRoot, rolloutFiles } from "./limits.js";
-import { openAIUsage, pricingFor, usageCost } from "./pricing.js";
+import { openAIUsage, rateCard, ratesAt, requestCost } from "./pricing.js";
 import { pick, rowsOf } from "./scan.js";
 import { tilde } from "./claudedir.js";
 /** The config.toml key the lever writes. */
@@ -128,19 +128,21 @@ function readSteps(file, seen) {
         if (!Number.isFinite(at))
             continue;
         const u = openAIUsage(r.u);
-        const price = pricingFor(model);
+        const prompt = num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.cache_creation_input_tokens);
+        const card = rateCard(model, u, at);
+        const price = card && ratesAt(card, prompt);
         const copy = !!r.key && seen.has(r.key);
         if (r.key)
             seen.add(r.key);
         const window = num(r.win) ? num(r.win) / RECORDED_SHARE : DEFAULT_WINDOW;
         steps.push({
-            k: "r", at, copy,
-            prompt: num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.cache_creation_input_tokens),
+            k: "r", at, copy, prompt,
             cached: num(u.cache_read_input_tokens),
             out: num(u.output_tokens),
             inPerM: price?.inputPerM ?? 0, readPerM: price?.cacheReadPerM ?? 0, outPerM: price?.outputPerM ?? 0,
-            billedUsd: price ? usageCost(u, price).promptUsd : 0,
+            billedUsd: requestCost(model, u, at)?.promptUsd ?? 0,
             trigger: DEFAULT_SHARE * window,
+            ...(card ? { card } : {}),
         });
     }
     return steps;
@@ -178,11 +180,15 @@ function replay(steps, limit, since, until, after, scope = "total") {
             fresh = false;
         }
         let cost = s.billedUsd;
+        // A smaller prompt can fall under a long-context tier (OpenAI's 272k): all of it then bills at the lower rates.
+        const low = s.card && ctx < s.prompt ? ratesAt(s.card, ctx) : undefined;
         if (fresh)
-            cost = (ctx * s.inPerM) / 1e6;
+            cost = (ctx * (low ? low.inputPerM : s.inPerM)) / 1e6;
         else if (removed > 0) {
             const fromCache = Math.min(removed, s.cached);
             cost = Math.max(0, s.billedUsd - (fromCache * s.readPerM + (removed - fromCache) * s.inPerM) / 1e6);
+            if (low && low.inputPerM < s.inPerM)
+                cost *= low.inputPerM / s.inPerM;
         }
         fresh = false;
         prefill ??= ctx;
@@ -195,8 +201,9 @@ function replay(steps, limit, since, until, after, scope = "total") {
             : ctx + s.out >= Math.min(limit, s.trigger) && limit < s.trigger;
         if (reached) {
             // Compacted after this turn: one request reading the context, a summary written; the next starts from `after`.
+            const at = low ?? { cacheReadPerM: s.readPerM, outputPerM: s.outPerM };
             if (counted) {
-                sim += (ctx * s.readPerM + SUMMARY_OUTPUT * s.outPerM) / 1e6;
+                sim += (ctx * at.cacheReadPerM + SUMMARY_OUTPUT * at.outputPerM) / 1e6;
                 extra++;
             }
             removed = s.prompt + s.out - after;

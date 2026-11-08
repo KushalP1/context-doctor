@@ -6,7 +6,8 @@
  * (the author's `gantry-ai` audit: 2,795 requests, 1.3B cached tokens read).
  * So before each prompt (Claude Code's and Codex's UserPromptSubmit, Gemini
  * CLI's BeforeAgent) the hook adds up what this session has cost, subagents
- * included (they bill to it), and when it passes $25, $100 and $500 says so
+ * included (they bill to it: Claude Code's, and the agents a Codex thread
+ * spawned, codexSpawnedRollouts), and when it passes $25, $100 and $500 says so
  * to the user once: the cost so far, what each message of the main
  * conversation now costs at the model's cache-read rate (or, after an idle
  * that expired the cache, the re-write this message pays), and that
@@ -37,12 +38,12 @@ import { createHash } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { statePath } from "./ledger.js";
 import { refreshEntry, wellFormed, writeWhole } from "./budget.js";
-import { codexFileSpend, geminiFileSpend } from "./spend.js";
+import { codexFileSpend, codexSpawnedRollouts, geminiFileSpend } from "./spend.js";
 import { isGeminiChat } from "./gemini.js";
 import { subagentFiles } from "./subagents.js";
 import { tailUsage } from "./statusline.js";
 import { autoCompactsAt, detectColdResume, withResumeVerdict } from "./coldresume.js";
-import { formatUsd, pricingFor } from "./pricing.js";
+import { formatUsd, rateCard, ratesAt } from "./pricing.js";
 import { formatTokens } from "./tokens.js";
 /** Where the hook speaks unless CONTEXT_DOCTOR_SESSION_PRICE says otherwise. */
 export const SESSION_PRICE_THRESHOLDS = [25, 100, 500];
@@ -134,6 +135,10 @@ export function sessionPriceDue(input, now = Date.now(), env = process.env) {
     if (app === "claude")
         for (const f of subagentFiles(input.transcript))
             files.push([f.file, f.run ? "workflow" : "sub"]);
+    // A Codex thread's spawned agents: their rollouts name it as their parent (a forked one's copy of its history counts once, by key).
+    if (app === "codex")
+        for (const f of codexSpawnedRollouts(input.transcript, now))
+            files.push([f, "sub"]);
     let saved = {};
     try {
         const raw = JSON.parse(readFileSync(ledgerFile(b), "utf8"));
@@ -218,18 +223,21 @@ function perMessage(app, input, now) {
             const items = app === "codex" ? codexFileSpend(input.transcript, 0) : geminiFileSpend(input.transcript, 0);
             const last = items[items.length - 1];
             const model = last?.model ?? input.model;
-            const p = pricingFor(model);
-            if (!last || !p)
+            const tokens = last ? last.input + last.read + last.write : 0;
+            // At the rate the next request bills: its prompt's tier (a long prompt's on OpenAI and Gemini Pro).
+            const card = rateCard(model, undefined, now);
+            if (!last || !card)
                 return {};
-            const tokens = last.input + last.read + last.write;
-            return { tokens, model, readUsd: (tokens * p.cacheReadPerM) / 1e6 };
+            return { tokens, model, readUsd: (tokens * ratesAt(card, tokens).cacheReadPerM) / 1e6 };
         }
         // Undefined right after a compaction: the new size is not known yet.
         const live = tailUsage(input.transcript);
         if (!live)
             return {};
         const model = live.model ?? input.model;
-        const p = pricingFor(model);
+        // As the next request bills: fast mode and US-only as the last one recorded, the tier of its prompt.
+        const card = rateCard(model, live.billing, now);
+        const p = card && ratesAt(card, live.tokens);
         // Claude Code compacts this very prompt itself: the figure is about to be wrong.
         if (!p || live.tokens >= (autoCompactsAt(model) ?? Infinity))
             return {};

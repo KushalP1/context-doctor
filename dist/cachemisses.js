@@ -66,7 +66,7 @@ const SIZE_BUCKETS = [["<100k", 100_000], ["100-300k", 300_000], ["300-600k", 60
 const bucketOf = (tokens) => SIZE_BUCKETS.find(([, max]) => tokens < max)[0];
 const num = (x) => (typeof x === "number" && Number.isFinite(x) && x > 0 ? x : 0);
 export const MISS_ROWS = {
-    id: "misses.1",
+    id: "misses.2",
     init: () => ({ user: false }),
     line(line, row, out, st) {
         const block = () => {

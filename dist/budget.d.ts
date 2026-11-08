@@ -69,7 +69,10 @@ export declare function periodEnd(period: Period, now?: number): number;
  * place, same inode and no smaller, is read again in full, not from `o`.
  * `x` lists the requests on a model with no list price (index into k/d,
  * model): in `d` at $0, and said so rather than silently left out. `y`
- * lists those priced only by their model's family (an estimate), the same way.
+ * lists those priced only by their model's family (an estimate), the same
+ * way; `z` those priced past the day their model's price changed (index,
+ * model, the day). `d` is requestCost's: each request's tier, fast mode,
+ * US-only and web searches, and the output price in `r` is its own.
  */
 export interface FileEntry {
     t: Tool;
@@ -83,6 +86,7 @@ export interface FileEntry {
     r?: Array<[string, number, number, number]>;
     x?: Array<[number, string]>;
     y?: Array<[number, string]>;
+    z?: Array<[number, string, string]>;
 }
 /** A ledger entry this version can use: a damaged one threw on every prompt until its transcript changed. */
 export declare function wellFormed(e: FileEntry | undefined): e is FileEntry;
@@ -117,6 +121,12 @@ export interface PeriodSpend {
         requests: number;
         usd: number;
         models: string[];
+    };
+    /** Requests priced past the day their model's price changed (model, day): in `usd`, an estimate. */
+    changed?: {
+        requests: number;
+        usd: number;
+        models: Array<[string, string]>;
     };
 }
 /**

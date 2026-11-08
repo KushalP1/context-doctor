@@ -38,7 +38,7 @@
  */
 import { listSessions, isClaudeSession, replyCounter } from "./session.js";
 import { pick, rowsOf, slimUsage } from "./scan.js";
-import { cacheWriteSplit, pricingFor, usageCost, writeMultiplier } from "./pricing.js";
+import { cacheWriteSplit, rateCard, ratesAt, requestCost, writeMultiplier } from "./pricing.js";
 import { isCodeLike, realModel, tokensForLength } from "./tokens.js";
 import { subagentTranscripts } from "./cachettl.js";
 /** The settings key the lever writes. */
@@ -90,7 +90,7 @@ function resultText(content) {
     return s;
 }
 export const TOOL_OUTPUT_ROWS = {
-    id: "tool-output.1",
+    id: "tool-output.2",
     init: () => ({ ids: {}, calls: {} }),
     line(raw, row, out, st) {
         if (!raw.includes('"usage"') && !raw.includes('"tool_use"') && !raw.includes('"tool_result"') && !raw.includes("compact_boundary"))
@@ -209,14 +209,17 @@ function timeline(path, since, until, runRows) {
             for (const x of unsized[th].splice(0))
                 x.model = m;
         }
-        const price = pricingFor(m);
+        const card = rateCard(m, u, at);
+        const price = card && ratesAt(card, prompt);
+        const below = card?.over !== undefined && prompt > card.over ? card.rates : undefined;
         out.push({
             k: "r", prompt,
             readPerM: price?.cacheReadPerM ?? 0,
             writePerM: (price?.inputPerM ?? 0) * writeMult,
             cold: num(u.cache_creation_input_tokens) > COLD_SHARE * prompt,
             counted: !!price && seen === "new" && at >= since && at < until,
-            billedUsd: price ? usageCost(u, price).promptUsd : 0,
+            billedUsd: requestCost(m, u, at)?.promptUsd ?? 0,
+            ...(below && price ? { over: card.over, lower: below.inputPerM / price.inputPerM } : {}),
         });
     }
     return threads;
@@ -266,6 +269,7 @@ function walk(lines, move, kind) {
             // Never more than the request held.
             const held = live.reduce((n, x) => n + x.e, 0);
             const scale = held > s.prompt ? s.prompt / held : 1;
+            let here = 0;
             for (const x of live) {
                 if (x.fresh && s.counted) {
                     moved++;
@@ -274,10 +278,15 @@ function walk(lines, move, kind) {
                 if (s.counted) {
                     const t = x.e * scale;
                     tokens += t;
-                    savedUsd += (t * (x.fresh || s.cold ? s.writePerM : s.readPerM)) / 1e6;
+                    const usd = (t * (x.fresh || s.cold ? s.writePerM : s.readPerM)) / 1e6;
+                    savedUsd += usd;
+                    here += usd;
                 }
                 x.fresh = false;
             }
+            // Under its tier's threshold now: the rest of its prompt bills at the lower rates too.
+            if (s.counted && s.over !== undefined && s.lower !== undefined && s.prompt - held * scale <= s.over)
+                savedUsd += Math.max(0, s.billedUsd - here) * (1 - s.lower);
         }
     }
     return { moved, results, tokens, savedUsd, openUsd };

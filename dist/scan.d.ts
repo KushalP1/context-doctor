@@ -103,4 +103,10 @@ export declare function clearScanMemo(): void;
 export declare function pruneScanCache(now?: number, force?: boolean): void;
 /** `o` with only `keys`, those set: what a record keeps of a row. Not an object: as it was. */
 export declare function pick(o: any, keys: readonly string[]): any;
-export declare const slimUsage: (u: unknown) => unknown;
+/**
+ * Those fields, and what changes the request's price (requestCost) only
+ * when it does: fast mode, US-only inference, web searches. Every request
+ * records `speed`, `inference_geo` and `server_tool_use`; kept on each, they
+ * would grow every record for nothing.
+ */
+export declare const slimUsage: (u: any) => unknown;

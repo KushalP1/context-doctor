@@ -69,9 +69,9 @@ export interface TypeReplay {
     billedUsd: number;
     /** The same requests with the ones the variable moves at the candidate model. */
     atCandidateUsd: number;
-    /** Every request of this type at Haiku 5.5's base rates (a floor: see over100k). */
+    /** Every request of this type at Haiku 5.5, a prompt over 100k at its higher rates. */
     atHaikuUsd: number;
-    /** Requests whose prompt was over 100k tokens, which Haiku 5.5 bills at a higher rate not priced here. */
+    /** Requests whose prompt was over 100k tokens, which Haiku 5.5 bills at its higher rates (in atHaikuUsd). */
     over100k: number;
     moves: boolean;
     why?: string;

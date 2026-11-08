@@ -501,4 +501,22 @@ export function pick(o, keys) {
 }
 /** The usage fields any report reads (cost, cache writes by TTL, reasoning, context edits). */
 const USAGE_KEYS = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens", "cache_creation", "output_tokens_details", "context_management"];
-export const slimUsage = (u) => pick(u, USAGE_KEYS);
+/**
+ * Those fields, and what changes the request's price (requestCost) only
+ * when it does: fast mode, US-only inference, web searches. Every request
+ * records `speed`, `inference_geo` and `server_tool_use`; kept on each, they
+ * would grow every record for nothing.
+ */
+export const slimUsage = (u) => {
+    const out = pick(u, USAGE_KEYS);
+    if (!out || typeof out !== "object" || Array.isArray(out))
+        return out;
+    if (u.speed === "fast")
+        out.speed = "fast";
+    if (u.inference_geo === "us")
+        out.inference_geo = "us";
+    const searches = u.server_tool_use?.web_search_requests;
+    if (typeof searches === "number" && searches > 0)
+        out.server_tool_use = { web_search_requests: searches };
+    return out;
+};

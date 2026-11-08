@@ -28,6 +28,7 @@
  * prints nothing at all, because a status line that shows an error is worse
  * than one that shows nothing.
  */
+import { type RecordedUsage } from "./pricing.js";
 /** The parts of Claude Code's status payload this reads. All optional. */
 interface StatusInput {
     session_id?: string;
@@ -52,6 +53,8 @@ interface StatusInput {
             input_tokens?: number;
             cache_read_input_tokens?: number;
             cache_creation_input_tokens?: number;
+            speed?: string;
+            inference_geo?: string;
         } | null;
     };
 }
@@ -74,6 +77,8 @@ interface LiveUsage {
     tokens: number;
     cacheShare?: number;
     model?: string;
+    /** What the last request recorded that changes its price (fast mode, US-only): the next one is billed alike. */
+    billing?: Pick<RecordedUsage, "speed" | "inference_geo">;
 }
 /** Newest assistant usage from the END of a transcript, without reading the file. */
 export declare function tailUsage(path: string, tailBytes?: number): LiveUsage | undefined;
@@ -83,9 +88,12 @@ export declare function tailUsage(path: string, tailBytes?: number): LiveUsage |
  * 2x at an hour) where a warm one would read them (0.1x). The extra is the
  * price; tokens alone when the model has no price. Undefined when Claude Code
  * does not say (no `prompt_cache`, caching off, or right after a compaction
- * while the cache is cold).
+ * while the cache is cold). Priced as the next request bills (requestCost's
+ * rate card): `billing` (fast mode, US-only) as the last request recorded,
+ * and the tier of a prompt of `prompt` tokens (the re-cached ones when not
+ * given).
  */
-export declare function cacheClock(pc: PromptCache | null | undefined, model: string | undefined, nowMs?: number): string | undefined;
+export declare function cacheClock(pc: PromptCache | null | undefined, model: string | undefined, nowMs?: number, billing?: LiveUsage["billing"], prompt?: number): string | undefined;
 /**
  * Build the status line, or null when there is nothing trustworthy to show.
  * `budget`: the spend budget's part ("$12/$50 today"), when one is set.

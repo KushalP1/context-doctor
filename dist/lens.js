@@ -17,7 +17,7 @@
 import { createHash } from "node:crypto";
 import { forEachLine, listSessions, replyCounter, isClaudeSession } from "./session.js";
 import { rowsOf, slimUsage } from "./scan.js";
-import { openAIUsage, pricingFor, usageCost } from "./pricing.js";
+import { openAIUsage, requestCost } from "./pricing.js";
 import { formatTokens, realModel } from "./tokens.js";
 const num = (v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
 class Acc {
@@ -25,11 +25,11 @@ class Acc {
     polls = new Map();
     pollContext = 0;
     sessions = 0;
-    request(model, u, reasoning) {
+    request(model, u, reasoning, at) {
         const name = model ?? "unknown";
         const m = this.models.get(name) ?? { model: name, requests: 0, outputTokens: 0, reasoningTokens: 0, outputUsd: 0, totalUsd: 0 };
-        const price = pricingFor(model);
-        const cost = price ? usageCost(u, price) : undefined;
+        // As billed (requestCost): fast mode, US-only, a long prompt's tier, web searches.
+        const cost = requestCost(model, u, Number.isFinite(at) ? at : undefined);
         m.requests++;
         m.outputTokens += num(u.output_tokens);
         m.reasoningTokens += Math.min(num(u.output_tokens), reasoning);
@@ -61,7 +61,7 @@ const callKey = (name, input) => `${name}\u0000${typeof input === "string" ? inp
 /** A call's identity, as a hash: equal calls stay equal, and the cache keeps no command or input. */
 const callId = (key) => createHash("sha1").update(key).digest("base64");
 export const LENS_ROWS = {
-    id: "lens.1",
+    id: "lens.2",
     init: () => null,
     line(line, row, out) {
         const prompt = line.includes('"type":"user"') && !line.includes('"tool_result"');
@@ -118,7 +118,7 @@ function scanClaude(path, acc, since, runRows) {
             const seen = sighting({ message: { id }, uuid: r.uuid });
             if (seen === "new" && inPeriod) {
                 const u = r.u;
-                const usd = acc.request(r.model, u, num(u.output_tokens_details?.thinking_tokens));
+                const usd = acc.request(r.model, u, num(u.output_tokens_details?.thinking_tokens), at);
                 if (id)
                     costOf.set(id, { usd, context: num(r.u.input_tokens) + num(r.u.cache_read_input_tokens) + num(r.u.cache_creation_input_tokens) });
             }
@@ -176,7 +176,7 @@ function scanCodex(path, acc, since) {
                 return;
             }
             const u = openAIUsage(last);
-            const usd = acc.request(model, u, num(last.reasoning_output_tokens));
+            const usd = acc.request(model, u, num(last.reasoning_output_tokens), at);
             pending.forEach((name, i) => acc.poll(name, i === 0 ? usd : 0, i === 0 ? num(last.input_tokens) : 0));
             pending = [];
         }

@@ -22,7 +22,7 @@
  */
 import { join } from "node:path";
 import { listSessions, replyCounter, isClaudeSession } from "./session.js";
-import { cacheWriteSplit, pricingFor, usageCost, writeMultiplier } from "./pricing.js";
+import { cacheWriteSplit, rateCard, ratesAt, requestCost, writeMultiplier } from "./pricing.js";
 import { realModel } from "./tokens.js";
 import { backupOnce } from "./install.js";
 import { ABSENT, readSettings, setJsonPath, withSettingsLock, writeAtomic } from "./settingsedit.js";
@@ -40,6 +40,7 @@ const SUMMARY_OUTPUT = 20_000;
 const TTL_MS = 3_600_000;
 export const MIN_WINDOW = 100_000;
 export const MAX_WINDOW = 1_000_000;
+const UNPRICED = { inputPerM: 0, outputPerM: 0, cacheReadPerM: 0 };
 /**
  * `writeMult`: what this session pays to write a token to the cache,
  * relative to input, from the 5-minute and 1-hour writes its usage records.
@@ -81,13 +82,13 @@ function readRequests(path, runRows) {
             return;
         // Each request at its own model's price; "<synthetic>" rows carry no usage.
         model = realModel(e.message.model) ?? model;
-        const p = pricingFor(model);
-        if (p)
+        const card = rateCard(model, u, at);
+        if (card)
             priced = true;
         const w = cacheWriteSplit(u);
         writes5m += w.fiveMinute;
         writes1h += w.oneHour;
-        reqs.push({ at, prompt, inPerM: p?.inputPerM ?? 0, readPerM: p?.cacheReadPerM ?? 0, outPerM: p?.outputPerM ?? 0, copy: seen === "copy", billedUsd: p ? usageCost(u, p).promptUsd : 0 });
+        reqs.push({ at, prompt, ...(card ? { card } : {}), copy: seen === "copy", billedUsd: requestCost(model, u, at)?.promptUsd ?? 0 });
     });
     return { reqs, writeMult: writeMultiplier(writes5m, writes1h), priced };
 }
@@ -133,12 +134,15 @@ function replay(reqs, window, since, reread = 0, writeMult = 1.25, idleMin = idl
         // still shape both arms; only the rest are billed.
         const counted = r.at >= since && !r.copy;
         const cold = prevAt === undefined || r.at - prevAt > TTL_MS;
-        const write = writeMult * r.inPerM;
+        // Each prompt, real or simulated, at its own tier's rates.
+        const rates = (ctx) => (r.card ? ratesAt(r.card, ctx) : UNPRICED);
         const cost = (ctx, prev) => {
+            const p = rates(ctx);
+            const write = writeMult * p.inputPerM;
             if (cold)
                 return write * ctx;
             const fresh = prev === undefined || ctx < prev ? ctx : ctx - prev;
-            return r.readPerM * (ctx - fresh) + write * fresh;
+            return p.cacheReadPerM * (ctx - fresh) + write * fresh;
         };
         if (counted)
             base += cost(r.prompt, prevActual);
@@ -151,8 +155,9 @@ function replay(reqs, window, since, reread = 0, writeMult = 1.25, idleMin = idl
         }
         let simPrev = prevSim;
         if (ctx >= TRIGGER_SHARE * window) {
+            const p = rates(ctx);
             if (counted) {
-                sim += r.readPerM * ctx + r.outPerM * SUMMARY_OUTPUT + write * reread;
+                sim += p.cacheReadPerM * ctx + p.outputPerM * SUMMARY_OUTPUT + writeMult * p.inputPerM * reread;
                 extra++;
             }
             removed = r.prompt - AFTER_COMPACT - reread;

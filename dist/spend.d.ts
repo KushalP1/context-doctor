@@ -21,7 +21,10 @@
  *    and an upper bound. Replies on Auto ("default") have no list price and
  *    are counted, not priced.
  *
- * Priced at pricing.ts's list prices (usageCost), as every report here is.
+ * Priced at pricing.ts's list prices with what each request recorded that
+ * changes its bill (requestCost: fast mode, US-only inference, a long
+ * prompt's tier, web searches, a price past its end date), as every report
+ * here is; the report says what the modifiers added.
  * Claude Code, Codex and Gemini CLI are read through the shared scan
  * (scan.ts), so a second run reads only what was appended since; Cursor's
  * replies are kept per chat until the chat changes.
@@ -31,6 +34,7 @@
  * sessions with 10+ requests. `spend` counts every request, its output and
  * subagents too; on the requests both count, the dollars are the same.
  */
+import { type Modifiers } from "./pricing.js";
 import { type Extractor } from "./scan.js";
 export type Tool = "claude" | "codex" | "gemini" | "cursor";
 export declare const TOOLS: Tool[];
@@ -54,9 +58,13 @@ export interface SpendItem {
     readUsd: number;
     outputUsd: number;
     priced: boolean;
-    /** Priced by its family's row, not one of its own (a new release, an id the table does not list): an estimate. */
+    /** Priced by its family's row, not one of its own (a new release, an id the table does not list), or past `changedOn`: an estimate. */
     estimated?: boolean;
-    /** Claude Code: run by a subagent (the Agent tool's). */
+    /** Its model's price in the table changed on this day ("YYYY-MM-DD"), before the request: priced at what the page said would follow, an estimate. */
+    changedOn?: string;
+    /** What fast mode, US-only, a long prompt's tier and web searches added to its list price, inside `usd`; absent when nothing. */
+    modifiers?: Modifiers;
+    /** Run by a subagent: Claude Code's (the Agent tool's), or an agent a Codex thread spawned (its `session` is then the thread's). */
     subagent?: boolean;
     /** Claude Code: run by a workflow agent: its run, "<session>/<run>". */
     workflow?: string;
@@ -73,22 +81,45 @@ export interface SpendItem {
 export declare function projectFromDir(dir: string): string;
 /** A project's name as `savings` shows it: the folder's path with "-" for separators, less the home folder. */
 export declare function projectName(folder: string): string;
+/** Whether a request's modifiers added anything (kept on an item only then). */
+export declare const anyModifier: (m: Modifiers | undefined) => m is Modifiers;
 /**
  * Claude Code's requests between `since` and `until`, main threads and
  * subagents, over `tops` (default: every transcript written since `since`).
  */
 export declare function claudeSpend(since: number, until?: number, tops?: string[], onProgress?: (done: number, total: number) => void): SpendItem[];
 /**
- * What `spend` takes from a Codex rollout: its folder, each model change,
- * and every token_count event's last request and running total.
+ * What `spend` takes from a Codex rollout: its folder, its own id and the
+ * thread that spawned it (the first session_meta), each model change, and
+ * every token_count event's last request and running total.
  */
-export declare const CODEX_SPEND_ROWS: Extractor<null>;
+export declare const CODEX_SPEND_ROWS: Extractor<{
+    m?: 1;
+}>;
 /** The requests of one Codex rollout since `since`. Throws when it cannot be read. */
 export declare function codexFileSpend(file: string, since: number, until?: number): SpendItem[];
 /** Codex rollouts written since `since`: the live ones and the archived. */
 export declare function codexFiles(since: number, home?: string): string[];
-/** Every Codex request in the window, once: a forked rollout's copy of its parent's (codexEventKey) counts at the earliest time met. */
+/** A Codex rollout's own thread id and the thread that spawned it, when one did (spawnedBy). Throws when it cannot be read. */
+export declare function codexRolloutMeta(file: string): {
+    id?: string;
+    parent?: string;
+};
+/**
+ * Every Codex request in the window, once: a forked rollout's copy of its
+ * parent's (codexEventKey) counts at the earliest time met. A spawned
+ * agent's requests are its session's (the thread at the top of its
+ * parents, when its rollout is among the window's), marked `subagent`: they
+ * bill to the same work, as a Claude Code subagent's do.
+ */
 export declare function codexSpend(since: number, until?: number, home?: string): SpendItem[];
+/**
+ * The rollouts of the agents a Codex thread spawned (and theirs), for the
+ * session price: those written since the thread began in its own folder,
+ * the day folders from then to `now` (by local and UTC date) and the
+ * archive. Only each candidate's first line is read.
+ */
+export declare function codexSpawnedRollouts(parent: string, now?: number, home?: string): string[];
 /**
  * What `spend` takes from a Gemini CLI chat (JSONL): each `gemini` message's
  * id, time, model and token counts. A message without a time of its own
@@ -113,7 +144,7 @@ export interface ToolSpend {
         write: number;
         output: number;
     };
-    /** Claude Code: what its subagents cost, inside `usd`. */
+    /** What its subagents cost, inside `usd`: Claude Code's (the Agent tool's), Codex's spawned agents. */
     subagentUsd?: number;
     /** Claude Code: what its workflow agents cost, inside `usd`, and in how many workflow runs. */
     workflowUsd?: number;
@@ -153,13 +184,23 @@ export interface SpendReport {
     daily: Array<SpendRow & {
         day: string;
     }>;
-    /** The bill by what it paid for. */
+    /** The bill by what it paid for; web searches (Claude's, per use) only when there were any. */
     parts: {
         inputUsd: number;
         writeUsd: number;
         readUsd: number;
         outputUsd: number;
+        webSearchUsd?: number;
     };
+    /** What billing modifiers added to the list prices, inside `usd` (fast mode, US-only, long-prompt tiers, web searches); absent when nothing. */
+    modifiers?: Modifiers;
+    /** Models whose price in the table changed on a day before some of their requests: those are priced at what the page said would follow, an estimate. */
+    priceChanged?: Array<{
+        model: string;
+        on: string;
+        requests: number;
+        usd: number;
+    }>;
     sessions: Array<{
         tool: Tool;
         project: string;
@@ -196,6 +237,8 @@ export declare const MAX_SPEND_DAYS = 3650;
 /** The last `days` days, every tool on this machine. A tool with nothing on disk is just absent. */
 export declare function spendReport(days?: number, opts?: SpendOptions): SpendReport;
 export declare const usd: (n: number) => string;
+/** "fast mode +$4.10, US-only +$0.93, web searches $0.12 (12), long-prompt tier +$0.40": what each billing modifier added, the ones that added anything. */
+export declare function modifiersText(m: Modifiers): string;
 /** The full report, kept within 80 columns. `top`: rows per list. */
 export declare function renderSpend(r: SpendReport, top?: number): string;
 /**

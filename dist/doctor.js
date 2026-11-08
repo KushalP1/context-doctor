@@ -30,7 +30,7 @@ import { codexDir } from "./codexdir.js";
 import { periodSpend, readBudget } from "./budget.js";
 import { sessionPriceThresholds } from "./sessionprice.js";
 import { claudeSpend, codexSpend } from "./spend.js";
-import { hasKnownPrice, isUnbilledModel } from "./pricing.js";
+import { hasKnownPrice, isUnbilledModel, priceChangedText } from "./pricing.js";
 function claudeDesktopConfigPath() {
     switch (platform()) {
         case "darwin": return join(homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
@@ -297,10 +297,15 @@ export function unpricedModelsCheck(days = 30, now = Date.now(), home = homedir(
     const label = "Model prices";
     const since = now - days * 86_400_000;
     const seen = new Map();
+    // A price in the table that changed on a day before some requests (pricing.ts's end dates).
+    const changed = new Map();
     const add = (items) => {
         for (const i of items)
-            if (i.model)
+            if (i.model) {
                 seen.set(i.model, (seen.get(i.model) ?? 0) + 1);
+                if (i.changedOn)
+                    changed.set(i.model, [i.model, i.changedOn]);
+            }
     };
     try {
         add(claudeSpend(since, now));
@@ -313,6 +318,8 @@ export function unpricedModelsCheck(days = 30, now = Date.now(), home = homedir(
     if (seen.size === 0)
         return undefined;
     const unknown = [...seen].filter(([m]) => !hasKnownPrice(m) && !isUnbilledModel(m)).sort((a, b) => b[1] - a[1]);
+    if (!unknown.length && changed.size)
+        return { label, status: "warn", detail: `${priceChangedText([...changed.values()])}: those requests are estimated. npm install -g context-doctor@latest` };
     if (!unknown.length)
         return { label, status: "ok", detail: `every model used in the last ${days} days has a list price on file` };
     const named = unknown.slice(0, 5).map(([m, n]) => `${m} (${n.toLocaleString("en-US")} request${n === 1 ? "" : "s"})`).join(", ") + (unknown.length > 5 ? ` and ${unknown.length - 5} more` : "");

@@ -38,7 +38,7 @@ import { join } from "node:path";
 import { listSessions, replyCounter, isClaudeSession } from "./session.js";
 import { REQUEST_ROWS } from "./coldresume.js";
 import { rowsOf } from "./scan.js";
-import { CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, pricingFor, usageCost } from "./pricing.js";
+import { CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, requestCost } from "./pricing.js";
 import { realModel } from "./tokens.js";
 import { backupOnce } from "./install.js";
 import { ABSENT, readSettings, setJsonPath, withSettingsLock, writeAtomic } from "./settingsedit.js";
@@ -105,14 +105,16 @@ export function replayTtlTranscript(path, acc, since, until = Infinity, sidechai
         // wrote nothing keeps the lifetime of the last one that did.
         if (W > 0)
             lastTtl = split.oneHour > split.fiveMinute ? HOUR : FIVE_MIN;
-        const p = pricingFor(model);
+        // The rates it billed at (its tier, fast mode, US-only): a lifetime changes reads and writes, not the prompt's length.
+        const c = requestCost(model, u, at);
+        const p = c?.rates;
         if (at >= since && at < until && seen === "new") {
             counted++;
             acc.requests++;
-            if (!p)
+            if (!c || !p)
                 acc.unpriced++;
             else {
-                acc.billedUsd += usageCost(u, p).promptUsd;
+                acc.billedUsd += c.promptUsd;
                 acc.writes += W;
                 acc.writes1h += split.oneHour;
                 const inp = p.inputPerM / 1e6;

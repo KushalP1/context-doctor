@@ -6,7 +6,8 @@
  * (the author's `gantry-ai` audit: 2,795 requests, 1.3B cached tokens read).
  * So before each prompt (Claude Code's and Codex's UserPromptSubmit, Gemini
  * CLI's BeforeAgent) the hook adds up what this session has cost, subagents
- * included (they bill to it), and when it passes $25, $100 and $500 says so
+ * included (they bill to it: Claude Code's, and the agents a Codex thread
+ * spawned, codexSpawnedRollouts), and when it passes $25, $100 and $500 says so
  * to the user once: the cost so far, what each message of the main
  * conversation now costs at the model's cache-read rate (or, after an idle
  * that expired the cache, the re-write this message pays), and that
@@ -43,7 +44,7 @@ export interface SessionPrice {
     /** The threshold just passed. */
     threshold: number;
     usd: number;
-    /** Subagents' part of `usd` (the Agent tool's). */
+    /** Subagents' part of `usd`: the Agent tool's, or the agents a Codex thread spawned. */
     subagentUsd: number;
     /** Workflow agents' part of `usd`. */
     workflowUsd?: number;

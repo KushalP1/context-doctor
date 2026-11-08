@@ -3,9 +3,12 @@
  *
  * List rates of each provider's first-party API (standard tier, global
  * routing, no batch or fast mode), each family with the page it was read
- * from and the date. Prices drift, so all cost output is labeled as an
- * estimate. One table, one file, easy to update: PRs welcome when prices
- * change.
+ * from and the date. What a request recorded can bill it differently (fast
+ * mode, US-only inference, a long prompt's tier, web searches) and a row's
+ * price can end on a known day: requestCost applies all of it, per request,
+ * from the row's billing options. Prices drift, so all cost output is
+ * labeled as an estimate. One table, one file, easy to update: PRs welcome
+ * when prices change.
  *
  * A row names one model (a "known" price, see knownPricingFor) unless it is
  * listed in FALLBACKS: those price ids the table does not know by version,
@@ -32,6 +35,7 @@ export declare const CACHE_WRITE_1H = 2;
  */
 export declare const CACHE_WRITE_OPENAI_30M = 1.25;
 export declare const CACHE_WRITE_OPENAI_12H = 2.5;
+/** A model's list row, as the page lists it today (no tier, mode or date applied). */
 export declare function pricingFor(model?: string): ModelPricing | undefined;
 /**
  * A model's price from a row for that model, not a family fallback: undefined
@@ -71,6 +75,16 @@ export interface RecordedUsage {
         ephemeral_1h_input_tokens?: unknown;
         ttl_12h_input_tokens?: unknown;
     } | null;
+    /** Anthropic: "fast" for a fast-mode request ("standard" otherwise). */
+    speed?: unknown;
+    /** Anthropic: "us" for US-only inference ("global", "", "not_available" otherwise). */
+    inference_geo?: unknown;
+    /** Anthropic: server-side tool uses billed per use. */
+    server_tool_use?: {
+        web_search_requests?: unknown;
+        web_fetch_requests?: unknown;
+        code_execution_requests?: unknown;
+    } | null;
 }
 export interface UsageCost {
     /** Uncached input. */
@@ -104,11 +118,96 @@ export declare function cacheWriteSplit(usage: RecordedUsage | undefined | null)
  */
 export declare function writeMultiplier(fiveMinute: number, oneHour: number, twelveHour?: number): number;
 /**
- * What one recorded request cost: uncached input, cache writes priced by
- * TTL, cache reads, output. The one place recorded usage is priced, so every
- * report agrees with the others and with the bill.
+ * Recorded usage at given rates: uncached input, cache writes priced by
+ * TTL, cache reads, output. The rates a request was billed at (its tier,
+ * fast mode, US-only, its date) are requestCost's to decide.
  */
 export declare function usageCost(usage: RecordedUsage | undefined | null, pricing: ModelPricing): UsageCost;
+/** US-only inference on Claude 4.6 and later: 1.1x on every token category (Anthropic, "Data residency pricing", read 2026-11-08). */
+export declare const US_ONLY_MULTIPLIER = 1.1;
+/**
+ * Claude's web search tool: $10 per 1,000 searches, on top of its tokens
+ * (Anthropic, "Web search tool", read 2026-11-08). A token price, so not
+ * under the US-only multiplier. Web fetch has no charge beyond its tokens;
+ * code execution bills container time (1,550 free hours a month, then $0.05
+ * an hour), which usage does not record per request: not modelled.
+ */
+export declare const WEB_SEARCH_USD: number;
+/** The tokens a request's prompt holds: uncached input, cache reads and cache writes (what a long-prompt tier counts). */
+export declare function promptTokens(usage: RecordedUsage | undefined | null): number;
+/**
+ * The rates a model's requests bill at, from its row and what the request
+ * recorded: `rates` for a prompt up to `over` tokens, `longRates` beyond
+ * (no tier: `over` absent). Fast mode replaces the rates (its price holds
+ * across the full context window); US-only scales them. A request on or
+ * after the day its row's price changes (`changedOn`) is priced at the
+ * price the page said would follow, or the old one when it said none: an
+ * estimate either way (a scheduled price can be called off: Sonnet 5's was).
+ */
+export interface RateCard {
+    rates: ModelPricing;
+    over?: number;
+    longRates?: ModelPricing;
+    /** The list row's own rates, before tier, fast mode and US-only: what the modifiers are measured from. */
+    list: ModelPricing;
+    /** Fast mode's rates applied. */
+    fast?: true;
+    /** US-only's 1.1x applied. */
+    geo?: true;
+    /** Priced by family or past its row's date: an estimate. */
+    estimated?: true;
+    /** "YYYY-MM-DD": the row's price changed on this day, before the request. */
+    changedOn?: string;
+    /** Web searches bill per use (Claude). */
+    webSearch?: true;
+}
+/** The rate card for one of `model`'s requests at time `at`, with the modifiers its usage records. Undefined for a model with no price. */
+export declare function rateCard(model: string | undefined, usage?: RecordedUsage | null, at?: number): RateCard | undefined;
+/** A card's rates for a prompt of `prompt` tokens: its long tier's past `over`. */
+export declare function ratesAt(card: RateCard, prompt: number): ModelPricing;
+/**
+ * What a request's billing modifiers added to its list-row price, in USD:
+ * fast mode, US-only inference, a long-prompt tier, and the web searches it
+ * ran (`webSearches` of them, `webSearchUsd`).
+ */
+export interface Modifiers {
+    fastUsd: number;
+    geoUsd: number;
+    longUsd: number;
+    webSearchUsd: number;
+    webSearches: number;
+}
+export declare const NO_MODIFIERS: Readonly<Modifiers>;
+export interface RequestCost extends UsageCost {
+    /** The rates its tokens were billed at (the parts above); `totalUsd` adds the web searches. */
+    rates: ModelPricing;
+    modifiers: Modifiers;
+    /** Priced by family, or past the day its row's price changed: an estimate. */
+    estimated?: true;
+    /** "YYYY-MM-DD": its row's price changed on this day, before the request. */
+    changedOn?: string;
+}
+/**
+ * What one recorded request cost, as billed: its model's row at the time it
+ * ran, its prompt's tier, fast mode, US-only inference, cache writes by TTL,
+ * and per-use tool fees. The one place a request's price is decided, so
+ * every report agrees with the others and with the bill. `at`: when it ran.
+ * Undefined for a model with no price.
+ */
+export declare function requestCost(model: string | undefined, usage: RecordedUsage | undefined | null, at?: number): RequestCost | undefined;
+/** `a` plus `b`, part by part. */
+export declare function addModifiers(a: Modifiers, b: Readonly<Modifiers>): Modifiers;
+/**
+ * When a model's price in the table stops being its list price: the day
+ * (YYYY-MM-DD) and, when the page said, the price from then. Undefined for
+ * a row with no end date. What `doctor` and the budget say once it has passed.
+ */
+export declare function priceChange(model?: string): {
+    on: string;
+    then?: ModelPricing;
+} | undefined;
+/** "gemini-4-argon's price changed on 2026-12-01; a newer context-doctor knows the new one": said for each model priced past its row's date. */
+export declare function priceChangedText(models: Array<[model: string, on: string]>): string;
 /**
  * OpenAI usage, in any of its shapes, as RecordedUsage: Responses
  * (`input_tokens`, `input_tokens_details.cached_tokens`, `cache_write_tokens`

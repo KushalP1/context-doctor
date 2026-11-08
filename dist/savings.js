@@ -16,7 +16,7 @@ import { AutoClearer } from "./autoclear.js";
 import { coldResumeEvents } from "./coldresume.js";
 import { listSessions, isClaudeSession } from "./session.js";
 import { rowsOf } from "./scan.js";
-import { CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, pricingFor, usageCost, writeMultiplier } from "./pricing.js";
+import { CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, rateCard, ratesAt, requestCost, writeMultiplier } from "./pricing.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
 import { withInvocation } from "./invocation.js";
 import { sessionsLabel } from "./compactwindow.js";
@@ -134,7 +134,6 @@ function replayExtractor(id, options, makeClearer, replay) {
                         // Each request at its own model: a session that switched from a
                         // $4 to a $10 model was priced at the first one throughout.
                         const pm = realModel(m.model) ?? st.model;
-                        const price = pricingFor(pm);
                         const ttl = cacheWriteSplit(u);
                         st.writes5m += ttl.fiveMinute;
                         st.writes1h += ttl.oneHour;
@@ -142,7 +141,7 @@ function replayExtractor(id, options, makeClearer, replay) {
                         const r = {
                             k: "r", now, cold,
                             bw: fresh + read * 0.1 + ttl.fiveMinute * CACHE_WRITE_5M + ttl.oneHour * CACHE_WRITE_1H,
-                            usd: price ? usageCost(u, price).promptUsd : 0,
+                            usd: requestCost(pm, u, now)?.promptUsd ?? 0,
                             raw: fresh + read + write,
                         };
                         // Only what is set: a record read back from the cache must equal this one.
@@ -150,6 +149,11 @@ function replayExtractor(id, options, makeClearer, replay) {
                             r.uuid = uuid;
                         if (pm !== undefined)
                             r.pm = pm;
+                        // What bills the arms' requests as this one was (fast mode, US-only).
+                        if (u.speed === "fast")
+                            r.f = 1;
+                        if (u.inference_geo === "us")
+                            r.g = 1;
                         if (st.base && st.auto) {
                             const b = armRequest(st.base, now, cold), a = armRequest(st.auto, now, cold);
                             Object.assign(r, { b: [b.read, b.write, b.total], a: [a.read, a.write, a.total] });
@@ -191,8 +195,8 @@ function replayExtractor(id, options, makeClearer, replay) {
         load: (v) => ({ ...v, ids: new Set(v.ids), base: loadArm(v.base, options), auto: loadArm(v.auto, options) }),
     };
 }
-const REPLAY = replayExtractor("replay.2", {}, undefined, true);
-const BILL = replayExtractor("bill.2", {}, undefined, false);
+const REPLAY = replayExtractor("replay.3", {}, undefined, true);
+const BILL = replayExtractor("bill.3", {}, undefined, false);
 /** What `estimateSavings` reads from each transcript, with or without autopilot's replay (for `prescan`). */
 export const savingsRows = (replay = true) => (replay ? REPLAY : BILL);
 /**
@@ -259,9 +263,12 @@ function settleReplay(path, rows, since, runRows, coldRows, replay) {
             billedUsd += r.usd;
             billedRaw += r.raw;
             requests++;
-            const price = pricingFor(r.pm) ?? UNPRICED;
-            charge(base, r.b, r.cold, price);
-            charge(auto, r.a, r.cold, price);
+            // Each arm's request at its own tier (Haiku 5.5's 100k): as billed for the
+            // session as it ran, less what autopilot cleared for the other.
+            const card = rateCard(r.pm, { ...(r.f ? { speed: "fast" } : {}), ...(r.g ? { inference_geo: "us" } : {}) }, r.now);
+            const cleared = r.b && r.a ? Math.max(0, r.b[2] - r.a[2]) : 0;
+            charge(base, r.b, r.cold, card ? ratesAt(card, r.raw) : UNPRICED);
+            charge(auto, r.a, r.cold, card ? ratesAt(card, r.raw - cleared) : UNPRICED);
         }
     }
     flush();

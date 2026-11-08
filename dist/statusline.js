@@ -30,10 +30,12 @@
  */
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { contextWindowFor, formatTokens } from "./tokens.js";
-import { CACHE_WRITE_1H, CACHE_WRITE_5M, formatUsd, pricingFor } from "./pricing.js";
+import { CACHE_WRITE_1H, CACHE_WRITE_5M, formatUsd, rateCard, ratesAt } from "./pricing.js";
 import { recordLimits } from "./limits.js";
 import { recordMiss } from "./missledger.js";
 import { budgetStatus } from "./budget.js";
+/** The fields of a usage that carry over to the next request's price. */
+const billingOf = (u) => (u && (u.speed === "fast" || u.inference_geo === "us") ? { ...(u.speed === "fast" ? { speed: "fast" } : {}), ...(u.inference_geo === "us" ? { inference_geo: "us" } : {}) } : undefined);
 /** Newest assistant usage from the END of a transcript, without reading the file. */
 export function tailUsage(path, tailBytes = 256 * 1024) {
     try {
@@ -67,8 +69,10 @@ export function tailUsage(path, tailBytes = 256 * 1024) {
                 continue;
             const read = usage.cache_read_input_tokens ?? 0;
             const tokens = (usage.input_tokens ?? 0) + read + (usage.cache_creation_input_tokens ?? 0);
-            if (tokens > 0)
-                return { tokens, cacheShare: read / tokens, model: entry.message?.model };
+            if (tokens > 0) {
+                const billing = billingOf(usage);
+                return { tokens, cacheShare: read / tokens, model: entry.message?.model, ...(billing ? { billing } : {}) };
+            }
         }
     }
     catch {
@@ -98,14 +102,18 @@ const MAX_EXPIRY_AHEAD_S = 2 * 3600;
  * 2x at an hour) where a warm one would read them (0.1x). The extra is the
  * price; tokens alone when the model has no price. Undefined when Claude Code
  * does not say (no `prompt_cache`, caching off, or right after a compaction
- * while the cache is cold).
+ * while the cache is cold). Priced as the next request bills (requestCost's
+ * rate card): `billing` (fast mode, US-only) as the last request recorded,
+ * and the tier of a prompt of `prompt` tokens (the re-cached ones when not
+ * given).
  */
-export function cacheClock(pc, model, nowMs = Date.now()) {
+export function cacheClock(pc, model, nowMs = Date.now(), billing, prompt) {
     if (!pc || pc.caching_observed === false)
         return undefined;
     const r = pc.recache_tokens_if_cold;
     const tokens = typeof r === "number" && Number.isFinite(r) && r > 0 && r <= MAX_RECACHE_TOKENS ? r : undefined;
-    const price = pricingFor(model);
+    const card = rateCard(model, billing, nowMs);
+    const price = card && ratesAt(card, prompt ?? tokens ?? 0);
     const oneHour = pc.ttl === "1h";
     const extra = tokens !== undefined && price ? (tokens * (price.inputPerM * (oneHour ? CACHE_WRITE_1H : CACHE_WRITE_5M) - price.cacheReadPerM)) / 1e6 : undefined;
     const cost = tokens === undefined ? undefined : extra !== undefined && extra > 0 ? `+${formatUsd(extra)}` : `${formatTokens(tokens)} re-write`;
@@ -140,7 +148,8 @@ export function renderStatusLine(input, nowMs = Date.now(), budget) {
     const fromPayload = cu ? (cu.input_tokens ?? 0) + (cu.cache_read_input_tokens ?? 0) + (cu.cache_creation_input_tokens ?? 0) : 0;
     if (cu && fromPayload > 0) {
         const read = cu.cache_read_input_tokens;
-        live = { tokens: fromPayload, cacheShare: read !== undefined ? read / fromPayload : undefined, model: input.model?.id };
+        const billing = billingOf(cu);
+        live = { tokens: fromPayload, cacheShare: read !== undefined ? read / fromPayload : undefined, model: input.model?.id, ...(billing ? { billing } : {}) };
     }
     else if (input.transcript_path) {
         live = tailUsage(input.transcript_path);
@@ -160,7 +169,7 @@ export function renderStatusLine(input, nowMs = Date.now(), budget) {
         if (live.cacheShare !== undefined)
             parts.push(`cache ${Math.round(live.cacheShare * 100)}%`);
     }
-    const warmth = cacheClock(input.prompt_cache, input.model?.id ?? live?.model, nowMs);
+    const warmth = cacheClock(input.prompt_cache, input.model?.id ?? live?.model, nowMs, live?.billing, live?.tokens);
     if (warmth)
         parts.push(warmth);
     // The session's cost is true whatever the context is; show it on its own.
