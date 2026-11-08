@@ -25,6 +25,13 @@ test("configs come from user and project scope in ~/.claude.json and from .mcp.j
     writeFileSync(join(proj, ".mcp.json"), JSON.stringify({ mcpServers: { c: { command: "y" } } }));
     assert.deepEqual(claudeMcpConfigs(proj, home).map((c) => `${c.name}:${c.scope}`), ["a:user", "b:project", "c:.mcp.json"]);
 });
+test("a name in several scopes is the one Claude Code runs: local over .mcp.json over user", () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-mcp-home-"));
+    const proj = mkdtempSync(join(tmpdir(), "cd-mcp-proj-"));
+    writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { gh: { command: "user" }, db: { command: "user" } }, projects: { [proj]: { mcpServers: { gh: { command: "local" } } } } }));
+    writeFileSync(join(proj, ".mcp.json"), JSON.stringify({ mcpServers: { gh: { command: "repo" }, db: { command: "repo" } } }));
+    assert.deepEqual(claudeMcpConfigs(proj, home).map((c) => `${c.name}:${c.scope}:${c.command}`), ["db:.mcp.json:repo", "gh:project:local"]);
+});
 test("a real server is sized by listing its tools; a dead one reports an error instead of hanging", async () => {
     const ok = await measureServer({ name: "context-doctor", scope: "user", command: process.execPath, args: ["dist/mcp.js"] });
     assert.equal(ok.tools, 6);

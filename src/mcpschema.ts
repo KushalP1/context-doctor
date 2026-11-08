@@ -142,18 +142,20 @@ export function claudeMcpConfigs(cwd = process.cwd(), home = homedir()): McpServ
       if (c && typeof c === "object") out.set(name, { name, scope, command: c.command, args: c.args, env: c.env, url: c.url, type: c.type });
     }
   };
+  let cfg: any;
   try {
-    const cfg = JSON.parse(readFileSync(claudeJsonPath(home), "utf8"));
-    addAll(cfg.mcpServers, "user");
-    addAll(cfg.projects?.[resolve(cwd)]?.mcpServers, "project");
+    cfg = JSON.parse(readFileSync(claudeJsonPath(home), "utf8"));
   } catch {
     /* absent */
   }
+  // A name in several scopes is Claude Code's local one, then the .mcp.json one, then the user's.
+  addAll(cfg?.mcpServers, "user");
   try {
     addAll(JSON.parse(readFileSync(join(cwd, ".mcp.json"), "utf8")).mcpServers, ".mcp.json");
   } catch {
     /* absent */
   }
+  addAll(cfg?.projects?.[resolve(cwd)]?.mcpServers, "project");
   return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
