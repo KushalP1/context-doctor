@@ -34,7 +34,7 @@ import { statePath } from "./ledger.js";
 import { forEachLine, listSessions, outputSettler, replyCounter, isClaudeSession } from "./session.js";
 import { subagentFiles } from "./subagents.js";
 import { pick, rowsOf, slimUsage, type Extractor } from "./scan.js";
-import { CACHE_WRITE_5M, isUnbilledModel, openAIUsage, pricingFor, usageCost, type ModelPricing, type RecordedUsage } from "./pricing.js";
+import { CACHE_WRITE_5M, isUnbilledModel, NO_MODIFIERS, openAIUsage, requestCost, type ModelPricing, type Modifiers, type RecordedUsage } from "./pricing.js";
 import { realModel } from "./tokens.js";
 
 const MIN = 60_000;
@@ -309,8 +309,7 @@ export function codexLimitData(since: number, root = codexSessionsRoot()): { rea
         if (last && num(last.input_tokens) > 0 && (runTotal === 0 || runTotal !== total)) {
           total = runTotal;
           const u = openAIUsage(last);
-          const price = pricingFor(model);
-          ev.point = { ts, app: "codex", model, input: num(u.input_tokens), read: num(u.cache_read_input_tokens), write: num(u.cache_creation_input_tokens), output: num(u.output_tokens), usd: price ? usageCost(u, price).totalUsd : 0 };
+          ev.point = { ts, app: "codex", model, input: num(u.input_tokens), read: num(u.cache_read_input_tokens), write: num(u.cache_creation_input_tokens), output: num(u.output_tokens), usd: requestCost(model, u, ts)?.totalUsd ?? 0 };
         }
         const rl = p.rate_limits;
         if (rl && typeof rl === "object") {
@@ -355,7 +354,7 @@ export function codexLimitData(since: number, root = codexSessionsRoot()): { rea
  * main thread.
  */
 export const USAGE_ROWS: Extractor<{ ids: Record<string, 1> }> = {
-  id: "usage.2",
+  id: "usage.3",
   init: () => ({ ids: {} }),
   line(line, row, out, st) {
     if (!line.includes('"usage"')) return;
@@ -384,21 +383,29 @@ export interface ClaudeRequest extends UsagePoint {
   sidechain?: boolean;
   /** The prompt's part of `usd` (input, cache writes, cache reads): what `savings` bills. */
   promptUsd: number;
+  /** The rates it billed at (requestCost: its tier, fast mode, US-only, its date); absent when unpriced. */
+  rates?: ModelPricing;
+  /** What fast mode, US-only, a long prompt's tier and web searches added to its list price, inside `usd`. */
+  modifiers: Modifiers;
+  /** Priced by family, or past the day its row's price changed: an estimate. */
+  estimated?: boolean;
+  /** Its row's price changed on this day, before the request. */
+  changedOn?: string;
 }
 
 /**
  * The requests of one Claude Code transcript between `since` and `until`,
- * each reply once, its output settled on its last row. `runRows` is shared
- * by every file of one report, so a fork's copy of its parent's replies is
- * counted once, in the file met first (replyCounter). Replies on
- * `<synthetic>` (isUnbilledModel) are left out. Throws when the transcript
- * cannot be read.
+ * each reply once, its output settled on its last row (billed at the
+ * reply's own rates, requestCost's). `runRows` is shared by every file of
+ * one report, so a fork's copy of its parent's replies is counted once, in
+ * the file met first (replyCounter). Replies on `<synthetic>`
+ * (isUnbilledModel) are left out. Throws when the transcript cannot be read.
  */
 export function claudeFileUsage(file: string, since: number, until = Infinity, runRows?: Set<string>): ClaudeRequest[] {
   const out: ClaudeRequest[] = [];
   const sighting = replyCounter(runRows);
   const settle = outputSettler();
-  const byId = new Map<string, { point: ClaudeRequest; price?: ModelPricing }>();
+  const byId = new Map<string, { point: ClaudeRequest; u: RecordedUsage }>();
   rowsOf(file, USAGE_ROWS).forEach((e: Record<string, any>) => {
     const m = e?.message;
     if (e?.type !== "assistant" || !m?.usage) return;
@@ -407,8 +414,13 @@ export function claudeFileUsage(file: string, since: number, until = Infinity, r
       const known = typeof m.id === "string" ? byId.get(m.id) : undefined;
       const more = settle(e, false);
       if (known && more) {
-        known.point.output += more;
-        if (known.price) known.point.usd += (more * known.price.outputPerM) / 1e6;
+        const p = known.point;
+        p.output += more;
+        if (p.rates) {
+          p.usd += (more * p.rates.outputPerM) / 1e6;
+          // What the modifiers added grows with the output: priced again whole.
+          if (p.modifiers.fastUsd || p.modifiers.geoUsd || p.modifiers.longUsd) p.modifiers = requestCost(p.model, { ...known.u, output_tokens: p.output }, p.ts)!.modifiers;
+        }
       }
       return;
     }
@@ -419,19 +431,22 @@ export function claudeFileUsage(file: string, since: number, until = Infinity, r
     const ts = Date.parse(String(e.timestamp ?? ""));
     if (!Number.isFinite(ts) || ts < since || ts > until) return;
     const u = m.usage as RecordedUsage;
-    const point: ClaudeRequest = { ts, app: "claude", model: realModel(m.model), input: num(u.input_tokens), read: num(u.cache_read_input_tokens), write: num(u.cache_creation_input_tokens), output: num(u.output_tokens), usd: 0, promptUsd: 0 };
+    const point: ClaudeRequest = { ts, app: "claude", model: realModel(m.model), input: num(u.input_tokens), read: num(u.cache_read_input_tokens), write: num(u.cache_creation_input_tokens), output: num(u.output_tokens), usd: 0, promptUsd: 0, modifiers: { ...NO_MODIFIERS } };
     if (point.input + point.read + point.write === 0) return;
     if (typeof e.uuid === "string") point.uuid = e.uuid;
     if (typeof m.id === "string") point.id = m.id;
     if (e.isSidechain === true) point.sidechain = true;
-    const price = pricingFor(point.model);
-    if (price) {
-      const c = usageCost(u, price);
+    const c = requestCost(point.model, u, ts);
+    if (c) {
       point.usd = c.totalUsd;
       point.promptUsd = c.promptUsd;
+      point.rates = c.rates;
+      point.modifiers = c.modifiers;
+      if (c.estimated) point.estimated = true;
+      if (c.changedOn) point.changedOn = c.changedOn;
     }
     out.push(point);
-    if (typeof m.id === "string") byId.set(m.id, { point, price });
+    if (typeof m.id === "string") byId.set(m.id, { point, u });
   });
   return out;
 }

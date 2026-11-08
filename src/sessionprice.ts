@@ -43,7 +43,7 @@ import { isGeminiChat } from "./gemini.js";
 import { subagentFiles } from "./subagents.js";
 import { tailUsage } from "./statusline.js";
 import { autoCompactsAt, detectColdResume, withResumeVerdict, type ResumeVerdict } from "./coldresume.js";
-import { formatUsd, pricingFor } from "./pricing.js";
+import { formatUsd, rateCard, ratesAt } from "./pricing.js";
 import { formatTokens } from "./tokens.js";
 
 /** Where the hook speaks unless CONTEXT_DOCTOR_SESSION_PRICE says otherwise. */
@@ -227,16 +227,19 @@ function perMessage(app: Tool, input: SessionPriceInput, now: number): Pick<Sess
       const items = app === "codex" ? codexFileSpend(input.transcript, 0) : geminiFileSpend(input.transcript, 0);
       const last = items[items.length - 1];
       const model = last?.model ?? input.model;
-      const p = pricingFor(model);
-      if (!last || !p) return {};
-      const tokens = last.input + last.read + last.write;
-      return { tokens, model, readUsd: (tokens * p.cacheReadPerM) / 1e6 };
+      const tokens = last ? last.input + last.read + last.write : 0;
+      // At the rate the next request bills: its prompt's tier (a long prompt's on OpenAI and Gemini Pro).
+      const card = rateCard(model, undefined, now);
+      if (!last || !card) return {};
+      return { tokens, model, readUsd: (tokens * ratesAt(card, tokens).cacheReadPerM) / 1e6 };
     }
     // Undefined right after a compaction: the new size is not known yet.
     const live = tailUsage(input.transcript);
     if (!live) return {};
     const model = live.model ?? input.model;
-    const p = pricingFor(model);
+    // As the next request bills: fast mode and US-only as the last one recorded, the tier of its prompt.
+    const card = rateCard(model, live.billing, now);
+    const p = card && ratesAt(card, live.tokens);
     // Claude Code compacts this very prompt itself: the figure is about to be wrong.
     if (!p || live.tokens >= (autoCompactsAt(model) ?? Infinity)) return {};
     const cold = withResumeVerdict(detectColdResume(input.transcript, now, undefined, 0), input.rv?.(), now);

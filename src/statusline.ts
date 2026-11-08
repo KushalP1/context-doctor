@@ -31,7 +31,7 @@
 
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { contextWindowFor, formatTokens } from "./tokens.js";
-import { CACHE_WRITE_1H, CACHE_WRITE_5M, formatUsd, pricingFor } from "./pricing.js";
+import { CACHE_WRITE_1H, CACHE_WRITE_5M, formatUsd, rateCard, ratesAt, type RecordedUsage } from "./pricing.js";
 import { recordLimits } from "./limits.js";
 import { recordMiss } from "./missledger.js";
 import { budgetStatus } from "./budget.js";
@@ -51,7 +51,7 @@ interface StatusInput {
     total_input_tokens?: number;
     context_window_size?: number;
     /** The last request's usage; null right after /compact, /clear and in a new session. */
-    current_usage?: { input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | null;
+    current_usage?: { input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; speed?: string; inference_geo?: string } | null;
   };
 }
 
@@ -73,7 +73,12 @@ interface LiveUsage {
   tokens: number;
   cacheShare?: number;
   model?: string;
+  /** What the last request recorded that changes its price (fast mode, US-only): the next one is billed alike. */
+  billing?: Pick<RecordedUsage, "speed" | "inference_geo">;
 }
+
+/** The fields of a usage that carry over to the next request's price. */
+const billingOf = (u: Record<string, unknown> | null | undefined): LiveUsage["billing"] => (u && (u.speed === "fast" || u.inference_geo === "us") ? { ...(u.speed === "fast" ? { speed: "fast" } : {}), ...(u.inference_geo === "us" ? { inference_geo: "us" } : {}) } : undefined);
 
 /** Newest assistant usage from the END of a transcript, without reading the file. */
 export function tailUsage(path: string, tailBytes = 256 * 1024): LiveUsage | undefined {
@@ -88,7 +93,7 @@ export function tailUsage(path: string, tailBytes = 256 * 1024): LiveUsage | und
       closeSync(fd);
     }
     for (const line of buf.toString("utf8").split("\n").reverse()) {
-      let entry: { type?: string; subtype?: string; isCompactSummary?: boolean; isSidechain?: boolean; message?: { usage?: Record<string, number>; model?: string } };
+      let entry: { type?: string; subtype?: string; isCompactSummary?: boolean; isSidechain?: boolean; message?: { usage?: Record<string, any>; model?: string } };
       try {
         entry = JSON.parse(line);
       } catch {
@@ -103,7 +108,10 @@ export function tailUsage(path: string, tailBytes = 256 * 1024): LiveUsage | und
       if (!usage) continue;
       const read = usage.cache_read_input_tokens ?? 0;
       const tokens = (usage.input_tokens ?? 0) + read + (usage.cache_creation_input_tokens ?? 0);
-      if (tokens > 0) return { tokens, cacheShare: read / tokens, model: entry.message?.model };
+      if (tokens > 0) {
+        const billing = billingOf(usage);
+        return { tokens, cacheShare: read / tokens, model: entry.message?.model, ...(billing ? { billing } : {}) };
+      }
     }
   } catch {
     /* unreadable: the caller shows nothing */
@@ -135,13 +143,17 @@ const MAX_EXPIRY_AHEAD_S = 2 * 3600;
  * 2x at an hour) where a warm one would read them (0.1x). The extra is the
  * price; tokens alone when the model has no price. Undefined when Claude Code
  * does not say (no `prompt_cache`, caching off, or right after a compaction
- * while the cache is cold).
+ * while the cache is cold). Priced as the next request bills (requestCost's
+ * rate card): `billing` (fast mode, US-only) as the last request recorded,
+ * and the tier of a prompt of `prompt` tokens (the re-cached ones when not
+ * given).
  */
-export function cacheClock(pc: PromptCache | null | undefined, model: string | undefined, nowMs = Date.now()): string | undefined {
+export function cacheClock(pc: PromptCache | null | undefined, model: string | undefined, nowMs = Date.now(), billing?: LiveUsage["billing"], prompt?: number): string | undefined {
   if (!pc || pc.caching_observed === false) return undefined;
   const r = pc.recache_tokens_if_cold;
   const tokens = typeof r === "number" && Number.isFinite(r) && r > 0 && r <= MAX_RECACHE_TOKENS ? r : undefined;
-  const price = pricingFor(model);
+  const card = rateCard(model, billing, nowMs);
+  const price = card && ratesAt(card, prompt ?? tokens ?? 0);
   const oneHour = pc.ttl === "1h";
   const extra = tokens !== undefined && price ? (tokens * (price.inputPerM * (oneHour ? CACHE_WRITE_1H : CACHE_WRITE_5M) - price.cacheReadPerM)) / 1e6 : undefined;
   const cost = tokens === undefined ? undefined : extra !== undefined && extra > 0 ? `+${formatUsd(extra)}` : `${formatTokens(tokens)} re-write`;
@@ -177,7 +189,8 @@ export function renderStatusLine(input: StatusInput, nowMs = Date.now(), budget?
   const fromPayload = cu ? (cu.input_tokens ?? 0) + (cu.cache_read_input_tokens ?? 0) + (cu.cache_creation_input_tokens ?? 0) : 0;
   if (cu && fromPayload > 0) {
     const read = cu.cache_read_input_tokens;
-    live = { tokens: fromPayload, cacheShare: read !== undefined ? read / fromPayload : undefined, model: input.model?.id };
+    const billing = billingOf(cu);
+    live = { tokens: fromPayload, cacheShare: read !== undefined ? read / fromPayload : undefined, model: input.model?.id, ...(billing ? { billing } : {}) };
   } else if (input.transcript_path) {
     live = tailUsage(input.transcript_path);
   }
@@ -195,7 +208,7 @@ export function renderStatusLine(input: StatusInput, nowMs = Date.now(), budget?
     }
     if (live.cacheShare !== undefined) parts.push(`cache ${Math.round(live.cacheShare * 100)}%`);
   }
-  const warmth = cacheClock(input.prompt_cache, input.model?.id ?? live?.model, nowMs);
+  const warmth = cacheClock(input.prompt_cache, input.model?.id ?? live?.model, nowMs, live?.billing, live?.tokens);
   if (warmth) parts.push(warmth);
   // The session's cost is true whatever the context is; show it on its own.
   // With a budget set, the period's spend across tools takes the session's cost's place: it includes it.

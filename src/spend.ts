@@ -21,7 +21,10 @@
  *    and an upper bound. Replies on Auto ("default") have no list price and
  *    are counted, not priced.
  *
- * Priced at pricing.ts's list prices (usageCost), as every report here is.
+ * Priced at pricing.ts's list prices with what each request recorded that
+ * changes its bill (requestCost: fast mode, US-only inference, a long
+ * prompt's tier, web searches, a price past its end date), as every report
+ * here is; the report says what the modifiers added.
  * Claude Code, Codex and Gemini CLI are read through the shared scan
  * (scan.ts), so a second run reads only what was appended since; Cursor's
  * replies are kept per chat until the chat changes.
@@ -39,7 +42,7 @@ import { existsSync, statSync } from "node:fs";
 import { claudeFileUsage, claudeUsageFiles, codexEventKey, codexSessionsRoot, rolloutFiles } from "./limits.js";
 import { listGeminiChats, readGeminiMessages } from "./gemini.js";
 import { cursorClaudeId, cursorUsage, SqliteUnavailableError } from "./cursor.js";
-import { hasKnownPrice, isUnbilledModel, openAIUsage, pricingFor, usageCost, type RecordedUsage } from "./pricing.js";
+import { addModifiers, isUnbilledModel, NO_MODIFIERS, openAIUsage, priceChangedText, requestCost, type Modifiers, type RecordedUsage } from "./pricing.js";
 import { pick, rowsOf, type Extractor } from "./scan.js";
 import { formatTokens } from "./tokens.js";
 import { withInvocation } from "./invocation.js";
@@ -69,8 +72,12 @@ export interface SpendItem {
   readUsd: number;
   outputUsd: number;
   priced: boolean;
-  /** Priced by its family's row, not one of its own (a new release, an id the table does not list): an estimate. */
+  /** Priced by its family's row, not one of its own (a new release, an id the table does not list), or past `changedOn`: an estimate. */
   estimated?: boolean;
+  /** Its model's price in the table changed on this day ("YYYY-MM-DD"), before the request: priced at what the page said would follow, an estimate. */
+  changedOn?: string;
+  /** What fast mode, US-only, a long prompt's tier and web searches added to its list price, inside `usd`; absent when nothing. */
+  modifiers?: Modifiers;
   /** Claude Code: run by a subagent (the Agent tool's). */
   subagent?: boolean;
   /** Claude Code: run by a workflow agent: its run, "<session>/<run>". */
@@ -100,12 +107,22 @@ function claudeProject(top: string): string {
   return projectFromDir(basename(dirname(top)));
 }
 
+/** Whether a request's modifiers added anything (kept on an item only then). */
+export const anyModifier = (m: Modifiers | undefined): m is Modifiers => Boolean(m && (m.fastUsd || m.geoUsd || m.longUsd || m.webSearchUsd || m.webSearches));
+
+/** An estimate's labels, and what the modifiers added, onto an item. */
+function label(item: SpendItem, c: { estimated?: boolean; changedOn?: string; modifiers?: Modifiers }): SpendItem {
+  if (c.estimated) item.estimated = true;
+  if (c.changedOn) item.changedOn = c.changedOn;
+  if (anyModifier(c.modifiers)) item.modifiers = c.modifiers;
+  return item;
+}
+
 /** `priceAs`: the id to price it by, when the model's own name is not one the table knows (Cursor's names for Claude). */
 function priced(base: Omit<SpendItem, "usd" | "inputUsd" | "writeUsd" | "readUsd" | "outputUsd" | "priced">, u: RecordedUsage, priceAs = base.model): SpendItem {
-  const price = pricingFor(priceAs);
-  if (!price) return { ...base, usd: 0, inputUsd: 0, writeUsd: 0, readUsd: 0, outputUsd: 0, priced: false };
-  const c = usageCost(u, price);
-  return { ...base, usd: c.totalUsd, inputUsd: c.inputUsd, writeUsd: c.writeUsd, readUsd: c.readUsd, outputUsd: c.outputUsd, priced: true, ...(hasKnownPrice(priceAs) ? {} : { estimated: true }) };
+  const c = requestCost(priceAs, u, base.ts);
+  if (!c) return { ...base, usd: 0, inputUsd: 0, writeUsd: 0, readUsd: 0, outputUsd: 0, priced: false };
+  return label({ ...base, usd: c.totalUsd, inputUsd: c.inputUsd, writeUsd: c.writeUsd, readUsd: c.readUsd, outputUsd: c.outputUsd, priced: true }, c);
 }
 
 // ---------------------------------------------------------------------------
@@ -131,15 +148,15 @@ export function claudeSpend(since: number, until = Infinity, tops?: string[], on
     const project = claudeProject(f.top);
     const session = basename(f.top, ".jsonl");
     for (const r of reqs) {
-      const price = pricingFor(r.model);
-      // claudeFileUsage priced it (writes by TTL); the split is what the drivers show.
+      const price = r.rates;
+      // claudeFileUsage priced it (requestCost: writes by TTL, its modifiers); the split is what the drivers show.
       const inputUsd = price ? (r.input * price.inputPerM) / 1e6 : 0;
       const readUsd = price ? (r.read * price.cacheReadPerM) / 1e6 : 0;
       const item: SpendItem = {
         tool: "claude", ts: r.ts, project, session, input: r.input, read: r.read, write: r.write, output: r.output,
-        usd: r.usd, inputUsd, readUsd, writeUsd: Math.max(0, r.promptUsd - inputUsd - readUsd), outputUsd: Math.max(0, r.usd - r.promptUsd), priced: Boolean(price),
+        usd: r.usd, inputUsd, readUsd, writeUsd: Math.max(0, r.promptUsd - inputUsd - readUsd), outputUsd: Math.max(0, r.usd - r.promptUsd - r.modifiers.webSearchUsd), priced: Boolean(price),
       };
-      if (price && !hasKnownPrice(r.model)) item.estimated = true;
+      label(item, r);
       if (r.model) item.model = r.model;
       if (f.run) item.workflow = `${session}/${f.run}`;
       else if (f.subagent || r.sidechain) item.subagent = true;
@@ -348,8 +365,12 @@ export interface SpendReport {
   models: Array<SpendRow & { model: string }>;
   /** Every local day of the window, oldest first. */
   daily: Array<SpendRow & { day: string }>;
-  /** The bill by what it paid for. */
-  parts: { inputUsd: number; writeUsd: number; readUsd: number; outputUsd: number };
+  /** The bill by what it paid for; web searches (Claude's, per use) only when there were any. */
+  parts: { inputUsd: number; writeUsd: number; readUsd: number; outputUsd: number; webSearchUsd?: number };
+  /** What billing modifiers added to the list prices, inside `usd` (fast mode, US-only, long-prompt tiers, web searches); absent when nothing. */
+  modifiers?: Modifiers;
+  /** Models whose price in the table changed on a day before some of their requests: those are priced at what the page said would follow, an estimate. */
+  priceChanged?: Array<{ model: string; on: string; requests: number; usd: number }>;
   sessions: Array<{ tool: Tool; project: string; session: string; model?: string; usd: number; requests: number; first: number; last: number }>;
   /** A tool that could not be read (Cursor without SQLite), and why. */
   skipped: Array<{ tool: Tool; reason: string }>;
@@ -377,9 +398,18 @@ export function summarizeSpend(items: SpendItem[], days: number, since: number, 
   const projects = new Map<string, SpendRow>(), models = new Map<string, SpendRow>(), daily = new Map<string, SpendRow>();
   const sessions = new Map<string, SpendReport["sessions"][number]>();
   const sessionModels = new Map<string, Map<string, number>>();
-  const parts = { inputUsd: 0, writeUsd: 0, readUsd: 0, outputUsd: 0 };
+  const parts: SpendReport["parts"] = { inputUsd: 0, writeUsd: 0, readUsd: 0, outputUsd: 0 };
   const runs = new Set<string>();
+  const mods: Modifiers = { ...NO_MODIFIERS };
+  const changed = new Map<string, NonNullable<SpendReport["priceChanged"]>[number]>();
   for (const it of items) {
+    if (it.modifiers) addModifiers(mods, it.modifiers);
+    if (it.changedOn) {
+      const k = `${it.model}\u0000${it.changedOn}`;
+      const c = changed.get(k) ?? changed.set(k, { model: it.model ?? "unknown", on: it.changedOn, requests: 0, usd: 0 }).get(k)!;
+      c.requests++;
+      c.usd += it.usd;
+    }
     const t = tools.get(it.tool) ?? tools.set(it.tool, { tool: it.tool, name: TOOL_NAME[it.tool], usd: 0, requests: 0, tokens: { input: 0, read: 0, write: 0, output: 0 }, unpriced: 0, unpricedTokens: 0, unpricedModels: [], ...(it.tool === "cursor" ? { estimate: true } : {}), ...(it.tool === "claude" ? { subagentUsd: 0 } : {}) }).get(it.tool)!;
     t.usd += it.usd;
     t.requests++;
@@ -395,7 +425,7 @@ export function summarizeSpend(items: SpendItem[], days: number, since: number, 
       t.unpricedTokens += it.input + it.read + it.write + it.output;
       const m = it.model ?? "unknown";
       if (!t.unpricedModels.includes(m)) t.unpricedModels.push(m);
-    } else if (it.estimated) {
+    } else if (it.estimated && !it.changedOn) {
       const e = (t.estimated ??= { requests: 0, usd: 0, models: [] });
       e.requests++;
       e.usd += it.usd;
@@ -427,6 +457,7 @@ export function summarizeSpend(items: SpendItem[], days: number, since: number, 
     const day = localDay(d.getTime());
     days_.push({ day, ...(daily.get(day) ?? { usd: 0, requests: 0, byTool: {} }) });
   }
+  if (mods.webSearchUsd > 0) parts.webSearchUsd = mods.webSearchUsd;
   return {
     days, since, until,
     usd: items.reduce((n, it) => n + it.usd, 0),
@@ -436,6 +467,8 @@ export function summarizeSpend(items: SpendItem[], days: number, since: number, 
     models: [...models].map(([model, r]) => ({ model, ...r })).sort(byUsd),
     daily: days_,
     parts,
+    ...(anyModifier(mods) ? { modifiers: mods } : {}),
+    ...(changed.size ? { priceChanged: [...changed.values()].sort((a, b) => b.usd - a.usd) } : {}),
     sessions: [...sessions.values()].sort(byUsd),
     skipped,
   };
@@ -482,6 +515,16 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 const shortDay = (day: string) => `${MONTHS[Number(day.slice(5, 7)) - 1]} ${day.slice(8, 10)}`;
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
+/** "fast mode +$4.10, US-only +$0.93, web searches $0.12 (12), long-prompt tier +$0.40": what each billing modifier added, the ones that added anything. */
+export function modifiersText(m: Modifiers): string {
+  return [
+    m.fastUsd > 0 ? `fast mode +${usd(m.fastUsd)}` : "",
+    m.geoUsd > 0 ? `US-only +${usd(m.geoUsd)}` : "",
+    m.webSearches > 0 ? `web searches ${usd(m.webSearchUsd)} (${m.webSearches.toLocaleString("en-US")})` : "",
+    m.longUsd > 0 ? `long-prompt tier +${usd(m.longUsd)}` : "",
+  ].filter(Boolean).join(", ");
+}
+
 /** The full report, kept within 80 columns. `top`: rows per list. */
 export function renderSpend(r: SpendReport, top = 8): string {
   const lines: string[] = [];
@@ -512,7 +555,9 @@ export function renderSpend(r: SpendReport, top = 8): string {
   const unpricedModels = new Set(r.tools.flatMap((t) => t.unpricedModels));
   // One priced by its family's row reads as the estimate it is.
   const estimatedModels = new Set(r.tools.flatMap((t) => t.estimated?.models ?? []));
-  list("By model", r.models.slice(0, top).map((m) => ({ name: m.model, usd: m.usd, ...(m.usd === 0 && unpricedModels.has(m.model) ? { tail: `not priced, ${m.requests.toLocaleString("en-US")} ${m.requests === 1 ? "request" : "requests"}` } : estimatedModels.has(m.model) ? { tail: "estimate: its family's price" } : {}) })), r.models.length - top);
+  // One priced past the day its price changed, likewise.
+  const changedOn = new Map((r.priceChanged ?? []).map((c) => [c.model, c.on]));
+  list("By model", r.models.slice(0, top).map((m) => ({ name: m.model, usd: m.usd, ...(m.usd === 0 && unpricedModels.has(m.model) ? { tail: `not priced, ${m.requests.toLocaleString("en-US")} ${m.requests === 1 ? "request" : "requests"}` } : estimatedModels.has(m.model) ? { tail: "estimate: its family's price" } : changedOn.has(m.model) ? { tail: `estimate: price changed ${changedOn.get(m.model)}` } : {}) })), r.models.length - top);
 
   // The last two weeks of the window, a bar each, scaled to the busiest.
   const recent = r.daily.slice(-14);
@@ -521,9 +566,11 @@ export function renderSpend(r: SpendReport, top = 8): string {
   for (const d of recent) lines.push(`  ${shortDay(d.day)}  ${usd(d.usd).padStart(9)}  ${peak > 0 ? "▮".repeat(Math.round((d.usd / peak) * 30)) : ""}`);
 
   lines.push("", "Where it goes");
-  const parts: Array<[string, number]> = [["cache writes", r.parts.writeUsd], ["cache reads", r.parts.readUsd], ["output", r.parts.outputUsd], ["uncached input", r.parts.inputUsd]];
+  const parts: Array<[string, number]> = [["cache writes", r.parts.writeUsd], ["cache reads", r.parts.readUsd], ["output", r.parts.outputUsd], ["uncached input", r.parts.inputUsd], ["web searches", r.parts.webSearchUsd ?? 0]];
   const partText = parts.filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${usd(v)} (${share(v, r.usd)})`);
   for (let i = 0; i < partText.length; i += 2) lines.push(`  ${partText.slice(i, i + 2).join(", ")}`);
+  // What the requests' own billing added to the list rates, already in the parts above.
+  if (r.modifiers) lines.push(`  Of it, billed above list rates: ${modifiersText(r.modifiers)}`);
   const claude = r.tools.find((t) => t.tool === "claude");
   if (claude?.subagentUsd) lines.push(`  Claude Code subagents ${usd(claude.subagentUsd)} (${share(claude.subagentUsd, r.usd)}): context-doctor subagents says which paid off`);
   if (claude?.workflowUsd) lines.push(`  Claude Code workflow agents ${usd(claude.workflowUsd)} (${share(claude.workflowUsd, r.usd)}), in ${runsText(claude.workflowRuns ?? 0)}`);
@@ -545,6 +592,11 @@ export function renderSpend(r: SpendReport, top = 8): string {
     const n = t.estimated.requests;
     notes.push(`${n.toLocaleString("en-US")} ${t.name} ${t.tool === "cursor" ? (n === 1 ? "reply" : "replies") : n === 1 ? "request" : "requests"} (${usd(t.estimated.usd)}) priced as ${n === 1 ? "its" : "their"} model's family, an estimate:`);
     notes.push(`  no list price of its own for ${t.estimated.models.slice(0, 3).join(", ")}${t.estimated.models.length > 3 ? " and others" : ""}.`);
+  }
+  if (r.priceChanged) {
+    const n = r.priceChanged.reduce((s, c) => s + c.requests, 0);
+    notes.push(`${n.toLocaleString("en-US")} ${n === 1 ? "request" : "requests"} (${usd(r.priceChanged.reduce((s, c) => s + c.usd, 0))}) priced past the day ${n === 1 ? "its" : "their"} model's price changed, an estimate:`);
+    notes.push(`  ${priceChangedText(r.priceChanged.map((c) => [c.model, c.on]))}.`);
   }
   if (r.tools.some((t) => t.estimate)) notes.push("Cursor records no cache split: its input is priced uncached, an upper bound.");
   for (const s of r.skipped) notes.push(`${TOOL_NAME[s.tool]} not read: ${s.reason}.`);
@@ -570,7 +622,9 @@ export function renderSpendShare(r: SpendReport): string {
   if (unpriced) lines.push(`Not in it: ${unpriced.toLocaleString("en-US")} ${unpriced === 1 ? "request" : "requests"} (${formatTokens(r.tools.reduce((n, t) => n + t.unpricedTokens, 0))} tokens) on models with no list price.`);
   const estimated = r.tools.reduce((n, t) => n + (t.estimated?.usd ?? 0), 0);
   if (r.tools.some((t) => t.estimated)) lines.push(`Of it, ${usd(estimated)} is on models priced as their family, an estimate.`);
-  const parts: Array<[string, number]> = [["cache writes", r.parts.writeUsd], ["cache reads", r.parts.readUsd], ["output", r.parts.outputUsd], ["uncached input", r.parts.inputUsd]];
+  if (r.priceChanged) lines.push(`Of it, ${usd(r.priceChanged.reduce((s, c) => s + c.usd, 0))} is on models priced past the day their price changed, an estimate.`);
+  if (r.modifiers) lines.push(`Billed above list rates: ${modifiersText(r.modifiers)}.`);
+  const parts: Array<[string, number]> = [["cache writes", r.parts.writeUsd], ["cache reads", r.parts.readUsd], ["output", r.parts.outputUsd], ["uncached input", r.parts.inputUsd], ["web searches", r.parts.webSearchUsd ?? 0]];
   const [bigPart, bigUsd] = parts.sort((a, b) => b[1] - a[1])[0];
   const busiest = [...r.daily].sort((a, b) => b.usd - a.usd)[0];
   if (r.models[0] && r.usd > 0) lines.push(`Top model ${r.models[0].model} (${share(r.models[0].usd, r.usd)}); the biggest part is ${bigPart} (${share(bigUsd, r.usd)}); busiest day ${usd(busiest.usd)}.`);

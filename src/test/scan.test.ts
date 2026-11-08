@@ -134,7 +134,7 @@ test("a damaged or foreign cache entry is a miss, and is replaced", () => {
   withCache((cache) => {
     const path = transcripts(history())[0];
     const good = rowsOf(path, REQUEST_ROWS);
-    const files = readdirSync(cache, { recursive: true }).map(String).filter((f) => f.endsWith(".json") && f.includes("requests.1"));
+    const files = readdirSync(cache, { recursive: true }).map(String).filter((f) => f.endsWith(".json") && f.includes("requests.2"));
     assert.equal(files.length, 1);
     const entry = join(cache, files[0]);
     const real = JSON.parse(readFileSync(entry, "utf8"));
@@ -176,24 +176,24 @@ test("pruning: other versions, gone or long-untouched transcripts and stray temp
       utimesSync(stale, new Date(Date.now() - 200 * 86_400_000), new Date(Date.now() - 200 * 86_400_000));
       const root = join(cache, "transcripts");
       const version = readdirSync(root).find((v) => v.startsWith("v"))!;
-      mkdirSync(join(root, "v0-0.0.1", "requests.1"), { recursive: true });
-      writeFileSync(join(root, "v0-0.0.1", "requests.1", "x.json"), "{}");
-      const tmp = join(root, version, "requests.1", "y.json.1.ab.tmp");
+      mkdirSync(join(root, "v0-0.0.1", "requests.2"), { recursive: true });
+      writeFileSync(join(root, "v0-0.0.1", "requests.2", "x.json"), "{}");
+      const tmp = join(root, version, "requests.2", "y.json.1.ab.tmp");
       writeFileSync(tmp, "");
       utimesSync(tmp, new Date(Date.now() - 2 * 3_600_000), new Date(Date.now() - 2 * 3_600_000));
       pruneScanCache(Date.now(), true);
       assert.deepEqual(readdirSync(root).filter((v) => !v.startsWith(".")), [version]);
-      const left = readdirSync(join(root, version, "requests.1"));
+      const left = readdirSync(join(root, version, "requests.2"));
       assert.equal(left.length, keep.length, "only the entries of transcripts still there and recent");
       // Over the cap: the oldest entries go until 80% of it.
-      const total = left.reduce((n, f) => n + statSync(join(root, version, "requests.1", f)).size, 0);
+      const total = left.reduce((n, f) => n + statSync(join(root, version, "requests.2", f)).size, 0);
       process.env.CONTEXT_DOCTOR_CACHE_MAX_MB = String(total / 2 / 1024 / 1024);
       try {
         pruneScanCache(Date.now(), true);
       } finally {
         delete process.env.CONTEXT_DOCTOR_CACHE_MAX_MB;
       }
-      assert.ok(readdirSync(join(root, version, "requests.1")).length < keep.length);
+      assert.ok(readdirSync(join(root, version, "requests.2")).length < keep.length);
       // Once a day unless forced.
       writeFileSync(join(root, "v0-0.0.1"), "");
       pruneScanCache(Date.now());
@@ -235,8 +235,8 @@ test("uninstall removes the transcript cache, and the cache folder once empty", 
   const home = mkdtempSync(join(tmpdir(), "cd-scan-uninst-"));
   try {
     const cache = join(home, ".cache", "context-doctor");
-    mkdirSync(join(cache, "transcripts", "v1-x", "requests.1"), { recursive: true });
-    writeFileSync(join(cache, "transcripts", "v1-x", "requests.1", "a.json"), "{}");
+    mkdirSync(join(cache, "transcripts", "v1-x", "requests.2"), { recursive: true });
+    writeFileSync(join(cache, "transcripts", "v1-x", "requests.2", "a.json"), "{}");
     const r = spawnSync(process.execPath, [join(here, "..", "cli.js"), "uninstall"], { env: cleanEnv(home), encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /Removed the transcript cache/);

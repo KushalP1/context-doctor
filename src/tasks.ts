@@ -22,7 +22,7 @@
 import { realModel } from "./tokens.js";
 import { basename } from "node:path";
 import { forEachLine, listSessions, outputSettler, replyCounter, isClaudeSession } from "./session.js";
-import { formatUsd, pricingFor, usageCost } from "./pricing.js";
+import { formatUsd, requestCost, type ModelPricing } from "./pricing.js";
 
 export interface SessionCost {
   path: string;
@@ -72,6 +72,8 @@ export interface Counted {
 export function sessionCost(path: string, since = 0, counted: Counted = { rows: new Set(), commits: new Set() }): SessionCost | undefined {
   let cwd: string | undefined, model: string | undefined;
   let start = Infinity, end = 0, usd = 0, requests = 0, commits = 0;
+  // The last counted reply's rates (requestCost's): its later rows settle its output at them.
+  let rates: ModelPricing | undefined;
   const commitCalls = new Map<string, number>();
   const sighting = replyCounter(counted.rows);
   const settle = outputSettler();
@@ -108,7 +110,7 @@ export function sessionCost(path: string, since = 0, counted: Counted = { rows: 
     if (seen === "repeat") {
       // A later row of a counted reply: only its final output count is new.
       const more = settle(e, false);
-      const price = more ? pricingFor(realModel(e.message.model) ?? model) : undefined;
+      const price = more ? rates : undefined;
       if (price) usd += (more * price.outputPerM) / 1e6;
       return;
     }
@@ -116,10 +118,11 @@ export function sessionCost(path: string, since = 0, counted: Counted = { rows: 
     const at = Date.parse(e.timestamp);
     if (Number.isFinite(at)) { start = Math.min(start, at); end = Math.max(end, at); }
     model = realModel(e.message.model) ?? model;
-    // Each request at its own model's price: one session can switch models.
-    const price = pricingFor(model);
-    if (!price) return;
-    usd += usageCost(e.message.usage, price).totalUsd;
+    // Each request at its own model's price, as billed: one session can switch models.
+    const c = requestCost(model, e.message.usage, Number.isFinite(at) ? at : undefined);
+    if (!c) return;
+    rates = c.rates;
+    usd += c.totalUsd;
     settle(e, true);
     requests++;
   });

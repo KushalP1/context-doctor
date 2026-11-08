@@ -17,7 +17,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { formatTokens } from "./tokens.js";
-import { formatUsd, pricingFor, usageCost } from "./pricing.js";
+import { formatUsd, requestCost, type ModelPricing } from "./pricing.js";
 import { forEachLine, outputSettler, replyCounter } from "./session.js";
 import { realModel } from "./tokens.js";
 
@@ -119,6 +119,8 @@ function summarize(path: string): SubagentSummary {
   let last: number | undefined;
   let cost = 0;
   let priced = true;
+  // The last reply's rates: its later rows settle its output at them.
+  let rates: ModelPricing | undefined;
   // One reply is written as several rows with the same usage; counting rows
   // doubled the calls and the bill (a real session: 6156 calls / $769 per
   // row against 3228 / $387 per reply).
@@ -157,7 +159,7 @@ function summarize(path: string): SubagentSummary {
       if (seen === "repeat") {
         // A later row of the same reply: only its final output count is new.
         const more = settle(e, false);
-        const p = more ? pricingFor(s.model) : undefined;
+        const p = more ? rates : undefined;
         s.outputTokens += more;
         if (p) cost += (more * p.outputPerM) / 1_000_000;
         return;
@@ -170,14 +172,12 @@ function summarize(path: string): SubagentSummary {
       s.inputBilledTokens += input + read + write;
       s.cacheReadTokens += read;
       s.outputTokens += out;
-      const p = pricingFor(s.model);
-      if (p) {
-        // Subagents write at the 5-minute TTL (1.25x), the main thread mostly
-        // at 1 hour (2x); the usage records which.
-        cost += usageCost(u, p).totalUsd;
-      } else {
-        priced = false;
-      }
+      // Subagents write at the 5-minute TTL (1.25x), the main thread mostly
+      // at 1 hour (2x); the usage records which. As billed: requestCost.
+      const c = requestCost(s.model, u, Number.isFinite(at) ? at : undefined);
+      rates = c?.rates;
+      if (c) cost += c.totalUsd;
+      else priced = false;
     }
   });
 
