@@ -39,7 +39,7 @@
 
 import { listSessions, isClaudeSession, replyCounter } from "./session.js";
 import { pick, rowsOf, slimUsage, type Extractor } from "./scan.js";
-import { cacheWriteSplit, pricingFor, usageCost, writeMultiplier, type RecordedUsage } from "./pricing.js";
+import { cacheWriteSplit, rateCard, ratesAt, requestCost, writeMultiplier, type RecordedUsage } from "./pricing.js";
 import { isCodeLike, realModel, tokensForLength } from "./tokens.js";
 import { subagentTranscripts } from "./cachettl.js";
 
@@ -101,7 +101,7 @@ function resultText(content: unknown): string | undefined {
 }
 
 export const TOOL_OUTPUT_ROWS: Extractor<{ ids: Record<string, number>; calls: Record<string, string> }> = {
-  id: "tool-output.1",
+  id: "tool-output.2",
   init: () => ({ ids: {}, calls: {} }),
   line(raw, row, out, st) {
     if (!raw.includes('"usage"') && !raw.includes('"tool_use"') && !raw.includes('"tool_result"') && !raw.includes("compact_boundary")) return;
@@ -150,8 +150,13 @@ export const TOOL_OUTPUT_ROWS: Extractor<{ ids: Record<string, number>; calls: R
   },
 };
 
-/** A request, priced: its prompt, rates and whether it counts (in the period, not a fork's copy, priced). */
-interface Req { k: "r"; prompt: number; readPerM: number; writePerM: number; cold: boolean; counted: boolean; billedUsd: number }
+/**
+ * A request, priced: its prompt, rates and whether it counts (in the
+ * period, not a fork's copy, priced). `lower`: on a long-prompt tier (Haiku
+ * 5.5 over 100k), the share of its prompt's price it would pay below
+ * `over` tokens, where all of it bills at the lower rates.
+ */
+interface Req { k: "r"; prompt: number; readPerM: number; writePerM: number; cold: boolean; counted: boolean; billedUsd: number; over?: number; lower?: number }
 /** A result: its length (or the size Claude Code saved), as code or prose, the model's tokenizer. */
 interface Res { k: "b" | "m"; n: number; c: number; p?: number; model?: string }
 type Step = Req | Res | { k: "c" };
@@ -192,14 +197,17 @@ function timeline(path: string, since: number, until: number, runRows: Set<strin
       model[th] = m;
       for (const x of unsized[th].splice(0)) x.model = m;
     }
-    const price = pricingFor(m);
+    const card = rateCard(m, u, at);
+    const price = card && ratesAt(card, prompt);
+    const below = card?.over !== undefined && prompt > card.over ? card.rates : undefined;
     out.push({
       k: "r", prompt,
       readPerM: price?.cacheReadPerM ?? 0,
       writePerM: (price?.inputPerM ?? 0) * writeMult,
       cold: num(u.cache_creation_input_tokens) > COLD_SHARE * prompt,
       counted: !!price && seen === "new" && at >= since && at < until,
-      billedUsd: price ? usageCost(u, price).promptUsd : 0,
+      billedUsd: requestCost(m, u, at)?.promptUsd ?? 0,
+      ...(below && price ? { over: card!.over, lower: below.inputPerM / price.inputPerM } : {}),
     });
   }
   return threads;
@@ -255,15 +263,20 @@ function walk(lines: Step[][], move: Mover, kind: "b" | "m"): CapReplay {
       // Never more than the request held.
       const held = live.reduce((n, x) => n + x.e, 0);
       const scale = held > s.prompt ? s.prompt / held : 1;
+      let here = 0;
       for (const x of live) {
         if (x.fresh && s.counted) { moved++; openUsd += (s.prompt * s.readPerM) / 1e6; }
         if (s.counted) {
           const t = x.e * scale;
           tokens += t;
-          savedUsd += (t * (x.fresh || s.cold ? s.writePerM : s.readPerM)) / 1e6;
+          const usd = (t * (x.fresh || s.cold ? s.writePerM : s.readPerM)) / 1e6;
+          savedUsd += usd;
+          here += usd;
         }
         x.fresh = false;
       }
+      // Under its tier's threshold now: the rest of its prompt bills at the lower rates too.
+      if (s.counted && s.over !== undefined && s.lower !== undefined && s.prompt - held * scale <= s.over) savedUsd += Math.max(0, s.billedUsd - here) * (1 - s.lower);
     }
   }
   return { moved, results, tokens, savedUsd, openUsd };

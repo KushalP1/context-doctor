@@ -35,7 +35,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "n
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pick, rowsOf, slimUsage, type Extractor } from "./scan.js";
-import { pricingFor, usageCost, type ModelPricing, type RecordedUsage } from "./pricing.js";
+import { pricingFor, rateCard, ratesAt, requestCost, usageCost, WEB_SEARCH_USD, type ModelPricing, type RecordedUsage } from "./pricing.js";
 import { realModel } from "./tokens.js";
 import { claudeDir } from "./claudedir.js";
 import { subagentTranscripts } from "./cachettl.js";
@@ -77,7 +77,7 @@ const READ_ONLY = new Set(["Explore", "Plan"]);
  * last row); the working folder once, to find the project's agent files.
  */
 export const SUBAGENT_ROWS: Extractor<{ out: Record<string, number>; cwd: boolean }> = {
-  id: "subagent-requests.1",
+  id: "subagent-requests.2",
   init: () => ({ out: {}, cwd: false }),
   line(raw, row, out, st) {
     const usage = raw.includes('"usage"');
@@ -200,9 +200,9 @@ export interface TypeReplay {
   billedUsd: number;
   /** The same requests with the ones the variable moves at the candidate model. */
   atCandidateUsd: number;
-  /** Every request of this type at Haiku 5.5's base rates (a floor: see over100k). */
+  /** Every request of this type at Haiku 5.5, a prompt over 100k at its higher rates. */
   atHaikuUsd: number;
-  /** Requests whose prompt was over 100k tokens, which Haiku 5.5 bills at a higher rate not priced here. */
+  /** Requests whose prompt was over 100k tokens, which Haiku 5.5 bills at its higher rates (in atHaikuUsd). */
   over100k: number;
   moves: boolean;
   why?: string;
@@ -260,13 +260,24 @@ export function agentTypeOf(transcript: string): string {
 
 const tokens = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
 const promptTokens = (u: RecordedUsage) => tokens(u?.input_tokens) + tokens(u?.cache_read_input_tokens) + tokens(u?.cache_creation_input_tokens);
-/** The rates of a mix of models (shares adding to 1); undefined when none has a price. */
-function blend(mix: Record<string, number>): ModelPricing | undefined {
-  const parts = Object.entries(mix).map(([m, w]) => [pricingFor(m), w] as const).filter((x): x is readonly [ModelPricing, number] => !!x[0] && x[1] > 0);
+/**
+ * The rates of a mix of models (shares adding to 1), each as it would bill
+ * `u` (its tier, US-only: rateCard) when given; undefined when none has a price.
+ */
+function blend(mix: Record<string, number>, u?: RecordedUsage, at?: number): ModelPricing | undefined {
+  const rates = (m: string) => { const c = rateCard(m, u, at); return c && ratesAt(c, promptTokens(u ?? {})); };
+  const parts = Object.entries(mix).map(([m, w]) => [rates(m), w] as const).filter((x): x is readonly [ModelPricing, number] => !!x[0] && x[1] > 0);
   const total = parts.reduce((s, [, w]) => s + w, 0);
   if (!(total > 0)) return undefined;
   const rate = (k: keyof ModelPricing) => parts.reduce((s, [p, w]) => s + (p[k] * w) / total, 0);
   return { inputPerM: rate("inputPerM"), outputPerM: rate("outputPerM"), cacheReadPerM: rate("cacheReadPerM") };
+}
+
+/** A request at the baseline mix (prices are linear in each rate: the blend of its costs), web searches as any Claude model bills them. */
+function atBaseline(base: ModelPricing, u: RecordedUsage, at: number, mix?: Record<string, number>): { totalUsd: number; rates: ModelPricing } {
+  const rates = (mix && blend(mix, u, at)) || base;
+  const searches = Number(u?.server_tool_use?.web_search_requests) > 0 ? Number(u.server_tool_use!.web_search_requests) : 0;
+  return { totalUsd: usageCost(u, rates).totalUsd + searches * WEB_SEARCH_USD, rates };
 }
 
 const cheaper = (a: ModelPricing, b: ModelPricing) => a.inputPerM < b.inputPerM || (a.inputPerM === b.inputPerM && a.outputPerM < b.outputPerM);
@@ -281,7 +292,6 @@ const cheaper = (a: ModelPricing, b: ModelPricing) => a.inputPerM < b.inputPerM 
 export function replaySubagentModels(opts: SubagentModelOptions): SubagentModelReplay {
   const candidate = opts.candidate ?? SUBAGENT_CANDIDATE;
   const cand = pricingFor(candidate)!;
-  const haiku = pricingFor(HAIKU)!;
   const base = opts.baseline ? blend(opts.baseline) : undefined;
   const until = opts.until ?? Infinity;
   const home = opts.home ?? homedir();
@@ -310,7 +320,7 @@ export function replaySubagentModels(opts: SubagentModelOptions): SubagentModelR
     // One project's file may name a model where another's does not: the type moves where any of its runs does.
     if (how.moves) t.moves = true;
     // Per reply of this file: the prices its output top-ups are charged at.
-    const priced = new Map<string, { billed: ModelPricing; other: ModelPricing; model: string }>();
+    const priced = new Map<string, { billed: ModelPricing; other: ModelPricing; haiku: ModelPricing; cand: ModelPricing; model: string }>();
     let counted = false;
     for (const r of rows) {
       if (r?.t === "o") {
@@ -318,8 +328,8 @@ export function replaySubagentModels(opts: SubagentModelOptions): SubagentModelR
         if (!q) continue;
         t.billedUsd += (r.more * q.billed.outputPerM) / 1e6;
         t.atCandidateUsd += (r.more * q.other.outputPerM) / 1e6;
-        t.atHaikuUsd += (r.more * haiku.outputPerM) / 1e6;
-        if (how.moves) add(beforeBy, q.model, (r.more * cand.outputPerM) / 1e6);
+        t.atHaikuUsd += (r.more * q.haiku.outputPerM) / 1e6;
+        if (how.moves) add(beforeBy, q.model, (r.more * q.cand.outputPerM) / 1e6);
         continue;
       }
       if (r?.t !== "r") continue;
@@ -333,21 +343,24 @@ export function replaySubagentModels(opts: SubagentModelOptions): SubagentModelR
         seen.add(r.id);
       }
       const price = pricingFor(model);
-      if (!price) { unpriced++; continue; }
       const u = r.usage as RecordedUsage;
-      const billed = usageCost(u, price).totalUsd;
-      const target = base ?? cand;
+      // Each arm as that model would bill these tokens (requestCost): its tier (Haiku 5.5 over 100k), US-only, web searches.
+      const asBilled = requestCost(model, u, at);
+      if (!price || !asBilled) { unpriced++; continue; }
+      const atCand = requestCost(candidate, u, at)!;
+      const atHaiku = requestCost(HAIKU, u, at)!;
+      const billed = asBilled.totalUsd;
       const move = how.moves && (base ? true : cheaper(cand, price));
-      const other = move ? target : price;
+      const other = move ? base ? atBaseline(base, u, at, opts.baseline) : atCand : asBilled;
       t.requests++;
       counted = true;
       t.billedUsd += billed;
-      t.atCandidateUsd += move ? usageCost(u, other).totalUsd : billed;
-      t.atHaikuUsd += usageCost(u, haiku).totalUsd;
+      t.atCandidateUsd += move ? other.totalUsd : billed;
+      t.atHaikuUsd += atHaiku.totalUsd;
       if (promptTokens(u) > HAIKU_TIER) t.over100k++;
       if (move) add(movedBy, model, billed);
-      if (how.moves) add(beforeBy, model, usageCost(u, cand).totalUsd);
-      if (r.id) priced.set(r.id, { billed: price, other, model });
+      if (how.moves) add(beforeBy, model, atCand.totalUsd);
+      if (r.id) priced.set(r.id, { billed: asBilled.rates, other: other.rates, haiku: atHaiku.rates, cand: atCand.rates, model });
     }
     if (counted) t.agents++;
   }
@@ -398,10 +411,8 @@ export function renderSubagentTypes(r: SubagentModelReplay): string[] {
     const over = ro.reduce((s, t) => s + t.over100k, 0);
     const reqs = ro.reduce((s, t) => s + t.requests, 0);
     const what = `Read-only work (${ro.map((t) => t.type).join(", ")}, ${usd(billed)}) at Haiku 5.5`;
-    // Haiku 5.5's rates hold to 100k-token prompts; above that it bills a tier the price table does not hold.
-    if (over === 0) out.push(`${what}: ~${usd(haiku)}.`);
-    else if (over <= 0.1 * reqs) out.push(`${what}: over ~${usd(haiku)} (${over} of ${reqs} requests had prompts over 100k tokens, which Haiku bills higher).`);
-    else out.push(`${what}: not priced, ${over} of ${reqs} requests had prompts over 100k tokens, where Haiku bills a higher rate.`);
+    // Haiku 5.5's rates hold to 100k-token prompts; a longer one bills all of it at 5x, priced in.
+    out.push(`${what}: ~${usd(haiku)}${over ? ` (${over} of ${reqs} requests had prompts over 100k tokens, at Haiku's higher rates for those)` : ""}.`);
     out.push("Only an agent of your own runs there (`model: haiku` in its file); the built-ins keep the main conversation's model.");
   }
   return out;

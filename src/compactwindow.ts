@@ -25,7 +25,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { listSessions, replyCounter, isClaudeSession } from "./session.js";
-import { cacheWriteSplit, pricingFor, usageCost, writeMultiplier } from "./pricing.js";
+import { cacheWriteSplit, rateCard, ratesAt, requestCost, writeMultiplier, type ModelPricing, type RateCard } from "./pricing.js";
 import { realModel } from "./tokens.js";
 import { backupOnce } from "./install.js";
 import { ABSENT, readSettings, setJsonPath, withSettingsLock, writeAtomic } from "./settingsedit.js";
@@ -75,14 +75,18 @@ export interface CompactWindowReport {
 }
 
 /**
- * A request with its own model's prices (USD per 1M: input, cache read,
- * output), or a compaction. `copy`: already counted from another transcript
- * (a fork copies its parent's history); it still shapes the replay, it is
- * not billed twice.
+ * A request with its own rate card (its model's prices, fast mode and
+ * US-only as it recorded them, and a long-prompt tier the replay applies to
+ * each simulated prompt: a smaller window can take a Haiku 5.5 prompt under
+ * 100k, where all of it bills at the lower rates), or a compaction. `copy`:
+ * already counted from another transcript (a fork copies its parent's
+ * history); it still shapes the replay, it is not billed twice.
  */
 type Req =
-  | { at: number; prompt: number; inPerM: number; readPerM: number; outPerM: number; copy: boolean; billedUsd: number }
+  | { at: number; prompt: number; card?: RateCard; copy: boolean; billedUsd: number }
   | { compact: true; copy: boolean; idle?: boolean };
+
+const UNPRICED: ModelPricing = { inputPerM: 0, outputPerM: 0, cacheReadPerM: 0 };
 
 /**
  * `writeMult`: what this session pays to write a token to the cache,
@@ -119,12 +123,12 @@ function readRequests(path: string, runRows?: Set<string>): { reqs: Req[]; write
     if (!(prompt > 0) || !Number.isFinite(at)) return;
     // Each request at its own model's price; "<synthetic>" rows carry no usage.
     model = realModel(e.message.model) ?? model;
-    const p = pricingFor(model);
-    if (p) priced = true;
+    const card = rateCard(model, u, at);
+    if (card) priced = true;
     const w = cacheWriteSplit(u);
     writes5m += w.fiveMinute;
     writes1h += w.oneHour;
-    reqs.push({ at, prompt, inPerM: p?.inputPerM ?? 0, readPerM: p?.cacheReadPerM ?? 0, outPerM: p?.outputPerM ?? 0, copy: seen === "copy", billedUsd: p ? usageCost(u, p).promptUsd : 0 });
+    reqs.push({ at, prompt, ...(card ? { card } : {}), copy: seen === "copy", billedUsd: requestCost(model, u, at)?.promptUsd ?? 0 });
   });
   return { reqs, writeMult: writeMultiplier(writes5m, writes1h), priced };
 }
@@ -164,11 +168,14 @@ function replay(reqs: Req[], window: number, since: number, reread = 0, writeMul
     // still shape both arms; only the rest are billed.
     const counted = r.at >= since && !r.copy;
     const cold = prevAt === undefined || r.at - prevAt > TTL_MS;
-    const write = writeMult * r.inPerM;
+    // Each prompt, real or simulated, at its own tier's rates.
+    const rates = (ctx: number) => (r.card ? ratesAt(r.card, ctx) : UNPRICED);
     const cost = (ctx: number, prev: number | undefined) => {
+      const p = rates(ctx);
+      const write = writeMult * p.inputPerM;
       if (cold) return write * ctx;
       const fresh = prev === undefined || ctx < prev ? ctx : ctx - prev;
-      return r.readPerM * (ctx - fresh) + write * fresh;
+      return p.cacheReadPerM * (ctx - fresh) + write * fresh;
     };
     if (counted) base += cost(r.prompt, prevActual);
     let ctx = r.prompt - removed;
@@ -177,7 +184,8 @@ function replay(reqs: Req[], window: number, since: number, reread = 0, writeMul
     if (ctx < AFTER_COMPACT && removed > 0) { removed = 0; ctx = r.prompt; }
     let simPrev = prevSim;
     if (ctx >= TRIGGER_SHARE * window) {
-      if (counted) { sim += r.readPerM * ctx + r.outPerM * SUMMARY_OUTPUT + write * reread; extra++; }
+      const p = rates(ctx);
+      if (counted) { sim += p.cacheReadPerM * ctx + p.outputPerM * SUMMARY_OUTPUT + writeMult * p.inputPerM * reread; extra++; }
       removed = r.prompt - AFTER_COMPACT - reread;
       ctx = AFTER_COMPACT + reread;
       simPrev = undefined; // everything after a compaction is new to the cache

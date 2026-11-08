@@ -31,7 +31,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { forEachLine, replyCounter, textOf } from "./session.js";
 import { pick, rowsOf, slimUsage, type Extractor } from "./scan.js";
-import { cacheWriteSplit, pricingFor, formatUsd, writeMultiplier, type ModelPricing } from "./pricing.js";
+import { cacheWriteSplit, formatUsd, rateCard, ratesAt, writeMultiplier, type ModelPricing, type RateCard } from "./pricing.js";
 import { contextWindowFor, formatTokens, isCodeLike, realModel } from "./tokens.js";
 import { claudeDir } from "./claudedir.js";
 
@@ -72,7 +72,7 @@ export function isIdleCompactNotice(e: any): boolean {
  * reader meets it as a repeat of that reply and skips it.
  */
 export const REQUEST_ROWS: Extractor<{ ids: Record<string, number>; user: boolean }> = {
-  id: "requests.1",
+  id: "requests.2",
   init: () => ({ ids: {}, user: false }),
   line(raw, row, out, st) {
     let e: any;
@@ -265,7 +265,9 @@ export function detectColdResume(path: string, now = Date.now(), idleMs?: number
       const gate = idleMs ?? (ttl ?? HOUR_MS) + COLD_MARGIN_MS;
       if (idle < gate || tokens < minTokens) return undefined;
       const model = realModel(e.message?.model);
-      const p = pricingFor(model);
+      // As the resuming request bills: fast mode and US-only as the last one recorded, its prompt's tier.
+      const card = rateCard(model, u, now);
+      const p = card && ratesAt(card, tokens);
       // The rebuild is written at the TTL this session writes at: Claude
       // Code's main thread has mostly written the 1-hour cache (2x input,
       // 97% of the author's main-thread writes), which a flat 1.25x
@@ -377,7 +379,7 @@ export interface ColdResumeEvent {
  */
 export function coldResumeEvents(path: string, idleMs?: number, minTokens = COLD_MIN_TOKENS, runRows?: Set<string>): ColdResumeEvent[] {
   /** `ttl`: how long the cache this request left behind lives (see writtenTtlMs). */
-  type Req = { at: number; total: number; price?: ModelPricing; copy: boolean; ttl: number } | "compact";
+  type Req = { at: number; total: number; card?: RateCard; copy: boolean; ttl: number } | "compact";
   let ttl = HOUR_MS;
   const reqs: Req[] = [];
   let model: string | undefined, writes5m = 0, writes1h = 0;
@@ -397,7 +399,7 @@ export function coldResumeEvents(path: string, idleMs?: number, minTokens = COLD
     writes5m += w.fiveMinute;
     writes1h += w.oneHour;
     ttl = writtenTtlMs(u) ?? ttl;
-    reqs.push({ at, total, price: pricingFor(model), copy: seen === "copy", ttl });
+    reqs.push({ at, total, card: rateCard(model, u, at), copy: seen === "copy", ttl });
   });
   const mix = writeMultiplier(writes5m, writes1h);
   const real = reqs.filter((r) => r !== "compact");
@@ -409,20 +411,26 @@ export function coldResumeEvents(path: string, idleMs?: number, minTokens = COLD
     // Cold once the gap outlives the cache the previous request left behind.
     const gate = (r: { ttl: number }) => idleMs ?? r.ttl + COLD_MARGIN_MS;
     if (b.at - a.at <= gate(a) || b.total < minTokens) continue;
-    if (b.copy || !b.price) continue;
+    if (b.copy || !b.card) continue;
+    const price = ratesAt(b.card, b.total);
     const removed = Math.max(0, b.total - AFTER_COMPACT_TOKENS);
     let saved = 0, n = 0, prev: { at: number; ttl: number } = b;
     for (const c of reqs.slice(i + 1)) {
       if (c === "compact") break;
       if (c.at - prev.at > gate(prev) && c.total >= minTokens) break;
-      const p = c.price ?? b.price;
-      saved += removed * (c.at - prev.at > prev.ttl ? mix * p.inputPerM : p.cacheReadPerM);
+      const card = c.card ?? b.card;
+      const cold = c.at - prev.at > prev.ttl;
+      const per = (p: ModelPricing) => (cold ? mix * p.inputPerM : p.cacheReadPerM);
+      // A long-prompt tier: the smaller prompt may bill all of it at the lower rates.
+      const after = Math.max(0, c.total - removed);
+      const hi = ratesAt(card, c.total), lo = ratesAt(card, after);
+      saved += hi === lo ? removed * per(hi) : c.total * per(hi) - after * per(lo);
       prev = c;
       n++;
     }
     // The compaction re-reads the context just rebuilt and writes a summary;
     // the next request writes the fresh context.
-    const cost = b.total * b.price.cacheReadPerM + SUMMARY_OUTPUT_TOKENS * b.price.outputPerM + mix * AFTER_COMPACT_TOKENS * b.price.inputPerM;
+    const cost = b.total * price.cacheReadPerM + SUMMARY_OUTPUT_TOKENS * price.outputPerM + mix * AFTER_COMPACT_TOKENS * ratesAt(b.card, AFTER_COMPACT_TOKENS).inputPerM;
     events.push({ at: b.at, tokens: b.total, messagesAfter: n, netUsd: (saved - cost) / 1e6 });
   }
   return events;

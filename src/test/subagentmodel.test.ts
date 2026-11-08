@@ -34,12 +34,14 @@ test("replay: every request as billed and at Sonnet 5.5, only for the types CLAU
   assert.match(by.reviewer.why!, /model: haiku/);
   assert.equal(by.helper.moves, true);
   assert.match(by.mystery.why!, /not found/);
-  // Every prompt here is 211k tokens: past Haiku 5.5's 100k tier, so read-only work is not priced at Haiku.
+  // Every prompt here is 211k tokens: past Haiku 5.5's 100k tier, so read-only work at Haiku is
+  // priced at its higher rates ($0.50 / $0.05 / $2.50; Anthropic's page, read 2026-11-08).
   assert.equal(by.Explore.over100k, 1);
+  near(by.Explore.atHaikuUsd, (1000 * 0.5 + 200_000 * 0.05 + 17_000 * 0.5 + 1000 * 2.5) / 1e6, "Explore at Haiku 5.5, over 100k");
   const lines = renderSubagentTypes(r).join("\n");
   assert.match(lines, /general-purpose\s+3\s+\$0\.\d\d\s+\$0\.\d\d/);
   assert.match(lines, /Explore .*unchanged: built in, on the main conversation's model/);
-  assert.match(lines, /Haiku 5\.5: not priced, 1 of 1 requests had prompts over 100k/);
+  assert.match(lines, /Haiku 5\.5: ~\$0\.02 \(1 of 1 requests had prompts over 100k tokens, at Haiku's higher rates for those\)/);
   assert.match(lines, /`model: haiku` in its file/);
 
   // CLAUDE_CODE_SUBAGENT_MODEL_FORCE: the variable wins over the definitions too (forks still inherit).
