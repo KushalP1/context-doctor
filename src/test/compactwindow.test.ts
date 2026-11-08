@@ -51,6 +51,28 @@ test("replay: a session growing to 900k saves with a 400k window and compacts wh
   assert.ok(Math.abs(w1m.savedUsd) < 1e-9, "and changes nothing");
 });
 
+test("replay: a window that keeps Haiku 5.5 prompts under 100k prices each simulated request at the lower tier", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cd-acw-tier-"));
+  const start = Date.now() - 86_400_000;
+  /** 40 requests a minute apart, context growing 60k -> ~255k, on `model`. */
+  const session = (model: string) => {
+    const p = join(dir, `${model}.jsonl`);
+    const lines = Array.from({ length: 40 }, (_, i) => ({ type: "assistant", timestamp: new Date(start + i * 60_000).toISOString(), message: { id: `${model}-${i}`, model, content: [{ type: "text", text: "ok" }], usage: { input_tokens: 5, cache_read_input_tokens: 60_000 + i * 5_000 - 5, cache_creation_input_tokens: 0, output_tokens: 10 } } }));
+    writeFileSync(p, lines.map((l) => JSON.stringify(l)).join("\n"));
+    return p;
+  };
+  // Haiku 4.5 has one rate at every length: the share saved is the replay's alone.
+  const flat = estimateCompactWindows([100_000], 30, [session("claude-haiku-4-5")]).estimates[0];
+  // Haiku 5.5 bills a prompt over 100k at 5x (Anthropic's page, read 2026-11-08): compacting under it saves that too.
+  const tiered = estimateCompactWindows([100_000], 30, [session("claude-haiku-5-5")]).estimates[0];
+  assert.ok(flat.compactions > 0 && tiered.compactions === flat.compactions, "the same compactions");
+  assert.ok(tiered.savedPct > flat.savedPct + 0.2, `the tier's saving counted: ${tiered.savedPct} vs ${flat.savedPct}`);
+  // As billed: the 28 requests over 100k at $0.05 a million read, the rest at $0.01.
+  const reads = Array.from({ length: 40 }, (_, i) => 60_000 + i * 5_000 - 5);
+  const billed = reads.reduce((s, r) => s + (r + 5 > 100_000 ? 5 * 0.5 + r * 0.05 : 5 * 0.1 + r * 0.01), 0) / 1e6;
+  assert.ok(Math.abs(tiered.baselineUsd - billed) < 1e-9, `${tiered.baselineUsd} vs ${billed}`);
+});
+
 test("render: the current window is shown even with no history to replay", () => {
   const empty = estimateCompactWindows([400_000], 30, []);
   const text = renderCompactWindows(empty, 250_000);
