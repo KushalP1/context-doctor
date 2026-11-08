@@ -31,6 +31,12 @@ export interface HttpGuard {
     /** Host names (lowercase, no port, no brackets) accepted in Host; "*" accepts any. */
     hosts: Set<string> | "*";
     origins: Set<string>;
+    /**
+     * Accept any IP address in Host too (the proxy): DNS rebinding needs a
+     * host name the attacker controls, and a client of a proxy published from
+     * a container may call it by its address.
+     */
+    ipLiterals?: boolean;
 }
 /** A Host header's or URL's host name: lowercase, no port, no brackets, no trailing dot. */
 export declare function hostName(hostHeader: string): string;
@@ -39,7 +45,9 @@ export declare function hostName(hostHeader: string): string;
  * --allowed-origins (comma lists) and the CONTEXT_DOCTOR_ALLOWED_HOSTS and
  * CONTEXT_DOCTOR_ALLOWED_ORIGINS environment variables.
  */
-export declare function makeGuard(bindHost: string, allowedHosts?: string, allowedOrigins?: string, env?: NodeJS.ProcessEnv): HttpGuard;
+export declare function makeGuard(bindHost: string, allowedHosts?: string, allowedOrigins?: string, env?: NodeJS.ProcessEnv, opts?: {
+    ipLiterals?: boolean;
+}): HttpGuard;
 /** Why this request may not reach /mcp, or undefined when it may. */
 export declare function refusal(guard: HttpGuard, headers: IncomingMessage["headers"]): string | undefined;
 /**

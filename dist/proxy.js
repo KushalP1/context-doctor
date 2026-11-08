@@ -21,6 +21,7 @@ import { formatUsd, inputCostUsd, pricingFor } from "./pricing.js";
 import { recordLedger } from "./ledger.js";
 import { minCacheableTokens } from "./cacheplan.js";
 import { withPromptCacheKey } from "./cachekey.js";
+import { makeGuard, refusal } from "./httpguard.js";
 /** Default request body cap: far above any real request (a 1M-token context is ~4 MB of JSON, images aside). */
 export const DEFAULT_MAX_BODY_BYTES = 100 * 1024 * 1024;
 /** Reported by /health so `autopilot status` can tell an outdated service from a current one. */
@@ -245,6 +246,8 @@ export function startProxy(opts = {}) {
         stats.advice.push(msg);
         console.error(`[context-doctor] cache advisor: ${msg}`);
     };
+    /** Host and Origin checks: a web page that rebinds its name to this address gets nothing. */
+    const guard = makeGuard(opts.host ?? "127.0.0.1", opts.token ? "*" : opts.allowedHosts, opts.allowedOrigins, process.env, { ipLiterals: true });
     /** Requests still being answered, so a shutdown can let them finish. */
     let inFlight = 0;
     const server = http.createServer(async (req, res) => {
@@ -264,6 +267,13 @@ export function startProxy(opts = {}) {
             if (url === "/health") {
                 res.setHeader("content-type", "application/json");
                 res.end(JSON.stringify({ ok: true, service: "context-doctor-proxy", autopilot: Boolean(opts.autopilot), version: PROXY_VERSION }));
+                return;
+            }
+            const refused = refusal(guard, req.headers);
+            if (refused) {
+                res.statusCode = 403;
+                res.setHeader("content-type", "application/json");
+                res.end(JSON.stringify({ error: `context-doctor proxy: ${refused}` }));
                 return;
             }
             if (opts.token) {
@@ -718,6 +728,8 @@ export function startProxy(opts = {}) {
     server.listen(port, host, () => {
         // Print the token as <token>, never the value: this log is what people paste into bug reports.
         const prefix = opts.token ? "/t/<token>" : "";
+        // The port it got: with --port 0 the system picks one.
+        const port = server.address()?.port ?? opts.port ?? 8787;
         console.error(`context-doctor proxy listening on http://${host}:${port}`);
         // 127.0.0.1, not localhost: on macOS another program can hold the same
         // port on :: or ::1 beside this one, and `localhost` may resolve there.

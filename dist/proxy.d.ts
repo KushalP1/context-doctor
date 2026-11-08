@@ -33,6 +33,17 @@ export interface ProxyOptions extends OptimizeOptions {
      */
     token?: string;
     /**
+     * Host names besides loopback, an IP address and `host` that requests may
+     * name in their Host header (comma list; also CONTEXT_DOCTOR_ALLOWED_HOSTS;
+     * `*` for any), and origins a browser page may call from besides loopback
+     * ones (also CONTEXT_DOCTOR_ALLOWED_ORIGINS). A page that rebinds its own
+     * name to 127.0.0.1 is refused, as by the MCP server's --http (httpguard.ts).
+     * With a token, Host is not checked: the token is the guard, and a tunnel's
+     * name is whatever it is.
+     */
+    allowedHosts?: string;
+    allowedOrigins?: string;
+    /**
      * Autopilot: instead of the general strategies, run only the cache-aware
      * stale-tool-output clearing (autoclear.ts), which replays of real sessions
      * showed never costs more than it saves. Anthropic Messages, OpenAI Chat

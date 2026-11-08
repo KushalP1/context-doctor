@@ -20,6 +20,7 @@
  *    then handed to the transport, so no request can make the server buffer
  *    an unbounded body.
  */
+import { isIP } from "node:net";
 export const HTTP_LIMITS = { bodyBytes: 10 * 1024 * 1024, bodyMs: 30_000 };
 /** Origins a browser may call from without being listed: ChatGPT's. */
 export const DEFAULT_ALLOWED_ORIGINS = ["https://chatgpt.com", "https://chat.openai.com"];
@@ -41,17 +42,17 @@ export function hostName(hostHeader) {
  * --allowed-origins (comma lists) and the CONTEXT_DOCTOR_ALLOWED_HOSTS and
  * CONTEXT_DOCTOR_ALLOWED_ORIGINS environment variables.
  */
-export function makeGuard(bindHost, allowedHosts, allowedOrigins, env = process.env) {
+export function makeGuard(bindHost, allowedHosts, allowedOrigins, env = process.env, opts = {}) {
     const extra = [...list(allowedHosts), ...list(env.CONTEXT_DOCTOR_ALLOWED_HOSTS)];
     const origins = new Set([...DEFAULT_ALLOWED_ORIGINS, ...list(allowedOrigins), ...list(env.CONTEXT_DOCTOR_ALLOWED_ORIGINS)].map((o) => o.toLowerCase().replace(/\/+$/, "")));
     if (extra.includes("*"))
-        return { hosts: "*", origins };
+        return { hosts: "*", origins, ipLiterals: opts.ipLiterals };
     const bind = hostName(bindHost);
     const hosts = new Set([...LOOPBACK_HOSTS, ...extra.map(hostName)]);
     // A specific bind address or name is one the server answers to; a wildcard is not a name.
     if (bind && bind !== "0.0.0.0" && bind !== "::")
         hosts.add(bind);
-    return { hosts, origins };
+    return { hosts, origins, ipLiterals: opts.ipLiterals };
 }
 /** Why this request may not reach /mcp, or undefined when it may. */
 export function refusal(guard, headers) {
@@ -59,7 +60,7 @@ export function refusal(guard, headers) {
         const host = hostName(String(headers.host ?? ""));
         if (!host)
             return "the request has no Host header";
-        if (!guard.hosts.has(host)) {
+        if (!guard.hosts.has(host) && !(guard.ipLiterals && isIP(host))) {
             return `Host "${host}" is not one this server answers to. Behind a tunnel or under a host name, start it with --allowed-hosts ${host}`;
         }
     }

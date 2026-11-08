@@ -22,6 +22,7 @@
  */
 
 import type { IncomingMessage } from "node:http";
+import { isIP } from "node:net";
 
 export const HTTP_LIMITS = { bodyBytes: 10 * 1024 * 1024, bodyMs: 30_000 };
 
@@ -34,6 +35,12 @@ export interface HttpGuard {
   /** Host names (lowercase, no port, no brackets) accepted in Host; "*" accepts any. */
   hosts: Set<string> | "*";
   origins: Set<string>;
+  /**
+   * Accept any IP address in Host too (the proxy): DNS rebinding needs a
+   * host name the attacker controls, and a client of a proxy published from
+   * a container may call it by its address.
+   */
+  ipLiterals?: boolean;
 }
 
 function list(value: string | undefined): string[] {
@@ -53,15 +60,15 @@ export function hostName(hostHeader: string): string {
  * --allowed-origins (comma lists) and the CONTEXT_DOCTOR_ALLOWED_HOSTS and
  * CONTEXT_DOCTOR_ALLOWED_ORIGINS environment variables.
  */
-export function makeGuard(bindHost: string, allowedHosts?: string, allowedOrigins?: string, env: NodeJS.ProcessEnv = process.env): HttpGuard {
+export function makeGuard(bindHost: string, allowedHosts?: string, allowedOrigins?: string, env: NodeJS.ProcessEnv = process.env, opts: { ipLiterals?: boolean } = {}): HttpGuard {
   const extra = [...list(allowedHosts), ...list(env.CONTEXT_DOCTOR_ALLOWED_HOSTS)];
   const origins = new Set([...DEFAULT_ALLOWED_ORIGINS, ...list(allowedOrigins), ...list(env.CONTEXT_DOCTOR_ALLOWED_ORIGINS)].map((o) => o.toLowerCase().replace(/\/+$/, "")));
-  if (extra.includes("*")) return { hosts: "*", origins };
+  if (extra.includes("*")) return { hosts: "*", origins, ipLiterals: opts.ipLiterals };
   const bind = hostName(bindHost);
   const hosts = new Set([...LOOPBACK_HOSTS, ...extra.map(hostName)]);
   // A specific bind address or name is one the server answers to; a wildcard is not a name.
   if (bind && bind !== "0.0.0.0" && bind !== "::") hosts.add(bind);
-  return { hosts, origins };
+  return { hosts, origins, ipLiterals: opts.ipLiterals };
 }
 
 /** Why this request may not reach /mcp, or undefined when it may. */
@@ -69,7 +76,7 @@ export function refusal(guard: HttpGuard, headers: IncomingMessage["headers"]): 
   if (guard.hosts !== "*") {
     const host = hostName(String(headers.host ?? ""));
     if (!host) return "the request has no Host header";
-    if (!guard.hosts.has(host)) {
+    if (!guard.hosts.has(host) && !(guard.ipLiterals && isIP(host))) {
       return `Host "${host}" is not one this server answers to. Behind a tunnel or under a host name, start it with --allowed-hosts ${host}`;
     }
   }

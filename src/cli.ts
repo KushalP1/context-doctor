@@ -323,6 +323,9 @@ Options:
   --token <secret>        (proxy) Require /t/<secret>/ in every request path; needed before
                           putting the proxy on a public URL (Cursor BYO-key, tunnels).
                           Also read from CONTEXT_DOCTOR_PROXY_TOKEN
+  --allowed-hosts <names> (proxy) Host names it answers to besides localhost, an IP address and
+                          --host (a container's service name); a web page that rebinds its own
+                          name to this address is refused. Not checked with --token
   --config <file>         (proxy) Per-route overrides: {"routes":[{"modelPrefix":"gpt","strategies":[...],
                           "keepRecent":n,"maxToolResultTokens":n}]} — first prefix match wins
   --upstream-anthropic <url>  (proxy) Override Anthropic upstream (testing)
@@ -484,6 +487,8 @@ interface Args {
   port?: number;
   host?: string;
   token?: string;
+  allowedHosts?: string;
+  allowedOrigins?: string;
   days?: number;
   autopilot?: boolean;
   autopilotState?: string;
@@ -642,8 +647,8 @@ const FLAGS: FlagSpec[] = [
   // Read by the MCP server itself: `mcp --http [--port n] [--host h]`.
   { names: ["--http"], set: () => {} },
   { names: ["--store-handoffs"], set: () => {} },
-  { names: ["--allowed-hosts"], value: "text", set: () => {} },
-  { names: ["--allowed-origins"], value: "text", set: () => {} },
+  { names: ["--allowed-hosts"], value: "text", set: (a, v) => { a.allowedHosts = v; } },
+  { names: ["--allowed-origins"], value: "text", set: (a, v) => { a.allowedOrigins = v; } },
 ];
 const FLAG_BY_NAME = new Map(FLAGS.flatMap((f) => f.names.map((n) => [n, f] as const)));
 const FLAG_NAMES = [...FLAG_BY_NAME.keys(), "--help", "--version"];
@@ -1295,6 +1300,8 @@ async function main(): Promise<void> {
       port: args.port,
       host: args.host,
       token: args.token ?? process.env.CONTEXT_DOCTOR_PROXY_TOKEN,
+      allowedHosts: args.allowedHosts,
+      allowedOrigins: args.allowedOrigins,
       autopilot: args.autopilot,
       autopilotStatePath: args.autopilotState,
       autopilotPauseFile: args.autopilotPauseFile,

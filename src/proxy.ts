@@ -23,6 +23,7 @@ import { formatUsd, inputCostUsd, pricingFor } from "./pricing.js";
 import { recordLedger } from "./ledger.js";
 import { minCacheableTokens } from "./cacheplan.js";
 import { withPromptCacheKey } from "./cachekey.js";
+import { makeGuard, refusal } from "./httpguard.js";
 
 export interface ProxyOptions extends OptimizeOptions {
   /** Per-model-prefix overrides; first match wins, global options otherwise. */
@@ -43,6 +44,17 @@ export interface ProxyOptions extends OptimizeOptions {
    * constant time; a wrong or missing prefix gets 401 and no upstream call.
    */
   token?: string;
+  /**
+   * Host names besides loopback, an IP address and `host` that requests may
+   * name in their Host header (comma list; also CONTEXT_DOCTOR_ALLOWED_HOSTS;
+   * `*` for any), and origins a browser page may call from besides loopback
+   * ones (also CONTEXT_DOCTOR_ALLOWED_ORIGINS). A page that rebinds its own
+   * name to 127.0.0.1 is refused, as by the MCP server's --http (httpguard.ts).
+   * With a token, Host is not checked: the token is the guard, and a tunnel's
+   * name is whatever it is.
+   */
+  allowedHosts?: string;
+  allowedOrigins?: string;
   /**
    * Autopilot: instead of the general strategies, run only the cache-aware
    * stale-tool-output clearing (autoclear.ts), which replays of real sessions
@@ -348,6 +360,8 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
     console.error(`[context-doctor] cache advisor: ${msg}`);
   };
 
+  /** Host and Origin checks: a web page that rebinds its name to this address gets nothing. */
+  const guard = makeGuard(opts.host ?? "127.0.0.1", opts.token ? "*" : opts.allowedHosts, opts.allowedOrigins, process.env, { ipLiterals: true });
   /** Requests still being answered, so a shutdown can let them finish. */
   let inFlight = 0;
   const server = http.createServer(async (req, res) => {
@@ -366,6 +380,13 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
       if (url === "/health") {
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify({ ok: true, service: "context-doctor-proxy", autopilot: Boolean(opts.autopilot), version: PROXY_VERSION }));
+        return;
+      }
+      const refused = refusal(guard, req.headers);
+      if (refused) {
+        res.statusCode = 403;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ error: `context-doctor proxy: ${refused}` }));
         return;
       }
       if (opts.token) {
@@ -802,6 +823,8 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
   server.listen(port, host, () => {
     // Print the token as <token>, never the value: this log is what people paste into bug reports.
     const prefix = opts.token ? "/t/<token>" : "";
+    // The port it got: with --port 0 the system picks one.
+    const port = (server.address() as { port?: number } | null)?.port ?? opts.port ?? 8787;
     console.error(`context-doctor proxy listening on http://${host}:${port}`);
     // 127.0.0.1, not localhost: on macOS another program can hold the same
     // port on :: or ::1 beside this one, and `localhost` may resolve there.
