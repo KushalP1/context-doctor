@@ -95,6 +95,41 @@ test("a credential folder spelled in another case is refused where the disk igno
   });
 });
 
+test("the agents' MCP and settings files in the home folder are refused (their servers' env holds API keys); a project's .mcp.json is read", async () => {
+  const home = mkdtempSync(join(tmpdir(), "cd-pack-configs-"));
+  const claudeHome = join(home, "claude-config"), codexHome = join(home, "codex-home");
+  const files = [
+    ".claude.json", join(".claude", "settings.json"), join(".claude", "settings.local.json"),
+    join("claude-config", ".claude.json"), join("claude-config", "settings.json"),
+    join(".cursor", "mcp.json"), join("codex-home", "config.toml"), join(".codex", "config.toml"),
+    join(".gemini", "settings.json"), join(".gemini", "config", "mcp_config.json"), join(".gemini", "antigravity", "mcp_config.json"),
+    join("Library", "Application Support", "Claude", "claude_desktop_config.json"),
+    join("AppData", "Roaming", "Claude", "claude_desktop_config.json"),
+    join(".config", "Claude", "claude_desktop_config.json"),
+    join(".copilot", "mcp-config.json"),
+  ];
+  for (const f of files) {
+    mkdirSync(dirname(join(home, f)), { recursive: true });
+    writeFileSync(join(home, f), '{"mcpServers":{"x":{"env":{"API_KEY":"sk-live-config"}}}}\n');
+  }
+  const repo = join(home, "repo");
+  mkdirSync(repo);
+  writeFileSync(join(repo, ".mcp.json"), '{"mcpServers":{"docs":{"command":"docs-mcp"}}}\n');
+  await withSandboxHome(home, () => {
+    process.env.CLAUDE_CONFIG_DIR = claudeHome;
+    process.env.CODEX_HOME = codexHome;
+    try {
+      const r = readSources([...files.map((f) => join(home, f)), join(home, ".cursor"), join(repo, ".mcp.json")], home);
+      assert.deepEqual(names(r), ["repo/.mcp.json"], r.sources.map((s) => s.text).join("\n"));
+      assert.equal(r.skipped.filter((s) => /refused, .* can hold API keys \(an MCP server's env\)/.test(s)).length, files.length + 1, r.skipped.join("\n"));
+      assert.equal(readSources([join(home, ".cursor", "mcp.json")], { cwd: home, includeSecrets: true }).sources.length, 1);
+    } finally {
+      delete process.env.CLAUDE_CONFIG_DIR;
+      delete process.env.CODEX_HOME;
+    }
+  });
+});
+
 test("the agents' own sign-ins are refused, named outright, behind a link, or where CODEX_HOME puts them", async () => {
   for (const f of ["h/.claude/.credentials.json", "h/.codex/auth.json", "h/.gemini/oauth_creds.json", "h/.cargo/credentials.toml", "h/.gem/credentials", ".vault-token"]) {
     assert.ok(secretFileReason(f), f);

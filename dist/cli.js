@@ -302,7 +302,9 @@ Options:
   --chunk-tokens <n>      (pack) Largest chunk, in tokens (default 400)
   --ids <a#2,b#5>         (pack) Return these chunks by id
   --include-secrets       (pack) Also pack .env, .npmrc, private keys and other credential files,
-                          and paths under ~/.ssh, ~/.aws and similar (skipped by default)
+                          paths under ~/.ssh, ~/.aws and similar, and the agents' MCP and
+                          settings files in your home folder, whose servers' env holds API keys
+                          (skipped by default; a project's own .mcp.json is read)
   --min-tokens <n>        (overhead split) Smallest section to move, in tokens (default 400)
   --requests-per-day <n>  (ci --markdown) Price the change at this many requests a day
   --check <cmd>           (experiment) Command whose exit code is the pass/fail for each arm

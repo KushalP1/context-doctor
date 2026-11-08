@@ -141,6 +141,35 @@ class PackReadsWhatGitDoes(unittest.TestCase):
             self.assertEqual(list(_read([spelled], skipped)), [])
         self.assertTrue(any("holds credentials" in s for s in skipped), skipped)
 
+    def test_agent_config_files_refused(self):
+        import os
+        import tempfile
+        from unittest import mock
+
+        from context_doctor.__main__ import _read
+
+        home = tempfile.mkdtemp()
+        files = [".claude.json", os.path.join(".claude", "settings.json"), os.path.join(".cursor", "mcp.json"),
+                 os.path.join(".codex", "config.toml"), os.path.join(".gemini", "settings.json"),
+                 os.path.join(".gemini", "config", "mcp_config.json"), os.path.join(".copilot", "mcp-config.json"),
+                 os.path.join(".config", "Claude", "claude_desktop_config.json")]
+        for f in files:
+            os.makedirs(os.path.dirname(os.path.join(home, f)), exist_ok=True)
+            with open(os.path.join(home, f), "w") as fh:
+                fh.write('{"env": {"API_KEY": "sk-live-config"}}\n')
+        repo = os.path.join(home, "repo")
+        os.makedirs(repo)
+        with open(os.path.join(repo, ".mcp.json"), "w") as fh:
+            fh.write('{"mcpServers": {}}\n')
+        env = {"HOME": home, "USERPROFILE": home, "APPDATA": os.path.join(home, "AppData", "Roaming")}
+        with mock.patch.dict(os.environ, env):
+            for k in ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "COPILOT_HOME"):
+                os.environ.pop(k, None)
+            skipped = []
+            texts = [s.text for s in _read([os.path.join(home, f) for f in files] + [os.path.join(repo, ".mcp.json")], skipped)]
+        self.assertEqual(texts, ['{"mcpServers": {}}\n'])
+        self.assertEqual(sum("can hold API keys" in s for s in skipped), len(files), skipped)
+
     def test_folder_git_config_runs_nothing(self):
         import os
         import subprocess

@@ -94,6 +94,31 @@ def _sensitive_dirs():
     return sorted(set(dirs + [os.path.realpath(d) for d in dirs]))
 
 
+def _agent_config_files():
+    """The agents' MCP and settings files in the home folder, as src/pack.ts agentConfigFiles lists them.
+
+    An MCP server's `env` there commonly holds an API key. A project's own .mcp.json is not refused.
+    """
+    home = os.path.expanduser("~")
+    claude = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    codex = os.environ.get("CODEX_HOME", "").strip()
+    files = [os.path.join(claude or home, ".claude.json"), os.path.join(home, ".claude.json")]
+    for d in {claude or os.path.join(home, ".claude"), os.path.join(home, ".claude")}:
+        files += [os.path.join(d, "settings.json"), os.path.join(d, "settings.local.json")]
+    files += [
+        os.path.join(home, ".cursor", "mcp.json"),
+        os.path.join(codex or os.path.join(home, ".codex"), "config.toml"), os.path.join(home, ".codex", "config.toml"),
+        os.path.join(home, ".gemini", "settings.json"),
+        os.path.join(home, ".gemini", "config", "mcp_config.json"), os.path.join(home, ".gemini", "antigravity", "mcp_config.json"),
+        os.path.join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json"),
+        os.path.join(os.environ.get("APPDATA") or os.path.join(home, "AppData", "Roaming"), "Claude", "claude_desktop_config.json"),
+        os.path.join(home, ".config", "Claude", "claude_desktop_config.json"),
+        os.path.join(os.environ.get("COPILOT_HOME") or os.path.join(home, ".copilot"), "mcp-config.json"),
+        os.path.join(home, ".copilot", "mcp-config.json"),
+    ]
+    return sorted(set(files + [os.path.realpath(f) for f in files]))
+
+
 def _within(root, inner):
     try:
         rel = os.path.relpath(inner, root)
@@ -121,6 +146,7 @@ def _read(paths, skipped=None, include_secrets=False):
     skipped = [] if skipped is None else skipped
     seen = set()
     denied = [] if include_secrets else _sensitive_dirs()
+    configs = [] if include_secrets else _agent_config_files()
     hint = "" if include_secrets else " (--include-secrets packs it)"
 
     # macOS and Windows disks ignore case by default: ~/.AWS/credentials is ~/.aws/credentials there.
@@ -132,6 +158,10 @@ def _read(paths, skipped=None, include_secrets=False):
             if _within(fold(d), fold(real)):
                 if top:
                     skipped.append(f"{path}: refused, {d} holds credentials{hint}")
+                return True
+        for f in configs:
+            if _within(fold(f), fold(real)):
+                skipped.append(f"{path}: refused, {f} can hold API keys (an MCP server's env){hint}")
                 return True
         return False
 

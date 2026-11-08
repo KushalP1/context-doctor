@@ -20,7 +20,7 @@ import { homedir } from "node:os";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { estimateTokens, formatTokens } from "./tokens.js";
 import { EXTRACT_BUDGET_MS, EXTRACTABLE, extractText, extractTextAsync, monotonicNow } from "./extract.js";
-import { claudeDir } from "./claudedir.js";
+import { claudeDir, claudeJsonPath } from "./claudedir.js";
 import { codexDir } from "./codexdir.js";
 
 export interface PackSource {
@@ -514,6 +514,33 @@ function sensitiveDirs(): string[] {
 }
 
 /**
+ * The agents' own MCP and settings files, in the home folder (and where
+ * CLAUDE_CONFIG_DIR, CODEX_HOME and COPILOT_HOME put them): each MCP server's
+ * `env` there commonly holds an API key, and settings.json an `env` of its
+ * own. Refused unless secrets are allowed (never over MCP). A project's own
+ * `.mcp.json` is not: it is read for good reasons, and it rides in the
+ * repository, where a key does not belong.
+ */
+function agentConfigFiles(): string[] {
+  const home = homedir();
+  const files = [
+    claudeJsonPath(), join(home, ".claude.json"),
+    ...[claudeDir(), join(home, ".claude")].flatMap((d) => [join(d, "settings.json"), join(d, "settings.local.json")]),
+    join(home, ".cursor", "mcp.json"),
+    join(codexDir(), "config.toml"), join(home, ".codex", "config.toml"),
+    join(home, ".gemini", "settings.json"),
+    // Antigravity: the shared config folder's file, and the app's own from before it.
+    join(home, ".gemini", "config", "mcp_config.json"), join(home, ".gemini", "antigravity", "mcp_config.json"),
+    // Claude Desktop on macOS, Windows and Linux.
+    join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json"),
+    join(process.env.APPDATA || join(home, "AppData", "Roaming"), "Claude", "claude_desktop_config.json"),
+    join(home, ".config", "Claude", "claude_desktop_config.json"),
+    join(process.env.COPILOT_HOME || join(home, ".copilot"), "mcp-config.json"), join(home, ".copilot", "mcp-config.json"),
+  ];
+  return [...new Set([...files, ...files.map(realOf)])];
+}
+
+/**
  * A path's real spelling: links resolved and, where the system can say,
  * the case on disk and Windows' long names (`realpathSync.native`), so
  * ~/.SSH and C:\Users\RUNNER~1 are the folders they name.
@@ -593,6 +620,7 @@ export function readSources(
   const includeSecrets = options.includeSecrets === true;
   const secretsHint = options.secretsHint ?? "";
   const denied = includeSecrets ? [] : sensitiveDirs();
+  const deniedConfigs = includeSecrets ? [] : agentConfigFiles();
   const sources: PackSource[] = [];
   const skipped: string[] = [];
   let bytes = 0;
@@ -628,10 +656,16 @@ export function readSources(
       return;
     }
     if (denied.length > 0) {
-      const dir = inSensitiveDir(realOf(p), denied);
+      const real = realOf(p);
+      const dir = inSensitiveDir(real, denied);
       if (dir) {
         // Once per named path: a folder of keys is one refusal, not one per key.
         if (top) skipped.push(`${p}: refused, ${dir} holds credentials${secretsHint}`);
+        return;
+      }
+      const config = inSensitiveDir(real, deniedConfigs);
+      if (config) {
+        skipped.push(`${p}: refused, ${config} can hold API keys (an MCP server's env)${secretsHint}`);
         return;
       }
     }
