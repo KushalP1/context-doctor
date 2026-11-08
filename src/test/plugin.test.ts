@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,6 +89,22 @@ test("the GitHub Action runs its own version unless `version:` names another", {
   assert.equal(run("latest"), "latest");
   assert.equal(run("0.40.0"), "0.40.0");
   assert.equal(run("", mkdtempSync(join(tmpdir(), "cd-action-"))), "latest", "no package.json beside the Action: npm's newest");
+});
+
+test("the GitHub Action installs context-doctor outside the checkout, so a pull request's .npmrc picks no registry or shell", { skip: process.platform === "win32" && "the step is bash" }, () => {
+  const action = readFileSync(join(root, "action.yml"), "utf8");
+  assert.doesNotMatch(action.replace(/^\s*#.*$/gm, ""), /\bnpx\b/, "npx in the checkout reads its .npmrc");
+  const fragment = /# install:start[^\n]*\n([\s\S]*?)# install:end/.exec(action)?.[1];
+  assert.ok(fragment, "action.yml marks the install step");
+  // A stand-in npm that says where it ran; the checkout carries an .npmrc of its own.
+  const tmp = mkdtempSync(join(tmpdir(), "cd-action-npm-"));
+  const bin = join(tmp, "bin"), checkout = join(tmp, "checkout"), runnerTemp = join(tmp, "runner-temp");
+  for (const d of [bin, checkout, runnerTemp]) mkdirSync(d);
+  writeFileSync(join(checkout, ".npmrc"), "registry=http://127.0.0.1:9/\n");
+  writeFileSync(join(bin, "npm"), `#!/bin/sh\necho "npm in $(pwd -P)"\n`, { mode: 0o755 });
+  const r = spawnSync("bash", ["-c", `${fragment}\necho "cmd \${cd_cmd[*]}"`], { cwd: checkout, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CD_VERSION: "0.44.0", RUNNER_TEMP: runnerTemp, GITHUB_ACTION_PATH: root }, encoding: "utf8" });
+  assert.match(r.stderr, new RegExp(`npm in ${realpathSync(runnerTemp).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"), r.stderr);
+  assert.match(r.stdout, /^cmd node .*context-doctor-cli\/node_modules\/context-doctor\/dist\/cli\.js$/m, r.stdout);
 });
 
 test("the build scripts find their own folder in a checkout whose path has a space (a URL's pathname is %20-encoded)", () => {
