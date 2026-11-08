@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,6 +35,8 @@ test("overhead --mcp with no node_modules measures servers through the bundled S
   } }));
   mkdirSync(join(cwd, ".claude"));
   writeFileSync(join(cwd, ".claude", "settings.local.json"), JSON.stringify({ enabledMcpjsonServers: ["demo"] }));
+  // The project's own settings approve only in a workspace the user trusted.
+  writeFileSync(join(home, ".claude.json"), JSON.stringify({ projects: { [realpathSync(cwd)]: { hasTrustDialogAccepted: true } } }));
 
   const r = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
     execFile(process.execPath, [join(plugin, "dist", "cli.js"), "overhead", "--mcp"], { cwd, env: sandboxEnv(home), timeout: 60_000 }, (err, stdout, stderr) =>

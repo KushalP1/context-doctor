@@ -34,7 +34,7 @@ import { statePath } from "./ledger.js";
 import { listSessions, isClaudeSession } from "./session.js";
 import { rowsOf } from "./scan.js";
 import { subagentFiles } from "./subagents.js";
-import { claudeMcpConfigs, countMcpRow, serverUses } from "./mcpschema.js";
+import { claudeMcpConfigs, countMcpRow, serverUses, toolPrefixName } from "./mcpschema.js";
 import { estimateTokens, formatTokens } from "./tokens.js";
 import { formatUsd } from "./pricing.js";
 import { claudeDir, claudeJsonPath } from "./claudedir.js";
@@ -279,9 +279,61 @@ function offFor(cwd, home) {
     return {
         off,
         mcpjsonAllowlist: all ? undefined : allow,
-        // Approved in so many words: a server nobody said yes to is one Claude Code asks about first.
-        mcpjsonApproved: (name) => !off.has(`mcp:${name}`) && (all || (allow?.has(name) ?? false)),
+        mcpjsonApproved: (name) => mcpjsonApprovedBy(name, cwd, home, read, off),
     };
+}
+/**
+ * Claude Code's own approval of a project `.mcp.json` server (read from the
+ * 2.1.311 binary). Rejected when any settings file lists it in
+ * `disabledMcpjsonServers` (or it is toggled off). Otherwise the project's own
+ * files, `.claude/settings.json` and `.claude/settings.local.json`, count only
+ * once the user trusted the workspace (`hasTrustDialogAccepted` on its
+ * project, the repository root or the folder, in ~/.claude.json): both can
+ * arrive with a clone, and a repository approving its own servers is the
+ * attack the trust dialog stands in front of. Untrusted, only the user's
+ * settings approve; trusted, the files merge (a later file's
+ * `enableAllProjectMcpServers: false` overrides an earlier `true`). Names
+ * compare as Claude Code compares them, in their tool-name spelling.
+ */
+function mcpjsonApprovedBy(name, cwd, home, read, off) {
+    const same = (n) => typeof n === "string" && toolPrefixName(n) === toolPrefixName(name);
+    for (const o of off)
+        if (o.startsWith("mcp:") && same(o.slice(4)))
+            return false;
+    const user = read(join(claudeDir(home), "settings.json"));
+    const projects = read(claudeJsonPath(home)).projects;
+    const keys = trustKeys(cwd);
+    const entry = (k) => (projects && typeof projects === "object" && projects[k] && typeof projects[k] === "object" ? projects[k] : undefined);
+    const trusted = keys.some((k) => entry(k)?.hasTrustDialogAccepted === true);
+    const legacy = keys.map(entry).find((e) => e && (e.enabledMcpjsonServers !== undefined || e.enableAllProjectMcpServers !== undefined)) ?? {};
+    const sources = trusted ? [user, read(join(cwd, ".claude", "settings.json")), legacy, read(localSettingsPath(cwd))] : [user];
+    let all = false;
+    for (const s of sources)
+        if (typeof s.enableAllProjectMcpServers === "boolean")
+            all = trusted ? s.enableAllProjectMcpServers : all || s.enableAllProjectMcpServers;
+    return all || sources.some((s) => list(s.enabledMcpjsonServers).some(same));
+}
+/**
+ * The keys ~/.claude.json may hold this workspace's trust under: the folder
+ * and the repository root it is in (Claude Code keys a project by its git
+ * root), each as given, resolved and real, with forward slashes too.
+ */
+function trustKeys(cwd) {
+    const out = new Set();
+    const add = (p) => { for (const v of [p, resolve(p), canonical(p)]) {
+        out.add(v);
+        out.add(v.replace(/\\/g, "/"));
+    } };
+    add(cwd);
+    for (let d = canonical(cwd);; d = dirname(d)) {
+        if (existsSync(join(d, ".git"))) {
+            add(d);
+            break;
+        }
+        if (dirname(d) === d)
+            break;
+    }
+    return [...out];
 }
 /**
  * Whether Claude Code would start this project `.mcp.json` server without

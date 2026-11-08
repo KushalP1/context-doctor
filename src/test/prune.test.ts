@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { applyPrune, canonical, localSettingsPath, planPrune, projectUsage, undoPrune } from "../prune.js";
+import { applyPrune, canonical, localSettingsPath, mcpjsonServerApproved, planPrune, projectUsage, undoPrune } from "../prune.js";
 import { claudeProjectDir } from "../session.js";
 import { sandboxEnv } from "./sandbox.js";
 
@@ -145,4 +145,42 @@ test("a server's uses are found however it is used: a name with spaces beside a 
   assert.deepEqual(plan.used.map((u) => `${u.name}:${u.uses}`).sort(), ["docs:3", "kb:3", "linear (work):3"]);
   assert.deepEqual(plan.unused.map((u) => u.name).sort(), ["approved", "idle", "linear"]);
   assert.deepEqual(plan.alreadyOff, ["figma"], "not in enabledMcpjsonServers: Claude Code does not start it");
+});
+
+test("a project's own settings approve its .mcp.json servers only once the workspace is trusted, as in Claude Code", () => {
+  const home = mkdtempSync(join(tmpdir(), "cd-prune-trust-"));
+  const repo = join(home, "clone");
+  const sub = join(repo, "pkg");
+  mkdirSync(join(repo, ".git"), { recursive: true });
+  mkdirSync(join(repo, ".claude"));
+  mkdirSync(sub);
+  writeFileSync(join(repo, ".mcp.json"), JSON.stringify({ mcpServers: { evil: { command: "x" }, "my.tool": { command: "y" } } }));
+  // A fresh clone that approves its own servers: committed settings, shared or local.
+  for (const file of ["settings.json", "settings.local.json"]) {
+    writeFileSync(join(repo, ".claude", file), JSON.stringify({ enableAllProjectMcpServers: true, enabledMcpjsonServers: ["evil"] }));
+    assert.equal(mcpjsonServerApproved("evil", repo, home), false, `${file} approved its own server before trust`);
+    writeFileSync(join(repo, ".claude", file), "{}");
+  }
+  // The user's own settings approve without trust; names compare in their tool-name spelling.
+  mkdirSync(join(home, ".claude"));
+  writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ enabledMcpjsonServers: ["my_tool"] }));
+  assert.equal(mcpjsonServerApproved("my.tool", repo, home), true);
+  assert.equal(mcpjsonServerApproved("evil", repo, home), false);
+  writeFileSync(join(home, ".claude", "settings.json"), "{}");
+  // Trusted at the repository root (where Claude Code keys it): the project's files count, from a subfolder too.
+  writeFileSync(join(home, ".claude.json"), JSON.stringify({ projects: { [canonical(repo).replace(/\\/g, "/")]: { hasTrustDialogAccepted: true } } }));
+  writeFileSync(join(repo, ".claude", "settings.local.json"), JSON.stringify({ enabledMcpjsonServers: ["evil"] }));
+  assert.equal(mcpjsonServerApproved("evil", repo, home), true);
+  mkdirSync(join(sub, ".claude"));
+  writeFileSync(join(sub, ".claude", "settings.local.json"), JSON.stringify({ enabledMcpjsonServers: ["evil"] }));
+  assert.equal(mcpjsonServerApproved("evil", sub, home), true, "a subfolder of the trusted root");
+  // A later file's explicit false overrides the user's true; a rejection anywhere wins.
+  writeFileSync(join(repo, ".claude", "settings.local.json"), "{}");
+  writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ enableAllProjectMcpServers: true }));
+  assert.equal(mcpjsonServerApproved("evil", repo, home), true);
+  writeFileSync(join(repo, ".claude", "settings.json"), JSON.stringify({ enableAllProjectMcpServers: false }));
+  assert.equal(mcpjsonServerApproved("evil", repo, home), false);
+  writeFileSync(join(repo, ".claude", "settings.json"), JSON.stringify({ disabledMcpjsonServers: ["my tool"] }));
+  assert.equal(mcpjsonServerApproved("evil", repo, home), true);
+  assert.equal(mcpjsonServerApproved("my.tool", repo, home), false);
 });
