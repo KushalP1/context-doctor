@@ -2,19 +2,19 @@
   "days": 30,
   "since": 1788264000000,
   "until": 1790856000000,
-  "usd": 141.76623729999991,
-  "requests": 278,
+  "usd": 142.53063429999995,
+  "requests": 290,
   "tools": [
     {
       "tool": "claude",
       "name": "Claude Code",
-      "usd": 141.70116729999992,
-      "requests": 273,
+      "usd": 142.46556429999995,
+      "requests": 285,
       "tokens": {
-        "input": 6143,
-        "read": 41021498,
-        "write": 19062761,
-        "output": 140643
+        "input": 6223,
+        "read": 42081498,
+        "write": 19124751,
+        "output": 145343
       },
       "unpriced": 0,
       "unpricedTokens": 0,
@@ -71,6 +71,14 @@
       }
     },
     {
+      "project": "tech-billing",
+      "usd": 0.764397,
+      "requests": 12,
+      "byTool": {
+        "claude": 0.764397
+      }
+    },
+    {
       "project": "site",
       "usd": 0.05532,
       "requests": 3,
@@ -90,10 +98,10 @@
   "models": [
     {
       "model": "claude-opus-5-5",
-      "usd": 85.54538200000002,
-      "requests": 203,
+      "usd": 86.25766200000002,
+      "requests": 213,
       "byTool": {
-        "claude": 85.54538200000002
+        "claude": 86.25766200000002
       }
     },
     {
@@ -118,6 +126,22 @@
       "requests": 3,
       "byTool": {
         "gemini": 0.05532
+      }
+    },
+    {
+      "model": "claude-sonnet-5-5",
+      "usd": 0.034122,
+      "requests": 1,
+      "byTool": {
+        "claude": 0.034122
+      }
+    },
+    {
+      "model": "claude-haiku-5-5",
+      "usd": 0.017995,
+      "requests": 1,
+      "byTool": {
+        "claude": 0.017995
       }
     },
     {
@@ -322,10 +346,10 @@
     },
     {
       "day": "2026-09-30",
-      "usd": 10.965129400000002,
-      "requests": 22,
+      "usd": 11.729526400000003,
+      "requests": 34,
       "byTool": {
-        "claude": 10.965129400000002
+        "claude": 11.729526400000003
       }
     },
     {
@@ -336,10 +360,18 @@
     }
   ],
   "parts": {
-    "inputUsd": 0.073448,
-    "writeUsd": 130.24281950000002,
-    "readUsd": 8.463979799999995,
-    "outputUsd": 2.9859899999999984
+    "inputUsd": 0.073755,
+    "writeUsd": 130.68640950000002,
+    "readUsd": 8.665979799999993,
+    "outputUsd": 3.084489999999999,
+    "webSearchUsd": 0.02
+  },
+  "modifiers": {
+    "fastUsd": 0.06804,
+    "geoUsd": 0.003102000000000004,
+    "longUsd": 0.014396,
+    "webSearchUsd": 0.02,
+    "webSearches": 2
   },
   "sessions": [
     {
@@ -420,6 +452,16 @@
       "requests": 14,
       "first": 1790078517691,
       "last": 1790079524976,
+      "model": "claude-opus-5-5"
+    },
+    {
+      "tool": "claude",
+      "project": "tech-billing",
+      "session": "5e55a0f1-0000-4000-8000-00000000f00d",
+      "usd": 0.764397,
+      "requests": 12,
+      "first": 1790769660000,
+      "last": 1790770320000,
       "model": "claude-opus-5-5"
     },
     {

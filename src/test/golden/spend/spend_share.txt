@@ -1,8 +1,9 @@
-My AI coding, last 30 days, at list prices: $142 (Claude Code $142, Gemini CLI $0.06, Codex $0.01).
+My AI coding, last 30 days, at list prices: $143 (Claude Code $142, Gemini CLI $0.06, Codex $0.01).
 Claude Code subagents: $3.46 of it.
 Claude Code workflow agents: $4.90 of it, in 1 run.
 Of it, $0.06 is on models priced as their family, an estimate.
-Top model claude-opus-5-5 (60%); the biggest part is cache writes (92%); busiest day $47.52.
+Billed above list rates: fast mode +$0.07, US-only +<$0.01, web searches $0.02 (2), long-prompt tier +$0.01.
+Top model claude-opus-5-5 (61%); the biggest part is cache writes (92%); busiest day $47.52.
 Measured locally from my own history with context-doctor: npx context-doctor spend
 
 [exit 0]

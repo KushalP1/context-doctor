@@ -19,6 +19,7 @@ import { claudeUsage, codexLimitData } from "../limits.js";
 import { estimateSavings } from "../savings.js";
 import { clearScanMemo } from "../scan.js";
 import { buildHistory, FIXTURE_NOW } from "./history-fixture.js";
+import { writeModifierSession } from "./modifier-fixture.js";
 import { runReport } from "./golden-run.js";
 import { withSandboxHome } from "./sandbox.js";
 
@@ -395,7 +396,7 @@ test("nothing on disk: no tools, a plain sentence, and --share says so", async (
   }
 });
 
-/** The CLI on a fixture with Claude Code, Codex and Gemini CLI: text, JSON and --share, byte for byte. */
+/** The CLI on a fixture with Claude Code (a session with every billing modifier too), Codex and Gemini CLI: text, JSON and --share, byte for byte. */
 const GOLDEN = [["spend"], ["spend", "--json"], ["spend", "--share"]];
 
 test("spend on every tool: the CLI's output, cold and warm, against src/test/golden/spend", () => {
@@ -406,6 +407,8 @@ test("spend on every tool: the CLI's output, cold and warm, against src/test/gol
     buildHistory(home);
     writeCodex(home, FIXTURE_NOW);
     writeGemini(home, FIXTURE_NOW);
+    // Fast mode, US-only, a 150k Haiku 5.5 prompt and web searches: what spend says the modifiers added.
+    writeModifierSession(home, FIXTURE_NOW - DAY);
     for (const pass of ["cold", "warm"]) {
       for (const args of GOLDEN) {
         const out = runReport(cli, home, args, { CONTEXT_DOCTOR_CACHE_DIR: cache });
