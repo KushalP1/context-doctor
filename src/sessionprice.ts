@@ -6,7 +6,8 @@
  * (the author's `gantry-ai` audit: 2,795 requests, 1.3B cached tokens read).
  * So before each prompt (Claude Code's and Codex's UserPromptSubmit, Gemini
  * CLI's BeforeAgent) the hook adds up what this session has cost, subagents
- * included (they bill to it), and when it passes $25, $100 and $500 says so
+ * included (they bill to it: Claude Code's, and the agents a Codex thread
+ * spawned, codexSpawnedRollouts), and when it passes $25, $100 and $500 says so
  * to the user once: the cost so far, what each message of the main
  * conversation now costs at the model's cache-read rate (or, after an idle
  * that expired the cache, the re-write this message pays), and that
@@ -38,7 +39,7 @@ import { createHash } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { statePath } from "./ledger.js";
 import { refreshEntry, wellFormed, writeWhole, type FileEntry } from "./budget.js";
-import { codexFileSpend, geminiFileSpend, type Tool } from "./spend.js";
+import { codexFileSpend, codexSpawnedRollouts, geminiFileSpend, type Tool } from "./spend.js";
 import { isGeminiChat } from "./gemini.js";
 import { subagentFiles } from "./subagents.js";
 import { tailUsage } from "./statusline.js";
@@ -119,7 +120,7 @@ export interface SessionPrice {
   /** The threshold just passed. */
   threshold: number;
   usd: number;
-  /** Subagents' part of `usd` (the Agent tool's). */
+  /** Subagents' part of `usd`: the Agent tool's, or the agents a Codex thread spawned. */
   subagentUsd: number;
   /** Workflow agents' part of `usd`. */
   workflowUsd?: number;
@@ -161,6 +162,8 @@ export function sessionPriceDue(input: SessionPriceInput, now = Date.now(), env:
   const files: Array<[string, "main" | "sub" | "workflow"]> = [[input.transcript, "main"]];
   // Subagents and workflow agents bill to the session that started them.
   if (app === "claude") for (const f of subagentFiles(input.transcript)) files.push([f.file, f.run ? "workflow" : "sub"]);
+  // A Codex thread's spawned agents: their rollouts name it as their parent (a forked one's copy of its history counts once, by key).
+  if (app === "codex") for (const f of codexSpawnedRollouts(input.transcript, now)) files.push([f, "sub"]);
   let saved: Record<string, FileEntry> = {};
   try {
     const raw = JSON.parse(readFileSync(ledgerFile(b), "utf8"));
