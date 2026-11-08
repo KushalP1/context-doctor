@@ -22,7 +22,7 @@ export declare const EXTRACTABLE: Set<string>;
 /** Never load or write a document's subsidiary resources (stylesheets, images, frames). */
 export declare const TEXTUTIL_ARGS: string[];
 /** The document's text, or the reason it could not be read. */
-export declare function extractText(path: string): {
+export declare function extractText(name: string): {
     text: string;
 } | {
     error: string;
@@ -42,7 +42,7 @@ export declare const monotonicNow: () => number;
  * `end` on the same clock: a deadline on the wall clock, converted per
  * document, let a clock jump between two documents cut the later ones short.
  */
-export declare function extractTextAsync(path: string, end?: number): Promise<{
+export declare function extractTextAsync(name: string, end?: number): Promise<{
     text: string;
 } | {
     error: string;

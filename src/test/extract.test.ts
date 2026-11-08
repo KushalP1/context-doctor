@@ -3,11 +3,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { extractText } from "../extract.js";
-import { packContext, readSources } from "../pack.js";
+import { packContext, readSources, readSourcesAsync } from "../pack.js";
 
 /** A minimal one-page PDF with a real text layer. */
 function pdf(lines: string[]): string {
@@ -66,6 +66,23 @@ test("an unreadable PDF is reported with a reason, not dropped silently", () => 
 });
 
 // -- Safety: no network from a document, and no blocking the server ----------
+
+test("a document named like an option is never read as one: `pack .` ran a script hidden in a PDF's name", { skip: process.platform === "win32" && "the name has characters Windows forbids" }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cd-extract-dash-"));
+  const marker = join(dir, "PWNED");
+  writeFileSync(join(dir, `-eObjC.import("stdlib");$.system("touch PWNED");var x={};x.pdf`), "%PDF-1.4\nnot really\n");
+  writeFileSync(join(dir, "notes.md"), "# Notes\n");
+  const before = process.cwd();
+  process.chdir(dir);
+  try {
+    const r = readSources(["."], dir);
+    assert.deepEqual(r.sources.map((s) => s.name), ["notes.md"]);
+    await readSourcesAsync(["."], { cwd: dir });
+  } finally {
+    process.chdir(before);
+  }
+  assert.equal(existsSync(marker), false, "a converter ran the file's name as code");
+});
 
 test("textutil never loads a document's subresources: an HTML '.doc' cannot make it fetch", { skip: process.platform !== "darwin" && "macOS only" }, async () => {
   const { createServer } = await import("node:http");

@@ -22,7 +22,7 @@
 import { execFile, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, extname, join } from "node:path";
+import { dirname, extname, join, resolve } from "node:path";
 
 export const EXTRACTABLE = new Set([".pdf", ".docx", ".doc", ".rtf", ".odt", ".pptx"]);
 
@@ -79,8 +79,19 @@ function xmlToText(xml: string): string {
     .trim();
 }
 
+/**
+ * The document's path as a converter's argument: absolute, so a file named
+ * like an option is never read as one. `pack .` met
+ * `-eObjC.import("stdlib");$.system("…");var x={};x.pdf` as that very
+ * string, and osascript ran it as a second script statement.
+ */
+function argPath(path: string): string {
+  return resolve(path);
+}
+
 /** The document's text, or the reason it could not be read. */
-export function extractText(path: string): { text: string } | { error: string } {
+export function extractText(name: string): { text: string } | { error: string } {
+  const path = argPath(name);
   const ext = extname(path).toLowerCase();
   const mac = process.platform === "darwin";
   let text: string | undefined;
@@ -176,7 +187,8 @@ function runAsync(cmd: string, args: string[], end: number): Promise<{ out?: str
  * `end` on the same clock: a deadline on the wall clock, converted per
  * document, let a clock jump between two documents cut the later ones short.
  */
-export async function extractTextAsync(path: string, end = monotonicNow() + EXTRACT_BUDGET_MS): Promise<{ text: string } | { error: string }> {
+export async function extractTextAsync(name: string, end = monotonicNow() + EXTRACT_BUDGET_MS): Promise<{ text: string } | { error: string }> {
+  const path = argPath(name);
   const ext = extname(path).toLowerCase();
   const mac = process.platform === "darwin";
   let text: string | undefined;
