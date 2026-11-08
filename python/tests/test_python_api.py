@@ -121,6 +121,22 @@ class PackReadsWhatGitDoes(unittest.TestCase):
             self.assertFalse(any("outside secret" in t for t in texts), "a link out of the folder is not followed")
             self.assertTrue(any("symlink pointing outside" in n for n in skipped))
 
+    def test_folder_git_config_runs_nothing(self):
+        import os
+        import subprocess
+        import tempfile
+
+        from context_doctor.__main__ import _read
+
+        repo = tempfile.mkdtemp()
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        with open(os.path.join(repo, "guide.md"), "w") as fh:
+            fh.write("# Guide\n\nhello\n")
+        # An unpacked archive's own .git/config: git runs this from the work tree's top.
+        subprocess.run(["git", "-C", repo, "config", "core.fsmonitor", "echo ran > fsmonitor-ran"], check=True)
+        list(_read([repo], []))
+        self.assertFalse(os.path.exists(os.path.join(repo, "fsmonitor-ran")), "git ran the folder's fsmonitor command")
+
 
 class Fixes(unittest.TestCase):
     def test_pack_documents_ids_stay_unique_when_a_name_looks_generated(self):

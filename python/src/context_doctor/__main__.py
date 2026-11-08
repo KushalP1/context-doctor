@@ -24,7 +24,8 @@ def _git_files(folder):
     """
     try:
         r = subprocess.run(
-            ["git", "-C", folder, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            # A folder's own .git/config can name a command for ls-files to run (core.fsmonitor).
+            ["git", "-c", "core.fsmonitor=false", "-C", folder, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
             capture_output=True, timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired):

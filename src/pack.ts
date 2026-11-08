@@ -425,10 +425,17 @@ export function renderPack(r: PackResult, { outlineLimit = 60 }: { outlineLimit?
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "target", "__pycache__", ".venv", "venv", "vendor"]);
 export const PACK_LIMITS = { files: 500, fileBytes: 5 * 1024 * 1024, totalBytes: 50 * 1024 * 1024 };
 
+/**
+ * A folder's own .git/config can name a command for `git ls-files` to run
+ * (core.fsmonitor): an unpacked archive or a downloaded project brings its
+ * .git with it, and packing it must not run anything.
+ */
+const SAFE_GIT = ["-c", "core.fsmonitor=false"];
+
 /** Files git would consider part of the repository under `dir` (relative to it), or undefined outside git. */
 function gitFiles(dir: string): string[] | undefined {
   try {
-    const r = spawnSync("git", ["-C", dir, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 30_000 });
+    const r = spawnSync("git", [...SAFE_GIT, "-C", dir, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 30_000 });
     if (r.status !== 0 || typeof r.stdout !== "string") return undefined;
     // --cached lists files deleted from the work tree too; only what exists is read.
     return r.stdout.split("\0").filter((f) => f && existsSync(join(dir, f))).sort();
@@ -440,7 +447,7 @@ function gitFiles(dir: string): string[] | undefined {
 /** Git ignores something under `dir`: why a folder that has files can list none. */
 function gitIgnoresSome(dir: string): boolean {
   // --directory names an ignored folder once instead of every file in it.
-  const r = spawnSync("git", ["-C", dir, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 30_000 });
+  const r = spawnSync("git", [...SAFE_GIT, "-C", dir, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 30_000 });
   return r.status === 0 && typeof r.stdout === "string" && r.stdout.length > 0;
 }
 

@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chunkSource, packContext, readSources } from "../pack.js";
@@ -59,6 +59,20 @@ test("a .gitignore'd folder named outright stays out, and the user is told why",
   assert.equal(r.sources.length, 0, "the .gitignore guarantee holds");
   assert.equal(r.skipped.length, 1);
   assert.match(r.skipped[0], /ignored by git \(\.gitignore\)/);
+});
+
+test("a folder's own .git/config runs nothing when it is packed (core.fsmonitor)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cd-pack-fsmonitor-"));
+  execFileSync("git", ["init", "-q"], { cwd: dir });
+  writeFileSync(join(dir, "guide.md"), "# Guide\n\nHello.\n");
+  execFileSync("git", ["add", "-A"], { cwd: dir });
+  // git runs the hook from the work tree's top: the marker lands beside guide.md.
+  execFileSync("git", ["config", "core.fsmonitor", "echo ran > fsmonitor-ran"], { cwd: dir });
+  writeFileSync(join(dir, ".gitignore"), "build/\n");
+  mkdirSync(join(dir, "build"));
+  const r = readSources([dir, join(dir, "build")], dir);
+  assert.deepEqual(names(r), [".gitignore", "guide.md"]);
+  assert.equal(existsSync(join(dir, "fsmonitor-ran")), false, "git ran the folder's fsmonitor command");
 });
 
 test("a long line of emoji is cut between characters, never inside a surrogate pair", () => {
