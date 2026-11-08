@@ -128,6 +128,22 @@ export function ciReport(opts = {}) {
     }
     return { base: opts.base, files, baseTotal, headTotal, breaches };
 }
+/**
+ * A path as inline code that stays code: a pull request names its files, and
+ * a name may hold a backtick, a pipe or a line break (all allowed in a
+ * repository), which closed the code span in the bot's comment and made the
+ * rest of the name markdown of the PR author's choosing (a link, an
+ * @mention, a heading). Line breaks are written as \n; in a table cell a
+ * pipe is escaped.
+ */
+function codePath(p, inTable = false) {
+    let s = p.replace(/[\r\n\t\u2028\u2029]/g, (c) => ({ "\r": "\\r", "\n": "\\n", "\t": "\\t" })[c] ?? `\\u${c.charCodeAt(0).toString(16)}`);
+    if (inTable)
+        s = s.replace(/\|/g, "\\|");
+    const fence = "`".repeat(Math.max(0, ...[...s.matchAll(/`+/g)].map((m) => m[0].length)) + 1);
+    const pad = s.startsWith("`") || s.endsWith("`") ? " " : "";
+    return `${fence}${pad}${s}${pad}${fence}`;
+}
 const signed = (n) => (n > 0 ? `+${formatTokens(n)}` : n < 0 ? `−${formatTokens(-n)}` : "0");
 /** Markdown for a PR comment or a job summary. */
 export function renderCiMarkdown(r, opts = {}) {
@@ -152,7 +168,7 @@ export function renderCiMarkdown(r, opts = {}) {
     if (changed.length) {
         out.push(r.base ? "| File | Agent | Base | This PR | Change |" : "| File | Agent | Tokens |", r.base ? "|---|---|---:|---:|---:|" : "|---|---|---:|");
         for (const f of changed) {
-            const name = `\`${f.path}\`${f.imported ? " (imported)" : ""}`;
+            const name = `${codePath(f.path, true)}${f.imported ? " (imported)" : ""}`;
             out.push(r.base ? `| ${name} | ${f.agent} | ${f.base ? "~" + formatTokens(f.base) : "—"} | ${f.head ? "~" + formatTokens(f.head) : "—"} | ${signed(f.head - f.base)} |` : `| ${name} | ${f.agent} | ~${formatTokens(f.head)} |`);
         }
     }
@@ -163,7 +179,7 @@ export function renderCiMarkdown(r, opts = {}) {
         out.push("", ...r.breaches.map((b) => `**Over budget:** ${b}.`));
     const big = r.files.filter((f) => f.head >= 2000);
     if (big.length)
-        out.push("", `Large files: ${big.map((f) => `\`${f.path}\``).join(", ")}. \`npx context-doctor overhead split <file>\` moves reference sections out, word for word.`);
+        out.push("", `Large files: ${big.map((f) => codePath(f.path)).join(", ")}. \`npx context-doctor overhead split <file>\` moves reference sections out, word for word.`);
     return out.join("\n");
 }
 /** Plain-text rendering for a terminal. */

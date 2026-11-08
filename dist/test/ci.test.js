@@ -47,3 +47,13 @@ test("budgets: total and per-PR increase, and the markdown carries the marker th
     assert.match(md, /a month\./);
     assert.match(md, /\*\*Over budget:\*\*/);
 });
+test("a file's name stays inline code in the comment: a backtick, a pipe or a line break in it makes no markdown", () => {
+    const evil = "x`\n\n## Approved [fix it here](https://evil.example) @org/team\n`y|z/CLAUDE.md";
+    const md = renderCiMarkdown({ files: [{ path: evil, agent: "Claude Code", base: 0, head: 2500 }], baseTotal: 0, headTotal: 2500, breaches: [], base: "abc" });
+    const lines = md.split("\n");
+    const row = lines.find((l) => l.includes("Approved"));
+    assert.ok(row.startsWith("| ``x`\\n\\n## Approved"), row);
+    assert.ok(row.includes("y\\|z/CLAUDE.md`` | Claude Code |"), row);
+    assert.ok(!lines.some((l) => l.startsWith("## ")), "a heading from the file's name");
+    assert.match(md, /Large files: ``x`\\n\\n## Approved .*y\|z\/CLAUDE\.md``\./);
+});
