@@ -490,8 +490,8 @@ export function secretFileReason(path: string): string | undefined {
   }
   if (SECRET_EXT.has(extname(lower))) return `a key or certificate store (${extname(lower)})`;
   const parts = path.split(/[\\/]+/);
-  if (lower === "credentials" && parts[parts.length - 2] === ".aws") return "AWS credentials";
   const parent = (parts[parts.length - 2] ?? "").toLowerCase();
+  if (lower === "credentials" && parent === ".aws") return "AWS credentials";
   if (SECRET_IN_DIR.some(([dir, files]) => dir === parent && files.includes(lower))) return `a credentials file (${parent}/${name})`;
   return undefined;
 }
@@ -510,19 +510,33 @@ function sensitiveDirs(): string[] {
   ];
   // Compared against real paths: /etc is /private/etc on macOS, and a home
   // under /var/folders is really /private/var/folders.
-  const real = dirs.map((d) => {
-    try {
-      return realpathSync(d);
-    } catch {
-      return d;
-    }
-  });
-  return [...new Set([...dirs, ...real])];
+  return [...new Set([...dirs, ...dirs.map(realOf)])];
 }
 
-/** The denylisted folder `path` (a real path) sits in, if any. */
+/**
+ * A path's real spelling: links resolved and, where the system can say,
+ * the case on disk and Windows' long names (`realpathSync.native`), so
+ * ~/.SSH and C:\Users\RUNNER~1 are the folders they name.
+ */
+function realOf(p: string): string {
+  for (const real of [realpathSync.native, realpathSync]) {
+    try {
+      return real(p);
+    } catch {
+      /* the next */
+    }
+  }
+  return resolve(p);
+}
+
+/**
+ * The denylisted folder `path` (a real path) sits in, if any. macOS and
+ * Windows disks ignore case by default: ~/.AWS/credentials is
+ * ~/.aws/credentials there, whatever spelling the path arrived in.
+ */
 function inSensitiveDir(path: string, dirs: string[]): string | undefined {
-  return dirs.find((d) => within(d, path));
+  const fold = process.platform === "darwin" || process.platform === "win32" ? (s: string) => s.toLowerCase() : (s: string) => s;
+  return dirs.find((d) => within(fold(d), fold(path)));
 }
 
 export interface ReadSourcesOptions {
@@ -591,13 +605,6 @@ export function readSources(
   let hidden = 0;
   // Whether the folder being walked was listed by git (hidden tracked files are source there).
   let insideGit = false;
-  const realOf = (p: string): string => {
-    try {
-      return realpathSync(p);
-    } catch {
-      return resolve(p);
-    }
-  };
   const visit = (p: string, top: boolean) => {
     if (sources.length >= PACK_LIMITS.files) {
       if (top || skipped.length < 20) skipped.push(`${p}: over ${PACK_LIMITS.files} files`);
@@ -613,7 +620,7 @@ export function readSources(
     if (st.isSymbolicLink()) {
       let target: string | undefined;
       try {
-        target = realpathSync(p);
+        target = realOf(realpathSync(p));
       } catch {
         return; // dangling: nothing to read
       }

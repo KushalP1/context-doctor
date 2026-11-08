@@ -76,9 +76,9 @@ def secret_file_reason(path):
     if ext in _SECRET_EXT:
         return f"a key or certificate store ({ext})"
     parts = re.split(r"[\\/]+", path)
-    if lower == "credentials" and len(parts) >= 2 and parts[-2] == ".aws":
-        return "AWS credentials"
     parent = parts[-2].lower() if len(parts) >= 2 else ""
+    if lower == "credentials" and parent == ".aws":
+        return "AWS credentials"
     if lower in _SECRET_IN_DIR.get(parent, ()):
         return f"a credentials file ({parent}/{name})"
     return None
@@ -123,10 +123,13 @@ def _read(paths, skipped=None, include_secrets=False):
     denied = [] if include_secrets else _sensitive_dirs()
     hint = "" if include_secrets else " (--include-secrets packs it)"
 
+    # macOS and Windows disks ignore case by default: ~/.AWS/credentials is ~/.aws/credentials there.
+    fold = str.lower if sys.platform in ("darwin", "win32") else (lambda s: s)
+
     def refused(path, top):
         real = os.path.realpath(path)
         for d in denied:
-            if _within(d, real):
+            if _within(fold(d), fold(real)):
                 if top:
                     skipped.append(f"{path}: refused, {d} holds credentials{hint}")
                 return True

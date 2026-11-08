@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,6 +65,24 @@ test("credential folders under home are refused unless secrets are allowed", asy
         assert.equal(r.skipped.filter((s) => /refused, .* holds credentials/.test(s)).length, 2, r.skipped.join("\n"));
         const allowed = readSources([join(home, ".ssh", "config")], { cwd: home, includeSecrets: true });
         assert.equal(allowed.sources.length, 1);
+    });
+});
+test("a credential folder spelled in another case is refused where the disk ignores case (macOS, Windows)", async () => {
+    assert.ok(secretFileReason("h/.AWS/credentials"), "the name check ignores case too");
+    const home = mkdtempSync(join(tmpdir(), "cd-pack-case-"));
+    mkdirSync(join(home, ".config", "gh"), { recursive: true });
+    mkdirSync(join(home, ".aws"));
+    mkdirSync(join(home, ".kube"));
+    writeFileSync(join(home, ".config", "gh", "hosts.yml"), "github.com:\n  oauth_token: gho_case\n");
+    writeFileSync(join(home, ".aws", "credentials"), "aws_secret_access_key = case\n");
+    writeFileSync(join(home, ".kube", "config"), "token: kube-case\n");
+    const spelled = [join(home, ".CONFIG", "GH", "hosts.yml"), join(home, ".Aws", "credentials"), join(home, ".KUBE", "config"), join(home, ".KUBE")];
+    if (!existsSync(spelled[0]))
+        return; // a case-sensitive disk: those paths are not the files
+    await withSandboxHome(home, () => {
+        const r = readSources(spelled, home);
+        assert.equal(r.sources.length, 0, r.sources.map((s) => s.text).join("\n"));
+        assert.equal(r.skipped.filter((s) => /refused, .* holds credentials/.test(s)).length, 4, r.skipped.join("\n"));
     });
 });
 test("the agents' own sign-ins are refused, named outright, behind a link, or where CODEX_HOME puts them", async () => {

@@ -121,6 +121,26 @@ class PackReadsWhatGitDoes(unittest.TestCase):
             self.assertFalse(any("outside secret" in t for t in texts), "a link out of the folder is not followed")
             self.assertTrue(any("symlink pointing outside" in n for n in skipped))
 
+    def test_credential_folder_in_another_case(self):
+        import os
+        import tempfile
+        from unittest import mock
+
+        from context_doctor.__main__ import _read, secret_file_reason
+
+        self.assertTrue(secret_file_reason("h/.AWS/credentials"))
+        home = tempfile.mkdtemp()
+        os.makedirs(os.path.join(home, ".config", "gh"))
+        with open(os.path.join(home, ".config", "gh", "hosts.yml"), "w") as fh:
+            fh.write("oauth_token: gho_case\n")
+        spelled = os.path.join(home, ".CONFIG", "GH", "hosts.yml")
+        if not os.path.exists(spelled):
+            return  # a case-sensitive disk: that path is not the file
+        with mock.patch.dict(os.environ, {"HOME": home, "USERPROFILE": home}):
+            skipped = []
+            self.assertEqual(list(_read([spelled], skipped)), [])
+        self.assertTrue(any("holds credentials" in s for s in skipped), skipped)
+
     def test_folder_git_config_runs_nothing(self):
         import os
         import subprocess
