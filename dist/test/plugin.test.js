@@ -90,6 +90,12 @@ test("the GitHub Action runs its own version unless `version:` names another", {
     assert.equal(run("0.40.0"), "0.40.0");
     assert.equal(run("", mkdtempSync(join(tmpdir(), "cd-action-"))), "latest", "no package.json beside the Action: npm's newest");
 });
+test("the build scripts find their own folder in a checkout whose path has a space (a URL's pathname is %20-encoded)", () => {
+    for (const f of readdirSync(join(root, "scripts")).filter((n) => /\.m?js$/.test(n))) {
+        const text = readFileSync(join(root, "scripts", f), "utf8");
+        assert.doesNotMatch(text, /import\.meta\.url\)\.pathname/, `scripts/${f}: use fileURLToPath(new URL(..., import.meta.url))`);
+    }
+});
 test("MCP Registry: server.json matches package.json and the registry's limits", () => {
     const server = JSON.parse(readFileSync(join(root, "server.json"), "utf8"));
     const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));

@@ -9,6 +9,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { AutoClearer } from "../dist/autoclear.js";
 
 const seen = [];
@@ -34,7 +35,7 @@ const statePath = join(mkdtempSync(join(tmpdir(), "cd-smoke-")), "state.json");
 const seed = new AutoClearer({ statePath });
 seed.apply({ contents: [{ role: "user", parts: [{ text: "fix the build" }] }] }, Date.now() - 7_200_000, "gemini-3-pro");
 seed.flush();
-const proxy = spawn(process.execPath, [new URL("../dist/cli.js", import.meta.url).pathname, "proxy", "--autopilot", "--port", String(freePort), "--autopilot-state", statePath, "--upstream-google", `http://127.0.0.1:${up.address().port}`], { stdio: ["ignore", "pipe", "pipe"], env: process.env });
+const proxy = spawn(process.execPath, [fileURLToPath(new URL("../dist/cli.js", import.meta.url)), "proxy", "--autopilot", "--port", String(freePort), "--autopilot-state", statePath, "--upstream-google", `http://127.0.0.1:${up.address().port}`], { stdio: ["ignore", "pipe", "pipe"], env: process.env });
 await new Promise((r) => proxy.stderr.on("data", (d) => /listening/.test(String(d)) && r()));
 const base = `http://127.0.0.1:${freePort}`;
 const H = { "content-type": "application/json", "x-goog-api-key": "AIza-test-not-real" };

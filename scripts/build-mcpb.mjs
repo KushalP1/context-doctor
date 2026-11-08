@@ -14,9 +14,11 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const MCPB_CLI = "@anthropic-ai/mcpb@2.1.2";
-const root = new URL("..", import.meta.url).pathname;
+// Not the URL's pathname: that is %20-encoded (a checkout under "My Projects") and /C:/... on Windows.
+const root = fileURLToPath(new URL("..", import.meta.url));
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const stage = join(root, "build", "mcpb");
 const out = join(root, `context-doctor-${pkg.version}.mcpb`);
