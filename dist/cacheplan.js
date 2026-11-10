@@ -42,8 +42,8 @@ const MAX_BREAKPOINTS = 4;
  * on some models and called cacheable prompts too small on others.
  */
 const CACHE_MINIMUMS = {
-    "opus 5.5": 512, "opus 5.0": 512, "fable 5.0": 512, "fable 5.1": 512,
-    "mythos 5.0": 512, "mythos 5.1": 512, "sonnet 5.5": 512, "haiku 5.5": 512,
+    "opus 5.5": 512, "opus 5.0": 512, "fable 5.0": 512, "fable 5.1": 512, "fable 5.2": 512,
+    "mythos 5.0": 512, "mythos 5.1": 512, "mythos 5.2": 512, "sonnet 5.5": 512, "haiku 5.5": 512,
     "opus 4.8": 1024, "sonnet 5.0": 1024, "sonnet 4.6": 1024, "sonnet 4.5": 1024,
     "opus 4.1": 1024, "opus 4.0": 1024, "sonnet 4.0": 1024,
     "opus 4.7": 2048, "haiku 3.5": 2048, "mythos preview": 2048,

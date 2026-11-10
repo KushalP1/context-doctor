@@ -150,7 +150,7 @@ const ALIAS = {
     sonnet: { family: /sonnet/i, fallback: "claude-sonnet-5-5" },
     opus: { family: /opus/i, fallback: "claude-opus-5-5" },
     haiku: { family: /haiku/i, fallback: "claude-haiku-5-5" },
-    fable: { family: /fable|mythos/i, fallback: "claude-fable-5-1" },
+    fable: { family: /fable|mythos/i, fallback: "claude-fable-5-2" },
 };
 function aliasModel(alias, costs) {
     const a = ALIAS[alias.toLowerCase()];
