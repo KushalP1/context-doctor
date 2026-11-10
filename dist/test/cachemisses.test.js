@@ -5,7 +5,9 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cacheMisses, cacheMissesLine, cacheMissesSignificant, renderCacheMisses } from "../cachemisses.js";
-const T0 = Date.parse("2026-10-19T10:00:00Z");
+// Three days back, on the hour: inside every 30-day window these tests ask for. A fixed day
+// (it was 2026-10-19) fell out of the window a month later and failed six tests.
+const T0 = Math.floor(Date.now() / 3_600_000) * 3_600_000 - 3 * 86_400_000;
 let n = 0;
 /** One assistant reply row with usage: `read` from cache, `write` to it. */
 function reply(at, model, read, write, extra = {}, oneHour = false) {
