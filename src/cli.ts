@@ -42,6 +42,7 @@ import { measureAccuracy, renderAccuracy } from "./accuracy.js";
 import { renderDiff } from "./diff.js";
 import { renderExperiment, runExperiment } from "./experiment.js";
 import { runStatusLine } from "./statusline.js";
+import { runMod } from "./modmeasure.js";
 import { renderSubagents, subagentDir, subagentFiles, subagentReport } from "./subagents.js";
 import { findPreset, PRESETS, RC_FILENAME } from "./config.js";
 import { runWatch } from "./watch.js";
@@ -263,6 +264,9 @@ Internal (Claude Code and MCP clients run these for you):
   context-doctor statusline                     Claude Code status bar line: live context size, cache
                                                 share, cost (wired by \`install --statusline\`; reads
                                                 the status JSON on stdin)
+  context-doctor mod measure|event              Run by the plugin's mod after each turn (Desktop, VS Code,
+                                                terminal): limit readings, Claude Code's cost beside
+                                                ours, the band's figures (JSON on stdin and stdout)
   context-doctor mcp [--http]                   The MCP server (same as context-doctor-mcp), for clients
                                                 that launch \`npx -y context-doctor mcp\`
 
@@ -561,7 +565,7 @@ const COMMANDS = [
   "analyze", "optimize", "proxy", "install", "uninstall", "savings", "compact-window", "autopilot", "mcp",
   "instructions", "session", "cursor", "statusline", "hook", "report", "doctor", "dashboard", "init",
   "experiment", "diff", "accuracy", "overhead", "ci", "cache-plan", "compactions", "cache-misses", "cache-ttl", "fix", "limits", "subagents", "tasks",
-  "spend", "budget", "reads", "pack", "watch", "ab", "handoff", "recall", "help", "version",
+  "spend", "budget", "reads", "pack", "watch", "ab", "handoff", "recall", "mod", "help", "version",
 ];
 
 type NumOpts = { min?: number; max?: number; integer?: boolean };
@@ -871,6 +875,16 @@ async function main(): Promise<void> {
 
   if (args.command === "statusline") {
     void runStatusLine();
+    return;
+  }
+
+  if (args.command === "mod") {
+    if (args.file !== "measure" && args.file !== "event") usageError(`Usage: context-doctor mod measure|event (the plugin's mod runs these, with JSON on stdin); got "${args.file ?? ""}".`);
+    if (process.stdin.isTTY) {
+      console.log("context-doctor mod is run by the plugin's mod in Claude Code with JSON on stdin; there is nothing for it to do in a terminal.");
+      return;
+    }
+    await runMod(args.file);
     return;
   }
 
