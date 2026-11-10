@@ -203,7 +203,7 @@ const PRICING = [
     // the same $0.30 / $2.50 / $0.03: no change to say.
     [gemini("gemini-3.1-pro"), rate(2, 12, 0.2), { long: { over: 200_000, rates: rate(4, 18, 0.4) } }],
     [gemini("gemini-3-flash"), rate(0.5, 3, 0.05)],
-    [gemini("gemini-2.5-pro"), rate(1.25, 10, 0.125), { long: { over: 200_000, rates: rate(2.5, 15, 0.25) }, changes: "2026-12-01", then: rate(0.75, 3.75, 0.075) }],
+    [gemini("gemini-2.5-pro"), rate(1.25, 10, 0.125), { long: { over: 200_000, rates: rate(2.5, 15, 0.25) }, changes: "2026-12-01", then: rate(0.75, 3.75, 0.075), routes: "gemini-3.8-flash" }],
     [gemini("gemini-2.5-flash"), rate(0.3, 2.5, 0.03)],
     [gemini("gemini-2.5-flash-lite"), rate(0.1, 0.4, 0.01)],
     // Fallbacks for Gemini ids not on the page (gemini-3-pro, a new 3.x Flash,
@@ -329,6 +329,10 @@ export function rateCard(model, usage, at = Date.now()) {
         return undefined;
     const [, list, b = {}] = r;
     const expired = b.changes !== undefined && at >= dayStart(b.changes);
+    // Routed to another model: its card, so a later change of that model's price follows (and is the day said).
+    const to = expired && b.routes ? rateCard(b.routes, usage, at) : undefined;
+    if (to)
+        return { ...to, estimated: true, changedOn: to.changedOn ?? b.changes };
     const base = expired && b.then ? b.then : list;
     const long = expired && b.then ? undefined : b.long;
     const fast = usage?.speed === "fast" && b.fast ? b.fast : undefined;

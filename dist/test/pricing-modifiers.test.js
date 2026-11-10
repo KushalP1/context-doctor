@@ -179,6 +179,12 @@ test("prices that end on a day: the row before it, past it the page's next price
     // Routed to Flash: no Pro tier after the day.
     assert.equal(rateCard("gemini-2.5-pro", undefined, day("2026-12-01")).over, undefined);
     assert.equal(rateCard("gemini-2.5-pro", undefined, day("2026-11-30")).over, 200_000);
+    // ... and billed as 3.8 Flash is from then on: its own price doubles on January 1, 2027, so a routed request's does too.
+    const routed = requestCost("gemini-2.5-pro", u, day("2027-01-01"));
+    near(routed.totalUsd, requestCost("gemini-3.8-flash", u, day("2027-01-01")).totalUsd, "gemini-2.5-pro routed, in 2027");
+    near(routed.totalUsd, 0.9, "gemini-2.5-pro routed, in 2027");
+    assert.equal(routed.changedOn, "2027-01-01");
+    assert.equal(routed.estimated, true);
     // A row with no end date never expires; Sonnet 5's scheduled increase was called off.
     for (const m of ["claude-sonnet-5", "gpt-6-astra-law", "gemini-2.5-flash"]) {
         assert.equal(priceChange(m), undefined, m);
