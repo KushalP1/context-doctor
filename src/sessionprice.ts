@@ -157,6 +157,41 @@ export function sessionPriceDue(input: SessionPriceInput, now = Date.now(), env:
   const b = base(input.sessionId);
   // Everything said: one stat from now on.
   if (said(claimFile(b, thresholds[thresholds.length - 1]), now)) return undefined;
+  const { app, usd, subagentUsd, workflowUsd, unpriced, estimatedUsd, read, save } = sessionTotal(input, now);
+  const passed = thresholds.filter((t) => usd >= t);
+  const top = passed[passed.length - 1];
+  if (top === undefined || said(claimFile(b, top), now) || !claim(claimFile(b, top))) {
+    if (read >= SAVE_BYTES) save();
+    return undefined;
+  }
+  // Passed two at once (a first look at a long session): said once, for the higher.
+  for (const t of passed.slice(0, -1)) claim(claimFile(b, t));
+  save();
+  return { app, threshold: top, usd, subagentUsd, ...(workflowUsd > 0 ? { workflowUsd } : {}), ...(unpriced ? { unpriced } : {}), ...(estimatedUsd > 0 ? { estimatedUsd } : {}), ...perMessage(app, input, now) };
+}
+
+/** What a session has cost so far, subagents included, as the threshold check prices it. */
+export interface SessionTotal {
+  app: Tool;
+  usd: number;
+  subagentUsd: number;
+  workflowUsd: number;
+  unpriced: number;
+  estimatedUsd: number;
+  /** Bytes read to bring the entries up to date. */
+  read: number;
+  /** Keeps the entries, so the next look reads only what was appended. */
+  save: () => void;
+}
+
+/**
+ * The session's price so far, from the per-transcript entries the threshold
+ * check keeps (shared, so each reads only what the other has not). Claims
+ * no threshold: the mod compares it with Claude Code's own cost after each
+ * turn (modmeasure.ts).
+ */
+export function sessionTotal(input: Pick<SessionPriceInput, "sessionId" | "transcript" | "event">, now = Date.now()): SessionTotal {
+  const b = base(input.sessionId);
   const app = appOf(input.transcript, input.event);
   // Each file and whose it is: the main conversation, a subagent, a workflow agent.
   const files: Array<[string, "main" | "sub" | "workflow"]> = [[input.transcript, "main"]];
@@ -210,16 +245,12 @@ export function sessionPriceDue(input: SessionPriceInput, now = Date.now(), env:
     }
     try { writeWhole(ledgerFile(b), { v: LEDGER_VERSION, f: out }); } catch { /* read again next time */ }
   };
-  const passed = thresholds.filter((t) => usd >= t);
-  const top = passed[passed.length - 1];
-  if (top === undefined || said(claimFile(b, top), now) || !claim(claimFile(b, top))) {
-    if (read >= SAVE_BYTES) save();
-    return undefined;
-  }
-  // Passed two at once (a first look at a long session): said once, for the higher.
-  for (const t of passed.slice(0, -1)) claim(claimFile(b, t));
-  save();
-  return { app, threshold: top, usd, subagentUsd, ...(workflowUsd > 0 ? { workflowUsd } : {}), ...(unpriced ? { unpriced } : {}), ...(estimatedUsd > 0 ? { estimatedUsd } : {}), ...perMessage(app, input, now) };
+  return { app, usd, subagentUsd, workflowUsd, unpriced, estimatedUsd, read, save };
+}
+
+/** Keeps a look's entries once it read enough to be worth it, as the threshold check does. */
+export function saveIfWorthIt(t: Pick<SessionTotal, "read" | "save">): void {
+  if (t.read >= SAVE_BYTES) t.save();
 }
 
 /** The main conversation's context now, and what the next message pays for it. */
