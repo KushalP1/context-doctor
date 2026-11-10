@@ -98,6 +98,12 @@ if [ -n "$CC" ]; then
 else
   echo "- plugin validate skipped: no Claude Code found"
 fi
+# K1: every model the newest Claude Code here knows (its Bedrock catalog, its claude-* ids) has a price of its own, not a family row's.
+if [ -n "$CC" ]; then
+  run "pricing: every Claude model in Claude Code's catalog has a price ($CC)" node scripts/check-models.mjs --binary "$CC"
+else
+  echo "- model prices skipped: no Claude Code found"
+fi
 run "cli: diff two profiles" env HOME=$(sb) bash -c "node dist/cli.js analyze examples/sample-conversation.json --json > /tmp/a.json && node dist/cli.js diff /tmp/a.json /tmp/a.json"
 
 echo "== 6. install/uninstall round trip in a throwaway HOME"

@@ -1,0 +1,33 @@
+# Weekly: fails when Claude Code's CHANGELOG or Anthropic's price page names a
+# Claude model that src/pricing.ts has no price of its own for (it would be
+# priced by its family's row, an estimate). Claude Code ships a model days
+# before a context-doctor release; this says so before users run it.
+# Read-only: no secrets, no writes.
+name: Model prices
+
+on:
+  schedule:
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prices:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci && npm run build
+      - name: Every Claude model in Claude Code's CHANGELOG and on the price page has a price
+        run: >-
+          node scripts/check-models.mjs
+          --url https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md
+          --url https://platform.claude.com/docs/en/about-claude/pricing.md
