@@ -38,7 +38,7 @@
 import { listSessions, isClaudeSession } from "./session.js";
 import { rowsOf, slimUsage, type Extractor } from "./scan.js";
 import { formatTokens, isCodeLike, realModel, tokensForLength } from "./tokens.js";
-import { CACHE_WRITE_1H, CACHE_WRITE_5M, pricingFor } from "./pricing.js";
+import { CACHE_WRITE_1H, CACHE_WRITE_5M, requestCost } from "./pricing.js";
 import { compareVersions } from "./modelswitch.js";
 import { diagnosedMisses, missLogPath, type DiagnosedMisses } from "./missledger.js";
 
@@ -341,10 +341,12 @@ export function missesInTranscript(
     started = true;
     if (prev && at - prev.at >= prev.ttl) colds++;
     if (at >= since) {
-      const price = pricingFor(model);
+      // As billed (requestCost): fast mode, US-only, the prompt's tier, its day's price, each TTL at its own rate.
+      const cost = requestCost(model, u, at);
+      const price = cost?.rates;
       const w1h = Math.min(write, num(u.cache_creation?.ephemeral_1h_input_tokens));
       const w5m = u.cache_creation ? Math.min(write - w1h, num(u.cache_creation?.ephemeral_5m_input_tokens)) : write - w1h;
-      onRequest(price ? (write * price.inputPerM * (oneHour ? CACHE_WRITE_1H : CACHE_WRITE_5M)) / 1e6 : 0, { at, version, write, oneHour: w1h, fiveMinute: w5m, first, model, entrypoint: r.ep });
+      onRequest(cost?.writeUsd ?? 0, { at, version, write, oneHour: w1h, fiveMinute: w5m, first, model, entrypoint: r.ep });
       if (prev && !compacted && at - prev.at < Math.min(ttl, prev.ttl) && prev.total > MIN_CONTEXT) {
         const isMiss = write > MISS_SHARE * prev.total;
         let miss: CacheMiss | undefined;

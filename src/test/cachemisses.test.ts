@@ -77,6 +77,30 @@ test("the 1-hour TTL keeps a request warm for an hour; sidechains and repeated r
   assert.equal(r.largest[0].gapSeconds, 1200);
 });
 
+test("a miss and the cache writes are priced as billed: fast mode, US-only and Haiku 5.5's long-prompt tier", () => {
+  /** reply() with these billing fields in its usage, as Claude Code records them. */
+  const billed = (row: string, usage: Record<string, unknown>) => {
+    const e = JSON.parse(row);
+    Object.assign(e.message.usage, usage);
+    return JSON.stringify(e);
+  };
+  const missOf = (M: string, usage: Record<string, unknown>, context = 100_000) => {
+    const r = cacheMisses(30, [transcript([billed(reply(s(0), M, 0, context), usage), billed(reply(s(20), M, 0, context + 2_000), usage)])]);
+    assert.equal(r.misses, 1, M);
+    return r;
+  };
+  // Fast mode, Opus 5.5 ($8 in, $0.40 read): the previous 100,010-token context re-written at 1.25x, less the read it replaced.
+  const fast = missOf("claude-opus-5-5", { speed: "fast" });
+  assert.ok(Math.abs(fast.extraUsd - (100_010 * (8 * 1.25 - 0.4)) / 1e6) < 1e-9, String(fast.extraUsd));
+  assert.ok(Math.abs(fast.cacheWriteUsd - ((100_000 + 102_000) * 8 * 1.25) / 1e6) < 1e-9, String(fast.cacheWriteUsd));
+  // US-only, Sonnet 5.5 ($2 / $0.10 at 1.1x).
+  const us = missOf("claude-sonnet-5-5", { inference_geo: "us" });
+  assert.ok(Math.abs(us.extraUsd - (100_010 * (2 * 1.25 - 0.1) * 1.1) / 1e6) < 1e-9, String(us.extraUsd));
+  // Haiku 5.5, a 150k prompt: its whole request at $0.50 / $0.05, not $0.10 / $0.01.
+  const long = missOf("claude-haiku-5-5", {}, 150_000);
+  assert.ok(Math.abs(long.extraUsd - (150_010 * (0.5 * 1.25 - 0.05)) / 1e6) < 1e-9, String(long.extraUsd));
+});
+
 test("requests before the window are context, not counted", () => {
   const M = "claude-opus-5-5";
   const old = Date.now() - 40 * 86_400_000;
