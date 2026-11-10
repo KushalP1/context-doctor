@@ -460,6 +460,8 @@ function agentConfigFiles() {
     const home = homedir();
     const files = [
         claudeJsonPath(), join(home, ".claude.json"),
+        // Claude Code's copies of it: <config dir>/backups/.claude.json.backup.<ms> (2.1.321), and the older <file>.backup.
+        `${claudeJsonPath()}.backup`, join(home, ".claude.json.backup"), join(claudeDir(), "backups"), join(home, ".claude", "backups"),
         ...[claudeDir(), join(home, ".claude")].flatMap((d) => [join(d, "settings.json"), join(d, "settings.local.json")]),
         join(home, ".cursor", "mcp.json"),
         join(codexDir(), "config.toml"), join(home, ".codex", "config.toml"),

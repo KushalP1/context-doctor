@@ -103,8 +103,10 @@ def _agent_config_files():
     claude = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
     codex = os.environ.get("CODEX_HOME", "").strip()
     files = [os.path.join(claude or home, ".claude.json"), os.path.join(home, ".claude.json")]
+    # Claude Code's copies of it: <config dir>/backups/.claude.json.backup.<ms>, and the older <file>.backup.
+    files += [f + ".backup" for f in files]
     for d in {claude or os.path.join(home, ".claude"), os.path.join(home, ".claude")}:
-        files += [os.path.join(d, "settings.json"), os.path.join(d, "settings.local.json")]
+        files += [os.path.join(d, "settings.json"), os.path.join(d, "settings.local.json"), os.path.join(d, "backups")]
     files += [
         os.path.join(home, ".cursor", "mcp.json"),
         os.path.join(codex or os.path.join(home, ".codex"), "config.toml"), os.path.join(home, ".codex", "config.toml"),

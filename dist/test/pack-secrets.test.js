@@ -120,6 +120,31 @@ test("the agents' MCP and settings files in the home folder are refused (their s
         }
     });
 });
+test("Claude Code's backups of ~/.claude.json are refused as the file is: its backups folder, and the old .backup beside it", async () => {
+    // Claude Code copies its global config, MCP servers' env included, to <config dir>/backups/.claude.json.backup.<ms>
+    // (2.1.321), and older versions to ~/.claude.json.backup.
+    const home = mkdtempSync(join(tmpdir(), "cd-pack-backups-"));
+    const files = [
+        ".claude.json.backup", join(".claude", "backups", ".claude.json.backup.1762700000000"),
+        join("claude-config", "backups", ".claude.json.backup.1762700000000"), join("claude-config", ".claude.json.backup"),
+    ];
+    for (const f of files) {
+        mkdirSync(dirname(join(home, f)), { recursive: true });
+        writeFileSync(join(home, f), '{"mcpServers":{"x":{"env":{"API_KEY":"sk-live-backup"}}}}\n');
+    }
+    mkdirSync(join(home, ".claude", "x"));
+    await withSandboxHome(home, () => {
+        process.env.CLAUDE_CONFIG_DIR = join(home, "claude-config");
+        try {
+            const r = readSources([...files.map((f) => join(home, f)), join(home, ".claude", "backups"), join(home, ".claude", "x", "..", "backups", ".claude.json.backup.1762700000000")], home);
+            assert.deepEqual(names(r), [], r.sources.map((s) => s.text).join("\n"));
+            assert.equal(r.skipped.filter((s) => /refused/.test(s)).length, files.length + 2, r.skipped.join("\n"));
+        }
+        finally {
+            delete process.env.CLAUDE_CONFIG_DIR;
+        }
+    });
+});
 test("the agents' own sign-ins are refused, named outright, behind a link, or where CODEX_HOME puts them", async () => {
     for (const f of ["h/.claude/.credentials.json", "h/.codex/auth.json", "h/.gemini/oauth_creds.json", "h/.cargo/credentials.toml", "h/.gem/credentials", ".vault-token"]) {
         assert.ok(secretFileReason(f), f);

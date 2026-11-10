@@ -152,7 +152,9 @@ class PackReadsWhatGitDoes(unittest.TestCase):
         files = [".claude.json", os.path.join(".claude", "settings.json"), os.path.join(".cursor", "mcp.json"),
                  os.path.join(".codex", "config.toml"), os.path.join(".gemini", "settings.json"),
                  os.path.join(".gemini", "config", "mcp_config.json"), os.path.join(".copilot", "mcp-config.json"),
-                 os.path.join(".config", "Claude", "claude_desktop_config.json")]
+                 os.path.join(".config", "Claude", "claude_desktop_config.json"),
+                 # Claude Code's backups of ~/.claude.json, which carry the same env.
+                 ".claude.json.backup", os.path.join(".claude", "backups", ".claude.json.backup.1762700000000")]
         for f in files:
             os.makedirs(os.path.dirname(os.path.join(home, f)), exist_ok=True)
             with open(os.path.join(home, f), "w") as fh:
