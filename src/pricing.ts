@@ -16,6 +16,8 @@
  * provider prices only per minute, per image or not at all has no row.
  */
 
+import { orgApplies, orgRates, orgRowFor } from "./orgrates.js";
+
 export interface ModelPricing {
   /** USD per 1M input tokens. */
   inputPerM: number;
@@ -23,6 +25,17 @@ export interface ModelPricing {
   outputPerM: number;
   /** USD per 1M cached input tokens read (2.5-10% of input, depending on the Claude model). */
   cacheReadPerM: number;
+  /**
+   * USD per 1M cache-write tokens, every lifetime alike: only an
+   * organization's contracted row has one (orgrates.ts). Without it a write
+   * is its TTL's multiple of input.
+   */
+  cacheWritePerM?: number;
+}
+
+/** What a cache write costs per 1M tokens at `mult` times input (its TTL's), or the row's own write rate. */
+export function writePerM(p: ModelPricing, mult: number): number {
+  return p.cacheWritePerM ?? mult * p.inputPerM;
 }
 
 /** Anthropic cache writes, relative to the input price: 5-minute TTL and 1-hour TTL. */
@@ -387,7 +400,9 @@ export function usageCost(usage: RecordedUsage | undefined | null, pricing: Mode
   const { fiveMinute, oneHour, twelveHour } = cacheWriteSplit(usage);
   const perM = (tokens: number, usd: number) => (tokens * usd) / 1_000_000;
   const inputUsd = perM(count(usage?.input_tokens), pricing.inputPerM);
-  const writeUsd = perM(fiveMinute * CACHE_WRITE_5M + oneHour * CACHE_WRITE_1H + twelveHour * CACHE_WRITE_OPENAI_12H, pricing.inputPerM);
+  const writeUsd = pricing.cacheWritePerM !== undefined
+    ? perM(fiveMinute + oneHour + twelveHour, pricing.cacheWritePerM)
+    : perM(fiveMinute * CACHE_WRITE_5M + oneHour * CACHE_WRITE_1H + twelveHour * CACHE_WRITE_OPENAI_12H, pricing.inputPerM);
   const readUsd = perM(count(usage?.cache_read_input_tokens), pricing.cacheReadPerM);
   const outputUsd = perM(count(usage?.output_tokens), pricing.outputPerM);
   const promptUsd = inputUsd + writeUsd + readUsd;
@@ -413,7 +428,7 @@ export function promptTokens(usage: RecordedUsage | undefined | null): number {
 /** UTC midnight of a "YYYY-MM-DD" day. */
 const dayStart = (day: string) => Date.parse(`${day}T00:00:00Z`);
 
-const scaled = (p: ModelPricing, k: number): ModelPricing => (k === 1 ? p : { inputPerM: p.inputPerM * k, outputPerM: p.outputPerM * k, cacheReadPerM: p.cacheReadPerM * k });
+const scaled = (p: ModelPricing, k: number): ModelPricing => (k === 1 ? p : { inputPerM: p.inputPerM * k, outputPerM: p.outputPerM * k, cacheReadPerM: p.cacheReadPerM * k, ...(p.cacheWritePerM !== undefined ? { cacheWritePerM: p.cacheWritePerM * k } : {}) });
 
 /**
  * The rates a model's requests bill at, from its row and what the request
@@ -440,10 +455,25 @@ export interface RateCard {
   changedOn?: string;
   /** Web searches bill per use (Claude). */
   webSearch?: true;
+  /**
+   * Priced at the organization's rates (Claude Code's managed `modelPricing`,
+   * orgrates.ts): its row for the model, or the list price times its
+   * multiplier. Every figure on the card is already scaled by `scale`.
+   */
+  org?: true;
+  /** The organization's multiplier, which also scales the web-search fee. */
+  scale?: number;
 }
 
 /** The rate card for one of `model`'s requests at time `at`, with the modifiers its usage records. Undefined for a model with no price. */
 export function rateCard(model: string | undefined, usage?: RecordedUsage | null, at = Date.now()): RateCard | undefined {
+  const org = model ? orgRates() : undefined;
+  const own = org && orgRowFor(org, model!);
+  if (own) {
+    // A contracted row is charged as written: no tier, fast mode, US-only or date; then the multiplier.
+    const rates = scaled(own, org!.multiplier);
+    return { rates, list: rates, org: true, ...(org!.multiplier !== 1 ? { scale: org!.multiplier } : {}), ...(/claude/i.test(model!) ? { webSearch: true as const } : {}) };
+  }
   const r = row(model);
   if (!r) return undefined;
   const [, list, b = {}] = r;
@@ -462,6 +492,14 @@ export function rateCard(model: string | undefined, usage?: RecordedUsage | null
   if (b.fallback || expired) card.estimated = true;
   if (expired) card.changedOn = b.changes;
   if (/claude/i.test(model!)) card.webSearch = true;
+  if (org && orgApplies(org, model)) {
+    const k = org.multiplier;
+    card.rates = scaled(card.rates, k);
+    card.list = scaled(card.list, k);
+    if (card.longRates) card.longRates = scaled(card.longRates, k);
+    card.org = true;
+    card.scale = k;
+  }
   return card;
 }
 
@@ -487,6 +525,8 @@ export interface RequestCost extends UsageCost {
   estimated?: true;
   /** "YYYY-MM-DD": its row's price changed on this day, before the request. */
   changedOn?: string;
+  /** Priced at the organization's rates (RateCard.org). */
+  org?: true;
 }
 
 /**
@@ -503,7 +543,7 @@ export function requestCost(model: string | undefined, usage: RecordedUsage | un
   const rates = ratesAt(card, prompt);
   const c = usageCost(usage, rates);
   const searches = card.webSearch ? count(usage?.server_tool_use?.web_search_requests) : 0;
-  const m: Modifiers = { ...NO_MODIFIERS, webSearches: searches, webSearchUsd: searches * WEB_SEARCH_USD };
+  const m: Modifiers = { ...NO_MODIFIERS, webSearches: searches, webSearchUsd: searches * WEB_SEARCH_USD * (card.scale ?? 1) };
   if (card.fast || card.geo || rates !== card.rates || card.over !== undefined) {
     // Each modifier measured from the step before it: list row, its tier, fast mode, US-only.
     const geo = card.geo ? US_ONLY_MULTIPLIER : 1;
@@ -514,7 +554,7 @@ export function requestCost(model: string | undefined, usage: RecordedUsage | un
     m.fastUsd = card.fast ? preGeo - tiered : 0;
     m.geoUsd = c.totalUsd - preGeo;
   }
-  return { ...c, totalUsd: c.totalUsd + m.webSearchUsd, rates, modifiers: m, ...(card.estimated ? { estimated: true } : {}), ...(card.changedOn ? { changedOn: card.changedOn } : {}) };
+  return { ...c, totalUsd: c.totalUsd + m.webSearchUsd, rates, modifiers: m, ...(card.estimated ? { estimated: true } : {}), ...(card.changedOn ? { changedOn: card.changedOn } : {}), ...(card.org ? { org: true as const } : {}) };
 }
 
 /** `a` plus `b`, part by part. */

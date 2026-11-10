@@ -269,7 +269,7 @@ function blend(mix: Record<string, number>, u?: RecordedUsage, at?: number): Mod
   const parts = Object.entries(mix).map(([m, w]) => [rates(m), w] as const).filter((x): x is readonly [ModelPricing, number] => !!x[0] && x[1] > 0);
   const total = parts.reduce((s, [, w]) => s + w, 0);
   if (!(total > 0)) return undefined;
-  const rate = (k: keyof ModelPricing) => parts.reduce((s, [p, w]) => s + (p[k] * w) / total, 0);
+  const rate = (k: "inputPerM" | "outputPerM" | "cacheReadPerM") => parts.reduce((s, [p, w]) => s + (p[k] * w) / total, 0);
   return { inputPerM: rate("inputPerM"), outputPerM: rate("outputPerM"), cacheReadPerM: rate("cacheReadPerM") };
 }
 

@@ -34,6 +34,7 @@ import { claudeFileUsage, codexSessionsRoot, rolloutFiles, SUBAGENT_LOOKBACK_MS,
 import { subagentFiles } from "./subagents.js";
 import { codexFileSpend, codexFiles, geminiFileSpend, geminiFiles, TOOL_NAME, type Tool } from "./spend.js";
 import { isUnbilledModel, priceChangedText, requestCost, type RecordedUsage } from "./pricing.js";
+import { orgRates, orgRatesLine } from "./orgrates.js";
 import { anchorOf, rowsOf } from "./scan.js";
 import { realModel } from "./tokens.js";
 
@@ -193,9 +194,11 @@ export function periodEnd(period: Period, now = Date.now()): number {
  * lists those priced only by their model's family (an estimate), the same
  * way; `z` those priced past the day their model's price changed (index,
  * model, the day). `d` is requestCost's: each request's tier, fast mode,
- * US-only and web searches, and the output price in `r` is its own.
+ * US-only and web searches, and the output price in `r` is its own. `p`
+ * fingerprints the organization's rates `d` was priced at (orgrates.ts;
+ * absent at list prices): an entry priced under other rates is read again.
  */
-export interface FileEntry { t: Tool; s: number; m: number; i: number; k: string[]; d: number[]; o?: number; a?: string; r?: Array<[string, number, number, number]>; x?: Array<[number, string]>; y?: Array<[number, string]>; z?: Array<[number, string, string]> }
+export interface FileEntry { t: Tool; s: number; m: number; i: number; k: string[]; d: number[]; o?: number; a?: string; r?: Array<[string, number, number, number]>; x?: Array<[number, string]>; y?: Array<[number, string]>; z?: Array<[number, string, string]>; p?: string }
 
 /** Replies remembered per transcript, to tell a later row of one from a new reply. */
 const RECENT_REPLIES = 64;
@@ -478,8 +481,9 @@ export function wellFormed(e: FileEntry | undefined): e is FileEntry {
 export function refreshEntry(tool: Tool, file: string, prev: FileEntry | undefined, since: number, direct = false, own?: string): { e: FileEntry; read: number } | undefined {
   let s;
   try { s = statSync(file); } catch { return undefined; }
-  // An entry not in the shape this version writes (edited, or another version's) is read again.
-  const e = wellFormed(prev) ? prev : undefined;
+  // An entry not in the shape this version writes (edited, or another version's), or priced at other rates, is read again.
+  const org = orgRates()?.key;
+  const e = wellFormed(prev) && prev.p === org ? prev : undefined;
   if (e && e.t === tool && e.s === s.size && e.m === s.mtimeMs && e.i === s.ino) return { e, read: -1 };
   try {
     // Claude Code appends: a transcript that only grew is read from where the last read stopped.
@@ -492,10 +496,10 @@ export function refreshEntry(tool: Tool, file: string, prev: FileEntry | undefin
       const fd = openSync(file, "r");
       let a: string;
       try { a = anchorOf(fd, 0); } finally { closeSync(fd); }
-      const blank: FileEntry = { t: tool, s: 0, m: 0, i: s.ino, k: [], d: [], o: 0, a, r: [] };
+      const blank: FileEntry = { t: tool, s: 0, m: 0, i: s.ino, k: [], d: [], o: 0, a, r: [], ...(org ? { p: org } : {}) };
       if (readAppended(blank, file, since, own)) return { e: { ...blank, s: s.size, m: s.mtimeMs }, read: s.size };
     }
-    return { e: { t: tool, s: s.size, m: s.mtimeMs, i: s.ino, ...readFile(tool, file, since, s.size) }, read: s.size };
+    return { e: { t: tool, s: s.size, m: s.mtimeMs, i: s.ino, ...readFile(tool, file, since, s.size), ...(org ? { p: org } : {}) }, read: s.size };
   } catch {
     return undefined;
   }
@@ -664,6 +668,8 @@ export function renderBudgetStatus(b: Budget | undefined, s: PeriodSpend | undef
     `Budget: ${amount(b.usd)} a ${per(b.period)}, across Claude Code, Codex and Gemini CLI${b.block ? "; prompts over it are held" : ""}.`,
     `${span(b.period) === "today" ? "Today" : "This week"}: ${money(s.usd)} so far, ${Math.round((s.usd / b.usd) * 100)}%${byToolText(s.byTool)}. ${resets(b.period)}`,
   ];
+  const org = orgRatesLine();
+  if (org) lines.push(org);
   if (s.unpriced) lines.push(`Not counted: ${unpricedText(s.unpriced)}`);
   if (s.estimated) {
     const one = s.estimated.models.length === 1;
