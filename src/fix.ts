@@ -38,7 +38,7 @@ import { existsSync, mkdirSync, readFileSync, rmdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { forEachLine, listSessions, isClaudeSession } from "./session.js";
-import { pricingFor } from "./pricing.js";
+import { rateCard, ratesAt } from "./pricing.js";
 import { contextWindowFor, realModel } from "./tokens.js";
 import { adviseTtl, CACHE_TTL_SINCE, estimateCacheTtl, type CacheTtlReport, type CurrentTtl, type TtlKind } from "./cachettl.js";
 import { compareVersions, describeInstalls, type ClaudeCodeInstall } from "./modelswitch.js";
@@ -721,24 +721,27 @@ export function compactWindowSavingsSince(since: number, previousWindow: number 
         if (typeof msg.id === "string" && msg.id === lastId) return;
         lastId = typeof msg.id === "string" ? msg.id : undefined;
         const model = realModel(msg.model);
-        const price = pricingFor(model);
         const u = msg.usage;
+        // As the replays price (requestCost's rates): each prompt at its own tier, so the request a
+        // compaction avoided and the one it made can bill at different rates (Haiku 5.5 over 100k).
+        const card = rateCard(model, u, Number.isFinite(at) ? at : undefined);
         const total = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
         if (pendingPre !== undefined) {
           const oldTrigger = 0.97 * (previousWindow ?? contextWindowFor(model) ?? 200_000);
           // Only a compaction the old window would not have made yet.
-          if (pendingPre < 0.9 * oldTrigger && price) {
+          if (pendingPre < 0.9 * oldTrigger && card) {
             episode = { pre: pendingPre, post: total, trigger: oldTrigger, open: true };
             compactions++;
-            usd -= (pendingPre * price.cacheReadPerM + 20_000 * price.outputPerM) / 1e6;
+            const p = ratesAt(card, pendingPre);
+            usd -= (pendingPre * p.cacheReadPerM + 20_000 * p.outputPerM) / 1e6;
           }
           pendingPre = undefined;
           return;
         }
-        if (episode?.open && price && episode.post !== undefined) {
+        if (episode?.open && card && episode.post !== undefined) {
           const cf = episode.pre + Math.max(0, total - episode.post);
           if (cf >= episode.trigger) episode.open = false;
-          else usd += ((cf - total) * price.cacheReadPerM) / 1e6;
+          else usd += (cf * ratesAt(card, cf).cacheReadPerM - total * ratesAt(card, total).cacheReadPerM) / 1e6;
         }
       });
     } catch {

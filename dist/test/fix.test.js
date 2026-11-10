@@ -146,6 +146,24 @@ test("since: the cache lifetime's saving on the sessions after it was set, and e
     writeFileSync(q, c.join("\n").replace('"trigger":"auto"', '"trigger":"manual"') + "\n");
     assert.equal(compactWindowSavingsSince(at, undefined, [q]).compactions, 0);
 });
+test("since: an earlier compaction on Haiku 5.5 prices each request at its own prompt's tier, the one avoided and the one made", () => {
+    const at = Date.now() - 3 * 86_400_000;
+    // Compacted at 150k on a 200k window (it would have at 194k): the requests after it, 40k and 50k, would have been 160k and 170k.
+    const rows = [
+        reply(at + 1000, 150_000, 1_000, true),
+        JSON.stringify({ type: "system", subtype: "compact_boundary", timestamp: new Date(at + 2000).toISOString(), compactMetadata: { trigger: "auto", preTokens: 150_000 } }),
+        reply(at + 3000, 0, 30_000, true),
+        reply(at + 4000, 30_000, 10_000, true),
+        reply(at + 5000, 40_000, 10_000, true),
+    ].map((r) => r.replace(`"model":"${M}"`, '"model":"claude-haiku-5-5"'));
+    const q = join(mkdtempSync(join(tmpdir(), "cd-fix-since-haiku-")), "h.jsonl");
+    writeFileSync(q, rows.join("\n") + "\n");
+    const cw = compactWindowSavingsSince(at, undefined, [q]);
+    assert.equal(cw.compactions, 1);
+    // Over 100,000 tokens a whole Haiku 5.5 prompt reads at $0.05/M (output $2.50/M); under it, $0.01/M.
+    const expected = (160_000 * 0.05 - 40_000 * 0.01 + 170_000 * 0.05 - 50_000 * 0.01 - 150_000 * 0.05 - 20_000 * 2.5) / 1e6;
+    assert.ok(Math.abs(cw.usd - expected) < 1e-9, `${cw.usd} vs ${expected}`);
+});
 test("CLI: a plan from the history; nothing written without --apply; --apply then undo restores; bad ids are errors", () => {
     const now = Date.now();
     const home = homeWith([pausingSession(now - 2 * 86_400_000), pausingSession(now - 86_400_000)]);
