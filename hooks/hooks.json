@@ -1,5 +1,6 @@
 {
-  "description": "PreModelSwitch lives in its own file: Claude Code before 2.1.251 rejects a hooks file that names an event it does not know, and this way it drops only this one, not the plugin's other hooks in plugin.json.",
+  "description": "PreModelSwitch lives in its own file: Claude Code before 2.1.251 rejects a hooks file that names an event it does not know, and this way it drops only this one, not the plugin's other hooks in plugin.json. The mod (modules) is here for the same reason: Claude Code runs it from 2.1.286; an older one that refuses the key drops only this file.",
+  "modules": ["../dist/mod/register.js"],
   "hooks": {
     "PreModelSwitch": [
       {
