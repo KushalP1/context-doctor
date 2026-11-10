@@ -32,6 +32,7 @@ import { periodSpend, readBudget } from "./budget.js";
 import { sessionPriceThresholds } from "./sessionprice.js";
 import { claudeSpend, codexSpend } from "./spend.js";
 import { hasKnownPrice, isUnbilledModel, priceChangedText } from "./pricing.js";
+import { orgRatesLine } from "./orgrates.js";
 function claudeDesktopConfigPath() {
     switch (platform()) {
         case "darwin": return join(homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
@@ -836,6 +837,12 @@ export async function runDoctor() {
         const c = unpricedModelsCheck();
         if (c)
             checks.push(c);
+    }
+    // Contracted rates in managed settings: every report prices Claude at them, as Claude Code does.
+    {
+        const org = orgRatesLine();
+        if (org)
+            checks.push({ label: "Prices", status: "ok", detail: org });
     }
     checks.push(await checkMcpHandshake());
     // Autopilot: optional, so "off" is a skip, not a failure. When it is on, a

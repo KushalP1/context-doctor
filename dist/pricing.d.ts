@@ -22,7 +22,15 @@ export interface ModelPricing {
     outputPerM: number;
     /** USD per 1M cached input tokens read (2.5-10% of input, depending on the Claude model). */
     cacheReadPerM: number;
+    /**
+     * USD per 1M cache-write tokens, every lifetime alike: only an
+     * organization's contracted row has one (orgrates.ts). Without it a write
+     * is its TTL's multiple of input.
+     */
+    cacheWritePerM?: number;
 }
+/** What a cache write costs per 1M tokens at `mult` times input (its TTL's), or the row's own write rate. */
+export declare function writePerM(p: ModelPricing, mult: number): number;
 /** Anthropic cache writes, relative to the input price: 5-minute TTL and 1-hour TTL. */
 export declare const CACHE_WRITE_5M = 1.25;
 export declare const CACHE_WRITE_1H = 2;
@@ -160,6 +168,14 @@ export interface RateCard {
     changedOn?: string;
     /** Web searches bill per use (Claude). */
     webSearch?: true;
+    /**
+     * Priced at the organization's rates (Claude Code's managed `modelPricing`,
+     * orgrates.ts): its row for the model, or the list price times its
+     * multiplier. Every figure on the card is already scaled by `scale`.
+     */
+    org?: true;
+    /** The organization's multiplier, which also scales the web-search fee. */
+    scale?: number;
 }
 /** The rate card for one of `model`'s requests at time `at`, with the modifiers its usage records. Undefined for a model with no price. */
 export declare function rateCard(model: string | undefined, usage?: RecordedUsage | null, at?: number): RateCard | undefined;
@@ -186,6 +202,8 @@ export interface RequestCost extends UsageCost {
     estimated?: true;
     /** "YYYY-MM-DD": its row's price changed on this day, before the request. */
     changedOn?: string;
+    /** Priced at the organization's rates (RateCard.org). */
+    org?: true;
 }
 /**
  * What one recorded request cost, as billed: its model's row at the time it

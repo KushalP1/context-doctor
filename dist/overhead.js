@@ -20,7 +20,8 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { codexDir } from "./codexdir.js";
 import { forEachLine, listSessions, replyCounter, textOf } from "./session.js";
 import { estimateTokens, formatTokens, providerFor, realModel, tokensForLength } from "./tokens.js";
-import { cacheWriteSplit, formatUsd, pricingFor, writeMultiplier as ttlWriteMultiplier } from "./pricing.js";
+import { cacheWriteSplit, formatUsd, rateCard, ratesAt, writeMultiplier as ttlWriteMultiplier, writePerM } from "./pricing.js";
+import { priceBasis } from "./orgrates.js";
 import { isGeminiChat, readGeminiMessages } from "./gemini.js";
 import { claudeMcpConfigs, mcpUsage, measureServer, otherServerUses, serverUses } from "./mcpschema.js";
 import { claudeDir } from "./claudedir.js";
@@ -183,7 +184,7 @@ function claudeUsage(path, runRows) {
         const w = cacheWriteSplit(u);
         out.writes5m += w.fiveMinute;
         out.writes1h += w.oneHour;
-        out.reqs.push({ at, model: realModel(e.message.model) });
+        out.reqs.push({ at, model: realModel(e.message.model), prompt, billing: { speed: u.speed, inference_geo: u.inference_geo } });
     });
     return out;
 }
@@ -275,7 +276,7 @@ function aggregate(agent, sessions, since, days) {
                 const cold = prevAt === undefined || r.at - prevAt > TTL_MS;
                 if (cold)
                     coldStarts++;
-                starts.push({ cold, model: r.model });
+                starts.push({ cold, model: r.model, at: r.at, prompt: r.prompt, billing: r.billing });
                 if (r.model)
                     models.set(r.model, (models.get(r.model) ?? 0) + 1);
             }
@@ -291,11 +292,13 @@ function aggregate(agent, sessions, since, days) {
     // at its own model's price: one month can mix a $4 and a $10 model.
     let usdPerK = 0, priced = 0;
     for (const r of starts) {
-        const price = pricingFor(r.model ?? model);
-        if (!price)
+        // At the rates that request billed (rateCard: its prompt's tier, fast mode, US-only, the day).
+        const card = rateCard(r.model ?? model, r.billing, r.at);
+        if (!card)
             continue;
+        const price = ratesAt(card, r.prompt ?? 0);
         priced++;
-        usdPerK += (1000 * (r.cold ? writeMultiplier(r.model ?? model, writes5m, writes1h) * price.inputPerM : price.cacheReadPerM)) / 1e6;
+        usdPerK += (1000 * (r.cold ? writePerM(price, writeMultiplier(r.model ?? model, writes5m, writes1h)) : price.cacheReadPerM)) / 1e6;
     }
     const usdPerKPerMonth = priced > 0 ? usdPerK * (30 / days) : undefined;
     return {
@@ -470,7 +473,7 @@ export function renderOverhead(r, home = homedir()) {
     if (b) {
         out.push(`Claude Code, last ${b.days} days: ${sessionCount(b)} start at a median ~${formatTokens(b.median)} tokens (p90 ~${formatTokens(b.p90)}) before the first message.`, `Memory files loaded here are ~${formatTokens(claudeTokens)} of that; the rest is Claude Code's system prompt, tools, skills and MCP schemas.`);
         if (b.usdPerKPerMonth !== undefined) {
-            out.push(`At your usage (${b.requests.toLocaleString("en-US")} requests, ${b.coldStarts.toLocaleString("en-US")} cold starts, ${b.model} list prices) every 1k tokens of it costs ~${formatUsd(b.usdPerKPerMonth)} a month;`, `the whole overhead ~${formatUsd((b.median / 1000) * b.usdPerKPerMonth)} a month.`);
+            out.push(`At your usage (${b.requests.toLocaleString("en-US")} requests, ${b.coldStarts.toLocaleString("en-US")} cold starts, ${b.model} ${priceBasis().replace(/^at /, "")}) every 1k tokens of it costs ~${formatUsd(b.usdPerKPerMonth)} a month;`, `the whole overhead ~${formatUsd((b.median / 1000) * b.usdPerKPerMonth)} a month.`);
         }
     }
     else {
@@ -480,7 +483,7 @@ export function renderOverhead(r, home = homedir()) {
         const tokens = r.files.filter((f) => f.agent === o.agent).reduce((s, f) => s + f.tokens, 0);
         out.push("", `${o.agent}, last ${o.days} days: ${sessionCount(o)} start at a median ~${formatTokens(o.median)} tokens (p90 ~${formatTokens(o.p90)}); ${tokens ? `memory files loaded here ~${formatTokens(tokens)} of it` : "no memory files of its own here"}.` +
             (o.usdPerKPerMonth !== undefined
-                ? ` Each 1k tokens ~${formatUsd(o.usdPerKPerMonth)} a month (${o.requests.toLocaleString("en-US")} requests, ${o.coldStarts.toLocaleString("en-US")} cold starts, ${o.model} list prices).`
+                ? ` Each 1k tokens ~${formatUsd(o.usdPerKPerMonth)} a month (${o.requests.toLocaleString("en-US")} requests, ${o.coldStarts.toLocaleString("en-US")} cold starts, ${o.model} ${priceBasis().replace(/^at /, "")}).`
                 : ""));
     }
     out.push(...renderMcp(r));

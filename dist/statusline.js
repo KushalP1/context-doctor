@@ -30,7 +30,7 @@
  */
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { contextWindowFor, formatTokens } from "./tokens.js";
-import { CACHE_WRITE_1H, CACHE_WRITE_5M, formatUsd, rateCard, ratesAt } from "./pricing.js";
+import { CACHE_WRITE_1H, CACHE_WRITE_5M, formatUsd, rateCard, ratesAt, writePerM } from "./pricing.js";
 import { recordLimits } from "./limits.js";
 import { recordMiss } from "./missledger.js";
 import { budgetStatus } from "./budget.js";
@@ -115,7 +115,7 @@ export function cacheClock(pc, model, nowMs = Date.now(), billing, prompt) {
     const card = rateCard(model, billing, nowMs);
     const price = card && ratesAt(card, prompt ?? tokens ?? 0);
     const oneHour = pc.ttl === "1h";
-    const extra = tokens !== undefined && price ? (tokens * (price.inputPerM * (oneHour ? CACHE_WRITE_1H : CACHE_WRITE_5M) - price.cacheReadPerM)) / 1e6 : undefined;
+    const extra = tokens !== undefined && price ? (tokens * (writePerM(price, oneHour ? CACHE_WRITE_1H : CACHE_WRITE_5M) - price.cacheReadPerM)) / 1e6 : undefined;
     const cost = tokens === undefined ? undefined : extra !== undefined && extra > 0 ? `+${formatUsd(extra)}` : `${formatTokens(tokens)} re-write`;
     // Epoch seconds within two hours of now: milliseconds, 1e300 and the like
     // would print a nonsense time ("NaN:NaN"), so they count as no expiry.

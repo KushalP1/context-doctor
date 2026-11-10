@@ -17,6 +17,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { formatTokens } from "./tokens.js";
 import { formatUsd, requestCost } from "./pricing.js";
+import { orgRatesLine } from "./orgrates.js";
 import { forEachLine, outputSettler, replyCounter } from "./session.js";
 import { realModel } from "./tokens.js";
 /** Where Claude Code keeps a session's subagents: beside the transcript, under its id. */
@@ -233,6 +234,9 @@ export function renderSubagents(report, parentInputUsd, top = 5, options = {}) {
         return null;
     const lines = [];
     lines.push("Subagents (their own windows, your bill)");
+    const org = orgRatesLine();
+    if (org)
+        lines.push(org);
     lines.push("─".repeat(56));
     const cost = report.unpriced === 0 ? formatUsd(report.totalCostUsd) : `${formatUsd(report.totalCostUsd)}+ (${report.unpriced} unpriced)`;
     lines.push(`${report.agents.length} subagent(s) made ${report.agents.reduce((t, a) => t + a.calls, 0)} API calls: ` +

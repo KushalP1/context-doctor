@@ -33,6 +33,7 @@ import { claudeFileUsage, codexSessionsRoot, rolloutFiles, SUBAGENT_LOOKBACK_MS,
 import { subagentFiles } from "./subagents.js";
 import { codexFileSpend, codexFiles, geminiFileSpend, geminiFiles, TOOL_NAME } from "./spend.js";
 import { isUnbilledModel, priceChangedText, requestCost } from "./pricing.js";
+import { orgRates, orgRatesLine } from "./orgrates.js";
 import { anchorOf, rowsOf } from "./scan.js";
 import { realModel } from "./tokens.js";
 /** Beside the hook state and the ledger: ~/.claude/.context-doctor-budget.json. */
@@ -493,8 +494,9 @@ export function refreshEntry(tool, file, prev, since, direct = false, own) {
     catch {
         return undefined;
     }
-    // An entry not in the shape this version writes (edited, or another version's) is read again.
-    const e = wellFormed(prev) ? prev : undefined;
+    // An entry not in the shape this version writes (edited, or another version's), or priced at other rates, is read again.
+    const org = orgRates()?.key;
+    const e = wellFormed(prev) && prev.p === org ? prev : undefined;
     if (e && e.t === tool && e.s === s.size && e.m === s.mtimeMs && e.i === s.ino)
         return { e, read: -1 };
     try {
@@ -514,11 +516,11 @@ export function refreshEntry(tool, file, prev, since, direct = false, own) {
             finally {
                 closeSync(fd);
             }
-            const blank = { t: tool, s: 0, m: 0, i: s.ino, k: [], d: [], o: 0, a, r: [] };
+            const blank = { t: tool, s: 0, m: 0, i: s.ino, k: [], d: [], o: 0, a, r: [], ...(org ? { p: org } : {}) };
             if (readAppended(blank, file, since, own))
                 return { e: { ...blank, s: s.size, m: s.mtimeMs }, read: s.size };
         }
-        return { e: { t: tool, s: s.size, m: s.mtimeMs, i: s.ino, ...readFile(tool, file, since, s.size) }, read: s.size };
+        return { e: { t: tool, s: s.size, m: s.mtimeMs, i: s.ino, ...readFile(tool, file, since, s.size), ...(org ? { p: org } : {}) }, read: s.size };
     }
     catch {
         return undefined;
@@ -686,6 +688,9 @@ export function renderBudgetStatus(b, s, hookInstalled) {
         `Budget: ${amount(b.usd)} a ${per(b.period)}, across Claude Code, Codex and Gemini CLI${b.block ? "; prompts over it are held" : ""}.`,
         `${span(b.period) === "today" ? "Today" : "This week"}: ${money(s.usd)} so far, ${Math.round((s.usd / b.usd) * 100)}%${byToolText(s.byTool)}. ${resets(b.period)}`,
     ];
+    const org = orgRatesLine();
+    if (org)
+        lines.push(org);
     if (s.unpriced)
         lines.push(`Not counted: ${unpricedText(s.unpriced)}`);
     if (s.estimated) {

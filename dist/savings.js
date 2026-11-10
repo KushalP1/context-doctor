@@ -17,6 +17,7 @@ import { coldResumeEvents } from "./coldresume.js";
 import { listSessions, isClaudeSession } from "./session.js";
 import { rowsOf } from "./scan.js";
 import { CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, rateCard, ratesAt, requestCost, writeMultiplier } from "./pricing.js";
+import { priceBasis } from "./orgrates.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
 import { withInvocation } from "./invocation.js";
 import { sessionsLabel } from "./compactwindow.js";
@@ -364,7 +365,7 @@ export function renderSavings(r, autopilotOn = false, cw, missLines, limitLines,
     // Kept within 80 columns: this is most people's first screen of the tool.
     lines.push("What context-doctor finds in your Claude Code sessions");
     // The same count, said the same way, as compact-window's.
-    lines.push(`Last ${r.days} days, ${sessionsLabel(n, r.transcripts ?? n)}, at list prices`);
+    lines.push(`Last ${r.days} days, ${sessionsLabel(n, r.transcripts ?? n)}, ${priceBasis()}`);
     lines.push("─".repeat(60));
     lines.push(`Input you were billed for         ${usd(r.billedUsd).padStart(9)}   from your transcripts' usage`);
     lines.push("");
@@ -428,7 +429,7 @@ export function renderShare(r) {
     if (r.sessions.length === 0)
         return "context-doctor found no Claude Code sessions to measure yet.";
     const lines = [
-        `My Claude Code input, last ${r.days} days: ${usd(r.billedUsd)} at list price (${r.sessions.length} sessions).`,
+        `My Claude Code input, last ${r.days} days: ${usd(r.billedUsd)} ${priceBasis(false)} (${r.sessions.length} sessions).`,
     ];
     if (r.coldResumeNetUsd > 0) {
         lines.push(`Running /compact when I came back to a big session after the cache expired would have saved ${usd(r.coldResumeNetUsd)} (${Math.round((r.coldResumeNetUsd / r.billedUsd) * 100)}%, ${r.coldResumes} times).`);

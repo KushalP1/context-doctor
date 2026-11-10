@@ -30,7 +30,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { forEachLine, replyCounter, textOf } from "./session.js";
 import { pick, rowsOf, slimUsage } from "./scan.js";
-import { cacheWriteSplit, formatUsd, rateCard, ratesAt, writeMultiplier } from "./pricing.js";
+import { cacheWriteSplit, formatUsd, rateCard, ratesAt, writeMultiplier, writePerM } from "./pricing.js";
 import { contextWindowFor, formatTokens, isCodeLike, realModel } from "./tokens.js";
 import { claudeDir } from "./claudedir.js";
 /**
@@ -273,7 +273,7 @@ export function detectColdResume(path, now = Date.now(), idleMs, minTokens = COL
                 tokens,
                 model,
                 lastReplyAt,
-                resumeUsd: p ? (tokens * sessionWriteMultiplier(path) * p.inputPerM) / 1e6 : undefined,
+                resumeUsd: p ? (tokens * writePerM(p, sessionWriteMultiplier(path))) / 1e6 : undefined,
                 perMessageUsd: p ? (tokens * p.cacheReadPerM) / 1e6 : undefined,
                 ttlMs: ttl ?? HOUR_MS,
             };
@@ -424,7 +424,7 @@ export function coldResumeEvents(path, idleMs, minTokens = COLD_MIN_TOKENS, runR
                 break;
             const card = c.card ?? b.card;
             const cold = c.at - prev.at > prev.ttl;
-            const per = (p) => (cold ? mix * p.inputPerM : p.cacheReadPerM);
+            const per = (p) => (cold ? writePerM(p, mix) : p.cacheReadPerM);
             // A long-prompt tier: the smaller prompt may bill all of it at the lower rates.
             const after = Math.max(0, c.total - removed);
             const hi = ratesAt(card, c.total), lo = ratesAt(card, after);
@@ -434,7 +434,7 @@ export function coldResumeEvents(path, idleMs, minTokens = COLD_MIN_TOKENS, runR
         }
         // The compaction re-reads the context just rebuilt and writes a summary;
         // the next request writes the fresh context.
-        const cost = b.total * price.cacheReadPerM + SUMMARY_OUTPUT_TOKENS * price.outputPerM + mix * AFTER_COMPACT_TOKENS * ratesAt(b.card, AFTER_COMPACT_TOKENS).inputPerM;
+        const cost = b.total * price.cacheReadPerM + SUMMARY_OUTPUT_TOKENS * price.outputPerM + AFTER_COMPACT_TOKENS * writePerM(ratesAt(b.card, AFTER_COMPACT_TOKENS), mix);
         events.push({ at: b.at, tokens: b.total, messagesAfter: n, netUsd: (saved - cost) / 1e6 });
     }
     return events;

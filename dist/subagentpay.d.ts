@@ -24,6 +24,7 @@
  * window for a hard task) and what the parent would have spent on its own tool
  * calls, so "did not pay" means "did not pay in context", not "was a mistake".
  */
+import { type ModelPricing } from "./pricing.js";
 /**
  * The model `fix` offers the subagents (subagentmodel.ts): the id the price
  * table knows, which Claude Code's model catalog maps to every provider's
@@ -72,7 +73,11 @@ export interface PaybackReport {
         }>;
     };
 }
-/** A subagent's bill (usage priced as the cache bills it), steps, startup context, start time and the tool output it read. */
+/**
+ * A subagent's bill (each request as billed, requestCost), steps, startup
+ * context, start time, the tool output it read, and the rates its first
+ * request billed at.
+ */
 export declare function scanSubagent(path: string): {
     costUsd: number;
     atSonnetUsd: number;
@@ -83,6 +88,7 @@ export declare function scanSubagent(path: string): {
     start: number;
     model?: string;
     writeMult: number;
+    rates?: ModelPricing;
 };
 export declare function subagentPayback(days?: number, paths?: string[], onProgress?: (done: number, total: number) => void): PaybackReport;
 export declare function renderPayback(r: PaybackReport, top?: number): string;

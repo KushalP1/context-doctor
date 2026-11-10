@@ -29,7 +29,8 @@ import { basename, join } from "node:path";
 import { forEachLine, listSessions, outputSettler, replyCounter, isClaudeSession } from "./session.js";
 import { subagentFiles, workflowRunInfo } from "./subagents.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
-import { cacheWriteSplit, formatUsd, pricingFor, usageCost, writeMultiplier } from "./pricing.js";
+import { cacheWriteSplit, formatUsd, rateCard, ratesAt, requestCost, writeMultiplier, writePerM } from "./pricing.js";
+import { priceBasis } from "./orgrates.js";
 /**
  * The model `fix` offers the subagents (subagentmodel.ts): the id the price
  * table knows, which Claude Code's model catalog maps to every provider's
@@ -56,13 +57,30 @@ function blockTokens(content) {
     }
     return n;
 }
-/** The price a request is re-priced at for the Sonnet line: Sonnet 5.5 when its own model costs more, else its own. */
-const SONNET = pricingFor(SUBAGENT_CANDIDATE);
-const atSonnet = (p) => (SONNET.inputPerM < p.inputPerM || (SONNET.inputPerM === p.inputPerM && SONNET.outputPerM < p.outputPerM) ? SONNET : p);
-/** A subagent's bill (usage priced as the cache bills it), steps, startup context, start time and the tool output it read. */
+const cheaper = (a, b) => a.inputPerM < b.inputPerM || (a.inputPerM === b.inputPerM && a.outputPerM < b.outputPerM);
+/**
+ * A request as billed (requestCost: its tier, fast mode, US-only, its date,
+ * web searches) and re-priced for the Sonnet line: at Sonnet 5.5 when that
+ * bills it for less, else as billed.
+ */
+function billed(model, u, at) {
+    const own = requestCost(model, u, at);
+    if (!own)
+        return undefined;
+    const sonnet = requestCost(SUBAGENT_CANDIDATE, u, at);
+    const moved = cheaper(sonnet.rates, own.rates);
+    return { usd: own.totalUsd, sonnetUsd: moved ? sonnet.totalUsd : own.totalUsd, rates: own.rates, sonnetRates: moved ? sonnet.rates : own.rates };
+}
+/**
+ * A subagent's bill (each request as billed, requestCost), steps, startup
+ * context, start time, the tool output it read, and the rates its first
+ * request billed at.
+ */
 export function scanSubagent(path) {
-    let costUsd = 0, atSonnetUsd = 0, readTokens = 0, task = "", model;
+    let costUsd = 0, atSonnetUsd = 0, readTokens = 0, task = "", model, firstRates;
     let steps = 0, startup = 0, start = Infinity, writes5m = 0, writes1h = 0;
+    // The rates of the last reply, for the output its later rows settle.
+    let last;
     const sighting = replyCounter();
     const settle = outputSettler();
     forEachLine(path, (line) => {
@@ -91,10 +109,9 @@ export function scanSubagent(path) {
         if (seen === "repeat") {
             // A later row of the same reply: only its final output count is new.
             const more = settle(e, false);
-            const price = more ? pricingFor(realModel(e.message.model) ?? model) : undefined;
-            if (price) {
-                costUsd += (more * price.outputPerM) / 1e6;
-                atSonnetUsd += (more * atSonnet(price).outputPerM) / 1e6;
+            if (more && last) {
+                costUsd += (more * last.rates.outputPerM) / 1e6;
+                atSonnetUsd += (more * last.sonnetRates.outputPerM) / 1e6;
             }
             return;
         }
@@ -113,16 +130,18 @@ export function scanSubagent(path) {
         const w = cacheWriteSplit(u);
         writes5m += w.fiveMinute;
         writes1h += w.oneHour;
-        const price = pricingFor(model);
-        if (!price)
+        const b = billed(model, u, Number.isFinite(at) ? at : undefined);
+        last = b;
+        if (!b)
             return;
-        costUsd += usageCost(u, price).totalUsd;
-        atSonnetUsd += usageCost(u, atSonnet(price)).totalUsd;
+        firstRates ??= b.rates;
+        costUsd += b.usd;
+        atSonnetUsd += b.sonnetUsd;
     });
-    return { costUsd, atSonnetUsd, readTokens, task: task.replace(/\s+/g, " ").slice(0, 90), steps, startup, start, model, writeMult: writeMultiplier(writes5m, writes1h) };
+    return { costUsd, atSonnetUsd, readTokens, task: task.replace(/\s+/g, " ").slice(0, 90), steps, startup, start, model, writeMult: writeMultiplier(writes5m, writes1h), ...(firstRates ? { rates: firstRates } : {}) };
 }
 function scanParent(path, ids) {
-    const view = { requests: [], prompts: [], compactions: [], writes5m: 0, writes1h: 0, returns: new Map() };
+    const view = { requests: [], prompts: [], billing: [], compactions: [], writes5m: 0, writes1h: 0, returns: new Map() };
     let lastId;
     forEachLine(path, (line) => {
         const hits = [...ids].filter((id) => line.includes(id));
@@ -147,6 +166,7 @@ function scanParent(path, ids) {
                 const u = e.message.usage;
                 view.requests.push(at);
                 view.prompts.push((u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0));
+                view.billing.push({ speed: u.speed, inference_geo: u.inference_geo });
             }
             const w = cacheWriteSplit(e.message.usage);
             view.writes5m += w.fiveMinute;
@@ -213,7 +233,6 @@ export function subagentPayback(days = 30, paths, onProgress) {
         });
         const ids = new Set(metas.flatMap((m) => [m.id, m.meta.toolUseId].filter((x) => Boolean(x))));
         const view = scanParent(parent, ids);
-        const price = pricingFor(view.model);
         // What the parent pays to write a token to its cache, from its own usage.
         const parentWrite = writeMultiplier(view.writes5m, view.writes1h);
         for (const m of metas) {
@@ -230,18 +249,23 @@ export function subagentPayback(days = 30, paths, onProgress) {
             const laterRequests = view.requests.filter((t) => t > from && t < until).length;
             const carried = Math.max(0, s.readTokens - returnedTokens);
             // The parent's context when the subagent started: its last request before then.
-            let parentContextTokens = 0;
-            for (let i = 0; i < view.requests.length && view.requests[i] <= s.start; i++)
+            let parentContextTokens = 0, last = -1;
+            for (let i = 0; i < view.requests.length && view.requests[i] <= s.start; i++) {
                 parentContextTokens = view.prompts[i];
-            const sub = pricingFor(s.model) ?? price;
+                last = i;
+            }
+            // The parent's rates as its next request would have billed them (rateCard: its tier at that context, fast mode and US-only as its last request, the day).
+            const card = rateCard(view.model, last >= 0 ? view.billing[last] : undefined, Number.isFinite(s.start) ? s.start : undefined);
+            const price = card && ratesAt(card, parentContextTokens);
+            const sub = s.rates ?? price;
             let inParentUsd = s.costUsd, avoidedUsd = 0;
             if (price && sub) {
                 // Each side's cache writes at its own TTL mix (subagents write at 5
                 // minutes, the main thread mostly at 1 hour) and reads at its model's rate.
-                const startupUsd = (s.startup * (s.writeMult * sub.inputPerM + Math.max(0, s.steps - 1) * sub.cacheReadPerM)) / 1e6;
+                const startupUsd = (s.startup * (writePerM(sub, s.writeMult) + Math.max(0, s.steps - 1) * sub.cacheReadPerM)) / 1e6;
                 const work = Math.max(0, s.costUsd - startupUsd) * (price.inputPerM / sub.inputPerM);
                 const rideAlong = (parentContextTokens * s.steps * price.cacheReadPerM) / 1e6;
-                avoidedUsd = (carried * (parentWrite * price.inputPerM + laterRequests * price.cacheReadPerM)) / 1e6;
+                avoidedUsd = (carried * (writePerM(price, parentWrite) + laterRequests * price.cacheReadPerM)) / 1e6;
                 inParentUsd = work + rideAlong + avoidedUsd;
             }
             out.push({
@@ -271,7 +295,7 @@ export function subagentPayback(days = 30, paths, onProgress) {
 }
 /** The workflow agents' lines of `subagents`: what they cost, by run. */
 function renderWorkflows(w, top) {
-    const out = ["", `Workflow agents: ${w.agents} in ${w.runs} workflow run${w.runs === 1 ? "" : "s"}, ${formatUsd(w.costUsd)} at list price (each run's work handed off whole, so not weighed against the parent).`];
+    const out = ["", `Workflow agents: ${w.agents} in ${w.runs} workflow run${w.runs === 1 ? "" : "s"}, ${formatUsd(w.costUsd)} ${priceBasis(false)} (each run's work handed off whole, so not weighed against the parent).`];
     if (w.costUsd - w.atSonnetUsd >= 1)
         out.push(`At ${SUBAGENT_CANDIDATE_NAME} (where they ran on a pricier model): ~${formatUsd(w.atSonnetUsd)}, token counts as recorded: an estimate.`);
     for (const r of w.byRun.slice(0, top))
@@ -288,7 +312,7 @@ export function renderPayback(r, top = 8) {
     const cost = all.reduce((s, a) => s + a.costUsd, 0);
     const inParent = all.reduce((s, a) => s + a.inParentUsd, 0);
     const paid = all.filter((a) => a.netUsd > 0);
-    out.push(`Last ${r.days} days: ${all.length} subagents in ${r.sessions} sessions cost ${formatUsd(cost)} at list price.`, `The same work done in the parent would have cost ~${formatUsd(inParent)}: ${paid.length} of ${all.length} were cheaper as subagents, net ${inParent - cost >= 0 ? "+" : "−"}${formatUsd(Math.abs(inParent - cost))}.`);
+    out.push(`Last ${r.days} days: ${all.length} subagents in ${r.sessions} sessions cost ${formatUsd(cost)} ${priceBasis(false)}.`, `The same work done in the parent would have cost ~${formatUsd(inParent)}: ${paid.length} of ${all.length} were cheaper as subagents, net ${inParent - cost >= 0 ? "+" : "−"}${formatUsd(Math.abs(inParent - cost))}.`);
     const sonnet = all.reduce((s, a) => s + a.atSonnetUsd, 0);
     if (cost - sonnet >= 1)
         out.push(`At ${SUBAGENT_CANDIDATE_NAME} (where they ran on a pricier model) the same requests come to ~${formatUsd(sonnet)}, token counts as recorded: an estimate. context-doctor fix says which of them a setting moves.`);

@@ -22,7 +22,8 @@
  */
 import { join } from "node:path";
 import { listSessions, replyCounter, isClaudeSession } from "./session.js";
-import { cacheWriteSplit, rateCard, ratesAt, requestCost, writeMultiplier } from "./pricing.js";
+import { cacheWriteSplit, rateCard, ratesAt, requestCost, writeMultiplier, writePerM } from "./pricing.js";
+import { priceBasis } from "./orgrates.js";
 import { realModel } from "./tokens.js";
 import { backupOnce } from "./install.js";
 import { ABSENT, readSettings, setJsonPath, withSettingsLock, writeAtomic } from "./settingsedit.js";
@@ -138,7 +139,7 @@ function replay(reqs, window, since, reread = 0, writeMult = 1.25, idleMin = idl
         const rates = (ctx) => (r.card ? ratesAt(r.card, ctx) : UNPRICED);
         const cost = (ctx, prev) => {
             const p = rates(ctx);
-            const write = writeMult * p.inputPerM;
+            const write = writePerM(p, writeMult);
             if (cold)
                 return write * ctx;
             const fresh = prev === undefined || ctx < prev ? ctx : ctx - prev;
@@ -157,7 +158,7 @@ function replay(reqs, window, since, reread = 0, writeMult = 1.25, idleMin = idl
         if (ctx >= TRIGGER_SHARE * window) {
             const p = rates(ctx);
             if (counted) {
-                sim += p.cacheReadPerM * ctx + p.outputPerM * SUMMARY_OUTPUT + writeMult * p.inputPerM * reread;
+                sim += p.cacheReadPerM * ctx + p.outputPerM * SUMMARY_OUTPUT + writePerM(p, writeMult) * reread;
                 extra++;
             }
             removed = r.prompt - AFTER_COMPACT - reread;
@@ -285,7 +286,7 @@ export function renderCompactWindows(r, current, limitLines) {
     const lines = [];
     lines.push("Auto-compact window: compact earlier, automatically (Claude Code's own setting)");
     // Counted and said exactly as `savings` says it, so the two screens agree.
-    lines.push(`Last ${r.days} days, ${sessionsLabel(r.sessions, r.transcripts ?? r.sessions)}, at list prices`);
+    lines.push(`Last ${r.days} days, ${sessionsLabel(r.sessions, r.transcripts ?? r.sessions)}, ${priceBasis()}`);
     lines.push("─".repeat(66));
     lines.push(`Now: ${current ? `${k(current)} (set in ${tilde(settingsPath())})` : "not set: Claude Code compacts near the model's full window"}`);
     if (r.sessions === 0) {

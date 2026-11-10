@@ -15,6 +15,11 @@
  * at a family's price, so a new release still gets a number. A model a
  * provider prices only per minute, per image or not at all has no row.
  */
+import { orgApplies, orgRates, orgRowFor } from "./orgrates.js";
+/** What a cache write costs per 1M tokens at `mult` times input (its TTL's), or the row's own write rate. */
+export function writePerM(p, mult) {
+    return p.cacheWritePerM ?? mult * p.inputPerM;
+}
 /** Anthropic cache writes, relative to the input price: 5-minute TTL and 1-hour TTL. */
 export const CACHE_WRITE_5M = 1.25;
 export const CACHE_WRITE_1H = 2;
@@ -299,7 +304,9 @@ export function usageCost(usage, pricing) {
     const { fiveMinute, oneHour, twelveHour } = cacheWriteSplit(usage);
     const perM = (tokens, usd) => (tokens * usd) / 1_000_000;
     const inputUsd = perM(count(usage?.input_tokens), pricing.inputPerM);
-    const writeUsd = perM(fiveMinute * CACHE_WRITE_5M + oneHour * CACHE_WRITE_1H + twelveHour * CACHE_WRITE_OPENAI_12H, pricing.inputPerM);
+    const writeUsd = pricing.cacheWritePerM !== undefined
+        ? perM(fiveMinute + oneHour + twelveHour, pricing.cacheWritePerM)
+        : perM(fiveMinute * CACHE_WRITE_5M + oneHour * CACHE_WRITE_1H + twelveHour * CACHE_WRITE_OPENAI_12H, pricing.inputPerM);
     const readUsd = perM(count(usage?.cache_read_input_tokens), pricing.cacheReadPerM);
     const outputUsd = perM(count(usage?.output_tokens), pricing.outputPerM);
     const promptUsd = inputUsd + writeUsd + readUsd;
@@ -321,9 +328,16 @@ export function promptTokens(usage) {
 }
 /** UTC midnight of a "YYYY-MM-DD" day. */
 const dayStart = (day) => Date.parse(`${day}T00:00:00Z`);
-const scaled = (p, k) => (k === 1 ? p : { inputPerM: p.inputPerM * k, outputPerM: p.outputPerM * k, cacheReadPerM: p.cacheReadPerM * k });
+const scaled = (p, k) => (k === 1 ? p : { inputPerM: p.inputPerM * k, outputPerM: p.outputPerM * k, cacheReadPerM: p.cacheReadPerM * k, ...(p.cacheWritePerM !== undefined ? { cacheWritePerM: p.cacheWritePerM * k } : {}) });
 /** The rate card for one of `model`'s requests at time `at`, with the modifiers its usage records. Undefined for a model with no price. */
 export function rateCard(model, usage, at = Date.now()) {
+    const org = model ? orgRates() : undefined;
+    const own = org && orgRowFor(org, model);
+    if (own) {
+        // A contracted row is charged as written: no tier, fast mode, US-only or date; then the multiplier.
+        const rates = scaled(own, org.multiplier);
+        return { rates, list: rates, org: true, ...(org.multiplier !== 1 ? { scale: org.multiplier } : {}), ...(/claude/i.test(model) ? { webSearch: true } : {}) };
+    }
     const r = row(model);
     if (!r)
         return undefined;
@@ -352,6 +366,15 @@ export function rateCard(model, usage, at = Date.now()) {
         card.changedOn = b.changes;
     if (/claude/i.test(model))
         card.webSearch = true;
+    if (org && orgApplies(org, model)) {
+        const k = org.multiplier;
+        card.rates = scaled(card.rates, k);
+        card.list = scaled(card.list, k);
+        if (card.longRates)
+            card.longRates = scaled(card.longRates, k);
+        card.org = true;
+        card.scale = k;
+    }
     return card;
 }
 /** A card's rates for a prompt of `prompt` tokens: its long tier's past `over`. */
@@ -374,7 +397,7 @@ export function requestCost(model, usage, at = Date.now()) {
     const rates = ratesAt(card, prompt);
     const c = usageCost(usage, rates);
     const searches = card.webSearch ? count(usage?.server_tool_use?.web_search_requests) : 0;
-    const m = { ...NO_MODIFIERS, webSearches: searches, webSearchUsd: searches * WEB_SEARCH_USD };
+    const m = { ...NO_MODIFIERS, webSearches: searches, webSearchUsd: searches * WEB_SEARCH_USD * (card.scale ?? 1) };
     if (card.fast || card.geo || rates !== card.rates || card.over !== undefined) {
         // Each modifier measured from the step before it: list row, its tier, fast mode, US-only.
         const geo = card.geo ? US_ONLY_MULTIPLIER : 1;
@@ -385,7 +408,7 @@ export function requestCost(model, usage, at = Date.now()) {
         m.fastUsd = card.fast ? preGeo - tiered : 0;
         m.geoUsd = c.totalUsd - preGeo;
     }
-    return { ...c, totalUsd: c.totalUsd + m.webSearchUsd, rates, modifiers: m, ...(card.estimated ? { estimated: true } : {}), ...(card.changedOn ? { changedOn: card.changedOn } : {}) };
+    return { ...c, totalUsd: c.totalUsd + m.webSearchUsd, rates, modifiers: m, ...(card.estimated ? { estimated: true } : {}), ...(card.changedOn ? { changedOn: card.changedOn } : {}), ...(card.org ? { org: true } : {}) };
 }
 /** `a` plus `b`, part by part. */
 export function addModifiers(a, b) {
