@@ -249,3 +249,21 @@ test("odd hook input (a number or object where a path belongs) is ignored withou
     assert.equal(stdout, "");
   }
 });
+
+test("the context note prices a message as the session price does: Haiku 5.5's long-prompt tier, fast mode", async () => {
+  // The history the size check reads, then the last reply's usage: the API's figure for the live context.
+  const session = (name: string, model: string, usage: Record<string, unknown>) => {
+    const p = join(dir, `${name}.jsonl`);
+    const reply = JSON.stringify({ type: "assistant", message: { id: `msg_${name}`, role: "assistant", model, content: [{ type: "text", text: "ok" }], usage } });
+    writeFileSync(p, [...Array.from({ length: 300 }, (_, i) => transcriptLine(i % 2 ? "assistant" : "user", bigTurn)), reply].join("\n"));
+    return p;
+  };
+  const written1h = (n: number) => ({ cache_creation_input_tokens: n, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: n } });
+  // 150,000 tokens on Haiku 5.5: the whole prompt bills at $0.50 / $0.05, not $0.10 / $0.01.
+  const haiku = JSON.parse(await runHook(session("haiku-long", "claude-haiku-5-5", { input_tokens: 10, cache_read_input_tokens: 140_000, ...written1h(9_990), output_tokens: 400 }), "haiku-long")).hookSpecificOutput.additionalContext as string;
+  assert.match(haiku, /context is at ~150k tokens/);
+  assert.match(haiku, /re-reads it for ~\$0\.0075 from the prompt cache, ~\$0\.150 when the cache has expired/);
+  // Opus 5.5 in fast mode: $8 / $0.40, not $4 / $0.20.
+  const fast = JSON.parse(await runHook(session("opus-fast", "claude-opus-5-5", { input_tokens: 10, cache_read_input_tokens: 140_000, ...written1h(9_990), output_tokens: 400, speed: "fast" }), "opus-fast")).hookSpecificOutput.additionalContext as string;
+  assert.match(fast, /re-reads it for ~\$0\.060 from the prompt cache, ~\$2\.40 when the cache has expired/);
+});

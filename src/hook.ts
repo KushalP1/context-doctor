@@ -24,7 +24,7 @@ import { parseSessionFile } from "./session.js";
 import { formatTokens, CHARS_PER_TOKEN, LARGEST_WINDOW } from "./tokens.js";
 import { ensureProxyUp } from "./autopilot.js";
 import { autoCompactsAt, detectColdResume, renderColdResume, renderColdResumeNotice, resumeVerdict, sessionWriteMultiplier, withResumeVerdict, type ResumeVerdict } from "./coldresume.js";
-import { formatUsd, pricingFor } from "./pricing.js";
+import { formatUsd, rateCard, ratesAt } from "./pricing.js";
 import { checkBudget, loadConfig } from "./config.js";
 import { modelSwitchMessage } from "./modelswitch.js";
 import { compactFacts, compactInstructions } from "./precompact.js";
@@ -32,6 +32,7 @@ import { fanoutHook, subagentCosts } from "./fanout.js";
 import { claudeDir } from "./claudedir.js";
 import { budgetVerdict } from "./budget.js";
 import { renderSessionPrice, sessionPriceDue } from "./sessionprice.js";
+import { tailUsage } from "./statusline.js";
 
 /** Default nudge threshold; a project budget or env var can lower/raise it. */
 const DEFAULT_WARN_TOKENS = 80_000;
@@ -422,7 +423,10 @@ export async function runHook(app?: "copilot"): Promise<void> {
     // from the transcript's tail: Claude Code's main thread has mostly
     // written the 1-hour cache, at 2x input, where a flat 1.25x quoted the
     // cold message 37% low (5-minute writes stay at 1.25x).
-    const pricing = pricingFor(model);
+    // At the rates the next request bills, as the session price's line says them (rateCard): fast mode
+    // and US-only as the last reply recorded, the tier of a prompt this size, today's price.
+    const card = rateCard(model, cursor ? undefined : tailUsage(transcriptPath)?.billing);
+    const pricing = card && ratesAt(card, liveTokens);
     const cachedUsd = pricing ? (liveTokens * pricing.cacheReadPerM) / 1e6 : undefined;
     const coldUsd = pricing ? (liveTokens * pricing.inputPerM * sessionWriteMultiplier(transcriptPath)) / 1e6 : undefined;
     // Cursor's agent transcript records tool calls but not their output, and
