@@ -24,3 +24,5 @@ node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" fix undo
 ```
 
 Running `fix` again later also shows what each applied fix saved since.
+
+On Claude Code 2.1.286 and later (terminal, Desktop app, VS Code from 2.1.299), the user can also type `/context-doctor-fix`: it opens the same plan in a pane with an Apply and an Undo button per fix, which run these same commands, with no Claude turn. Mention it once if they would rather click than name ids.
