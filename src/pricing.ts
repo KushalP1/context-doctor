@@ -123,16 +123,22 @@ const openaiLong = (inputPerM: number, outputPerM: number, cacheReadPerM: number
 const PRICING: Array<[pattern: RegExp, pricing: ModelPricing, billing?: RowBilling]> = [
   // Anthropic: platform.claude.com/docs/en/about-claude/pricing ("Model
   // pricing"; 5-minute writes 1.25x, 1-hour writes 2x), read 2026-11-06,
-  // its modifiers read 2026-11-08 (pricing.md):
+  // its modifiers read 2026-11-08 (pricing.md); read again 2026-11-10: Fable
+  // 5.2 and Mythos 5.2 added, every other row and modifier unchanged:
   //  - "Data residency pricing": for Claude 4.6 and later, `inference_geo:
   //    "us"` is 1.1x on input, output, cache writes and reads, and on Haiku
   //    5.5's over-100k prices too (GEO). Earlier models reject the parameter.
-  //  - "Fast mode pricing": Opus 5.5 $8 / $40, Opus 5 and Opus 4.8 $10 / $50,
+  //  - "Fast mode pricing": Fable 5.2 and Mythos 5.2 $16 / $80 (read
+  //    2026-11-10), Opus 5.5 $8 / $40, Opus 5 and Opus 4.8 $10 / $50,
   //    "across the full context window"; caching multipliers and data
   //    residency apply on top (Opus 5.5's reads 0.05x: $0.40).
   //  - "Long context pricing": only Haiku 5.5 is priced by prompt length.
   // Specific Claude versions first: the family rows below are only a
   // fallback for ids this table does not know yet.
+  // Fable 5.2 and Mythos 5.2 (read 2026-11-10): $8 / $40, writes $10 (5 min)
+  // and $16 (1 h), reads 0.025x ($0.20); fast mode $16 / $80 on the Claude
+  // API, reads $0.40 at that multiplier; US-only 1.1x (Claude 4.6 and later).
+  [claude("fable|mythos", 5, 2), rate(8, 40, 0.2), { geo: true, fast: rate(16, 80, 0.4) }],
   [claude("fable|mythos", 5, 1), rate(10, 50, 0.25), GEO],
   [claude("fable|mythos", 5), rate(10, 50, 1), GEO],
   [claude("opus", 5, 5), rate(4, 20, 0.2), { geo: true, fast: rate(8, 40, 0.4) }],
