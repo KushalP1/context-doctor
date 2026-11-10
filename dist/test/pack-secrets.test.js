@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { packContext, readSources, renderPack, secretFileReason } from "../pack.js";
 import { sandboxEnv, withSandboxHome } from "./sandbox.js";
@@ -136,7 +136,7 @@ test("Claude Code's backups of ~/.claude.json are refused as the file is: its ba
     await withSandboxHome(home, () => {
         process.env.CLAUDE_CONFIG_DIR = join(home, "claude-config");
         try {
-            const r = readSources([...files.map((f) => join(home, f)), join(home, ".claude", "backups"), join(home, ".claude", "x", "..", "backups", ".claude.json.backup.1762700000000")], home);
+            const r = readSources([...files.map((f) => join(home, f)), join(home, ".claude", "backups"), [join(home, ".claude", "x"), "..", "backups", ".claude.json.backup.1762700000000"].join(sep)], home);
             assert.deepEqual(names(r), [], r.sources.map((s) => s.text).join("\n"));
             assert.equal(r.skipped.filter((s) => /refused/.test(s)).length, files.length + 2, r.skipped.join("\n"));
         }
