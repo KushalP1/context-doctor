@@ -18,6 +18,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { formatTokens } from "./tokens.js";
 import { formatUsd, requestCost, type ModelPricing } from "./pricing.js";
+import { orgRatesLine } from "./orgrates.js";
 import { forEachLine, outputSettler, replyCounter } from "./session.js";
 import { realModel } from "./tokens.js";
 
@@ -240,6 +241,8 @@ export function renderSubagents(report: SubagentReport | null, parentInputUsd?: 
   if (!report) return null;
   const lines: string[] = [];
   lines.push("Subagents (their own windows, your bill)");
+  const org = orgRatesLine();
+  if (org) lines.push(org);
   lines.push("─".repeat(56));
   const cost = report.unpriced === 0 ? formatUsd(report.totalCostUsd) : `${formatUsd(report.totalCostUsd)}+ (${report.unpriced} unpriced)`;
   lines.push(

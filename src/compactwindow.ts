@@ -25,7 +25,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { listSessions, replyCounter, isClaudeSession } from "./session.js";
-import { cacheWriteSplit, rateCard, ratesAt, requestCost, writeMultiplier, type ModelPricing, type RateCard } from "./pricing.js";
+import { cacheWriteSplit, rateCard, ratesAt, requestCost, writeMultiplier, writePerM, type ModelPricing, type RateCard } from "./pricing.js";
+import { priceBasis } from "./orgrates.js";
 import { realModel } from "./tokens.js";
 import { backupOnce } from "./install.js";
 import { ABSENT, readSettings, setJsonPath, withSettingsLock, writeAtomic } from "./settingsedit.js";
@@ -172,7 +173,7 @@ function replay(reqs: Req[], window: number, since: number, reread = 0, writeMul
     const rates = (ctx: number) => (r.card ? ratesAt(r.card, ctx) : UNPRICED);
     const cost = (ctx: number, prev: number | undefined) => {
       const p = rates(ctx);
-      const write = writeMult * p.inputPerM;
+      const write = writePerM(p, writeMult);
       if (cold) return write * ctx;
       const fresh = prev === undefined || ctx < prev ? ctx : ctx - prev;
       return p.cacheReadPerM * (ctx - fresh) + write * fresh;
@@ -185,7 +186,7 @@ function replay(reqs: Req[], window: number, since: number, reread = 0, writeMul
     let simPrev = prevSim;
     if (ctx >= TRIGGER_SHARE * window) {
       const p = rates(ctx);
-      if (counted) { sim += p.cacheReadPerM * ctx + p.outputPerM * SUMMARY_OUTPUT + writeMult * p.inputPerM * reread; extra++; }
+      if (counted) { sim += p.cacheReadPerM * ctx + p.outputPerM * SUMMARY_OUTPUT + writePerM(p, writeMult) * reread; extra++; }
       removed = r.prompt - AFTER_COMPACT - reread;
       ctx = AFTER_COMPACT + reread;
       simPrev = undefined; // everything after a compaction is new to the cache
@@ -329,7 +330,7 @@ export function renderCompactWindows(r: CompactWindowReport, current?: number, l
   const lines: string[] = [];
   lines.push("Auto-compact window: compact earlier, automatically (Claude Code's own setting)");
   // Counted and said exactly as `savings` says it, so the two screens agree.
-  lines.push(`Last ${r.days} days, ${sessionsLabel(r.sessions, r.transcripts ?? r.sessions)}, at list prices`);
+  lines.push(`Last ${r.days} days, ${sessionsLabel(r.sessions, r.transcripts ?? r.sessions)}, ${priceBasis()}`);
   lines.push("─".repeat(66));
   lines.push(`Now: ${current ? `${k(current)} (set in ${tilde(settingsPath())})` : "not set: Claude Code compacts near the model's full window"}`);
   if (r.sessions === 0) {

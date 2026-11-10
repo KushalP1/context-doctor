@@ -39,6 +39,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { forEachLine, listSessions, isClaudeSession } from "./session.js";
 import { rateCard, ratesAt } from "./pricing.js";
+import { priceBasis } from "./orgrates.js";
 import { contextWindowFor, realModel } from "./tokens.js";
 import { adviseTtl, CACHE_TTL_SINCE, estimateCacheTtl, type CacheTtlReport, type CurrentTtl, type TtlKind } from "./cachettl.js";
 import { compareVersions, describeInstalls, type ClaudeCodeInstall } from "./modelswitch.js";
@@ -827,9 +828,9 @@ export function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], sin
   if (recordProblem) out.push(`⚠ ${recordProblem}`);
   out.push("context-doctor fix: what to change, ranked by what it saves you");
   // Codex's input named beside Claude Code's when there is some; alone on a machine with only Codex.
-  if (codexBilledUsd > 0 && billedUsd > 0) out.push(`Last ${days} days of your sessions: Claude Code ${money(billedUsd)} of input, Codex ${money(codexBilledUsd)}, at list prices`);
-  else if (codexBilledUsd > 0) out.push(`Last ${days} days of your Codex sessions, ${money(codexBilledUsd)} of input at list prices`);
-  else out.push(`Last ${days} days of your Claude Code sessions, ${money(billedUsd)} of input at list prices`);
+  if (codexBilledUsd > 0 && billedUsd > 0) out.push(`Last ${days} days of your sessions: Claude Code ${money(billedUsd)} of input, Codex ${money(codexBilledUsd)}, ${priceBasis()}`);
+  else if (codexBilledUsd > 0) out.push(`Last ${days} days of your Codex sessions, ${money(codexBilledUsd)} of input ${priceBasis()}`);
+  else out.push(`Last ${days} days of your Claude Code sessions, ${money(billedUsd)} of input ${priceBasis()}`);
   out.push("─".repeat(66));
   const avail = fixes.filter((f) => f.state === "available");
   // No input billed: there is no history to measure, which is not "all applied".
@@ -879,7 +880,7 @@ export function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], sin
   if (avail.length) {
     out.push(`Apply: ${command("fix")} in a terminal asks about each one; or ${command(`fix --apply ${avail.map((f) => f.id).join(",")}`)}`);
   }
-  out.push(`Undo everything fix applied: ${command("fix undo")}. Dollars at list price; on a subscription the same tokens come out of your usage limit.`);
+  out.push(`Undo everything fix applied: ${command("fix undo")}. Dollars ${priceBasis(false)}; on a subscription the same tokens come out of your usage limit.`);
   return out.join("\n");
 }
 

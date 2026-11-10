@@ -40,6 +40,7 @@ import { listSessions, replyCounter, isClaudeSession } from "./session.js";
 import { REQUEST_ROWS } from "./coldresume.js";
 import { rowsOf } from "./scan.js";
 import { CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, requestCost } from "./pricing.js";
+import { priceBasis } from "./orgrates.js";
 import { realModel } from "./tokens.js";
 import { backupOnce } from "./install.js";
 import { ABSENT, readSettings, setJsonPath, withSettingsLock, writeAtomic } from "./settingsedit.js";
@@ -379,7 +380,7 @@ function block(label: string, r: TtlReplay, set: Ttl | undefined, kind: TtlKind)
 export function renderCacheTtl(r: CacheTtlReport, current: CurrentTtl, installs: ClaudeCodeInstall[] = [], command = (s: string) => `context-doctor ${s}`): string {
   const out: string[] = [];
   out.push("Prompt cache lifetime: 5 minutes or 1 hour (Claude Code's own setting)");
-  out.push(`Last ${r.days} days, at list prices; the same content is sent either way`);
+  out.push(`Last ${r.days} days, ${priceBasis()}; the same content is sent either way`);
   out.push("─".repeat(66));
   out.push(...block("Main conversation", r.main, current.main, "main"));
   out.push("");
