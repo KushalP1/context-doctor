@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { codexSpawnedRollouts, codexSpend, renderSpend, summarizeSpend } from "../spend.js";
+import { codexSpawnedRollouts, codexSpend, renderSpend, summarizeSpend, type SpawnHeads } from "../spend.js";
 import { sessionPriceDue } from "../sessionprice.js";
 import { clearScanMemo } from "../scan.js";
 import { withSandboxHome } from "./sandbox.js";
@@ -117,6 +117,35 @@ test("Codex: a thread's spawned agents (forked or not) are in its session price,
     if (savedCache === undefined) delete process.env.CONTEXT_DOCTOR_CACHE_DIR;
     else process.env.CONTEXT_DOCTOR_CACHE_DIR = savedCache;
     clearScanMemo();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("Codex: each rollout's first line is read once; a later prompt reads only rollouts new since, and forgets those gone", async () => {
+  const home = mkdtempSync(join(tmpdir(), "cd-codex-heads-"));
+  try {
+    await withSandboxHome(home, () => {
+      const h = history(home);
+      const known: SpawnHeads = { heads: {} };
+      const both = [basename(h.forked), basename(h.fresh)].sort();
+      assert.deepEqual(codexSpawnedRollouts(h.parent, NOW, home, known).map((f) => basename(f)), both);
+      assert.equal(known.changed, true);
+      assert.deepEqual(known.heads[basename(h.fresh)], [B, P], "kept by file name: its id and its parent");
+      assert.deepEqual(known.heads[basename(h.userFork)], [F], "a user's fork is kept too, with no parent");
+      // The next prompt: nothing new, so no first line is read. One rewritten in place (a first line never
+      // changes; this one would now name no parent) still counts as kept, which shows it was not read again.
+      writeFileSync(h.fresh, JSON.stringify(meta(T + 130_000, { id: B, source: "vscode" })) + "\n");
+      known.changed = false;
+      assert.deepEqual(codexSpawnedRollouts(h.parent, NOW, home, known).map((f) => basename(f)), both);
+      assert.equal(known.changed, false, "nothing to save");
+      // A new spawned agent is read; a rollout gone is forgotten.
+      const late = write(rolloutPath(home, T + 400_000, "019fb6e0-0000-7000-8000-00000000a1a1"), [meta(T + 400_000, { id: "019fb6e0-0000-7000-8000-00000000a1a1", parent_thread_id: P })], T + 400_000);
+      rmSync(h.userFork);
+      assert.deepEqual(codexSpawnedRollouts(h.parent, NOW, home, known).map((f) => basename(f)), [...both, basename(late)].sort());
+      assert.equal(known.changed, true);
+      assert.equal(known.heads[basename(h.userFork)], undefined);
+    });
+  } finally {
     rmSync(home, { recursive: true, force: true });
   }
 });

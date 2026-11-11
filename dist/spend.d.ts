@@ -113,13 +113,22 @@ export declare function codexRolloutMeta(file: string): {
  * bill to the same work, as a Claude Code subagent's do.
  */
 export declare function codexSpend(since: number, until?: number, home?: string): SpendItem[];
+/** What rollouts' first lines named, by file name: [its thread id, the thread that spawned it]. */
+export interface SpawnHeads {
+    heads: Record<string, [id: string, parent?: string]>;
+    /** Set when `heads` gained or lost a rollout, so the caller saves it. */
+    changed?: boolean;
+}
 /**
  * The rollouts of the agents a Codex thread spawned (and theirs), for the
  * session price: those written since the thread began in its own folder,
  * the day folders from then to `now` (by local and UTC date) and the
- * archive. Only each candidate's first line is read.
+ * archive. Only each candidate's first line is read, and with `known` only
+ * once: a rollout's first line (its own session_meta) never changes, so
+ * what it named is kept there by file name, and a prompt reads only the
+ * rollouts written since the last (`known.changed` says when to save it).
  */
-export declare function codexSpawnedRollouts(parent: string, now?: number, home?: string): string[];
+export declare function codexSpawnedRollouts(parent: string, now?: number, home?: string, known?: SpawnHeads): string[];
 /**
  * What `spend` takes from a Gemini CLI chat (JSONL): each `gemini` message's
  * id, time, model and token counts. A message without a time of its own

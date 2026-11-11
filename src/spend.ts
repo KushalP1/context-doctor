@@ -316,13 +316,23 @@ function headParent(file: string): { id?: string; parent?: string } {
   }
 }
 
+/** What rollouts' first lines named, by file name: [its thread id, the thread that spawned it]. */
+export interface SpawnHeads {
+  heads: Record<string, [id: string, parent?: string]>;
+  /** Set when `heads` gained or lost a rollout, so the caller saves it. */
+  changed?: boolean;
+}
+
 /**
  * The rollouts of the agents a Codex thread spawned (and theirs), for the
  * session price: those written since the thread began in its own folder,
  * the day folders from then to `now` (by local and UTC date) and the
- * archive. Only each candidate's first line is read.
+ * archive. Only each candidate's first line is read, and with `known` only
+ * once: a rollout's first line (its own session_meta) never changes, so
+ * what it named is kept there by file name, and a prompt reads only the
+ * rollouts written since the last (`known.changed` says when to save it).
  */
-export function codexSpawnedRollouts(parent: string, now = Date.now(), home = homedir()): string[] {
+export function codexSpawnedRollouts(parent: string, now = Date.now(), home = homedir(), known?: SpawnHeads): string[] {
   const id = rolloutId(parent);
   if (!id) return [];
   let born: number;
@@ -337,14 +347,32 @@ export function codexSpawnedRollouts(parent: string, now = Date.now(), home = ho
     for (const [y, mo, dd] of [[d.getFullYear(), d.getMonth() + 1, d.getDate()], [d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()]]) dirs.add(join(root, String(y), String(mo).padStart(2, "0"), String(dd).padStart(2, "0")));
   }
   const heads = new Map<string, { id?: string; parent?: string }>();
+  const kept: SpawnHeads["heads"] = {};
   for (const dir of dirs) {
     let names: string[];
     try { names = readdirSync(dir); } catch { continue; }
     for (const n of names) {
       const f = join(dir, n);
       if (!n.startsWith("rollout-") || !n.endsWith(".jsonl") || f === parent || heads.has(f)) continue;
-      try { if (statSync(f).mtimeMs < born) continue; heads.set(f, headParent(f)); } catch { /* vanished */ }
+      const k = known?.heads[n];
+      if (Array.isArray(k) && typeof k[0] === "string") {
+        heads.set(f, { id: k[0], ...(typeof k[1] === "string" ? { parent: k[1] } : {}) });
+        kept[n] = k;
+        continue;
+      }
+      try {
+        if (statSync(f).mtimeMs < born) continue;
+        const h = headParent(f);
+        heads.set(f, h);
+        // Kept only once its id is there: a rollout caught before its first line was written is read again.
+        if (known && h.id) { kept[n] = h.parent ? [h.id, h.parent] : [h.id]; known.changed = true; }
+      } catch { /* vanished */ }
     }
+  }
+  if (known) {
+    // A rollout gone from every folder looked in is forgotten.
+    if (Object.keys(known.heads).some((n) => !(n in kept))) known.changed = true;
+    known.heads = kept;
   }
   // Children, then theirs.
   const mine = new Set([id]);

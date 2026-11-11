@@ -300,9 +300,12 @@ function headParent(file) {
  * The rollouts of the agents a Codex thread spawned (and theirs), for the
  * session price: those written since the thread began in its own folder,
  * the day folders from then to `now` (by local and UTC date) and the
- * archive. Only each candidate's first line is read.
+ * archive. Only each candidate's first line is read, and with `known` only
+ * once: a rollout's first line (its own session_meta) never changes, so
+ * what it named is kept there by file name, and a prompt reads only the
+ * rollouts written since the last (`known.changed` says when to save it).
  */
-export function codexSpawnedRollouts(parent, now = Date.now(), home = homedir()) {
+export function codexSpawnedRollouts(parent, now = Date.now(), home = homedir(), known) {
     const id = rolloutId(parent);
     if (!id)
         return [];
@@ -325,6 +328,7 @@ export function codexSpawnedRollouts(parent, now = Date.now(), home = homedir())
             dirs.add(join(root, String(y), String(mo).padStart(2, "0"), String(dd).padStart(2, "0")));
     }
     const heads = new Map();
+    const kept = {};
     for (const dir of dirs) {
         let names;
         try {
@@ -337,13 +341,31 @@ export function codexSpawnedRollouts(parent, now = Date.now(), home = homedir())
             const f = join(dir, n);
             if (!n.startsWith("rollout-") || !n.endsWith(".jsonl") || f === parent || heads.has(f))
                 continue;
+            const k = known?.heads[n];
+            if (Array.isArray(k) && typeof k[0] === "string") {
+                heads.set(f, { id: k[0], ...(typeof k[1] === "string" ? { parent: k[1] } : {}) });
+                kept[n] = k;
+                continue;
+            }
             try {
                 if (statSync(f).mtimeMs < born)
                     continue;
-                heads.set(f, headParent(f));
+                const h = headParent(f);
+                heads.set(f, h);
+                // Kept only once its id is there: a rollout caught before its first line was written is read again.
+                if (known && h.id) {
+                    kept[n] = h.parent ? [h.id, h.parent] : [h.id];
+                    known.changed = true;
+                }
             }
             catch { /* vanished */ }
         }
+    }
+    if (known) {
+        // A rollout gone from every folder looked in is forgotten.
+        if (Object.keys(known.heads).some((n) => !(n in kept)))
+            known.changed = true;
+        known.heads = kept;
     }
     // Children, then theirs.
     const mine = new Set([id]);

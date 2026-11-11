@@ -39,7 +39,7 @@ import { createHash } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { statePath } from "./ledger.js";
 import { refreshEntry, wellFormed, writeWhole, type FileEntry } from "./budget.js";
-import { codexFileSpend, codexSpawnedRollouts, geminiFileSpend, type Tool } from "./spend.js";
+import { codexFileSpend, codexSpawnedRollouts, geminiFileSpend, type SpawnHeads, type Tool } from "./spend.js";
 import { isGeminiChat } from "./gemini.js";
 import { subagentFiles } from "./subagents.js";
 import { tailUsage } from "./statusline.js";
@@ -72,6 +72,8 @@ function base(sessionId: string): string {
   return join(statePath().replace(/\.json$/, "") + ".d", createHash("sha1").update(sessionId).digest("hex").slice(0, 16));
 }
 const ledgerFile = (b: string) => `${b}.price.json`;
+/** A Codex thread's candidate rollouts and what their first lines named (codexSpawnedRollouts). */
+const headsFile = (b: string) => `${b}.spawn-heads.json`;
 /** The price file's format: 2 counts only the session's own rows and may leave a finished subagent's `r` out. */
 const LEDGER_VERSION = 2;
 /** A subagent transcript not written for this long is done: its entry keeps no recent replies. */
@@ -198,7 +200,16 @@ export function sessionTotal(input: Pick<SessionPriceInput, "sessionId" | "trans
   // Subagents and workflow agents bill to the session that started them.
   if (app === "claude") for (const f of subagentFiles(input.transcript)) files.push([f.file, f.run ? "workflow" : "sub"]);
   // A Codex thread's spawned agents: their rollouts name it as their parent (a forked one's copy of its history counts once, by key).
-  if (app === "codex") for (const f of codexSpawnedRollouts(input.transcript, now)) files.push([f, "sub"]);
+  if (app === "codex") {
+    // What each rollout's first line named, kept: a prompt reads only the rollouts new since the last.
+    const known: SpawnHeads = { heads: {} };
+    try {
+      const raw = JSON.parse(readFileSync(headsFile(b), "utf8"));
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) known.heads = raw;
+    } catch { /* none yet, or damaged: read again */ }
+    for (const f of codexSpawnedRollouts(input.transcript, now, undefined, known)) files.push([f, "sub"]);
+    if (known.changed) try { writeWhole(headsFile(b), known.heads); } catch { /* read again next time */ }
+  }
   let saved: Record<string, FileEntry> = {};
   try {
     const raw = JSON.parse(readFileSync(ledgerFile(b), "utf8"));

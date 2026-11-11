@@ -69,6 +69,8 @@ function base(sessionId) {
     return join(statePath().replace(/\.json$/, "") + ".d", createHash("sha1").update(sessionId).digest("hex").slice(0, 16));
 }
 const ledgerFile = (b) => `${b}.price.json`;
+/** A Codex thread's candidate rollouts and what their first lines named (codexSpawnedRollouts). */
+const headsFile = (b) => `${b}.spawn-heads.json`;
 /** The price file's format: 2 counts only the session's own rows and may leave a finished subagent's `r` out. */
 const LEDGER_VERSION = 2;
 /** A subagent transcript not written for this long is done: its entry keeps no recent replies. */
@@ -158,9 +160,23 @@ export function sessionTotal(input, now = Date.now()) {
         for (const f of subagentFiles(input.transcript))
             files.push([f.file, f.run ? "workflow" : "sub"]);
     // A Codex thread's spawned agents: their rollouts name it as their parent (a forked one's copy of its history counts once, by key).
-    if (app === "codex")
-        for (const f of codexSpawnedRollouts(input.transcript, now))
+    if (app === "codex") {
+        // What each rollout's first line named, kept: a prompt reads only the rollouts new since the last.
+        const known = { heads: {} };
+        try {
+            const raw = JSON.parse(readFileSync(headsFile(b), "utf8"));
+            if (raw && typeof raw === "object" && !Array.isArray(raw))
+                known.heads = raw;
+        }
+        catch { /* none yet, or damaged: read again */ }
+        for (const f of codexSpawnedRollouts(input.transcript, now, undefined, known))
             files.push([f, "sub"]);
+        if (known.changed)
+            try {
+                writeWhole(headsFile(b), known.heads);
+            }
+            catch { /* read again next time */ }
+    }
     let saved = {};
     try {
         const raw = JSON.parse(readFileSync(ledgerFile(b), "utf8"));
