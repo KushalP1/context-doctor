@@ -159,9 +159,10 @@ export function scanSubagent(path: string): { costUsd: number; atSonnetUsd: numb
 }
 
 interface ParentView {
-  /** Main-chain request times, their prompt sizes, what changes their rates (fast mode, US-only), and compaction times. */
+  /** Main-chain request times, their prompt sizes, models and what changes their rates (fast mode, US-only), and compaction times. */
   requests: number[];
   prompts: number[];
+  models: string[];
   billing: RecordedUsage[];
   compactions: number[];
   model?: string;
@@ -173,7 +174,7 @@ interface ParentView {
 }
 
 function scanParent(path: string, ids: Set<string>): ParentView {
-  const view: ParentView = { requests: [], prompts: [], billing: [], compactions: [], writes5m: 0, writes1h: 0, returns: new Map() };
+  const view: ParentView = { requests: [], prompts: [], models: [], billing: [], compactions: [], writes5m: 0, writes1h: 0, returns: new Map() };
   let lastId: string | undefined;
   forEachLine(path, (line) => {
     const hits = [...ids].filter((id) => line.includes(id));
@@ -187,16 +188,17 @@ function scanParent(path: string, ids: Set<string>): ParentView {
     // Placeholder messages Claude Code writes itself ("<synthetic>") are not API requests.
     if (e?.type === "assistant" && !e.isSidechain && e.message?.usage && e.message.id !== lastId && realModel(e.message.model)) {
       lastId = e.message.id;
+      view.model = realModel(e.message.model) ?? view.model;
       if (Number.isFinite(at)) {
         const u = e.message.usage;
         view.requests.push(at);
         view.prompts.push((u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0));
         view.billing.push({ speed: u.speed, inference_geo: u.inference_geo });
+        view.models.push(view.model!);
       }
       const w = cacheWriteSplit(e.message.usage);
       view.writes5m += w.fiveMinute;
       view.writes1h += w.oneHour;
-      view.model = realModel(e.message.model) ?? view.model;
       return;
     }
     if (!hits.length || !Number.isFinite(at) || e?.type === "assistant") return;
@@ -263,7 +265,8 @@ export function subagentPayback(days = 30, paths?: string[], onProgress?: (done:
       let parentContextTokens = 0, last = -1;
       for (let i = 0; i < view.requests.length && view.requests[i] <= s.start; i++) { parentContextTokens = view.prompts[i]; last = i; }
       // The parent's rates as its next request would have billed them (rateCard: its tier at that context, fast mode and US-only as its last request, the day).
-      const card = rateCard(view.model, last >= 0 ? view.billing[last] : undefined, Number.isFinite(s.start) ? s.start : undefined);
+      // The parent as it ran then: a session that moved to another model later (Fable 5.1 to 5.2) is priced on the one it was on.
+      const card = rateCard(last >= 0 ? view.models[last] : view.model, last >= 0 ? view.billing[last] : undefined, Number.isFinite(s.start) ? s.start : undefined);
       const price = card && ratesAt(card, parentContextTokens);
       const sub = s.rates ?? price;
       let inParentUsd = s.costUsd, avoidedUsd = 0;
