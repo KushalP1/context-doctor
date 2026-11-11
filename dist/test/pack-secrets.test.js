@@ -145,6 +145,39 @@ test("Claude Code's backups of ~/.claude.json are refused as the file is: its ba
         }
     });
 });
+test("other agents' MCP files are refused too: VS Code's (each OS, Insiders, a profile's), Windsurf's, Zed's settings, Claude Desktop's extension settings; their neighbours are read", async () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-pack-editors-"));
+    const mac = join("Library", "Application Support"), win = join("AppData", "Roaming"), linux = ".config";
+    const refused = [
+        join(mac, "Code", "User", "mcp.json"), join(win, "Code", "User", "mcp.json"), join(linux, "Code", "User", "mcp.json"),
+        join(linux, "Code - Insiders", "User", "mcp.json"), join(linux, "Code", "User", "profiles", "-4a1b2c3d", "mcp.json"),
+        join(".codeium", "windsurf", "mcp_config.json"),
+        join(linux, "zed", "settings.json"), join(win, "zed", "settings.json"),
+        join(mac, "Claude", "Claude Extensions Settings", "ant.dir.gh.stripe.json"),
+        join(win, "Claude", "Claude Extensions Settings", "ant.dir.gh.stripe.json"),
+        join(linux, "Claude", "Claude Extensions Settings", "ant.dir.gh.stripe.json"),
+    ];
+    const read = [join(linux, "Code", "User", "keybindings.json"), join(linux, "Code", "User", "profiles", "-4a1b2c3d", "keybindings.json"), join(linux, "zed", "keymap.json")];
+    for (const f of [...refused, ...read]) {
+        mkdirSync(dirname(join(home, f)), { recursive: true });
+        writeFileSync(join(home, f), '{"servers":{"x":{"env":{"API_KEY":"sk-live-editor"}}}}\n');
+    }
+    await withSandboxHome(home, () => {
+        const savedXdg = process.env.XDG_CONFIG_HOME;
+        delete process.env.XDG_CONFIG_HOME;
+        try {
+            const r = readSources([...refused, ...read].map((f) => join(home, f)), home);
+            assert.deepEqual(names(r), read.map((f) => f.replace(/\\/g, "/")).sort(), r.skipped.join("\n"));
+            assert.equal(r.skipped.filter((s) => /refused, .* can hold API keys/.test(s)).length, refused.length, r.skipped.join("\n"));
+            // A folder named whole: Claude Desktop's extension settings are one refusal.
+            assert.equal(readSources([join(home, mac, "Claude", "Claude Extensions Settings")], home).sources.length, 0);
+        }
+        finally {
+            if (savedXdg !== undefined)
+                process.env.XDG_CONFIG_HOME = savedXdg;
+        }
+    });
+});
 test("the agents' own sign-ins are refused, named outright, behind a link, or where CODEX_HOME puts them", async () => {
     for (const f of ["h/.claude/.credentials.json", "h/.codex/auth.json", "h/.gemini/oauth_creds.json", "h/.cargo/credentials.toml", "h/.gem/credentials", ".vault-token"]) {
         assert.ok(secretFileReason(f), f);

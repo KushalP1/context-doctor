@@ -154,7 +154,14 @@ class PackReadsWhatGitDoes(unittest.TestCase):
                  os.path.join(".gemini", "config", "mcp_config.json"), os.path.join(".copilot", "mcp-config.json"),
                  os.path.join(".config", "Claude", "claude_desktop_config.json"),
                  # Claude Code's backups of ~/.claude.json, which carry the same env.
-                 ".claude.json.backup", os.path.join(".claude", "backups", ".claude.json.backup.1762700000000")]
+                 ".claude.json.backup", os.path.join(".claude", "backups", ".claude.json.backup.1762700000000"),
+                 # Other agents' MCP files: VS Code's (each OS, a profile's), Windsurf's, Zed's settings, Claude Desktop's extensions.
+                 os.path.join("Library", "Application Support", "Code", "User", "mcp.json"),
+                 os.path.join("AppData", "Roaming", "Code", "User", "mcp.json"),
+                 os.path.join(".config", "Code - Insiders", "User", "mcp.json"),
+                 os.path.join(".config", "Code", "User", "profiles", "-4a1b2c3d", "mcp.json"),
+                 os.path.join(".codeium", "windsurf", "mcp_config.json"), os.path.join(".config", "zed", "settings.json"),
+                 os.path.join(".config", "Claude", "Claude Extensions Settings", "ant.dir.gh.stripe.json")]
         for f in files:
             os.makedirs(os.path.dirname(os.path.join(home, f)), exist_ok=True)
             with open(os.path.join(home, f), "w") as fh:
@@ -165,7 +172,7 @@ class PackReadsWhatGitDoes(unittest.TestCase):
             fh.write('{"mcpServers": {}}\n')
         env = {"HOME": home, "USERPROFILE": home, "APPDATA": os.path.join(home, "AppData", "Roaming")}
         with mock.patch.dict(os.environ, env):
-            for k in ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "COPILOT_HOME"):
+            for k in ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "COPILOT_HOME", "XDG_CONFIG_HOME"):
                 os.environ.pop(k, None)
             skipped = []
             texts = [s.text for s in _read([os.path.join(home, f) for f in files] + [os.path.join(repo, ".mcp.json")], skipped)]

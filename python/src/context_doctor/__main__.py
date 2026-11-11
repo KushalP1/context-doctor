@@ -118,7 +118,32 @@ def _agent_config_files():
         os.path.join(os.environ.get("COPILOT_HOME") or os.path.join(home, ".copilot"), "mcp-config.json"),
         os.path.join(home, ".copilot", "mcp-config.json"),
     ]
+    for d in _app_data_dirs():
+        # Claude Desktop's extension settings, VS Code's user MCP servers (stable and Insiders), Zed's settings.
+        files.append(os.path.join(d, "Claude", "Claude Extensions Settings"))
+        files += [os.path.join(u, "mcp.json") for u in _vscode_user_dirs(d)]
+        files.append(os.path.join(d, "zed", "settings.json"))
+    files.append(os.path.join(home, ".codeium", "windsurf", "mcp_config.json"))
     return sorted(set(files + [os.path.realpath(f) for f in files]))
+
+
+def _app_data_dirs():
+    """Where apps keep their settings: macOS's Application Support, Windows' %APPDATA%, Linux's XDG config folder."""
+    home = os.path.expanduser("~")
+    dirs = [os.path.join(home, "Library", "Application Support"),
+            os.environ.get("APPDATA") or os.path.join(home, "AppData", "Roaming"),
+            os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config"), os.path.join(home, ".config")]
+    return sorted(set(dirs))
+
+
+def _vscode_user_dirs(app_data):
+    return [os.path.join(app_data, app, "User") for app in ("Code", "Code - Insiders")]
+
+
+def _vscode_profile_dirs():
+    """The folders of VS Code's profiles, each with an mcp.json of its own (User/profiles/<id>/mcp.json)."""
+    dirs = [os.path.join(u, "profiles") for d in _app_data_dirs() for u in _vscode_user_dirs(d)]
+    return sorted(set(dirs + [os.path.realpath(d) for d in dirs]))
 
 
 def _within(root, inner):
@@ -149,6 +174,7 @@ def _read(paths, skipped=None, include_secrets=False):
     seen = set()
     denied = [] if include_secrets else _sensitive_dirs()
     configs = [] if include_secrets else _agent_config_files()
+    profiles = [] if include_secrets else _vscode_profile_dirs()
     hint = "" if include_secrets else " (--include-secrets packs it)"
 
     # macOS and Windows disks ignore case by default: ~/.AWS/credentials is ~/.aws/credentials there.
@@ -161,7 +187,7 @@ def _read(paths, skipped=None, include_secrets=False):
                 if top:
                     skipped.append(f"{path}: refused, {d} holds credentials{hint}")
                 return True
-        for f in configs:
+        for f in configs + (profiles if os.path.basename(real).lower() == "mcp.json" else []):
             if _within(fold(f), fold(real)):
                 skipped.append(f"{path}: refused, {f} can hold API keys (an MCP server's env){hint}")
                 return True

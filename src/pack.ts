@@ -538,8 +538,37 @@ function agentConfigFiles(): string[] {
     join(process.env.APPDATA || join(home, "AppData", "Roaming"), "Claude", "claude_desktop_config.json"),
     join(home, ".config", "Claude", "claude_desktop_config.json"),
     join(process.env.COPILOT_HOME || join(home, ".copilot"), "mcp-config.json"), join(home, ".copilot", "mcp-config.json"),
+    // Claude Desktop's extensions keep their settings, API keys among them, in a folder of their own.
+    ...appDataDirs().map((d) => join(d, "Claude", "Claude Extensions Settings")),
+    // VS Code's user MCP servers (stable and Insiders; a profile's own are vsCodeProfileDirs').
+    ...vsCodeUserDirs().map((d) => join(d, "mcp.json")),
+    // Windsurf, and Zed, whose MCP servers ("context_servers") are in its settings.
+    join(home, ".codeium", "windsurf", "mcp_config.json"),
+    // (%APPDATA%\Zed on Windows, whose disks ignore case: inSensitiveDir.)
+    ...appDataDirs().map((d) => join(d, "zed", "settings.json")),
   ];
   return [...new Set([...files, ...files.map(realOf)])];
+}
+
+/** Where apps keep their settings: macOS's Application Support, Windows' %APPDATA%, Linux's XDG config folder (every one, whatever the OS). */
+function appDataDirs(): string[] {
+  const home = homedir();
+  return [...new Set([
+    join(home, "Library", "Application Support"),
+    process.env.APPDATA || join(home, "AppData", "Roaming"),
+    process.env.XDG_CONFIG_HOME || join(home, ".config"), join(home, ".config"),
+  ])];
+}
+
+/** VS Code's user folders, stable and Insiders. */
+function vsCodeUserDirs(): string[] {
+  return appDataDirs().flatMap((d) => ["Code", "Code - Insiders"].map((app) => join(d, app, "User")));
+}
+
+/** The folders that hold VS Code's profiles, each with an mcp.json of its own (User/profiles/<id>/mcp.json). */
+function vsCodeProfileDirs(): string[] {
+  const dirs = vsCodeUserDirs().map((d) => join(d, "profiles"));
+  return [...new Set([...dirs, ...dirs.map(realOf)])];
 }
 
 /**
@@ -623,6 +652,7 @@ export function readSources(
   const secretsHint = options.secretsHint ?? "";
   const denied = includeSecrets ? [] : sensitiveDirs();
   const deniedConfigs = includeSecrets ? [] : agentConfigFiles();
+  const deniedProfiles = includeSecrets ? [] : vsCodeProfileDirs();
   const sources: PackSource[] = [];
   const skipped: string[] = [];
   let bytes = 0;
@@ -665,7 +695,7 @@ export function readSources(
         if (top) skipped.push(`${p}: refused, ${dir} holds credentials${secretsHint}`);
         return;
       }
-      const config = inSensitiveDir(real, deniedConfigs);
+      const config = inSensitiveDir(real, deniedConfigs) ?? (basename(real).toLowerCase() === "mcp.json" ? inSensitiveDir(real, deniedProfiles) : undefined);
       if (config) {
         skipped.push(`${p}: refused, ${config} can hold API keys (an MCP server's env)${secretsHint}`);
         return;
