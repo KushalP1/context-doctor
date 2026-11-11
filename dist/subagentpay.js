@@ -141,7 +141,7 @@ export function scanSubagent(path) {
     return { costUsd, atSonnetUsd, readTokens, task: task.replace(/\s+/g, " ").slice(0, 90), steps, startup, start, model, writeMult: writeMultiplier(writes5m, writes1h), ...(firstRates ? { rates: firstRates } : {}) };
 }
 function scanParent(path, ids) {
-    const view = { requests: [], prompts: [], billing: [], compactions: [], writes5m: 0, writes1h: 0, returns: new Map() };
+    const view = { requests: [], prompts: [], models: [], billing: [], compactions: [], writes5m: 0, writes1h: 0, returns: new Map() };
     let lastId;
     forEachLine(path, (line) => {
         const hits = [...ids].filter((id) => line.includes(id));
@@ -162,16 +162,17 @@ function scanParent(path, ids) {
         // Placeholder messages Claude Code writes itself ("<synthetic>") are not API requests.
         if (e?.type === "assistant" && !e.isSidechain && e.message?.usage && e.message.id !== lastId && realModel(e.message.model)) {
             lastId = e.message.id;
+            view.model = realModel(e.message.model) ?? view.model;
             if (Number.isFinite(at)) {
                 const u = e.message.usage;
                 view.requests.push(at);
                 view.prompts.push((u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0));
                 view.billing.push({ speed: u.speed, inference_geo: u.inference_geo });
+                view.models.push(view.model);
             }
             const w = cacheWriteSplit(e.message.usage);
             view.writes5m += w.fiveMinute;
             view.writes1h += w.oneHour;
-            view.model = realModel(e.message.model) ?? view.model;
             return;
         }
         if (!hits.length || !Number.isFinite(at) || e?.type === "assistant")
@@ -255,7 +256,8 @@ export function subagentPayback(days = 30, paths, onProgress) {
                 last = i;
             }
             // The parent's rates as its next request would have billed them (rateCard: its tier at that context, fast mode and US-only as its last request, the day).
-            const card = rateCard(view.model, last >= 0 ? view.billing[last] : undefined, Number.isFinite(s.start) ? s.start : undefined);
+            // The parent as it ran then: a session that moved to another model later (Fable 5.1 to 5.2) is priced on the one it was on.
+            const card = rateCard(last >= 0 ? view.models[last] : view.model, last >= 0 ? view.billing[last] : undefined, Number.isFinite(s.start) ? s.start : undefined);
             const price = card && ratesAt(card, parentContextTokens);
             const sub = s.rates ?? price;
             let inParentUsd = s.costUsd, avoidedUsd = 0;
