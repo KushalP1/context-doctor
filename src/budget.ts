@@ -445,7 +445,8 @@ function countLines(e: FileEntry, recent: NonNullable<FileEntry["r"]>, text: str
       // A reply on <synthetic> was made by Claude Code itself, never billed: not a request at all.
       // A row of another session (`own`): a copy of its history, its spend, not this session's.
       const copied = own !== undefined && typeof row.sessionId === "string" && row.sessionId !== own;
-      if (Number.isFinite(ts) && ts >= since && tokens > 0 && !isUnbilledModel(m.model) && !copied) {
+      // A row with no time of its own fits no period, but it is in the session's price (since 0), at today's rates (requestCost).
+      if ((Number.isFinite(ts) ? ts >= since : since <= 0) && tokens > 0 && !isUnbilledModel(m.model) && !copied) {
         index = e.k.length;
         if (!c) (e.x ??= []).push([index, model ?? "unknown"]);
         else if (c.changedOn) (e.z ??= []).push([index, model ?? "unknown", c.changedOn]);

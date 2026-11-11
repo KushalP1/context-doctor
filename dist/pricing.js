@@ -342,6 +342,11 @@ export function rateCard(model, usage, at = Date.now()) {
     if (!r)
         return undefined;
     const [, list, b = {}] = r;
+    // A request with no time of its own (a row without a timestamp) is priced as of now, the default:
+    // past a change that is the newer price, labelled an estimate with its day. NaN compared as never
+    // expired, so such a row got an ended price unlabelled in some reports and today's in others.
+    if (!Number.isFinite(at))
+        at = Date.now();
     const expired = b.changes !== undefined && at >= dayStart(b.changes);
     // Routed to another model: its card, so a later change of that model's price follows (and is the day said).
     const to = expired && b.routes ? rateCard(b.routes, usage, at) : undefined;

@@ -203,7 +203,8 @@ function replayExtractor(id: string, options: AutoClearOptions, makeClearer: ((m
             const r: ReplayRow = {
               k: "r", now, cold,
               bw: fresh + read * 0.1 + ttl.fiveMinute * CACHE_WRITE_5M + ttl.oneHour * CACHE_WRITE_1H,
-              usd: requestCost(pm, u, now)?.promptUsd ?? 0,
+              // No time of its own (now is 0 then): priced as of now, as requestCost prices one.
+              usd: requestCost(pm, u, now || undefined)?.promptUsd ?? 0,
               raw: fresh + read + write,
             };
             // Only what is set: a record read back from the cache must equal this one.
@@ -250,8 +251,8 @@ function replayExtractor(id: string, options: AutoClearOptions, makeClearer: ((m
   };
 }
 
-const REPLAY = replayExtractor("replay.3", {}, undefined, true);
-const BILL = replayExtractor("bill.3", {}, undefined, false);
+const REPLAY = replayExtractor("replay.4", {}, undefined, true);
+const BILL = replayExtractor("bill.4", {}, undefined, false);
 /** What `estimateSavings` reads from each transcript, with or without autopilot's replay (for `prescan`). */
 export const savingsRows = (replay = true): Extractor<any> => (replay ? REPLAY : BILL);
 
@@ -312,7 +313,7 @@ function settleReplay(path: string, rows: ReplayRow[], since: number, runRows: S
       requests++;
       // Each arm's request at its own tier (Haiku 5.5's 100k): as billed for the
       // session as it ran, less what autopilot cleared for the other.
-      const card = rateCard(r.pm, { ...(r.f ? { speed: "fast" } : {}), ...(r.g ? { inference_geo: "us" } : {}) }, r.now);
+      const card = rateCard(r.pm, { ...(r.f ? { speed: "fast" } : {}), ...(r.g ? { inference_geo: "us" } : {}) }, r.now || undefined);
       const cleared = r.b && r.a ? Math.max(0, r.b[2] - r.a[2]) : 0;
       charge(base, r.b, r.cold, card ? ratesAt(card, r.raw) : UNPRICED);
       charge(auto, r.a, r.cold, card ? ratesAt(card, r.raw - cleared) : UNPRICED);
