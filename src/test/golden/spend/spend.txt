@@ -1,5 +1,5 @@
 What your AI coding cost, across every tool here
-Last 30 days, at list prices
+Last 30 days, as billed at list rates
 ────────────────────────────────────────────────────────────
 Claude Code          $142  285 requests      subagents $3.46, workflows $4.90 (1 run)
 Gemini CLI          $0.06  3 requests
@@ -54,7 +54,7 @@ Where it goes
 3 Gemini CLI requests ($0.06) priced as their model's family, an estimate:
   no list price of its own for gemini-3-pro.
 
-List prices, as an API key bills; on a subscription the same tokens come out
+As an API key is billed; on a subscription the same tokens come out
 of your plan's limits instead. Share yours: context-doctor spend --share
 
 [exit 0]

@@ -77,6 +77,11 @@ test("one session with every modifier: spend, limits, the budget, the session pr
     assert.match(text, /Of it, billed above list rates: fast mode \+\$0\.07, US-only \+<\$0\.01, web searches \$0\.02 \(2\), long-prompt tier \+\$0\.01/);
     assert.match(text, /web searches \$0\.02 \(\d+%\)/);
     assert.match(renderSpendShare(r), /^Billed above list rates: fast mode \+\$0\.07, US-only \+<\$0\.01, web searches \$0\.02 \(2\), long-prompt tier \+\$0\.01\.$/m);
+    // What the dollars are, said alike in the heading and --share: each request as billed, at list rates (not "list prices",
+    // which the modifiers above them are not); the closing line names no prices it would contradict.
+    assert.match(text, /^Last 7 days, as billed at list rates$/m);
+    assert.match(renderSpendShare(r), /^My AI coding, last 7 days, as billed at list rates: \$/m);
+    assert.doesNotMatch(text + renderSpendShare(r), /list prices/i);
     assert.deepEqual(JSON.parse(JSON.stringify(r)).modifiers.webSearches, 2);
 
     // limits' usage points (its fit is in dollars).

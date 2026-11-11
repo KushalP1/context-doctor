@@ -1,6 +1,6 @@
 /**
  * `context-doctor spend`: one bill across every AI coding tool on this
- * machine, at list prices.
+ * machine, each request as billed at list rates.
  *
  * Each tool keeps its own record of what it sent, and none adds them up:
  *

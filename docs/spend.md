@@ -2,7 +2,7 @@
 
 [← README](../README.md)
 
-Claude Code, Codex, Gemini CLI and Cursor each keep a record of what they sent, and none adds them up. `spend` reads all four from this machine and prints one bill: by tool, project, model and day, with what drives it, at list prices. `budget` sets a limit on it that the every-prompt hook applies while you work.
+Claude Code, Codex, Gemini CLI and Cursor each keep a record of what they sent, and none adds them up. `spend` reads all four from this machine and prints one bill: by tool, project, model and day, with what drives it, each request as billed at list rates (its tier, fast mode, US-only, web searches; below). `budget` sets a limit on it that the every-prompt hook applies while you work.
 
 ## One bill: `context-doctor spend`
 

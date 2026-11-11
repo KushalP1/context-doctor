@@ -1,4 +1,4 @@
-My AI coding, last 30 days, at list prices: $143 (Claude Code $142, Gemini CLI $0.06, Codex $0.01).
+My AI coding, last 30 days, as billed at list rates: $143 (Claude Code $142, Gemini CLI $0.06, Codex $0.01).
 Claude Code subagents: $3.46 of it.
 Claude Code workflow agents: $4.90 of it, in 1 run.
 Of it, $0.06 is on models priced as their family, an estimate.

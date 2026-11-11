@@ -157,8 +157,8 @@ Measure:
                                                 One bill across every tool here: Claude Code (with
                                                 its subagents), Codex, Gemini CLI and Cursor (an
                                                 estimate: no cache split), by project, model and
-                                                day, and what drives it, at list prices. --share:
-                                                totals only, to paste
+                                                day, and what drives it, as billed at list rates.
+                                                --share: totals only, to paste
   context-doctor cache-misses [--days n]        Requests that re-wrote the prompt cache while it was
                                                 still warm: priced, by model and context size, with
                                                 the cause where the transcript shows one

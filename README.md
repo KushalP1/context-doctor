@@ -33,7 +33,7 @@ Pick where you work. Each takes about a minute and is fully reversible.
 ## What it does
 
 **Measure, in dollars, on your own history** ([profiling](./docs/profiling.md))
-- `spend`: one bill across Claude Code (subagents and workflow agents included), Codex, Gemini CLI and Cursor, by tool, project, model and day, at list prices ([spend and budget](./docs/spend.md)).
+- `spend`: one bill across Claude Code (subagents and workflow agents included), Codex, Gemini CLI and Cursor, by tool, project, model and day, as billed at list rates ([spend and budget](./docs/spend.md)).
 - `savings`: what your recent Claude Code sessions cost and what each fix below would have saved, replayed request by request against what you were billed.
 - `overhead`: what every request re-reads before your message (system prompt, tools, MCP servers, CLAUDE.md, rules, memory), each file priced per month.
 - `tasks`, `reads`, `subagents`, `compactions`: cost per commit; files read into session after session; whether each subagent was cheaper than the same steps in the parent; whether sessions work worse after compacting.

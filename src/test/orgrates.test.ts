@@ -236,7 +236,7 @@ for (const [name, modelPricing, expected] of [
           assert.match(status, /^Claude requests priced at your organization's rates/m);
           assert.match(renderSubagents(subs)!, /^Claude requests priced at your organization's rates/m);
         } else {
-          assert.match(text, /^Last 7 days, at list prices$/m);
+          assert.match(text, /^Last 7 days, as billed at list rates$/m);
           assert.doesNotMatch(text + status, /organization/);
         }
       }));

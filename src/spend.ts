@@ -1,6 +1,6 @@
 /**
  * `context-doctor spend`: one bill across every AI coding tool on this
- * machine, at list prices.
+ * machine, each request as billed at list rates.
  *
  * Each tool keeps its own record of what it sent, and none adds them up:
  *
@@ -43,7 +43,14 @@ import { claudeFileUsage, claudeUsageFiles, codexEventKey, codexSessionsRoot, ro
 import { listGeminiChats, readGeminiMessages } from "./gemini.js";
 import { cursorClaudeId, cursorUsage, SqliteUnavailableError } from "./cursor.js";
 import { addModifiers, isUnbilledModel, NO_MODIFIERS, openAIUsage, priceChangedText, requestCost, type Modifiers, type RecordedUsage } from "./pricing.js";
-import { orgRatesLine, priceBasis } from "./orgrates.js";
+import { orgRates, orgRatesLine, priceBasis } from "./orgrates.js";
+
+/**
+ * What spend's dollars are: each request as it was billed (its tier, fast mode,
+ * US-only, web searches) at list rates, or at the organization's rates.
+ * "At list prices" was true before those were priced; it no longer is.
+ */
+const spendBasis = (): string => (orgRates() ? priceBasis() : "as billed at list rates");
 import { pick, rowsOf, type Extractor } from "./scan.js";
 import { formatTokens } from "./tokens.js";
 import { withInvocation } from "./invocation.js";
@@ -687,7 +694,7 @@ export function renderSpend(r: SpendReport, top = 8): string {
     return lines.join("\n");
   }
   lines.push("What your AI coding cost, across every tool here");
-  lines.push(`Last ${r.days === 1 ? "day" : `${r.days} days`}, ${priceBasis()}`);
+  lines.push(`Last ${r.days === 1 ? "day" : `${r.days} days`}, ${spendBasis()}`);
   const org = orgRatesLine();
   if (org) lines.push(org);
   lines.push("─".repeat(60));
@@ -756,7 +763,7 @@ export function renderSpend(r: SpendReport, top = 8): string {
   if (r.tools.some((t) => t.estimate)) notes.push("Cursor records no cache split: its input is priced uncached, an upper bound.");
   for (const s of r.skipped) notes.push(`${TOOL_NAME[s.tool]} not read: ${s.reason}.`);
   if (notes.length) lines.push("", ...notes);
-  lines.push("", "List prices, as an API key bills; on a subscription the same tokens come out");
+  lines.push("", "As an API key is billed; on a subscription the same tokens come out");
   lines.push("of your plan's limits instead. Share yours: context-doctor spend --share");
   return withInvocation(lines.map((l) => l.trimEnd()).join("\n"));
 }
@@ -768,7 +775,7 @@ export function renderSpend(r: SpendReport, top = 8): string {
 export function renderSpendShare(r: SpendReport): string {
   if (r.requests === 0) return "context-doctor found no AI coding usage to measure yet.";
   const tools = r.tools.map((t) => `${t.name} ${t.estimate ? "~" : ""}${usd(t.usd)}${t.estimate ? " (estimate)" : ""}`).join(", ");
-  const lines = [`My AI coding, last ${r.days === 1 ? "day" : `${r.days} days`}, ${priceBasis()}: ${usd(r.usd)}${r.tools.length > 1 ? ` (${tools})` : ` in ${r.tools[0].name}`}.`];
+  const lines = [`My AI coding, last ${r.days === 1 ? "day" : `${r.days} days`}, ${spendBasis()}: ${usd(r.usd)}${r.tools.length > 1 ? ` (${tools})` : ` in ${r.tools[0].name}`}.`];
   const claude = r.tools.find((t) => t.tool === "claude");
   if (claude?.subagentUsd) lines.push(`Claude Code subagents: ${usd(claude.subagentUsd)} of it.`);
   if (claude?.workflowUsd) lines.push(`Claude Code workflow agents: ${usd(claude.workflowUsd)} of it, in ${runsText(claude.workflowRuns ?? 0)}.`);
