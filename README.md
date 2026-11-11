@@ -28,7 +28,7 @@ Pick where you work. Each takes about a minute and is fully reversible.
 | **claude.ai, ChatGPT, phone apps** | `npx context-doctor instructions --copy`, then paste into the app's personal preferences (it tells you where). ChatGPT can also reach the MCP server at a URL ([how](./docs/chat-apps.md#chatgpt)) |
 | **Your own app on an LLM API** | Run `npx context-doctor proxy --autopilot` and point `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` (add `/v1`) or `GOOGLE_GEMINI_BASE_URL` at the proxy on `127.0.0.1:8787`, plain HTTP ([exact values](./docs/proxy.md)). No proxy possible? Wrap the SDK client: `withContextDoctor(new Anthropic())` ([library](./docs/library.md)) |
 | **Python / RAG pipelines** | `pip install "git+https://github.com/KushalP1/context-doctor#subdirectory=python"` (PyPI release coming), then `pack_documents(retrieved_docs, question, budget=4000)` trims LangChain or LlamaIndex results to the chunks that matter. [Python README](./python/README.md) |
-| **GitHub pull requests** | `uses: KushalP1/context-doctor@v0.45.0` comments how much a PR grows CLAUDE.md, AGENTS.md and rules, and can fail over a budget ([setup](./docs/ci.md)) |
+| **GitHub pull requests** | `uses: KushalP1/context-doctor@v0.46.0` comments how much a PR grows CLAUDE.md, AGENTS.md and rules, and can fail over a budget ([setup](./docs/ci.md)) |
 
 ## What it does
 
@@ -181,6 +181,7 @@ Rules 1-4 end exactly at character 512, the part ChatGPT's guide says must stand
 
 ## What's new
 
+- **0.46 Fable 5.2, the Desktop app, and an audit**: Claude Fable 5.2 is priced (0.45 read it 1.5x too high); managed `modelPricing` is honoured; a check catches new models without a price. The plugin's new mod brings limit readings, Claude Code's own cost, a cache-expiry band with **Compact first**, and `/context-doctor-fix` with Apply and Undo buttons to the Desktop app and VS Code ([Desktop](./docs/desktop.md), [details](./ROADMAP.md#shipped-in-0460-fable-52-the-desktop-app-and-an-audit-of-045)).
 - **0.45 Price what is billed, and a security pass**: fast mode, US-only inference, Haiku 5.5's long-prompt rates, web searches and OpenAI's and Gemini's long-prompt tiers are priced per request in every report, and prices that end on a known day say so. A security pass fixed a cloned repository approving its own MCP servers for `overhead --mcp`, a PDF's name running as a command through `pack` on macOS, the agents' API-key configs being packed, and the proxy answering a DNS-rebinding page ([details](./ROADMAP.md#shipped-in-0450-price-what-is-billed-and-a-security-pass-on-044)).
 - **0.44 Workflow agents on the bill, current prices, and an audit**: Claude Code's workflow agents were in no report: on the author's last 30 days $1,494 of $5,542. `spend`, the budget, a session's price, `subagents` and `fix` now count them, and `spend` equals an independent sum of every transcript to the cent. Prices re-read from each provider (Sonnet 5.5's cache read $0.10, gpt-5.5 $5/$30, the gpt-6 family); estimates are labelled. An audit fixed `overhead --mcp` launching a cloned repository's unapproved MCP servers, `pack_context` returning the agents' sign-in files, and more ([details](./ROADMAP.md#shipped-in-0440-workflow-agents-on-the-bill-current-prices-and-an-audit-of-043)).
 - **0.43 Long tool output, `fix` for Codex, and a session's price**: every Bash result stays in the conversation and is re-read on every later message until a compaction; `fix` now replays them at lower caps and, on a yes, sets Claude Code's `bashOutputMaxChars`, so longer output goes to a file the model can still open after a 2,000-character preview (the author's 30 days: $323 less at 8k, 9% of input). `fix` also works for Codex: it replays your rollouts at earlier auto-compact limits and sets `model_auto_compact_token_limit` in `config.toml`, on a machine with only Codex too. And the every-prompt hook now tells you once when a session passes $25, $100 and $500, with what each message costs from there (the author's: 15 sessions passed $25 in 30 days and spent $3,369 after).
@@ -207,6 +208,7 @@ Every release, with the details: [docs/whats-new.md](./docs/whats-new.md).
 - [Detectors and fixes](./docs/detectors.md): what the profiler finds and what each optimizer strategy changes
 - [Library](./docs/library.md): `profileConversation`, `optimizeConversation`, `packContext`, `withContextDoctor`
 - [Budgets and CI](./docs/ci.md): the GitHub Action and `.contextdoctorrc`
+- [Desktop app and VS Code](./docs/desktop.md): the plugin's mod: limit readings, Claude Code's own cost, the cache band with Compact first, and `/context-doctor-fix`
 - [Editor and status line](./docs/editor-and-statusline.md): the VS Code / Cursor extension and Claude Code's status bar
 - [Token counts](./docs/tokenizer.md): why counts are "~", how the Claude ratios were measured, exact counts
 - [Performance](./docs/performance.md): what context-doctor itself costs (its six MCP tool definitions: at most ~2,344 tokens)
