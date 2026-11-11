@@ -145,7 +145,7 @@ export function autoCompactsAt(model, home = homedir(), env = process.env) {
 /** Just past Claude Code's one-hour cache, as Claude Code's own idle clearing uses. */
 export const COLD_IDLE_MS = 65 * 60_000;
 /** Margin past a cache's lifetime before a return counts as cold. */
-const COLD_MARGIN_MS = 5 * 60_000;
+export const COLD_MARGIN_MS = 5 * 60_000;
 const HOUR_MS = 3_600_000;
 const FIVE_MIN_MS = 5 * 60_000;
 /**
@@ -173,7 +173,7 @@ function writtenTtlMs(u) {
 /** Below this, a rebuilt cache is cheap and compaction is not worth the interruption. */
 export const COLD_MIN_TOKENS = 150_000;
 /** What a compacted session restarts from: system prompt and tools plus the summary. */
-const AFTER_COMPACT_TOKENS = 45_000;
+export const AFTER_COMPACT_TOKENS = 45_000;
 /** Output tokens a compaction summary costs, at the model's output price. */
 const SUMMARY_OUTPUT_TOKENS = 8_000;
 export function resumeVerdict(input, now = Date.now()) {
@@ -275,6 +275,7 @@ export function detectColdResume(path, now = Date.now(), idleMs, minTokens = COL
                 lastReplyAt,
                 resumeUsd: p ? (tokens * sessionWriteMultiplier(path) * p.inputPerM) / 1e6 : undefined,
                 perMessageUsd: p ? (tokens * p.cacheReadPerM) / 1e6 : undefined,
+                ttlMs: ttl ?? HOUR_MS,
             };
         }
     }

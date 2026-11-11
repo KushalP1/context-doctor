@@ -77,8 +77,12 @@ export declare function idleCompactMinTokens(env?: NodeJS.ProcessEnv): number;
 export declare function autoCompactsAt(model: string | undefined, home?: string, env?: NodeJS.ProcessEnv): number | undefined;
 /** Just past Claude Code's one-hour cache, as Claude Code's own idle clearing uses. */
 export declare const COLD_IDLE_MS: number;
+/** Margin past a cache's lifetime before a return counts as cold. */
+export declare const COLD_MARGIN_MS: number;
 /** Below this, a rebuilt cache is cheap and compaction is not worth the interruption. */
 export declare const COLD_MIN_TOKENS = 150000;
+/** What a compacted session restarts from: system prompt and tools plus the summary. */
+export declare const AFTER_COMPACT_TOKENS = 45000;
 export interface ColdResume {
     idleMs: number;
     /** Context size at the last request, from the API's own usage. */
@@ -92,6 +96,8 @@ export interface ColdResume {
     perMessageUsd?: number;
     /** `resumeUsd` is Claude Code's own estimate (SessionStart), which honours a managed modelPricing. */
     claudeCodePriced?: boolean;
+    /** How long the cache the last reply left behind lives, as the gate counted it. */
+    ttlMs?: number;
 }
 /**
  * What Claude Code's SessionStart hook says on a resume (2.1.29x):

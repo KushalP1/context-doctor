@@ -74,5 +74,27 @@ export interface SessionPriceInput {
  * Claims the threshold: a second call for the same one gets undefined.
  */
 export declare function sessionPriceDue(input: SessionPriceInput, now?: number, env?: NodeJS.ProcessEnv): SessionPrice | undefined;
+/** What a session has cost so far, subagents included, as the threshold check prices it. */
+export interface SessionTotal {
+    app: Tool;
+    usd: number;
+    subagentUsd: number;
+    workflowUsd: number;
+    unpriced: number;
+    estimatedUsd: number;
+    /** Bytes read to bring the entries up to date. */
+    read: number;
+    /** Keeps the entries, so the next look reads only what was appended. */
+    save: () => void;
+}
+/**
+ * The session's price so far, from the per-transcript entries the threshold
+ * check keeps (shared, so each reads only what the other has not). Claims
+ * no threshold: the mod compares it with Claude Code's own cost after each
+ * turn (modmeasure.ts).
+ */
+export declare function sessionTotal(input: Pick<SessionPriceInput, "sessionId" | "transcript" | "event">, now?: number): SessionTotal;
+/** Keeps a look's entries once it read enough to be worth it, as the threshold check does. */
+export declare function saveIfWorthIt(t: Pick<SessionTotal, "read" | "save">): void;
 /** The line for the user (the hook's systemMessage). */
 export declare function renderSessionPrice(p: SessionPrice): string;

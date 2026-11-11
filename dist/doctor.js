@@ -13,6 +13,7 @@ import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ledgerPath, readLedger } from "./ledger.js";
+import { costCheck } from "./modmeasure.js";
 import { loadConfig } from "./config.js";
 import { codexRouting } from "./codexroute.js";
 import { CURSOR_HOOK_EVENTS } from "./install.js";
@@ -753,6 +754,15 @@ export async function runDoctor() {
         catch {
             /* settings.json unreadable is already reported by the hook check */
         }
+    }
+    // The plugin's mod: our session price against Claude Code's own cost, where it measured any.
+    try {
+        const c = costCheck();
+        if (c)
+            checks.push(c);
+    }
+    catch {
+        /* an unreadable ledger is no finding */
     }
     // Skill
     const skillPath = join(claudeDir(), "skills", "context-doctor", "SKILL.md");
