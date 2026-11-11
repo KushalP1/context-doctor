@@ -68,7 +68,11 @@ export const state = (): State => S;
 
 /** The CLI beside this module, in the same plugin: dist/mod/register.js → dist/cli.js. */
 function cliOf($: Engine): string {
-  return `${$.plugin.root}/dist/cli.js`;
+  // The module may import nothing but ./logic.js (no node:path): join with the
+  // separator the root already uses, so Windows gets D:\…\dist\cli.js.
+  const root = $.plugin.root;
+  const sep = root.includes("\\") && !root.includes("/") ? "\\" : "/";
+  return `${root}${sep}dist${sep}cli.js`;
 }
 
 function bandKey(now: number, surface: string): string {
