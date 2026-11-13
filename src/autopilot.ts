@@ -20,6 +20,7 @@
  */
 
 import { execFileSync, spawn } from "node:child_process";
+import { toolCwd } from "./toolcwd.js";
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
@@ -138,7 +139,7 @@ function uid(): string {
 }
 
 function run(cmd: string, args: string[]): void {
-  execFileSync(cmd, args, { stdio: "ignore" });
+  execFileSync(cmd, args, { cwd: toolCwd(), stdio: "ignore" });
 }
 
 function tryRun(cmd: string, args: string[]): boolean {
@@ -379,18 +380,18 @@ async function canBind(port: number): Promise<boolean> {
 function listenerProcess(port: number): { pid?: number; command?: string } {
   try {
     if (platform() === "win32") {
-      const net = execFileSync("netstat", ["-ano", "-p", "TCP"], { encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] });
+      const net = execFileSync("netstat", ["-ano", "-p", "TCP"], { cwd: toolCwd(), encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] });
       const line = net.split(/\r?\n/).find((l) => new RegExp(`:${port}\\s+\\S+\\s+LISTENING\\s+\\d+`, "i").test(l));
       const pid = Number(/LISTENING\s+(\d+)/i.exec(line ?? "")?.[1]);
       if (!(pid > 0)) return {};
       let command: string | undefined;
       try {
-        const task = execFileSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], { encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] });
+        const task = execFileSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], { cwd: toolCwd(), encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] });
         command = /^"([^"]+)"/.exec(task.trim())?.[1];
       } catch { /* the pid alone */ }
       return { pid, command };
     }
-    const out = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
+    const out = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], { cwd: toolCwd(), encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
     const pid = Number(/^p(\d+)/m.exec(out)?.[1]);
     return { pid: pid > 0 ? pid : undefined, command: /^c(.+)$/m.exec(out)?.[1] };
   } catch {

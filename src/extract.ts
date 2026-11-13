@@ -23,6 +23,7 @@ import { execFile, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
+import { toolCwd } from "./toolcwd.js";
 
 export const EXTRACTABLE = new Set([".pdf", ".docx", ".doc", ".rtf", ".odt", ".pptx"]);
 
@@ -30,7 +31,7 @@ const RUN = { encoding: "utf8" as const, timeout: 30_000, maxBuffer: 64 * 1024 *
 
 function run(cmd: string, args: string[]): string | undefined {
   try {
-    const r = spawnSync(cmd, args, RUN);
+    const r = spawnSync(cmd, args, { ...RUN, cwd: toolCwd() });
     return r.status === 0 && typeof r.stdout === "string" && r.stdout.trim() ? r.stdout : undefined;
   } catch {
     return undefined;
@@ -53,7 +54,7 @@ function pdftotext(path: string): string | undefined {
   if (direct) return direct;
   const out = join(mkdtempSync(join(tmpdir(), "cd-pdf-")), "out.txt");
   try {
-    spawnSync("pdftotext", [path, out], RUN);
+    spawnSync("pdftotext", [path, out], { ...RUN, cwd: toolCwd() });
     const text = existsSync(out) ? readFileSync(out, "utf8") : "";
     return text.trim() ? text : undefined;
   } catch {
@@ -162,7 +163,7 @@ function runAsync(cmd: string, args: string[], end: number): Promise<{ out?: str
       finish({ timedOut: monotonicNow() >= end - 50 });
     }, timeout);
     try {
-      child = execFile(cmd, args, { encoding: "utf8", timeout, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024, windowsHide: true }, (err, stdout) => {
+      child = execFile(cmd, args, { cwd: toolCwd(), encoding: "utf8", timeout, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024, windowsHide: true }, (err, stdout) => {
         // Only the clock says the budget ran out: a child killed for another
         // reason (seen on Windows runners, well inside a 60 s budget) is a
         // failed tool, and the next one is tried.

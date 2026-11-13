@@ -11,6 +11,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { toolCwd } from "./toolcwd.js";
 import { readFileSync, statSync } from "node:fs";
 import { join, posix } from "node:path";
 import { estimateTokens, formatTokens } from "./tokens.js";
@@ -48,7 +49,7 @@ export interface CiReport {
 
 function git(args: string[], cwd: string): string | undefined {
   try {
-    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
+    return execFileSync("git", ["-C", cwd, ...args], { cwd: toolCwd(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
   } catch {
     return undefined;
   }

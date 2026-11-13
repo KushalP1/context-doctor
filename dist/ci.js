@@ -10,6 +10,7 @@
  * Base contents come from `git show <base>:<path>`; nothing is checked out.
  */
 import { execFileSync } from "node:child_process";
+import { toolCwd } from "./toolcwd.js";
 import { readFileSync, statSync } from "node:fs";
 import { join, posix } from "node:path";
 import { estimateTokens, formatTokens } from "./tokens.js";
@@ -27,7 +28,7 @@ const MEMORY_PATTERNS = [
 ];
 function git(args, cwd) {
     try {
-        return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
+        return execFileSync("git", ["-C", cwd, ...args], { cwd: toolCwd(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
     }
     catch {
         return undefined;

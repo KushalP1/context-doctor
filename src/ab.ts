@@ -37,6 +37,7 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { toolCwd } from "./toolcwd.js";
 import { randomBytes } from "node:crypto";
 import { accessSync, chmodSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -175,7 +176,7 @@ function minimalEnv(home: string): NodeJS.ProcessEnv {
 function killTree(child: ChildProcess): void {
   if (child.pid === undefined) return;
   if (process.platform === "win32") {
-    spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { cwd: toolCwd(), stdio: "ignore", windowsHide: true });
     return;
   }
   try {
@@ -204,7 +205,7 @@ function killLeftovers(root: string): void {
     } else {
       // lsof walks every process's open files: ~0.5 s here, several on a loaded machine. Cut off
       // early, it found nothing and the leftover lived on, so it gets time.
-      const r = spawnSync("lsof", ["-t", "+D", root], { encoding: "utf8", timeout: 30_000 });
+      const r = spawnSync("lsof", ["-t", "+D", root], { cwd: toolCwd(), encoding: "utf8", timeout: 30_000 });
       for (const line of (r.stdout ?? "").split("\n")) if (/^\d+$/.test(line.trim())) pids.add(Number(line.trim()));
     }
   } catch { /* best effort */ }

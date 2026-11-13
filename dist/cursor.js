@@ -12,6 +12,7 @@
  * say so plainly instead of failing obscurely.
  */
 import { execFileSync } from "node:child_process";
+import { toolCwd } from "./toolcwd.js";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, platform } from "node:os";
@@ -127,6 +128,7 @@ export function queryRows(dbPath, sql) {
     }
     // Fallback: the sqlite3 CLI, if the user has it.
     const cli = (target) => execFileSync("sqlite3", ["-readonly", "-json", target, sql], {
+        cwd: toolCwd(),
         encoding: "utf8",
         maxBuffer: 512 * 1024 * 1024,
         stdio: ["ignore", "pipe", "ignore"], // a missing table is expected on some DBs

@@ -21,6 +21,7 @@ import { estimateTokens, formatTokens } from "./tokens.js";
 import { EXTRACT_BUDGET_MS, EXTRACTABLE, extractText, extractTextAsync, monotonicNow } from "./extract.js";
 import { claudeDir, claudeJsonPath } from "./claudedir.js";
 import { codexDir } from "./codexdir.js";
+import { toolCwd } from "./toolcwd.js";
 const DEFAULT_BUDGET = 4000;
 const DEFAULT_CHUNK_TOKENS = 400;
 /** Claude's tokenizer produces the most tokens per char; a budget in its terms never overruns another's. */
@@ -369,7 +370,7 @@ const SAFE_GIT = ["-c", "core.fsmonitor=false"];
 /** Files git would consider part of the repository under `dir` (relative to it), or undefined outside git. */
 function gitFiles(dir) {
     try {
-        const r = spawnSync("git", [...SAFE_GIT, "-C", dir, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 30_000 });
+        const r = spawnSync("git", [...SAFE_GIT, "-C", dir, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: toolCwd(), encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 30_000 });
         if (r.status !== 0 || typeof r.stdout !== "string")
             return undefined;
         // --cached lists files deleted from the work tree too; only what exists is read.
@@ -382,7 +383,7 @@ function gitFiles(dir) {
 /** Git ignores something under `dir`: why a folder that has files can list none. */
 function gitIgnoresSome(dir) {
     // --directory names an ignored folder once instead of every file in it.
-    const r = spawnSync("git", [...SAFE_GIT, "-C", dir, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 30_000 });
+    const r = spawnSync("git", [...SAFE_GIT, "-C", dir, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"], { cwd: toolCwd(), encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 30_000 });
     return r.status === 0 && typeof r.stdout === "string" && r.stdout.length > 0;
 }
 /** `inner` is `root` itself or somewhere under it. */
