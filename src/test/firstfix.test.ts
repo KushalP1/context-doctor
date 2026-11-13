@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync
 import { platform, tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { planFixes, type FixInputs } from "../fix.js";
+import { parseFixIds, planFixes, type FixInputs } from "../fix.js";
 import { firstQuestion, renderFirstScreen, splitFirstFixes } from "../firstfix.js";
 import type { ToolOutputReplay } from "../tooloutput.js";
 import type { ProjectPlan } from "../prune.js";
@@ -61,6 +61,16 @@ test("the quality-free set is the levers whose quality line is none: never compa
   // The mark follows the quality line: "none", or output moved where the model can still open it.
   for (const f of free) assert.ok(/^none/.test(f.quality) || f.id === "tool-output", `${f.id}: ${f.quality}`);
   for (const f of other) assert.ok(!/^none\b/.test(f.quality), `${f.id}: ${f.quality}`);
+});
+
+test("progress summaries off joins the one question by its own mark, and --apply all agrees with the set", () => {
+  const fixes = planFixes({ ...inputs, progressSummaries: { agents: 40, summarized: 30, calls: 900, notesUsd: 74, forkUsd: 463, none: {}, hosts: [] } });
+  const { free } = splitFirstFixes(fixes);
+  assert.ok(free.some((f) => f.id === "progress-summaries"));
+  assert.match(renderFirstScreen({ days: 30, billedUsd: 2000, fixes, command: cmd, ask: true }), /^ +\$74\.00  Subagent progress summaries off$/m);
+  // Every quality-free fix is one `--apply all` applies too (the subagents' model, never in all, is never quality-free).
+  const all = new Set(parseFixIds("all", fixes).ids);
+  for (const f of free) assert.ok(all.has(f.id), f.id);
 });
 
 test("the screen: one total for the quality-free fixes, one line each, the others with their dollars and command, under 25 lines", () => {

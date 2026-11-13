@@ -330,6 +330,7 @@ export function planFixes(i: FixInputs): Fix[] {
       shareOf: "of subagents",
       basis: `${ps.calls.toLocaleString("en-US")} summaries for ${ps.summarized} background subagent${ps.summarized === 1 ? "" : "s"}, one each 30 s while one ran and its transcript changed; no transcript records them, so an estimate: ~1,850 tokens of notes each (what Anthropic serves since November 2026), ${money(ps.forkUsd)} if each sent the whole context, as before`,
       quality: "none to the work: a summary never enters the subagent's context; you lose the 3-5 word progress line on a running subagent's task row",
+      qualityFree: true,
       change: `${where}: env.${PROGRESS_SUMMARIES_ENV} = "${PROGRESS_SUMMARIES_OFF}" (Claude Code ${PROGRESS_SUMMARIES_SINCE}+)`,
       state: "available",
       value: PROGRESS_SUMMARIES_OFF,
