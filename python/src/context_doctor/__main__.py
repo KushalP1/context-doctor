@@ -16,16 +16,37 @@ from .profile import profile_messages
 _SKIP = {"node_modules", ".git", "dist", "build", ".next", "target", "__pycache__", ".venv", "venv", "vendor"}
 
 
+def _git():
+    """git's own path, from PATH's absolute folders, or None.
+
+    Run by bare name, git is looked up in the current folder first on Windows
+    (CreateProcess, shutil.which), and wherever PATH names "." elsewhere:
+    `pack .` in a cloned repository ran a git.exe committed there.
+    """
+    names = ["git.exe", "git.com"] if os.name == "nt" else ["git"]
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        if not d or not os.path.isabs(d):
+            continue
+        for n in names:
+            p = os.path.join(d, n)
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                return p
+    return None
+
+
 def _git_files(folder):
     """Files git considers part of the repository under `folder` (relative), or None outside git.
 
     Tracked plus untracked-not-ignored, as `git ls-files` lists them, so
     .gitignore'd build output, data dumps and secrets (.env) never enter a pack.
     """
+    git = _git()
+    if git is None:
+        return None
     try:
         r = subprocess.run(
             # A folder's own .git/config can name a command for ls-files to run (core.fsmonitor).
-            ["git", "-c", "core.fsmonitor=false", "-C", folder, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            [git, "-c", "core.fsmonitor=false", "-C", folder, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
             capture_output=True, timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired):

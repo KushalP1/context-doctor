@@ -195,6 +195,34 @@ class PackReadsWhatGitDoes(unittest.TestCase):
         list(_read([repo], []))
         self.assertFalse(os.path.exists(os.path.join(repo, "fsmonitor-ran")), "git ran the folder's fsmonitor command")
 
+    @unittest.skipIf(__import__("os").name == "nt", "a stand-in git must be an executable on Windows")
+    def test_git_in_the_current_folder_is_not_run(self):
+        # Windows looks a bare name up in the current folder first; elsewhere a "." in PATH does the same.
+        import os
+        import subprocess
+        import tempfile
+
+        from context_doctor.__main__ import _read
+
+        repo = tempfile.mkdtemp()
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        with open(os.path.join(repo, "guide.md"), "w") as fh:
+            fh.write("# Guide\n\nhello\n")
+        marker = os.path.join(repo, "planted-git-ran")
+        with open(os.path.join(repo, "git"), "w") as fh:
+            fh.write("#!/bin/sh\ntouch '%s'\nexit 1\n" % marker)
+        os.chmod(os.path.join(repo, "git"), 0o755)
+        cwd, path = os.getcwd(), os.environ.get("PATH", "")
+        os.chdir(repo)
+        os.environ["PATH"] = "." + os.pathsep + path
+        try:
+            names = [s.name for s in _read([repo], [])]
+        finally:
+            os.chdir(cwd)
+            os.environ["PATH"] = path
+        self.assertFalse(os.path.exists(marker), "the folder's own git ran")
+        self.assertTrue(any(n.endswith("guide.md") for n in names), names)
+
 
 class Fixes(unittest.TestCase):
     def test_pack_documents_ids_stay_unique_when_a_name_looks_generated(self):
