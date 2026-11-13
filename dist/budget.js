@@ -36,6 +36,7 @@ import { isUnbilledModel, priceChangedText, priceTableKey, requestCost } from ".
 import { orgRates, orgRatesLine } from "./orgrates.js";
 import { anchorOf, rowsOf } from "./scan.js";
 import { realModel } from "./tokens.js";
+import { isCompactionRow, isTrack, newTrack, trackCompaction } from "./compactcost.js";
 /** Beside the hook state and the ledger: ~/.claude/.context-doctor-budget.json. */
 export function budgetPath() {
     return join(dirname(statePath()), ".context-doctor-budget.json");
@@ -177,6 +178,8 @@ export function periodEnd(period, now = Date.now()) {
     s.setDate(s.getDate() + (period === "week" ? 7 : 1));
     return s.getTime();
 }
+/** What a ledger entry counts: 2, each Claude Code compaction's own request too (compactcost.ts). An entry counted otherwise is read again. */
+const COUNTED = 2;
 /** Replies remembered per transcript, to tell a later row of one from a new reply. */
 const RECENT_REPLIES = 64;
 function readState() {
@@ -337,7 +340,10 @@ function readFile(tool, file, since, size) {
     // appended after this read, must still be known as its own (they were
     // counted again as a new request).
     const last = new Map();
+    // Where the compactions stand at the end (claudeFileUsage counted those before it): an append goes on from here.
+    const track = newTrack();
     for (const row of rowsOf(file, USAGE_ROWS)) {
+        trackCompaction(track, row);
         const m = row?.message;
         if (row?.type !== "assistant" || typeof m?.id !== "string")
             continue;
@@ -356,7 +362,7 @@ function readFile(tool, file, since, size) {
     const fd = openSync(file, "r");
     try {
         const o = lineStart(fd, size);
-        return { k, d, o, a: anchorOf(fd, o), r: r.slice(-RECENT_REPLIES), ...flags() };
+        return { k, d, o, a: anchorOf(fd, o), r: r.slice(-RECENT_REPLIES), c: track, ...flags() };
     }
     finally {
         closeSync(fd);
@@ -419,7 +425,8 @@ function countLines(e, recent, text, since, own) {
             // Only the last replies matter (a reply's rows are written together): a whole transcript read at once stays linear.
             if (recent.length > 2 * RECENT_REPLIES)
                 recent.splice(0, recent.length - RECENT_REPLIES);
-            if (!line.includes('"usage"'))
+            const compaction = isCompactionRow(line);
+            if (!compaction && !line.includes('"usage"'))
                 continue;
             let row;
             try {
@@ -427,6 +434,19 @@ function countLines(e, recent, text, since, own) {
             }
             catch {
                 continue;
+            }
+            // A compaction's own request, estimated (compactcost.ts), as claudeFileUsage counts it.
+            if (!isTrack(e.c))
+                e.c = newTrack();
+            const done = trackCompaction(e.c, row);
+            if (done && (Number.isFinite(done.ts) ? done.ts >= since : since <= 0) && !(own !== undefined && done.sessionId !== undefined && done.sessionId !== own)) {
+                const index = e.k.length;
+                if (done.cost.changedOn)
+                    (e.z ??= []).push([index, done.model, done.cost.changedOn]);
+                else if (done.cost.estimated)
+                    (e.y ??= []).push([index, done.model]);
+                e.k.push(keyOf(done.uuid));
+                e.d.push(done.cost.totalUsd);
             }
             const m = row?.message;
             if (row?.type !== "assistant" || !m?.usage)
@@ -496,9 +516,10 @@ export function refreshEntry(tool, file, prev, since, direct = false, own) {
         return undefined;
     }
     // An entry not in the shape this version writes (edited, or another version's), or priced at other
-    // rates (the organization's, or another price table: an upgrade that corrected a price), is read again.
+    // rates (the organization's, or another price table: an upgrade that corrected a price), or counted
+    // otherwise (COUNTED: 2 adds each compaction's own request), is read again.
     const org = orgRates()?.key;
-    const p = org ? `${priceTableKey()} ${org}` : priceTableKey();
+    const p = `${COUNTED}.${priceTableKey()}${org ? ` ${org}` : ""}`;
     const e = wellFormed(prev) && prev.p === p ? prev : undefined;
     if (e && e.t === tool && e.s === s.size && e.m === s.mtimeMs && e.i === s.ino)
         return { e, read: -1 };

@@ -36,6 +36,7 @@ import { subagentFiles } from "./subagents.js";
 import { pick, rowsOf, slimUsage, type Extractor } from "./scan.js";
 import { CACHE_WRITE_5M, isUnbilledModel, NO_MODIFIERS, openAIUsage, requestCost, type ModelPricing, type Modifiers, type RecordedUsage } from "./pricing.js";
 import { realModel } from "./tokens.js";
+import { isCompactionRow, newTrack, slimSummary, trackCompaction, type CompactionRequest } from "./compactcost.js";
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -354,12 +355,22 @@ export function codexLimitData(since: number, root = codexSessionsRoot()): { rea
  * main thread.
  */
 export const USAGE_ROWS: Extractor<{ ids: Record<string, 1> }> = {
-  id: "usage.3",
+  id: "usage.4",
   init: () => ({ ids: {} }),
   line(line, row, out, st) {
-    if (!line.includes('"usage"')) return;
+    const compaction = isCompactionRow(line);
+    if (!compaction && !line.includes('"usage"')) return;
     let e: Record<string, any>;
     try { e = row(); } catch { return; }
+    // A compaction's boundary (the context it read) and its summary (the output): what its own request is estimated from (compactcost.ts).
+    if (compaction && e?.type === "system" && e.subtype === "compact_boundary") {
+      out.push(pick({ ...e, isSidechain: e.isSidechain === true || undefined, compactMetadata: pick(e.compactMetadata ?? {}, ["preTokens"]) }, ["type", "subtype", "uuid", "sessionId", "timestamp", "isSidechain", "compactMetadata"]));
+      return;
+    }
+    if (compaction && e?.type === "user" && e.isCompactSummary === true) {
+      out.push(slimSummary(e));
+      return;
+    }
     const m = e?.message;
     if (e?.type !== "assistant" || !m?.usage) return;
     if (typeof m.id === "string") {
@@ -372,6 +383,16 @@ export const USAGE_ROWS: Extractor<{ ids: Record<string, 1> }> = {
     out.push(pick({ ...e, isSidechain: e.isSidechain === true || undefined, message: pick({ ...m, usage: slimUsage(m.usage) }, ["id", "model", "usage"]) }, ["type", "uuid", "timestamp", "isSidechain", "message"]));
   },
 };
+
+/** A compaction's estimated request as a request point (no message id: its key is the boundary's uuid). */
+export function compactionPoint(c: CompactionRequest): ClaudeRequest {
+  const u = c.usage;
+  return {
+    ts: c.ts, app: "claude", model: c.model, input: num(u.input_tokens), read: num(u.cache_read_input_tokens), write: num(u.cache_creation_input_tokens), output: num(u.output_tokens),
+    usd: c.cost.totalUsd, promptUsd: c.cost.promptUsd, rates: c.cost.rates, modifiers: c.cost.modifiers, compaction: true,
+    ...(c.uuid ? { uuid: c.uuid } : {}), ...(c.sidechain ? { sidechain: true } : {}), ...(c.cost.estimated ? { estimated: true } : {}), ...(c.cost.changedOn ? { changedOn: c.cost.changedOn } : {}),
+  };
+}
 
 /** One Claude Code request as `claudeFileUsage` reads it: the usage point, and what `spend` and `budget` add up. */
 export interface ClaudeRequest extends UsagePoint {
@@ -391,6 +412,8 @@ export interface ClaudeRequest extends UsagePoint {
   estimated?: boolean;
   /** Its row's price changed on this day, before the request. */
   changedOn?: string;
+  /** A compaction's own request, which no row records usage for: estimated (compactcost.ts). */
+  compaction?: boolean;
 }
 
 /**
@@ -406,7 +429,10 @@ export function claudeFileUsage(file: string, since: number, until = Infinity, r
   const sighting = replyCounter(runRows);
   const settle = outputSettler();
   const byId = new Map<string, { point: ClaudeRequest; u: RecordedUsage }>();
+  const track = newTrack();
   rowsOf(file, USAGE_ROWS).forEach((e: Record<string, any>) => {
+    const done = trackCompaction(track, e);
+    if (done && done.ts >= since && done.ts <= until) out.push(compactionPoint(done));
     const m = e?.message;
     if (e?.type !== "assistant" || !m?.usage) return;
     const seen = sighting(e);

@@ -70,6 +70,8 @@ export interface SpendItem {
     workflow?: string;
     /** Claude Code: the reply's row uuid, which a fork's copy shares. Codex: the event's codexEventKey, which a forked rollout's copy shares. */
     key?: string;
+    /** Claude Code: a compaction's own request, which no row records usage for: estimated from the context it read and its summary (compactcost.ts). */
+    compaction?: boolean;
 }
 /**
  * A project folder's name (its path with "-" for separators, as Claude Code
@@ -210,6 +212,11 @@ export interface SpendReport {
         requests: number;
         usd: number;
     }>;
+    /** Claude Code's compactions, each one's own request estimated (no row records its usage): inside `usd`; absent when none. */
+    compactions?: {
+        requests: number;
+        usd: number;
+    };
     sessions: Array<{
         tool: Tool;
         project: string;

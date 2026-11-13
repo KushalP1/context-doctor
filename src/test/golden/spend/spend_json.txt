@@ -2,19 +2,19 @@
   "days": 30,
   "since": 1788264000000,
   "until": 1790856000000,
-  "usd": 142.53063429999995,
-  "requests": 290,
+  "usd": 145.87364689999993,
+  "requests": 293,
   "tools": [
     {
       "tool": "claude",
       "name": "Claude Code",
-      "usd": 142.46556429999995,
-      "requests": 285,
+      "usd": 145.80857689999993,
+      "requests": 288,
       "tokens": {
         "input": 6223,
-        "read": 42081498,
-        "write": 19124751,
-        "output": 145343
+        "read": 42893461,
+        "write": 19522156,
+        "output": 145412
       },
       "unpriced": 0,
       "unpricedTokens": 0,
@@ -64,10 +64,10 @@
   "projects": [
     {
       "project": "work-app",
-      "usd": 141.70116729999992,
-      "requests": 273,
+      "usd": 145.04417989999993,
+      "requests": 276,
       "byTool": {
-        "claude": 141.70116729999992
+        "claude": 145.04417989999993
       }
     },
     {
@@ -98,10 +98,10 @@
   "models": [
     {
       "model": "claude-opus-5-5",
-      "usd": 86.25766200000002,
-      "requests": 213,
+      "usd": 89.60067460000002,
+      "requests": 216,
       "byTool": {
-        "claude": 86.25766200000002
+        "claude": 89.60067460000002
       }
     },
     {
@@ -216,18 +216,18 @@
     },
     {
       "day": "2026-09-11",
-      "usd": 29.327793,
-      "requests": 56,
+      "usd": 29.4247104,
+      "requests": 57,
       "byTool": {
-        "claude": 29.327793
+        "claude": 29.4247104
       }
     },
     {
       "day": "2026-09-12",
-      "usd": 9.409965599999998,
-      "requests": 30,
+      "usd": 12.589665599999998,
+      "requests": 31,
       "byTool": {
-        "claude": 9.409965599999998
+        "claude": 12.589665599999998
       }
     },
     {
@@ -308,10 +308,10 @@
     },
     {
       "day": "2026-09-25",
-      "usd": 11.8418472,
-      "requests": 30,
+      "usd": 11.9082424,
+      "requests": 31,
       "byTool": {
-        "claude": 11.8418472
+        "claude": 11.9082424
       }
     },
     {
@@ -361,9 +361,9 @@
   ],
   "parts": {
     "inputUsd": 0.073755,
-    "writeUsd": 130.68640950000002,
-    "readUsd": 8.665979799999993,
-    "outputUsd": 3.084489999999999,
+    "writeUsd": 133.86564950000005,
+    "readUsd": 8.828372399999994,
+    "outputUsd": 3.0858699999999977,
     "webSearchUsd": 0.02
   },
   "modifiers": {
@@ -372,6 +372,10 @@
     "longUsd": 0.014396,
     "webSearchUsd": 0.02,
     "webSearches": 2
+  },
+  "compactions": {
+    "requests": 3,
+    "usd": 3.3430126
   },
   "sessions": [
     {
@@ -388,8 +392,8 @@
       "tool": "claude",
       "project": "work-app",
       "session": "s1",
-      "usd": 28.7867318,
-      "requests": 58,
+      "usd": 32.0633492,
+      "requests": 60,
       "first": 1789133112745,
       "last": 1789181452916,
       "model": "claude-opus-5-5"
@@ -408,8 +412,8 @@
       "tool": "claude",
       "project": "work-app",
       "session": "s3",
-      "usd": 11.8418472,
-      "requests": 30,
+      "usd": 11.9082424,
+      "requests": 31,
       "first": 1790337665619,
       "last": 1790360003844,
       "model": "claude-opus-5-5"

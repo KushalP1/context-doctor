@@ -27,6 +27,7 @@
  */
 import { type Extractor } from "./scan.js";
 import { type ModelPricing, type Modifiers } from "./pricing.js";
+import { type CompactionRequest } from "./compactcost.js";
 /** Claude Code's two windows, as its status line input names them. */
 export declare const CLAUDE_WINDOWS: readonly ["five_hour", "seven_day"];
 /** One reading of one window: how much of it was used at `ts`. */
@@ -107,6 +108,8 @@ export declare function codexLimitData(since: number, root?: string): {
 export declare const USAGE_ROWS: Extractor<{
     ids: Record<string, 1>;
 }>;
+/** A compaction's estimated request as a request point (no message id: its key is the boundary's uuid). */
+export declare function compactionPoint(c: CompactionRequest): ClaudeRequest;
 /** One Claude Code request as `claudeFileUsage` reads it: the usage point, and what `spend` and `budget` add up. */
 export interface ClaudeRequest extends UsagePoint {
     /** The row's uuid: what tells a fork's copy of a reply from the reply itself. */
@@ -125,6 +128,8 @@ export interface ClaudeRequest extends UsagePoint {
     estimated?: boolean;
     /** Its row's price changed on this day, before the request. */
     changedOn?: string;
+    /** A compaction's own request, which no row records usage for: estimated (compactcost.ts). */
+    compaction?: boolean;
 }
 /**
  * The requests of one Claude Code transcript between `since` and `until`,

@@ -124,6 +124,8 @@ export function claudeSpend(since, until = Infinity, tops, onProgress) {
                 usd: r.usd, inputUsd, readUsd, writeUsd: Math.max(0, r.promptUsd - inputUsd - readUsd), outputUsd: Math.max(0, r.usd - r.promptUsd - r.modifiers.webSearchUsd), priced: Boolean(price),
             };
             label(item, r);
+            if (r.compaction)
+                item.compaction = true;
             if (r.model)
                 item.model = r.model;
             if (f.run)
@@ -515,7 +517,12 @@ export function summarizeSpend(items, days, since, until, skipped = []) {
     const runs = new Set();
     const mods = { ...NO_MODIFIERS };
     const changed = new Map();
+    const compactions = { requests: 0, usd: 0 };
     for (const it of items) {
+        if (it.compaction) {
+            compactions.requests++;
+            compactions.usd += it.usd;
+        }
         if (it.modifiers)
             addModifiers(mods, it.modifiers);
         if (it.changedOn) {
@@ -595,6 +602,7 @@ export function summarizeSpend(items, days, since, until, skipped = []) {
         parts,
         ...(anyModifier(mods) ? { modifiers: mods } : {}),
         ...(changed.size ? { priceChanged: [...changed.values()].sort((a, b) => b.usd - a.usd) } : {}),
+        ...(compactions.requests ? { compactions } : {}),
         sessions: [...sessions.values()].sort(byUsd),
         skipped,
     };
@@ -695,6 +703,9 @@ export function renderSpend(r, top = 8) {
     // What the requests' own billing added to the list rates, already in the parts above.
     if (r.modifiers)
         lines.push(`  Of it, billed above list rates: ${modifiersText(r.modifiers)}`);
+    // A compaction's own request is in no row's usage: estimated from the context it read and the summary it wrote.
+    if (r.compactions)
+        lines.push(`  Of it, ${r.compactions.requests.toLocaleString("en-US")} Claude Code ${r.compactions.requests === 1 ? "compaction's own request" : "compactions' own requests"} ${usd(r.compactions.usd)}, an estimate (no row records their usage)`);
     const claude = r.tools.find((t) => t.tool === "claude");
     if (claude?.subagentUsd)
         lines.push(`  Claude Code subagents ${usd(claude.subagentUsd)} (${share(claude.subagentUsd, r.usd)}): context-doctor subagents says which paid off`);

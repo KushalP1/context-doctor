@@ -37,6 +37,7 @@ import { isUnbilledModel, priceChangedText, priceTableKey, requestCost, type Rec
 import { orgRates, orgRatesLine } from "./orgrates.js";
 import { anchorOf, rowsOf } from "./scan.js";
 import { realModel } from "./tokens.js";
+import { isCompactionRow, isTrack, newTrack, trackCompaction, type CompactTrack } from "./compactcost.js";
 
 export type Period = "day" | "week";
 
@@ -197,9 +198,15 @@ export function periodEnd(period: Period, now = Date.now()): number {
  * US-only and web searches, and the output price in `r` is its own. `p`
  * fingerprints the price table `d` was priced by (pricing.ts priceTableKey)
  * and the organization's rates (orgrates.ts), when set: an entry priced
- * under another table or other rates is read again.
+ * under another table or other rates is read again. `c` is where reading a
+ * Claude Code transcript's compactions stopped (compactcost.ts): each
+ * compaction's own request is in `k`/`d` too, estimated, keyed by its
+ * boundary's uuid.
  */
-export interface FileEntry { t: Tool; s: number; m: number; i: number; k: string[]; d: number[]; o?: number; a?: string; r?: Array<[string, number, number, number]>; x?: Array<[number, string]>; y?: Array<[number, string]>; z?: Array<[number, string, string]>; p?: string }
+export interface FileEntry { t: Tool; s: number; m: number; i: number; k: string[]; d: number[]; o?: number; a?: string; r?: Array<[string, number, number, number]>; x?: Array<[number, string]>; y?: Array<[number, string]>; z?: Array<[number, string, string]>; p?: string; c?: CompactTrack }
+
+/** What a ledger entry counts: 2, each Claude Code compaction's own request too (compactcost.ts). An entry counted otherwise is read again. */
+const COUNTED = 2;
 
 /** Replies remembered per transcript, to tell a later row of one from a new reply. */
 const RECENT_REPLIES = 64;
@@ -350,7 +357,10 @@ function readFile(tool: Tool, file: string, since: number, size: number): Omit<F
   // appended after this read, must still be known as its own (they were
   // counted again as a new request).
   const last = new Map<string, [string, number, number, number]>();
+  // Where the compactions stand at the end (claudeFileUsage counted those before it): an append goes on from here.
+  const track = newTrack();
   for (const row of rowsOf<Record<string, any>>(file, USAGE_ROWS)) {
+    trackCompaction(track, row);
     const m = row?.message;
     if (row?.type !== "assistant" || typeof m?.id !== "string") continue;
     const out = Number(m.usage?.output_tokens) > 0 ? Number(m.usage.output_tokens) : 0;
@@ -364,7 +374,7 @@ function readFile(tool: Tool, file: string, since: number, size: number): Omit<F
   const fd = openSync(file, "r");
   try {
     const o = lineStart(fd, size);
-    return { k, d, o, a: anchorOf(fd, o), r: r.slice(-RECENT_REPLIES), ...flags() };
+    return { k, d, o, a: anchorOf(fd, o), r: r.slice(-RECENT_REPLIES), c: track, ...flags() };
   } finally {
     closeSync(fd);
   }
@@ -422,9 +432,20 @@ function countLines(e: FileEntry, recent: NonNullable<FileEntry["r"]>, text: str
     for (const line of text.split("\n")) {
       // Only the last replies matter (a reply's rows are written together): a whole transcript read at once stays linear.
       if (recent.length > 2 * RECENT_REPLIES) recent.splice(0, recent.length - RECENT_REPLIES);
-      if (!line.includes('"usage"')) continue;
+      const compaction = isCompactionRow(line);
+      if (!compaction && !line.includes('"usage"')) continue;
       let row: Record<string, any>;
       try { row = JSON.parse(line); } catch { continue; }
+      // A compaction's own request, estimated (compactcost.ts), as claudeFileUsage counts it.
+      if (!isTrack(e.c)) e.c = newTrack();
+      const done = trackCompaction(e.c, row);
+      if (done && (Number.isFinite(done.ts) ? done.ts >= since : since <= 0) && !(own !== undefined && done.sessionId !== undefined && done.sessionId !== own)) {
+        const index = e.k.length;
+        if (done.cost.changedOn) (e.z ??= []).push([index, done.model, done.cost.changedOn]);
+        else if (done.cost.estimated) (e.y ??= []).push([index, done.model]);
+        e.k.push(keyOf(done.uuid));
+        e.d.push(done.cost.totalUsd);
+      }
       const m = row?.message;
       if (row?.type !== "assistant" || !m?.usage) continue;
       const u = m.usage as RecordedUsage;
@@ -484,9 +505,10 @@ export function refreshEntry(tool: Tool, file: string, prev: FileEntry | undefin
   let s;
   try { s = statSync(file); } catch { return undefined; }
   // An entry not in the shape this version writes (edited, or another version's), or priced at other
-  // rates (the organization's, or another price table: an upgrade that corrected a price), is read again.
+  // rates (the organization's, or another price table: an upgrade that corrected a price), or counted
+  // otherwise (COUNTED: 2 adds each compaction's own request), is read again.
   const org = orgRates()?.key;
-  const p = org ? `${priceTableKey()} ${org}` : priceTableKey();
+  const p = `${COUNTED}.${priceTableKey()}${org ? ` ${org}` : ""}`;
   const e = wellFormed(prev) && prev.p === p ? prev : undefined;
   if (e && e.t === tool && e.s === s.size && e.m === s.mtimeMs && e.i === s.ino) return { e, read: -1 };
   try {

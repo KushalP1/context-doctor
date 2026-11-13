@@ -102,10 +102,11 @@ test("Claude Code's spend equals limits' usage, and its main conversation's inpu
             // The fork's copy of s1 is counted once.
             const keys = items.filter((i) => i.key).map((i) => i.key);
             assert.equal(new Set(keys).size, keys.length, "no reply twice");
-            // savings: the main conversation's input (output not), in sessions with 10+ requests.
+            // savings: the main conversation's input (output not), in sessions with 10+ requests; the
+            // compactions' own requests, estimated (no row records them), are spend's alone.
             const s = estimateSavings(30, {}, undefined, undefined, false);
             const kept = new Set(s.sessions.map((x) => x.path.replace(/^.*[\\/]/, "").replace(/\.jsonl$/, "")));
-            const input = items.filter((i) => !i.subagent && !i.workflow && kept.has(i.session)).reduce((n, i) => n + i.inputUsd + i.writeUsd + i.readUsd, 0);
+            const input = items.filter((i) => !i.subagent && !i.workflow && !i.compaction && kept.has(i.session)).reduce((n, i) => n + i.inputUsd + i.writeUsd + i.readUsd, 0);
             assert.ok(s.billedUsd > 0);
             close(input, s.billedUsd, "savings' input bill");
             // The parts add up to the whole.

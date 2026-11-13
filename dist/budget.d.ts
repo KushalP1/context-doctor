@@ -23,6 +23,7 @@
  * replies count once. Measured on the author's history: docs/spend.md.
  */
 import { type Tool } from "./spend.js";
+import { type CompactTrack } from "./compactcost.js";
 export type Period = "day" | "week";
 export interface Budget {
     usd: number;
@@ -75,7 +76,10 @@ export declare function periodEnd(period: Period, now?: number): number;
  * US-only and web searches, and the output price in `r` is its own. `p`
  * fingerprints the price table `d` was priced by (pricing.ts priceTableKey)
  * and the organization's rates (orgrates.ts), when set: an entry priced
- * under another table or other rates is read again.
+ * under another table or other rates is read again. `c` is where reading a
+ * Claude Code transcript's compactions stopped (compactcost.ts): each
+ * compaction's own request is in `k`/`d` too, estimated, keyed by its
+ * boundary's uuid.
  */
 export interface FileEntry {
     t: Tool;
@@ -91,6 +95,7 @@ export interface FileEntry {
     y?: Array<[number, string]>;
     z?: Array<[number, string, string]>;
     p?: string;
+    c?: CompactTrack;
 }
 /** A ledger entry this version can use: a damaged one threw on every prompt until its transcript changed. */
 export declare function wellFormed(e: FileEntry | undefined): e is FileEntry;

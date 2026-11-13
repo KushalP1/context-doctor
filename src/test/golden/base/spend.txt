@@ -1,14 +1,14 @@
 What your AI coding cost, across every tool here
 Last 30 days, as billed at list rates
 ────────────────────────────────────────────────────────────
-Claude Code          $142  273 requests      subagents $3.46, workflows $4.90 (1 run)
+Claude Code          $145  276 requests      subagents $3.46, workflows $4.90 (1 run)
 
 By project
-  work-app                                $142  100%
+  work-app                                $145  100%
 
 By model
-  claude-opus-5-5                       $85.55   60%
-  claude-fable-5-1                      $39.15   28%
+  claude-opus-5-5                       $88.89   61%
+  claude-fable-5-1                      $39.15   27%
   claude-sonnet-5                       $17.00   12%
 
 By day (last 14; all in --json)
@@ -19,7 +19,7 @@ By day (last 14; all in --json)
   Sep 22      $2.12  ▮
   Sep 23      $0.00
   Sep 24      $0.00
-  Sep 25     $11.84  ▮▮▮▮▮▮▮
+  Sep 25     $11.91  ▮▮▮▮▮▮▮▮
   Sep 26      $0.00
   Sep 27      $0.00
   Sep 28     $47.51  ▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮
@@ -28,15 +28,16 @@ By day (last 14; all in --json)
   Oct 01      $0.00
 
 Where it goes
-  cache writes $130 (92%), cache reads $8.45 (6%)
+  cache writes $133 (92%), cache reads $8.62 (6%)
   output $2.98 (2%), uncached input $0.03 (0%)
+  Of it, 3 Claude Code compactions' own requests $3.34, an estimate (no row records their usage)
   Claude Code subagents $3.46 (2%): context-doctor subagents says which paid off
   Claude Code workflow agents $4.90 (3%), in 1 run
   Biggest sessions:
      $47.51  work-app                   claude-fable-5-1   Sep 28
-     $28.79  work-app                   claude-opus-5-5    Sep 12
+     $32.06  work-app                   claude-opus-5-5    Sep 12
      $26.56  work-app                   claude-sonnet-5    Sep 19
-     $11.84  work-app                   claude-opus-5-5    Sep 25
+     $11.91  work-app                   claude-opus-5-5    Sep 25
      $10.97  work-app                   claude-opus-5-5    Sep 30
 
 As an API key is billed; on a subscription the same tokens come out

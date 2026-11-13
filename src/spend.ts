@@ -92,6 +92,8 @@ export interface SpendItem {
   workflow?: string;
   /** Claude Code: the reply's row uuid, which a fork's copy shares. Codex: the event's codexEventKey, which a forked rollout's copy shares. */
   key?: string;
+  /** Claude Code: a compaction's own request, which no row records usage for: estimated from the context it read and its summary (compactcost.ts). */
+  compaction?: boolean;
 }
 
 /**
@@ -165,6 +167,7 @@ export function claudeSpend(since: number, until = Infinity, tops?: string[], on
         usd: r.usd, inputUsd, readUsd, writeUsd: Math.max(0, r.promptUsd - inputUsd - readUsd), outputUsd: Math.max(0, r.usd - r.promptUsd - r.modifiers.webSearchUsd), priced: Boolean(price),
       };
       label(item, r);
+      if (r.compaction) item.compaction = true;
       if (r.model) item.model = r.model;
       if (f.run) item.workflow = `${session}/${f.run}`;
       else if (f.subagent || r.sidechain) item.subagent = true;
@@ -531,6 +534,8 @@ export interface SpendReport {
   modifiers?: Modifiers;
   /** Models whose price in the table changed on a day before some of their requests: those are priced at what the page said would follow, an estimate. */
   priceChanged?: Array<{ model: string; on: string; requests: number; usd: number }>;
+  /** Claude Code's compactions, each one's own request estimated (no row records its usage): inside `usd`; absent when none. */
+  compactions?: { requests: number; usd: number };
   sessions: Array<{ tool: Tool; project: string; session: string; model?: string; usd: number; requests: number; first: number; last: number }>;
   /** A tool that could not be read (Cursor without SQLite), and why. */
   skipped: Array<{ tool: Tool; reason: string }>;
@@ -562,7 +567,9 @@ export function summarizeSpend(items: SpendItem[], days: number, since: number, 
   const runs = new Set<string>();
   const mods: Modifiers = { ...NO_MODIFIERS };
   const changed = new Map<string, NonNullable<SpendReport["priceChanged"]>[number]>();
+  const compactions = { requests: 0, usd: 0 };
   for (const it of items) {
+    if (it.compaction) { compactions.requests++; compactions.usd += it.usd; }
     if (it.modifiers) addModifiers(mods, it.modifiers);
     if (it.changedOn) {
       const k = `${it.model}\u0000${it.changedOn}`;
@@ -629,6 +636,7 @@ export function summarizeSpend(items: SpendItem[], days: number, since: number, 
     parts,
     ...(anyModifier(mods) ? { modifiers: mods } : {}),
     ...(changed.size ? { priceChanged: [...changed.values()].sort((a, b) => b.usd - a.usd) } : {}),
+    ...(compactions.requests ? { compactions } : {}),
     sessions: [...sessions.values()].sort(byUsd),
     skipped,
   };
@@ -735,6 +743,8 @@ export function renderSpend(r: SpendReport, top = 8): string {
   for (let i = 0; i < partText.length; i += 2) lines.push(`  ${partText.slice(i, i + 2).join(", ")}`);
   // What the requests' own billing added to the list rates, already in the parts above.
   if (r.modifiers) lines.push(`  Of it, billed above list rates: ${modifiersText(r.modifiers)}`);
+  // A compaction's own request is in no row's usage: estimated from the context it read and the summary it wrote.
+  if (r.compactions) lines.push(`  Of it, ${r.compactions.requests.toLocaleString("en-US")} Claude Code ${r.compactions.requests === 1 ? "compaction's own request" : "compactions' own requests"} ${usd(r.compactions.usd)}, an estimate (no row records their usage)`);
   const claude = r.tools.find((t) => t.tool === "claude");
   if (claude?.subagentUsd) lines.push(`  Claude Code subagents ${usd(claude.subagentUsd)} (${share(claude.subagentUsd, r.usd)}): context-doctor subagents says which paid off`);
   if (claude?.workflowUsd) lines.push(`  Claude Code workflow agents ${usd(claude.workflowUsd)} (${share(claude.workflowUsd, r.usd)}), in ${runsText(claude.workflowRuns ?? 0)}`);
