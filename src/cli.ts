@@ -1164,11 +1164,17 @@ async function main(): Promise<void> {
     console.log(renderFirstScreen({ days: inputs.days, billedUsd: inputs.billedUsd, codexBilledUsd: inputs.codexCompact?.billedUsd, fixes, command: selfCommand, recordProblem: inputs.recordProblem, ask }));
     if (!ask) return;
     const rl = (await import("node:readline/promises")).createInterface({ input: process.stdin, output: process.stdout });
-    // Ctrl-D or a closed terminal is a no, never a wait.
+    // Ctrl-D or a closed terminal is a no, never a wait. A Ctrl-D typed during
+    // the scan, while the terminal was still line-buffered, reaches readline's
+    // raw mode as \x04 on macOS but as a NUL on Linux (the tty keeps a pending
+    // end-of-file as \0), which readline ignores: on an empty line it is a no too.
+    const typedAheadEof = (s: string | undefined) => { if (s === "\0" && rl.line === "") rl.close(); };
+    process.stdin.on("keypress", typedAheadEof);
     const answer = await new Promise<string>((resolve) => {
       rl.once("close", () => resolve(""));
       rl.question(firstQuestion(free.length, selfCommand)).then(resolve, () => resolve(""));
     });
+    process.stdin.off("keypress", typedAheadEof);
     rl.close();
     if (!/^(y|yes)$/i.test(answer.trim())) {
       console.log(`Nothing changed. ${selfCommand("fix")} asks about each lever, the ones above included.`);
