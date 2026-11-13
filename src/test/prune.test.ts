@@ -174,6 +174,17 @@ test("a project's own settings approve its .mcp.json servers only once the works
   mkdirSync(join(sub, ".claude"));
   writeFileSync(join(sub, ".claude", "settings.local.json"), JSON.stringify({ enabledMcpjsonServers: ["evil"] }));
   assert.equal(mcpjsonServerApproved("evil", sub, home), true, "a subfolder of the trusted root");
+  // CLAUDE_CODE_IGNORE_PERSISTED_TRUST (a self-hosted runner's --trust-workspace false): no trust record counts, as in Claude Code.
+  for (const [value, ignored] of [["1", true], ["TRUE", true], [" yes ", true], ["on", true], ["0", false], ["false", false], ["", false]] as const) {
+    const saved = process.env.CLAUDE_CODE_IGNORE_PERSISTED_TRUST;
+    process.env.CLAUDE_CODE_IGNORE_PERSISTED_TRUST = value;
+    try {
+      assert.equal(mcpjsonServerApproved("evil", repo, home), !ignored, `CLAUDE_CODE_IGNORE_PERSISTED_TRUST=${JSON.stringify(value)}`);
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_CODE_IGNORE_PERSISTED_TRUST;
+      else process.env.CLAUDE_CODE_IGNORE_PERSISTED_TRUST = saved;
+    }
+  }
   // A later file's explicit false overrides the user's true; a rejection anywhere wins.
   writeFileSync(join(repo, ".claude", "settings.local.json"), "{}");
   writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ enableAllProjectMcpServers: true }));

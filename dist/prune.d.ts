@@ -86,6 +86,14 @@ export interface PrunePlan {
 /** The project's own settings file, where prune writes. */
 export declare function localSettingsPath(cwd: string): string;
 /**
+ * CLAUDE_CODE_IGNORE_PERSISTED_TRUST, read as Claude Code reads it (2.1.321:
+ * a boolean variable, true for 1, true, yes or on). Set, "no workspace trust
+ * record counts in this process" (a self-hosted runner sets it when started
+ * with --trust-workspace false): ~/.claude.json's hasTrustDialogAccepted is
+ * not read, so a project's own settings approve nothing.
+ */
+export declare function persistedTrustIgnored(env?: NodeJS.ProcessEnv): boolean;
+/**
  * Whether Claude Code would start this project `.mcp.json` server without
  * asking: the user approved it (enabledMcpjsonServers, or
  * enableAllProjectMcpServers, in a settings file or ~/.claude.json) and has

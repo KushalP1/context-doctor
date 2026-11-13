@@ -295,12 +295,23 @@ function mcpjsonApprovedBy(name: string, cwd: string, home: string, read: (path:
   const projects = read(claudeJsonPath(home)).projects;
   const keys = trustKeys(cwd);
   const entry = (k: string) => (projects && typeof projects === "object" && projects[k] && typeof projects[k] === "object" ? projects[k] : undefined);
-  const trusted = keys.some((k) => entry(k)?.hasTrustDialogAccepted === true);
+  const trusted = !persistedTrustIgnored() && keys.some((k) => entry(k)?.hasTrustDialogAccepted === true);
   const legacy = keys.map(entry).find((e) => e && (e.enabledMcpjsonServers !== undefined || e.enableAllProjectMcpServers !== undefined)) ?? {};
   const sources = trusted ? [user, read(join(cwd, ".claude", "settings.json")), legacy, read(localSettingsPath(cwd))] : [user];
   let all = false;
   for (const s of sources) if (typeof s.enableAllProjectMcpServers === "boolean") all = trusted ? s.enableAllProjectMcpServers : all || s.enableAllProjectMcpServers;
   return all || sources.some((s) => list(s.enabledMcpjsonServers).some(same));
+}
+
+/**
+ * CLAUDE_CODE_IGNORE_PERSISTED_TRUST, read as Claude Code reads it (2.1.321:
+ * a boolean variable, true for 1, true, yes or on). Set, "no workspace trust
+ * record counts in this process" (a self-hosted runner sets it when started
+ * with --trust-workspace false): ~/.claude.json's hasTrustDialogAccepted is
+ * not read, so a project's own settings approve nothing.
+ */
+export function persistedTrustIgnored(env: NodeJS.ProcessEnv = process.env): boolean {
+  return ["1", "true", "yes", "on"].includes(String(env.CLAUDE_CODE_IGNORE_PERSISTED_TRUST ?? "").trim().toLowerCase());
 }
 
 /**
