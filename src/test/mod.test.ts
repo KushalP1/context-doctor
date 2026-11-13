@@ -167,6 +167,13 @@ test("the cost ledger: one line per move, capped, compared by doctor", () => {
   const check = costCheck(30, T + 10, log)!;
   assert.equal(check.status, "warn");
   assert.match(check.detail, /^1 of 2 sessions the mod measured in the last 30 days within 2% of Claude Code's own cost; the largest gap is \+25% \(\$2\.50 against \$2\.00, on claude-fable-5-2, 3 requests with no list price\)/);
+  // Ours above Claude Code's: a price, or rates context-doctor does not read; not "modelPricing", which it now reads from the managed files.
+  assert.match(check.detail, /\. A price in context-doctor's table that is off, or contracted rates set by an MDM profile or server-managed settings/);
+  assert.doesNotMatch(check.detail, /contracted rates Claude Code applies \(modelPricing\)/);
+  // Ours below: Claude Code's ledger holds the compaction's own request, which no transcript row prices.
+  const under = join(dir, "under.jsonl");
+  recordSessionCost({ ts: T, sid: "s9", cc: 10, cd: 9, model: "claude-fable-5-2" }, under);
+  assert.match(costCheck(30, T + 10, under)!.detail, /the largest gap is -10% \(\$9\.00 against \$10\.00, on claude-fable-5-2\)\. Claude Code's figure also holds requests its transcript keeps no usage for \(a compaction's own summary request\)/);
   assert.equal(costCheck(30, T + 10, join(dir, "none.jsonl")), undefined);
   // Capped: past the size it keeps the newest part, whole lines only.
   writeFileSync(log, Array.from({ length: 12000 }, (_, i) => JSON.stringify({ ts: T + 10 + i, sid: `old-${i}`, cc: 1, cd: 1 })).join("\n") + "\n");

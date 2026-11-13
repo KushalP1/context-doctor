@@ -221,6 +221,18 @@ export function costGaps(lines: CostLine[]): CostGap[] {
     .map((l) => ({ sid: l.sid, ts: l.ts, cc: l.cc!, cd: l.cd!, gap: (l.cd! - l.cc!) / l.cc!, ...(l.model ? { model: l.model } : {}), ...(l.unpriced ? { unpriced: l.unpriced } : {}) }));
 }
 
+/**
+ * What a gap can come from, by its sign. Ours below Claude Code's: requests
+ * the transcript keeps no usage for, which Claude Code's ledger holds (a
+ * compaction's own summary request: its boundary row carries no usage, and
+ * the mods API says the ledger has it), a model with no price, rates from
+ * MDM or server-managed settings.
+ * Ours above: a price in context-doctor's table, or contracted rates it
+ * does not read.
+ */
+const UNDER = "Claude Code's figure also holds requests its transcript keeps no usage for (a compaction's own summary request), which context-doctor cannot price; a model with no price, or contracted rates set by an MDM profile or server-managed settings (context-doctor reads modelPricing from the managed settings files only), show up here too";
+const OVER = "A price in context-doctor's table that is off, or contracted rates set by an MDM profile or server-managed settings (context-doctor reads modelPricing from the managed settings files only), show up here";
+
 const pct = (x: number) => `${x >= 0 ? "+" : ""}${(x * 100).toFixed(Math.abs(x) < 0.1 ? 1 : 0)}%`;
 
 /**
@@ -238,7 +250,7 @@ export function costCheck(days = 30, now = Date.now(), path = costLogPath()): { 
   const head = `${within} of ${n} session${n === 1 ? "" : "s"} the mod measured in the last ${days} days within ${COST_GAP_TARGET * 100}% of Claude Code's own cost`;
   if (within === n) return { label, status: "ok", detail: `${head} (largest gap ${pct(worst.gap)})` };
   const why = worst.unpriced ? `, ${worst.unpriced} request${worst.unpriced === 1 ? "" : "s"} with no list price` : "";
-  return { label, status: "warn", detail: `${head}; the largest gap is ${pct(worst.gap)} ($${worst.cd.toFixed(2)} against $${worst.cc.toFixed(2)}${worst.model ? `, on ${worst.model}` : ""}${why}). A price missing from context-doctor's table, or contracted rates Claude Code applies (modelPricing), show up here` };
+  return { label, status: "warn", detail: `${head}; the largest gap is ${pct(worst.gap)} ($${worst.cd.toFixed(2)} against $${worst.cc.toFixed(2)}${worst.model ? `, on ${worst.model}` : ""}${why}). ${worst.gap < 0 ? UNDER : OVER}` };
 }
 
 // -- The measure itself ---------------------------------------------------------------
