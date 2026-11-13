@@ -98,6 +98,13 @@ if [ -n "$CC" ]; then
 else
   echo "- plugin validate skipped: no Claude Code found"
 fi
+# E2: the plugin and its mod live on that Claude Code (-p --plugin-dir, a local mock of the API, a throwaway HOME and a
+# made-up credential): green as committed, red on each planted fault. The weekly canary workflow runs it on npm's newest.
+if [ -n "$CC" ]; then
+  run "plugin: live canary on $CC: hooks, the mod's session.measure and ledgers; red on each planted fault" node scripts/canary.mjs --self-test --claude "$CC"
+else
+  echo "- live canary skipped: no Claude Code found"
+fi
 # K1: every model the newest Claude Code here knows (its Bedrock catalog, its claude-* ids) has a price of its own, not a family row's.
 if [ -n "$CC" ]; then
   run "pricing: every Claude model in Claude Code's catalog has a price ($CC)" node scripts/check-models.mjs --binary "$CC"

@@ -1,0 +1,37 @@
+# Weekly: the plugin and its mod, live, on the newest Claude Code from npm
+# (ROADMAP E2). Claude Code ships about a version a day; this says when one
+# stops loading the plugin, running its hooks, or raising the mod's
+# session.measure, before a user finds out. scripts/canary.mjs runs one
+# headless session (`claude -p --plugin-dir .`) against a local mock of the
+# Messages API in a throwaway HOME, with a made-up credential: nothing reaches
+# Anthropic, and no secret is used. --self-test also plants each known fault
+# in a copy of the plugin and fails if any of them leaves the canary green.
+# Read-only: no secrets, no writes.
+name: Canary
+
+on:
+  schedule:
+    - cron: "41 6 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          # Claude Code's npm package needs Node 22 or later.
+          node-version: 22
+          cache: npm
+      - run: npm ci && npm run build
+      - name: Install the newest Claude Code (npm, into a scratch prefix)
+        run: npm install --prefix "$RUNNER_TEMP/claude-code" --no-audit --no-fund @anthropic-ai/claude-code@latest
+      - name: The plugin and its mod on it (green), and each planted fault (red)
+        run: node scripts/canary.mjs --self-test --claude "$RUNNER_TEMP/claude-code/node_modules/.bin/claude"
