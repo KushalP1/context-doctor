@@ -43,7 +43,7 @@ import { createServer, get as httpGet } from "node:http";
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, platform, tmpdir } from "node:os";
-import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, resolve, sep, toNamespacedPath } from "node:path";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -448,7 +448,9 @@ export function copyPlugin(src) {
   const dst = mkdtempSync(join(tmpdir(), "cd-canary-plugin-"));
   // assets/icon.png: without it the directory profile warns (ICON_MISSING) and --strict fails every copy alike.
   for (const p of [".claude-plugin", "hooks", "plugin", "skills", join("assets", "icon.png"), "README.md", "LICENSE", "package.json"]) if (existsSync(join(src, p))) cpSync(join(src, p), join(dst, p), { recursive: true });
-  cpSync(join(src, "dist"), join(dst, "dist"), { recursive: true, filter: (f) => relative(join(src, "dist"), f).split(sep)[0] !== "test" });
+  // Node 20's cpSync on Windows hands the filter \\?\-prefixed paths, so dist/test is compared in that form on both sides.
+  const tests = toNamespacedPath(resolve(src, "dist", "test"));
+  cpSync(join(src, "dist"), join(dst, "dist"), { recursive: true, filter: (f) => toNamespacedPath(resolve(f)) !== tests });
   return dst;
 }
 
