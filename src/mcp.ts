@@ -36,7 +36,7 @@ import { SERVER_INSTRUCTIONS } from "./rules.js";
 import { compactOutline, compactProfile, compactSketch, resultMode, type CompactResult } from "./compact.js";
 import { HANDOFF_LIMITS, handoffDir, listHandoffs, maskSecrets, readHandoff, renderMath, saveHandoff, tildify, tildifyAll, validateHandoff } from "./handoff.js";
 import { sourcesFromOpenAiFiles } from "./fileparams.js";
-import { makeGuard, readJsonBody, refusal } from "./httpguard.js";
+import { exposureWarning, makeGuard, portArg, readJsonBody, refusal } from "./httpguard.js";
 import { currentTranscript, recall, renderRecall } from "./recall.js";
 
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"] as const;
@@ -621,7 +621,7 @@ if (argv.includes("--http")) {
     const i = argv.indexOf(flag);
     return i >= 0 ? argv[i + 1] : undefined;
   };
-  const port = Number(argAfter("--port")) > 0 ? Number(argAfter("--port")) : 8808;
+  const port = portArg(argAfter("--port"));
   const host = argAfter("--host") ?? "127.0.0.1";
   // Handoffs stay on this machine only when its owner says so: a server on a
   // shared host or behind a public tunnel must not collect other people's chats.
@@ -631,7 +631,7 @@ if (argv.includes("--http")) {
   const { createServer: createHttpServer } = await import("node:http");
   const { StreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
 
-  createHttpServer(async (req, res) => {
+  const httpServer = createHttpServer(async (req, res) => {
     try {
       if (req.url === "/health") {
         res.setHeader("content-type", "application/json");
@@ -715,8 +715,13 @@ if (argv.includes("--http")) {
       if (!res.headersSent) res.statusCode = 500;
       res.end(JSON.stringify({ error: (e as Error).message }));
     }
-  }).listen(port, host, () => {
-    console.error(`context-doctor MCP (streamable HTTP) on http://${host}:${port}/mcp`);
+  });
+  httpServer.listen(port, host, () => {
+    // The port it got: with --port 0 the system picks one.
+    const actual = (httpServer.address() as { port?: number } | null)?.port ?? port;
+    console.error(`context-doctor MCP (streamable HTTP) on http://${host.includes(":") ? `[${host}]` : host}:${actual}/mcp`);
+    const exposed = exposureWarning(host, storeHandoffs);
+    if (exposed) console.error(exposed);
     console.error(`ChatGPT developer-mode connectors need a URL their servers can reach — expose this via your host or a tunnel.`);
     console.error(
       guard.hosts === "*"

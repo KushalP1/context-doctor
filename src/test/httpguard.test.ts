@@ -11,7 +11,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFi
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_ALLOWED_ORIGINS, hostName, makeGuard, refusal } from "../httpguard.js";
+import { DEFAULT_ALLOWED_ORIGINS, exposureWarning, hostName, makeGuard, portArg, refusal } from "../httpguard.js";
 import { handoffDir, readHandoff, saveHandoff } from "../handoff.js";
 import { freePort } from "./freeport.js";
 import { sandboxEnv } from "./sandbox.js";
@@ -220,5 +220,36 @@ test("only /mcp is the endpoint: /mcpx and friends are 404", async () => {
     assert.equal((await s.rpc("tools/list")).status, 200);
   } finally {
     s.child.kill();
+  }
+});
+
+test("--http beyond this machine says it has no sign-in, as the proxy says it; loopback says nothing", () => {
+  for (const h of ["127.0.0.1", "127.1.2.3", "localhost", "::1", "[::1]", "LOCALHOST"]) assert.equal(exposureWarning(h), undefined, h);
+  for (const h of ["0.0.0.0", "::", "192.168.1.5", "my-host.example"]) assert.match(exposureWarning(h) ?? "", /beyond this machine, with no sign-in: anyone who can reach it can call its tools/, h);
+  assert.match(exposureWarning("0.0.0.0", true) ?? "", /save handoffs here \(--store-handoffs\)/);
+});
+
+test("--http --port 0 takes a port the system picks and prints it (it fell back to 8808)", async () => {
+  assert.equal(portArg("0"), 0);
+  assert.equal(portArg("9000"), 9000);
+  for (const bad of [undefined, "", "abc", "-1", "70000", "1.5"]) assert.equal(portArg(bad), 8808, String(bad));
+  const home = mkdtempSync(join(tmpdir(), "cd-http-port0-"));
+  const child = spawn(process.execPath, [mcpPath, "--http", "--port", "0"], { env: sandboxEnv(home), stdio: ["ignore", "ignore", "pipe"] });
+  try {
+    let err = "";
+    const port = await new Promise<number>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`no port line: ${err}`)), 15_000);
+      child.stderr!.on("data", (d) => {
+        err += d;
+        const m = /on http:\/\/127\.0\.0\.1:(\d+)\/mcp/.exec(err);
+        if (m) { clearTimeout(timer); resolve(Number(m[1])); }
+      });
+    });
+    assert.ok(port > 0 && port !== 8808, `printed port ${port}`);
+    assert.doesNotMatch(err, /WARNING/, "loopback: no exposure warning");
+    const health = await fetch(`http://127.0.0.1:${port}/health`).then((r) => r.json());
+    assert.equal(health.service, "context-doctor-mcp", "the printed port is the one it listens on");
+  } finally {
+    child.kill();
   }
 });

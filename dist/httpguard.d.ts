@@ -48,6 +48,19 @@ export declare function hostName(hostHeader: string): string;
 export declare function makeGuard(bindHost: string, allowedHosts?: string, allowedOrigins?: string, env?: NodeJS.ProcessEnv, opts?: {
     ipLiterals?: boolean;
 }): HttpGuard;
+/**
+ * What to say when the --http server listens beyond this machine: it has no
+ * sign-in, so anyone who can reach the address can call its tools (and,
+ * with --store-handoffs, save handoffs on this machine). On a host or behind
+ * a tunnel for ChatGPT that is the point, so it is said, not refused, as the
+ * proxy says it. Undefined on a loopback address.
+ */
+export declare function exposureWarning(host: string, storeHandoffs?: boolean): string | undefined;
+/**
+ * The --port value: a port number, 0 for one the system picks, or the
+ * default when absent or not a port (0 used to fall back to 8808).
+ */
+export declare function portArg(raw: string | undefined, fallback?: number): number;
 /** Why this request may not reach /mcp, or undefined when it may. */
 export declare function refusal(guard: HttpGuard, headers: IncomingMessage["headers"]): string | undefined;
 /**

@@ -54,6 +54,28 @@ export function makeGuard(bindHost, allowedHosts, allowedOrigins, env = process.
         hosts.add(bind);
     return { hosts, origins, ipLiterals: opts.ipLiterals };
 }
+/**
+ * What to say when the --http server listens beyond this machine: it has no
+ * sign-in, so anyone who can reach the address can call its tools (and,
+ * with --store-handoffs, save handoffs on this machine). On a host or behind
+ * a tunnel for ChatGPT that is the point, so it is said, not refused, as the
+ * proxy says it. Undefined on a loopback address.
+ */
+export function exposureWarning(host, storeHandoffs = false) {
+    const h = hostName(host.includes(":") && !host.startsWith("[") ? `[${host}]` : host);
+    if (h === "localhost" || h === "::1" || /^127\.\d+\.\d+\.\d+$/.test(h) || /^::ffff:127\./.test(h))
+        return undefined;
+    return (`WARNING: listening on ${host}, beyond this machine, with no sign-in: anyone who can reach it can call its tools${storeHandoffs ? " and save handoffs here (--store-handoffs)" : ""}.\n` +
+        "Put it behind your tunnel's or reverse proxy's authentication unless only you can reach this address.");
+}
+/**
+ * The --port value: a port number, 0 for one the system picks, or the
+ * default when absent or not a port (0 used to fall back to 8808).
+ */
+export function portArg(raw, fallback = 8808) {
+    const n = Number(raw);
+    return raw !== undefined && raw.trim() !== "" && Number.isInteger(n) && n >= 0 && n <= 65535 ? n : fallback;
+}
 /** Why this request may not reach /mcp, or undefined when it may. */
 export function refusal(guard, headers) {
     if (guard.hosts !== "*") {
