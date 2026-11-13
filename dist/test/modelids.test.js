@@ -31,6 +31,14 @@ test("a model with no price of its own is named: a new version, in any spelling"
     assert.deepEqual(unpricedClaudeIds("us.anthropic.claude-sonnet-6-v1:0"), ["claude-sonnet-6"]);
     assert.deepEqual(unpricedClaudeIds("model: claude-haiku-6-1."), ["claude-haiku-6-1"]);
 });
+test("a family the table does not know is named too (Fable and Mythos were new once); products, plans and test ids are not models", () => {
+    // No family row prices these: every request would be unpriced, not an estimate.
+    assert.deepEqual(unpricedClaudeIds("- Added Claude Aria 1 (`claude-aria-1`), now the default"), ["claude-aria-1"]);
+    assert.deepEqual(unpricedClaudeIds("\u0000claude-quill-2-1-20270101\u0000"), ["claude-quill-2-1"]);
+    // What the 2.1.321 binary, the CHANGELOG and the price page hold beside the models.
+    const noise = "Claude Code 2.1.321 · Claude Code 2.0 · Claude Max 20x · Claude Pro 5 · Claude Desktop 1.2 · claude-eval-9 · claude-code-2 · Claude Tag 1";
+    assert.deepEqual(claudeModelIds(noise), []);
+});
 test("scripts/check-models.mjs: exit 0 when every model is priced, 1 naming the ones that are not, 2 on an unreadable source", () => {
     const dir = mkdtempSync(join(tmpdir(), "cd-models-"));
     try {

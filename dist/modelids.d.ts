@@ -11,9 +11,10 @@
  * `us.anthropic.claude-sonnet-4-5-20250929-v1:0`), the catalog's cleanest
  * list; first-party ids of the current naming (`claude-fable-5-2`); and
  * display names (`Claude Fable 5.2`), which is how the price page names
- * them. First-party and display names count from major version 4 (the
- * naming the table keys on): older aliases Claude Code still accepts
- * (`claude-haiku-3-5`, `claude-sonnet-3-7`) are not ids anything bills.
+ * them. First-party and display names of the known families count from
+ * major version 4 (the naming the table keys on): older aliases Claude Code
+ * still accepts (`claude-haiku-3-5`, `claude-sonnet-3-7`) are not ids
+ * anything bills. A family the table does not know counts from version 1.
  */
 /** Ids that have no price on purpose, with the reason. */
 export declare const UNPRICED_ON_PURPOSE: Record<string, string>;
