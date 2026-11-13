@@ -4,6 +4,35 @@
 
 Most of context-doctor measures. The commands here change something: a setting each, measured on your own history first, written only when you say yes, and undone with one command. Except autopilot (a local proxy, terminal and IDE only), each is a setting Claude Code (or Codex) reads itself, so it works in every surface, the desktop app included.
 
+## One keystroke: a bare `context-doctor`
+
+In a terminal, on a machine with Claude Code history, `context-doctor` (or `npx context-doctor`) shows `fix`'s plan on one screen and asks one question:
+
+```text
+context-doctor: your last 30 days of Claude Code, $127 of input at list prices
+
+Free of any quality cost: 2 fixes, not priced
+  not priced  MCP tool search back on
+  not priced  Switch off 1 unused MCP server or skill in this project
+
+These trade something for money; read each in context-doctor fix first:
+      $13.31  Compact earlier: auto-compact window 400k                   context-doctor fix --apply compact-window
+       $3.64  Autopilot: clear stale tool output when the cache is cold   context-doctor fix --apply autopilot
+       $2.45  Subagents on Sonnet 5.5, not Opus 5.5                       context-doctor fix --apply subagent-model
+
+The full report: context-doctor savings. All commands: context-doctor --help
+Apply these 2 fixes? (undo any time: context-doctor fix undo) [y/N]
+```
+
+(The test fixture's history, with MCP tool search switched off in its `settings.json`.)
+
+- **The first group** is every fix whose quality line in the table below is "none": the cache lifetime (main conversation and subagents), long Bash output to a file (the output is moved where the model can still open it, not dropped), MCP tool search, and unused MCP servers and skills. Each fix carries this as a property (`qualityFree`), so a new lever joins the group by saying so in its own definition. Their dollars are added into one total, "a month" on the default 30 days; when two of them overlap the line under the total says so, since each is measured alone.
+- **`y`** applies exactly that group, in that order, through the same code as `fix --apply <ids>`: the same writes, the same record in `~/.claude/.context-doctor-fixes.json`, so `fix undo` (or `fix undo <id>`) reverts it and later `fix` runs show what each saved since. Anything else, Enter, `n` or Ctrl-D, changes nothing.
+- **The second group** costs something in quality, or its quality cost is not measured here: compacting earlier (Claude Code's or Codex's), autopilot (it clears tool output the model has read), the subagents' model. One line each with its dollars and the command that applies it; read its entry in `fix` first. The question never covers them.
+- **Nothing to ask:** with no quality-free fix left, one line says so and points at `fix`. When stdin is not a terminal, the screen ends with the `fix --apply` command for the group instead of the question; piped, or with no history, a bare `context-doctor` prints the "Start here" screen as before and measures nothing. `context-doctor --json` and `--share` in a terminal still print the `savings` report.
+
+It is one scan, the same replays as `fix` (no separate `savings` pass): on the fixture history 0.4 s cold.
+
 ## One plan: `context-doctor fix`
 
 ```bash
