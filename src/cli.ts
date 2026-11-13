@@ -732,6 +732,18 @@ function readInput(file: string): string {
   return stripBom(readFileSync(file === "-" ? 0 : file, "utf8"));
 }
 
+/** Write --out's file, or say why not and exit 1 (a folder that does not exist ended in a stack trace). */
+function writeOut(path: string, text: string): void {
+  try {
+    writeFileSync(path, text);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    const why = code === "ENOENT" ? "its folder does not exist" : code === "EACCES" || code === "EPERM" ? "permission denied" : code === "EISDIR" ? "it is a folder" : (e as Error).message;
+    console.error(`context-doctor: could not write ${path}: ${why}`);
+    process.exit(1);
+  }
+}
+
 /**
  * A UTF-8 byte-order mark (Windows editors, PowerShell's Out-File) is not
  * part of the text: left in, JSON.parse rejects the file and a valid
@@ -1545,7 +1557,7 @@ async function main(): Promise<void> {
     }
     console.log(args.json ? JSON.stringify(result.plan, null, 2) : renderCachePlan(result.plan));
     if (args.out) {
-      writeFileSync(args.out, JSON.stringify(result.apply(), null, 2));
+      writeOut(args.out, JSON.stringify(result.apply(), null, 2));
       console.error(result.plan.plan.length
         ? `context-doctor: request with the planned breakpoints written to ${args.out}`
         : `context-doctor: nothing to place; the request was written unchanged to ${args.out}`);
@@ -1759,7 +1771,7 @@ async function main(): Promise<void> {
 
     const output = JSON.stringify(result.conversation, null, 2);
     if (args.out) {
-      writeFileSync(args.out, output);
+      writeOut(args.out, output);
     } else if (args.json) {
       console.log(JSON.stringify(result, null, 2));
     } else {

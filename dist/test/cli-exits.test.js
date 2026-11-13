@@ -42,3 +42,15 @@ test("dashboard on a busy port says so and exits 1", async () => {
         blocker.close();
     }
 });
+test("--out into a folder that does not exist says so and exits 1, with no stack trace (optimize, cache-plan)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cd-out-exit-"));
+    writeFileSync(join(dir, "chat.json"), JSON.stringify([{ role: "user", content: "hi" }, { role: "assistant", content: "hello" }]));
+    writeFileSync(join(dir, "request.json"), JSON.stringify({ model: "claude-sonnet-5", system: "s", messages: [{ role: "user", content: "hi" }] }));
+    const out = join(dir, "missing", "out.json");
+    for (const args of [["optimize", join(dir, "chat.json")], ["cache-plan", join(dir, "request.json")]]) {
+        const r = spawnSync(process.execPath, [cliPath, ...args, "--out", out], { encoding: "utf8", env: sandboxEnv(dir) });
+        assert.equal(r.status, 1, `${args[0]}: ${r.stderr}`);
+        assert.match(r.stderr, /could not write .*out\.json: its folder does not exist/, r.stderr);
+        assert.doesNotMatch(r.stderr, /\n\s+at /, "no stack trace");
+    }
+});
