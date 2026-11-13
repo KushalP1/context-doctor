@@ -295,6 +295,24 @@ class PackSecrets(unittest.TestCase):
         for f in ["src/auth.json", "docs/credentials", "oauth.md"]:
             self.assertIsNone(secret_file_reason(f), f)
 
+    def test_shell_histories_and_home_registry_sign_ins_are_skipped(self):
+        import os
+        import tempfile
+        from unittest import mock
+
+        from context_doctor.__main__ import _read, secret_file_reason
+        for f in ["h/.bash_history", "h/.zsh_history", "h/.local/share/fish/fish_history", "h/PSReadLine/ConsoleHost_history.txt"]:
+            self.assertTrue(secret_file_reason(f), f)
+        home, project = tempfile.mkdtemp(), tempfile.mkdtemp()
+        os.mkdir(os.path.join(home, ".m2"))
+        for path, text in [(os.path.join(home, ".m2", "settings.xml"), "<password>hunter2</password>"), (os.path.join(home, ".yarnrc.yml"), "npmAuthToken: npm_secret"), (os.path.join(project, ".yarnrc.yml"), "nodeLinker: node-modules")]:
+            with open(path, "w") as fh:
+                fh.write(text)
+        skipped = []
+        with mock.patch.dict(os.environ, {"HOME": home, "USERPROFILE": home}):
+            texts = [s.text for s in _read([os.path.join(home, ".m2", "settings.xml"), os.path.join(home, ".yarnrc.yml"), os.path.join(project, ".yarnrc.yml")], skipped)]
+        self.assertEqual(texts, ["nodeLinker: node-modules"], skipped)
+
     def test_a_device_named_outright_is_not_read(self):
         import os
         from context_doctor.__main__ import _read

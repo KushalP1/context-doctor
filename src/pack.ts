@@ -472,6 +472,12 @@ const SECRET_NAMES = new Set([
   // Windows), Gemini CLI's, Terraform's.
   ".credentials.json", "oauth_creds.json", "credentials.tfrc.json",
 ]);
+/**
+ * Shell histories: every command typed, `export TOKEN=…` and `curl -H
+ * "Authorization: …"` among them. Bash, zsh, fish (fish_history) and
+ * PowerShell (PSReadLine's ConsoleHost_history.txt).
+ */
+const HISTORY_NAMES = new Set([".bash_history", ".zsh_history", ".zhistory", ".sh_history", "fish_history", "consolehost_history.txt"]);
 /** A file name that holds credentials inside one folder only: Codex's sign-in, Cargo's and RubyGems' tokens. */
 const SECRET_IN_DIR: Array<[string, string[]]> = [
   [".codex", ["auth.json"]],
@@ -481,15 +487,25 @@ const SECRET_IN_DIR: Array<[string, string[]]> = [
 const SECRET_EXT = new Set([".pem", ".key", ".p12", ".pfx", ".keystore", ".jks"]);
 
 /**
- * Why the MCP server will not open `path` on Windows: a network share
- * (\\host\share\…, \\?\UNC\…) or a device or pipe (\\.\…). Opening a share
- * connects to that host over SMB and signs in as the user, handing whoever
- * runs it the user's NTLM hash; a document can ask the model to "pack
- * \\host\share\notes.md". A path the user types on the CLI is theirs to name.
+ * Why the MCP server will not open a path a model names. A path the user
+ * types on the CLI is theirs to name.
+ *  - Windows: a network share (\\host\share\…, \\?\UNC\…) or a device or
+ *    pipe (\\.\…). Opening a share connects to that host over SMB and signs
+ *    in as the user, handing whoever runs it the user's NTLM hash; a
+ *    document can ask the model to "pack \\host\share\notes.md".
+ *  - Windows: an alternate data stream (notes.md:hidden, .env::$DATA). A
+ *    stream is the same file under a name no refusal here recognises.
+ *  - macOS: /net/<host>/…, which the automounter mounts from that host on
+ *    first access.
  */
 export function remotePathReason(path: string, platform: NodeJS.Platform = process.platform): string | undefined {
-  if (platform !== "win32") return undefined;
-  return /^[\\/]{2}/.test(path.trim()) ? "a network share or device path (\\\\host\\share, \\\\.\\…): pack_context reads this computer's own files only" : undefined;
+  const p = path.trim();
+  if (platform === "win32") {
+    if (/^[\\/]{2}/.test(p)) return "a network share or device path (\\\\host\\share, \\\\.\\…): pack_context reads this computer's own files only";
+    if (p.replace(/^[a-zA-Z]:/, "").includes(":")) return "an alternate data stream (a name with \":\" after the drive): pack_context reads files by their own names";
+  }
+  if (platform === "darwin" && /^\/+net(\/|$)/i.test(p)) return "a /net path, which macOS mounts from another host on access: pack_context reads this computer's own files only";
+  return undefined;
 }
 
 /** Why `path` looks like a secrets file, or undefined when it does not. */
@@ -498,6 +514,7 @@ export function secretFileReason(path: string): string | undefined {
   const lower = name.toLowerCase();
   if (lower === ".env" || lower.startsWith(".env.")) return "an .env file";
   if (SECRET_NAMES.has(lower)) return `a credentials file (${name})`;
+  if (HISTORY_NAMES.has(lower)) return `a shell history (${name})`;
   if (/^id_(rsa|dsa|ecdsa|ed25519)(_sk)?$/.test(lower) || (/^id_(rsa|dsa|ecdsa|ed25519)/.test(lower) && !lower.endsWith(".pub"))) {
     return "a private SSH key";
   }
@@ -517,6 +534,9 @@ function sensitiveDirs(): string[] {
   const home = homedir();
   const dirs = [
     ...[".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", join(".config", "gcloud"), join(".config", "gh"), join(".config", "github-copilot"), join("Library", "Keychains"), ".password-store"].map((d) => join(home, d)),
+    // Package registries' sign-ins in the home folder: Yarn's npmAuthToken, Maven's server passwords.
+    // (A project's own .yarnrc.yml rides in the repository and is read.)
+    ...[".yarnrc.yml", join(".m2", "settings.xml"), join(".m2", "settings-security.xml")].map((f) => join(home, f)),
     // Where CLAUDE_CONFIG_DIR and CODEX_HOME put the agents' sign-ins.
     join(claudeDir(), ".credentials.json"), join(codexDir(), "auth.json"),
     "/etc/shadow", "/etc/gshadow", "/etc/sudoers", "/etc/master.passwd", "/etc/ssh",

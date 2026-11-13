@@ -106,11 +106,16 @@ export declare const PACK_LIMITS: {
     totalBytes: number;
 };
 /**
- * Why the MCP server will not open `path` on Windows: a network share
- * (\\host\share\…, \\?\UNC\…) or a device or pipe (\\.\…). Opening a share
- * connects to that host over SMB and signs in as the user, handing whoever
- * runs it the user's NTLM hash; a document can ask the model to "pack
- * \\host\share\notes.md". A path the user types on the CLI is theirs to name.
+ * Why the MCP server will not open a path a model names. A path the user
+ * types on the CLI is theirs to name.
+ *  - Windows: a network share (\\host\share\…, \\?\UNC\…) or a device or
+ *    pipe (\\.\…). Opening a share connects to that host over SMB and signs
+ *    in as the user, handing whoever runs it the user's NTLM hash; a
+ *    document can ask the model to "pack \\host\share\notes.md".
+ *  - Windows: an alternate data stream (notes.md:hidden, .env::$DATA). A
+ *    stream is the same file under a name no refusal here recognises.
+ *  - macOS: /net/<host>/…, which the automounter mounts from that host on
+ *    first access.
  */
 export declare function remotePathReason(path: string, platform?: NodeJS.Platform): string | undefined;
 /** Why `path` looks like a secrets file, or undefined when it does not. */

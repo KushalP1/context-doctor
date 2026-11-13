@@ -24,6 +24,7 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { resolve as resolvePath } from "node:path";
 import { parseConversation } from "./parse.js";
 import { profileConversation } from "./profile.js";
 import { optimizeConversation } from "./optimize.js";
@@ -296,9 +297,10 @@ server.tool(
       }
       // Asynchronous extraction under one time budget: a slow or hostile PDF
       // must not block the server (stdio serves every chat in Claude Desktop).
-      // A path from the model is not opened when it names another machine (remotePathReason).
-      const remote = (paths ?? []).flatMap((p) => { const why = remotePathReason(p); return why ? [`${p}: refused, ${why}`] : []; });
-      const local = (paths ?? []).filter((p) => !remotePathReason(p));
+      // A path from the model is not opened when it reaches another machine or a hidden stream (remotePathReason), as written or resolved ("/tmp/../net/host").
+      const refusedWhy = (p: string) => remotePathReason(p) ?? remotePathReason(resolvePath(p));
+      const remote = (paths ?? []).flatMap((p) => { const why = refusedWhy(p); return why ? [`${p}: refused, ${why}`] : []; });
+      const local = (paths ?? []).filter((p) => !refusedWhy(p));
       const { sources, skipped } = local.length ? await readSourcesAsync(local) : { sources: [], skipped: [] as string[] };
       skipped.unshift(...remote);
       if (http && files?.length) {

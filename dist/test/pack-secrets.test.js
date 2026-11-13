@@ -271,7 +271,31 @@ test("pack_context will not open a Windows network share or device path a model 
     }
     for (const p of ["C:\\Users\\me\\notes.md", "\\Users\\me\\notes.md", "notes.md", "D:/docs"])
         assert.equal(remotePathReason(p, "win32"), undefined, p);
+    // An alternate data stream is the same file under another name (.env::$DATA is the .env).
+    for (const p of ["C:\\proj\\.env::$DATA", "notes.md:hidden", "D:/x/.npmrc:$DATA"])
+        assert.match(remotePathReason(p, "win32") ?? "", /alternate data stream/, p);
+    // macOS mounts /net/<host> from that host on access.
+    for (const p of ["/net/attacker.example/export/notes.md", "//net/h", "/net"])
+        assert.match(remotePathReason(p, "darwin") ?? "", /\/net path/, p);
+    for (const p of ["/network/x", "/Users/me/net/x"])
+        assert.equal(remotePathReason(p, "darwin"), undefined, p);
+    assert.equal(remotePathReason("/net/host/x", "linux"), undefined);
     // Elsewhere "//x" is an ordinary path (the same as /x).
     assert.equal(remotePathReason("//tmp/x", "linux"), undefined);
     assert.equal(remotePathReason("//tmp/x", "darwin"), undefined);
+});
+test("shell histories, and the home folder's Yarn and Maven sign-ins, are not packed; a project's .yarnrc.yml is", async () => {
+    for (const n of [".bash_history", ".zsh_history", ".zhistory", "fish_history", "ConsoleHost_history.txt"])
+        assert.match(secretFileReason(join("x", n)) ?? "", /shell history/, n);
+    const home = mkdtempSync(join(tmpdir(), "cd-pack-registries-"));
+    await withSandboxHome(home, () => {
+        mkdirSync(join(home, ".m2"));
+        writeFileSync(join(home, ".m2", "settings.xml"), "<settings><servers><server><password>hunter2</password></server></servers></settings>\n");
+        writeFileSync(join(home, ".yarnrc.yml"), 'npmAuthToken: "npm_secret"\n');
+        const project = mkdtempSync(join(tmpdir(), "cd-pack-yarnrc-proj-"));
+        writeFileSync(join(project, ".yarnrc.yml"), "nodeLinker: node-modules\n");
+        const { sources, skipped } = readSources([join(home, ".m2", "settings.xml"), join(home, ".yarnrc.yml"), join(project, ".yarnrc.yml")]);
+        assert.deepEqual(sources.map((s) => s.text), ["nodeLinker: node-modules\n"], JSON.stringify(skipped));
+        assert.equal(skipped.filter((s) => /refused, .* holds credentials/.test(s)).length, 2, skipped.join("\n"));
+    });
 });

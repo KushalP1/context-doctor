@@ -78,6 +78,8 @@ _SECRET_NAMES = {
     # The agents' own sign-ins: Claude Code's OAuth tokens (Linux, Windows), Gemini CLI's, Terraform's.
     ".credentials.json", "oauth_creds.json", "credentials.tfrc.json",
 }
+# Shell histories (bash, zsh, fish, PowerShell's PSReadLine), as src/pack.ts HISTORY_NAMES.
+_HISTORY_NAMES = {".bash_history", ".zsh_history", ".zhistory", ".sh_history", "fish_history", "consolehost_history.txt"}
 # A file name that holds credentials inside one folder only: Codex's sign-in, Cargo's and RubyGems' tokens.
 _SECRET_IN_DIR = {".codex": {"auth.json"}, ".cargo": {"credentials", "credentials.toml"}, ".gem": {"credentials"}}
 _SECRET_EXT = {".pem", ".key", ".p12", ".pfx", ".keystore", ".jks"}
@@ -91,6 +93,8 @@ def secret_file_reason(path):
         return "an .env file"
     if lower in _SECRET_NAMES:
         return f"a credentials file ({name})"
+    if lower in _HISTORY_NAMES:
+        return f"a shell history ({name})"
     if re.match(r"^id_(rsa|dsa|ecdsa|ed25519)", lower) and not lower.endswith(".pub"):
         return "a private SSH key"
     ext = os.path.splitext(lower)[1]
@@ -108,6 +112,8 @@ def secret_file_reason(path):
 def _sensitive_dirs():
     home = os.path.expanduser("~")
     dirs = [os.path.join(home, d) for d in (".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", os.path.join(".config", "gcloud"), os.path.join(".config", "gh"), os.path.join(".config", "github-copilot"), os.path.join("Library", "Keychains"), ".password-store")]
+    # Package registries' sign-ins in the home folder (a project's own .yarnrc.yml is read).
+    dirs += [os.path.join(home, f) for f in (".yarnrc.yml", os.path.join(".m2", "settings.xml"), os.path.join(".m2", "settings-security.xml"))]
     # Where CLAUDE_CONFIG_DIR and CODEX_HOME put the agents' sign-ins.
     dirs.append(os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", "").strip() or os.path.join(home, ".claude"), ".credentials.json"))
     dirs.append(os.path.join(os.environ.get("CODEX_HOME", "").strip() or os.path.join(home, ".codex"), "auth.json"))
