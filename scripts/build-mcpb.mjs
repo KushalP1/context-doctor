@@ -17,6 +17,19 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const MCPB_CLI = "@anthropic-ai/mcpb@2.1.2";
+
+/**
+ * npm and npx by name. On Windows they are npm.cmd and npx.cmd, batch
+ * scripts Node runs only through a shell (plain "npm" is ENOENT there, and
+ * "npm.cmd" without a shell EINVAL since CVE-2024-27980), so there each
+ * argument is quoted for cmd.exe and the .cmd runs through it.
+ */
+function run(cmd, args, opts = {}) {
+  if (process.platform !== "win32") return execFileSync(cmd, args, opts);
+  const quote = (a) => (/[\s"&|<>^()%!]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a);
+  return execFileSync(`${cmd}.cmd`, args.map(quote), { ...opts, shell: true });
+}
+
 // Not the URL's pathname: that is %20-encoded (a checkout under "My Projects") and /C:/... on Windows.
 const root = fileURLToPath(new URL("..", import.meta.url));
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -39,7 +52,7 @@ cpSync(join(root, "assets", "icon.png"), join(stage, "icon.png"));
 writeFileSync(join(stage, "package.json"), JSON.stringify({
   name: pkg.name, version: pkg.version, type: pkg.type, private: true, dependencies: pkg.dependencies,
 }, null, 2));
-execFileSync("npm", ["install", "--omit=dev", "--no-package-lock", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: stage, stdio: "inherit" });
+run("npm", ["install", "--omit=dev", "--no-package-lock", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: stage, stdio: "inherit" });
 
 const manifest = {
   manifest_version: "0.3",
@@ -100,8 +113,8 @@ const manifest = {
 writeFileSync(join(stage, "manifest.json"), JSON.stringify(manifest, null, 2));
 
 rmSync(out, { force: true });
-execFileSync("npx", ["--yes", MCPB_CLI, "validate", join(stage, "manifest.json")], { stdio: "inherit" });
-execFileSync("npx", ["--yes", MCPB_CLI, "pack", stage, out], { stdio: "inherit" });
+run("npx", ["--yes", MCPB_CLI, "validate", join(stage, "manifest.json")], { stdio: "inherit" });
+run("npx", ["--yes", MCPB_CLI, "pack", stage, out], { stdio: "inherit" });
 
 // Signing. Claude Desktop warns on unsigned bundles; a bundle signed with a
 // certificate from a trusted CA installs without that warning.
@@ -118,23 +131,29 @@ const pemPath = (value, name) => {
   }
   return value;
 };
-const cert = pemPath(process.env.MCPB_CERT, "sign-cert.pem");
-const key = pemPath(process.env.MCPB_KEY, "sign-key.pem");
-const chain = pemPath(process.env.MCPB_INTERMEDIATE, "sign-chain.pem");
-if (cert && key) {
-  execFileSync("npx", ["--yes", MCPB_CLI, "sign", out, "-c", cert, "-k", key, ...(chain ? ["-i", chain] : [])], { stdio: "inherit" });
-} else if (process.env.MCPB_SELF_SIGNED === "1") {
-  const dir = join(root, "build");
-  execFileSync("npx", ["--yes", MCPB_CLI, "sign", out, "--self-signed", "-c", join(dir, "self-cert.pem"), "-k", join(dir, "self-key.pem")], { stdio: "inherit" });
+// The key's PEM text is written to build/ only for the signing call, and
+// removed whatever happens: a failed sign or verify used to leave it there.
+let cert, key;
+try {
+  cert = pemPath(process.env.MCPB_CERT, "sign-cert.pem");
+  key = pemPath(process.env.MCPB_KEY, "sign-key.pem");
+  const chain = pemPath(process.env.MCPB_INTERMEDIATE, "sign-chain.pem");
+  if (cert && key) {
+    run("npx", ["--yes", MCPB_CLI, "sign", out, "-c", cert, "-k", key, ...(chain ? ["-i", chain] : [])], { stdio: "inherit" });
+  } else if (process.env.MCPB_SELF_SIGNED === "1") {
+    const dir = join(root, "build");
+    run("npx", ["--yes", MCPB_CLI, "sign", out, "--self-signed", "-c", join(dir, "self-cert.pem"), "-k", join(dir, "self-key.pem")], { stdio: "inherit" });
+  }
+  if (cert && key) {
+    // verify chains the certificate to the OS trust store: the same test Claude
+    // Desktop applies. A certificate that fails here would still show the warning.
+    run("npx", ["--yes", MCPB_CLI, "verify", out], { stdio: "inherit" });
+  } else if (process.env.MCPB_SELF_SIGNED === "1") {
+    // A self-signed certificate never chains to a trusted root, so `verify`
+    // reports it as unsigned by design. Check the signature block was written.
+    if (!readFileSync(out).subarray(-12).equals(Buffer.from("MCPB_SIG_END"))) throw new Error("signing did not append a signature block");
+  }
+} finally {
+  for (const f of ["sign-cert.pem", "sign-key.pem", "sign-chain.pem"]) rmSync(join(root, "build", f), { force: true });
 }
-if (cert && key) {
-  // verify chains the certificate to the OS trust store: the same test Claude
-  // Desktop applies. A certificate that fails here would still show the warning.
-  execFileSync("npx", ["--yes", MCPB_CLI, "verify", out], { stdio: "inherit" });
-} else if (process.env.MCPB_SELF_SIGNED === "1") {
-  // A self-signed certificate never chains to a trusted root, so `verify`
-  // reports it as unsigned by design. Check the signature block was written.
-  if (!readFileSync(out).subarray(-12).equals(Buffer.from("MCPB_SIG_END"))) throw new Error("signing did not append a signature block");
-}
-for (const f of ["sign-cert.pem", "sign-key.pem", "sign-chain.pem"]) rmSync(join(root, "build", f), { force: true });
 console.log(`\nBundle: ${out}${cert && key ? " (signed)" : process.env.MCPB_SELF_SIGNED === "1" ? " (self-signed, test only)" : " (unsigned)"}`);

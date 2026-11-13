@@ -141,6 +141,19 @@ test("action.yml and the workflows hold no unquoted value with ': ' inside, whic
   for (const f of files) assert.deepEqual(plainScalarProblems(readFileSync(join(root, f), "utf8")), [], f);
 });
 
+test("build-mcpb: npm and npx run on Windows too, and the signing key's PEM is removed even when signing fails", () => {
+  const text = readFileSync(join(root, "scripts", "build-mcpb.mjs"), "utf8");
+  // execFileSync("npm") is ENOENT on Windows (npm.cmd), and a .cmd needs a shell since CVE-2024-27980.
+  assert.doesNotMatch(text, /execFileSync\("np[mx]"/, "npm and npx go through run(), which uses npm.cmd and a shell on Windows");
+  assert.match(text, /execFileSync\(`\$\{cmd\}\.cmd`, args\.map\(quote\), \{ \.\.\.opts, shell: true \}\)/);
+  // The PEM files are written inside the try whose finally removes them.
+  const tryAt = text.indexOf("try {\n  cert = pemPath(");
+  const finallyAt = text.indexOf("} finally {", tryAt);
+  assert.ok(tryAt > 0 && finallyAt > tryAt, "the key is written inside a try");
+  assert.match(text.slice(finallyAt, finallyAt + 200), /rmSync\(join\(root, "build", f\)/, "and removed in its finally");
+  assert.ok(text.indexOf('pemPath(process.env.MCPB_KEY') > tryAt, "not before the try");
+});
+
 test("the build scripts find their own folder in a checkout whose path has a space (a URL's pathname is %20-encoded)", () => {
   for (const f of readdirSync(join(root, "scripts")).filter((n) => /\.m?js$/.test(n))) {
     const text = readFileSync(join(root, "scripts", f), "utf8");
