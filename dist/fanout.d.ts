@@ -28,6 +28,12 @@ export interface CostStat {
     p90: number;
     /** The model most of these ran on. */
     model?: string;
+    /**
+     * Their tokens, summed, as [uncached input, cache reads, cache writes,
+     * output, requests]: what another model's price of them is worked out
+     * from, rate by rate (absent in a cache written before it was kept).
+     */
+    tok?: [number, number, number, number, number];
 }
 export interface SubagentCosts {
     computedAt: number;
@@ -41,6 +47,15 @@ export interface SubagentCosts {
     byModel: Record<string, CostStat>;
 }
 export declare function subagentCostsPath(): string;
+/**
+ * What runs like `s` cost on `to` against `from`: their own tokens priced
+ * at each model's rates (rateCard: its tier for their average prompt, the
+ * organization's rates), each category at its own rate. Fable 5.2 reads at
+ * 2.5% of its input and Sonnet 5.5 at 5%: by the input price alone a
+ * read-heavy run on Sonnet came out at half its price. The input ratio only
+ * for a stat kept without its tokens.
+ */
+export declare function priceRatio(from: string | undefined, to: string | undefined, s?: CostStat): number;
 /**
  * Each subagent's bill in the last `days`, newest transcripts first, by
  * type and model. `limit` and `budgetMs` bound the work when the hook has

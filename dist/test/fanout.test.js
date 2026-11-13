@@ -9,7 +9,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { estimateSubagent, fanoutMessage, launchOf, measureSubagentCosts, subagentCosts } from "../fanout.js";
+import { estimateSubagent, fanoutMessage, launchOf, measureSubagentCosts, priceRatio, subagentCosts } from "../fanout.js";
+import { requestCost } from "../pricing.js";
 import { sandboxEnv } from "./sandbox.js";
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
 const NOW = Date.parse("2026-10-26T12:00:00Z");
@@ -36,6 +37,21 @@ test("the estimate: the type on the model it will run on, the Sonnet option at S
     const unknownType = estimateSubagent(costs, "my-reviewer", undefined, "claude-opus-5-5");
     assert.equal(unknownType.median, 3, "a type never seen: the overall median");
     assert.equal(estimateSubagent({ ...costs, n: 1, all: stat(1, 3, 3), byType: {}, byTypeModel: {}, byModel: {} }, "Explore"), undefined, "too few runs: no number");
+});
+test("another model's price of the runs is worked out rate by rate from their tokens, not by the input price alone", () => {
+    // Read-heavy Fable 5.2 runs: 2M cache reads, 100k writes, 50k output over 20 requests (prompts ~105k).
+    const tok = [10_000, 2_000_000, 100_000, 50_000, 20];
+    const u = { input_tokens: 10_000, cache_read_input_tokens: 2_000_000, cache_creation_input_tokens: 100_000, output_tokens: 50_000 };
+    const fable = requestCost("claude-fable-5-2", u).totalUsd, sonnet = requestCost("claude-sonnet-5-5", u).totalUsd;
+    const runs = { computedAt: Date.now(), days: 30, n: 10, all: { ...stat(10, 4, 9, "claude-fable-5-2"), tok }, byType: { Explore: { ...stat(10, 4, 9, "claude-fable-5-2"), tok } }, byTypeModel: { "Explore|claude-fable-5-2": { ...stat(10, 4, 9, "claude-fable-5-2"), tok } }, byModel: {} };
+    const e = estimateSubagent(runs, "Explore", undefined, "claude-fable-5-2");
+    assert.ok(Math.abs(e.cheaper.median - (4 * sonnet) / fable) < 1e-9, `${e.cheaper.median} vs ${(4 * sonnet) / fable}`);
+    // The input price alone ($2 against $8) said a quarter: the reads ($0.10 against $0.20, half) put it above.
+    assert.ok(e.cheaper.median > 4 * 0.27, `above a quarter: ${e.cheaper.median}`);
+    // A stat kept without its tokens (an older cache): the input ratio, as before.
+    const old = { ...runs, byTypeModel: { "Explore|claude-fable-5-2": stat(10, 4, 9, "claude-fable-5-2") } };
+    assert.ok(Math.abs(estimateSubagent(old, "Explore", undefined, "claude-fable-5-2").cheaper.median - 1) < 1e-9);
+    assert.equal(priceRatio("claude-fable-5-2", "claude-fable-5-2", runs.all), 1);
 });
 test("a type pinned to a model (all its runs on Haiku) is priced on it, not on the parent's, and offered no Sonnet", () => {
     const pinned = {

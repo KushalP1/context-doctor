@@ -103,12 +103,16 @@ function billed(model: string | undefined, u: RecordedUsage, at: number | undefi
   return { usd: own.totalUsd, sonnetUsd: moved ? sonnet.totalUsd : own.totalUsd, rates: own.rates, sonnetRates: moved ? sonnet.rates : own.rates };
 }
 
+/** A subagent's tokens by what they bill as: uncached input, cache reads, cache writes, output (settled). */
+export interface SubagentTokens { input: number; read: number; write: number; output: number }
+
 /**
  * A subagent's bill (each request as billed, requestCost), steps, startup
  * context, start time, the tool output it read, and the rates its first
  * request billed at.
  */
-export function scanSubagent(path: string): { costUsd: number; atSonnetUsd: number; readTokens: number; task: string; steps: number; startup: number; start: number; model?: string; writeMult: number; rates?: ModelPricing } {
+export function scanSubagent(path: string): { costUsd: number; atSonnetUsd: number; readTokens: number; task: string; steps: number; startup: number; start: number; model?: string; writeMult: number; rates?: ModelPricing; tokens: SubagentTokens } {
+  const tokens: SubagentTokens = { input: 0, read: 0, write: 0, output: 0 };
   let costUsd = 0, atSonnetUsd = 0, readTokens = 0, task = "", model: string | undefined, firstRates: ModelPricing | undefined;
   let steps = 0, startup = 0, start = Infinity, writes5m = 0, writes1h = 0;
   // The rates of the last reply, for the output its later rows settle.
@@ -130,6 +134,7 @@ export function scanSubagent(path: string): { costUsd: number; atSonnetUsd: numb
     if (seen === "repeat") {
       // A later row of the same reply: only its final output count is new.
       const more = settle(e, false);
+      if (more) tokens.output += more;
       if (more && last) {
         costUsd += (more * last.rates.outputPerM) / 1e6;
         atSonnetUsd += (more * last.sonnetRates.outputPerM) / 1e6;
@@ -145,6 +150,7 @@ export function scanSubagent(path: string): { costUsd: number; atSonnetUsd: numb
     if (Number.isFinite(at)) start = Math.min(start, at);
     if (steps === 0) startup = n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens");
     steps++;
+    tokens.input += n("input_tokens"); tokens.read += n("cache_read_input_tokens"); tokens.write += n("cache_creation_input_tokens"); tokens.output += n("output_tokens");
     const w = cacheWriteSplit(u);
     writes5m += w.fiveMinute;
     writes1h += w.oneHour;
@@ -155,7 +161,7 @@ export function scanSubagent(path: string): { costUsd: number; atSonnetUsd: numb
     costUsd += b.usd;
     atSonnetUsd += b.sonnetUsd;
   });
-  return { costUsd, atSonnetUsd, readTokens, task: task.replace(/\s+/g, " ").slice(0, 90), steps, startup, start, model, writeMult: writeMultiplier(writes5m, writes1h), ...(firstRates ? { rates: firstRates } : {}) };
+  return { costUsd, atSonnetUsd, readTokens, task: task.replace(/\s+/g, " ").slice(0, 90), steps, startup, start, model, writeMult: writeMultiplier(writes5m, writes1h), ...(firstRates ? { rates: firstRates } : {}), tokens };
 }
 
 interface ParentView {

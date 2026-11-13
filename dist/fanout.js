@@ -26,7 +26,7 @@ import { basename, dirname, join } from "node:path";
 import { statePath } from "./ledger.js";
 import { listSessions, isClaudeSession } from "./session.js";
 import { scanSubagent } from "./subagentpay.js";
-import { formatUsd, pricingFor } from "./pricing.js";
+import { formatUsd, pricingFor, rateCard, ratesAt, usageCost } from "./pricing.js";
 import { tailUsage } from "./statusline.js";
 /** The subagent tool, by its current name and its pre-2.1.63 alias. */
 export const FANOUT_MATCHER = "Agent|Task";
@@ -42,12 +42,37 @@ function stat(costs) {
     for (const c of costs)
         if (c.model)
             models.set(c.model, (models.get(c.model) ?? 0) + 1);
+    const tok = costs.every((c) => c.tok) ? costs.reduce((t, c) => t.map((v, i) => v + c.tok[i]), [0, 0, 0, 0, 0]) : undefined;
     return {
         n: s.length,
         median: s[Math.floor(s.length / 2)],
         p90: s[Math.min(s.length - 1, Math.floor(s.length * 0.9))],
         model: [...models.entries()].sort((a, b) => b[1] - a[1])[0]?.[0],
+        ...(tok ? { tok } : {}),
     };
+}
+/**
+ * What runs like `s` cost on `to` against `from`: their own tokens priced
+ * at each model's rates (rateCard: its tier for their average prompt, the
+ * organization's rates), each category at its own rate. Fable 5.2 reads at
+ * 2.5% of its input and Sonnet 5.5 at 5%: by the input price alone a
+ * read-heavy run on Sonnet came out at half its price. The input ratio only
+ * for a stat kept without its tokens.
+ */
+export function priceRatio(from, to, s) {
+    if (!from || !to || from === to)
+        return 1;
+    if (s?.tok && s.tok[4] > 0) {
+        const [input, read, write, output, requests] = s.tok;
+        const u = { input_tokens: input, cache_read_input_tokens: read, cache_creation_input_tokens: write, output_tokens: output };
+        const prompt = (input + read + write) / requests;
+        const at = (m) => { const c = rateCard(m); return c ? usageCost(u, ratesAt(c, prompt)).totalUsd : undefined; };
+        const a = at(from), b = at(to);
+        if (a !== undefined && b !== undefined && a > 0)
+            return b / a;
+    }
+    const a = pricingFor(from), b = pricingFor(to);
+    return a && b && a.inputPerM > 0 ? b.inputPerM / a.inputPerM : 1;
 }
 /**
  * Each subagent's bill in the last `days`, newest transcripts first, by
@@ -96,7 +121,7 @@ export function measureSubagentCosts(days = 30, opts = {}) {
                 type = String(JSON.parse(readFileSync(f.meta, "utf8"))?.agentType ?? "unknown").slice(0, 60);
             }
             catch { /* older Claude Code: no meta */ }
-            runs.push({ type, model: s.model, usd: s.costUsd });
+            runs.push({ type, model: s.model, usd: s.costUsd, tok: [s.tokens.input, s.tokens.read, s.tokens.write, s.tokens.output, s.steps] });
         }
         catch { /* unreadable */ }
     }
@@ -192,23 +217,19 @@ export function estimateSubagent(costs, type, modelAlias, parentModel) {
     // inherits the parent's model (general-purpose and Explore ran on several
     // families on the author's history: they follow the parent).
     const model = (modelAlias ? aliasModel(modelAlias, costs) : undefined) ?? pinnedModel(costs, type) ?? parentModel ?? (byType && byType.n >= MIN_RUNS ? byType.model : undefined);
-    const scale = (from, to) => {
-        const a = pricingFor(from), b = pricingFor(to);
-        return a && b && a.inputPerM > 0 ? b.inputPerM / a.inputPerM : 1;
-    };
     let base, factor = 1;
     const exact = model ? costs.byTypeModel[`${type}|${model}`] : undefined;
     if (exact && exact.n >= MIN_RUNS)
         base = exact;
     else if (byType && byType.n >= MIN_RUNS) {
         base = byType;
-        factor = scale(byType.model, model ?? byType.model);
+        factor = priceRatio(byType.model, model ?? byType.model, byType);
     }
     else if (model && costs.byModel[model]?.n >= MIN_RUNS)
         base = costs.byModel[model];
     else if (costs.all && costs.all.n >= MIN_RUNS) {
         base = costs.all;
-        factor = scale(costs.all.model, model ?? costs.all.model);
+        factor = priceRatio(costs.all.model, model ?? costs.all.model, costs.all);
     }
     if (!base)
         return undefined;
@@ -219,7 +240,7 @@ export function estimateSubagent(costs, type, modelAlias, parentModel) {
         const measured = costs.byTypeModel[`${type}|${sonnet}`];
         est.cheaper = measured && measured.n >= MIN_RUNS
             ? { model: sonnet, median: measured.median, measured: true }
-            : { model: sonnet, median: est.median * scale(est.model, sonnet), measured: false };
+            : { model: sonnet, median: est.median * priceRatio(est.model, sonnet, base), measured: false };
         if (!(est.cheaper.median < est.median))
             delete est.cheaper;
     }

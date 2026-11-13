@@ -73,6 +73,13 @@ export interface PaybackReport {
         }>;
     };
 }
+/** A subagent's tokens by what they bill as: uncached input, cache reads, cache writes, output (settled). */
+export interface SubagentTokens {
+    input: number;
+    read: number;
+    write: number;
+    output: number;
+}
 /**
  * A subagent's bill (each request as billed, requestCost), steps, startup
  * context, start time, the tool output it read, and the rates its first
@@ -89,6 +96,7 @@ export declare function scanSubagent(path: string): {
     model?: string;
     writeMult: number;
     rates?: ModelPricing;
+    tokens: SubagentTokens;
 };
 export declare function subagentPayback(days?: number, paths?: string[], onProgress?: (done: number, total: number) => void): PaybackReport;
 export declare function renderPayback(r: PaybackReport, top?: number): string;

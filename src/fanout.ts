@@ -27,7 +27,7 @@ import { basename, dirname, join } from "node:path";
 import { statePath } from "./ledger.js";
 import { listSessions, isClaudeSession } from "./session.js";
 import { scanSubagent } from "./subagentpay.js";
-import { formatUsd, pricingFor } from "./pricing.js";
+import { formatUsd, pricingFor, rateCard, ratesAt, usageCost } from "./pricing.js";
 import { tailUsage } from "./statusline.js";
 
 /** The subagent tool, by its current name and its pre-2.1.63 alias. */
@@ -39,6 +39,12 @@ export interface CostStat {
   p90: number;
   /** The model most of these ran on. */
   model?: string;
+  /**
+   * Their tokens, summed, as [uncached input, cache reads, cache writes,
+   * output, requests]: what another model's price of them is worked out
+   * from, rate by rate (absent in a cache written before it was kept).
+   */
+  tok?: [number, number, number, number, number];
 }
 
 export interface SubagentCosts {
@@ -61,16 +67,40 @@ export function subagentCostsPath(): string {
   return join(dirname(statePath()), ".context-doctor-subagent-costs.json");
 }
 
-function stat(costs: Array<{ usd: number; model?: string }>): CostStat {
+function stat(costs: Array<{ usd: number; model?: string; tok?: CostStat["tok"] }>): CostStat {
   const s = costs.map((c) => c.usd).sort((a, b) => a - b);
   const models = new Map<string, number>();
   for (const c of costs) if (c.model) models.set(c.model, (models.get(c.model) ?? 0) + 1);
+  const tok = costs.every((c) => c.tok) ? costs.reduce<NonNullable<CostStat["tok"]>>((t, c) => t.map((v, i) => v + c.tok![i]) as NonNullable<CostStat["tok"]>, [0, 0, 0, 0, 0]) : undefined;
   return {
     n: s.length,
     median: s[Math.floor(s.length / 2)],
     p90: s[Math.min(s.length - 1, Math.floor(s.length * 0.9))],
     model: [...models.entries()].sort((a, b) => b[1] - a[1])[0]?.[0],
+    ...(tok ? { tok } : {}),
   };
+}
+
+/**
+ * What runs like `s` cost on `to` against `from`: their own tokens priced
+ * at each model's rates (rateCard: its tier for their average prompt, the
+ * organization's rates), each category at its own rate. Fable 5.2 reads at
+ * 2.5% of its input and Sonnet 5.5 at 5%: by the input price alone a
+ * read-heavy run on Sonnet came out at half its price. The input ratio only
+ * for a stat kept without its tokens.
+ */
+export function priceRatio(from: string | undefined, to: string | undefined, s?: CostStat): number {
+  if (!from || !to || from === to) return 1;
+  if (s?.tok && s.tok[4] > 0) {
+    const [input, read, write, output, requests] = s.tok;
+    const u = { input_tokens: input, cache_read_input_tokens: read, cache_creation_input_tokens: write, output_tokens: output };
+    const prompt = (input + read + write) / requests;
+    const at = (m: string) => { const c = rateCard(m); return c ? usageCost(u, ratesAt(c, prompt)).totalUsd : undefined; };
+    const a = at(from), b = at(to);
+    if (a !== undefined && b !== undefined && a > 0) return b / a;
+  }
+  const a = pricingFor(from), b = pricingFor(to);
+  return a && b && a.inputPerM > 0 ? b.inputPerM / a.inputPerM : 1;
 }
 
 /**
@@ -99,7 +129,7 @@ export function measureSubagentCosts(days = 30, opts: { limit?: number; budgetMs
     }
   }
   files.sort((a, b) => b.at - a.at);
-  const runs: Array<{ type: string; model?: string; usd: number }> = [];
+  const runs: Array<{ type: string; model?: string; usd: number; tok: NonNullable<CostStat["tok"]> }> = [];
   for (const f of files.slice(0, opts.limit ?? Infinity)) {
     if (opts.budgetMs !== undefined && Date.now() - started > opts.budgetMs) break;
     try {
@@ -107,11 +137,11 @@ export function measureSubagentCosts(days = 30, opts: { limit?: number; budgetMs
       if (!(s.costUsd > 0)) continue;
       let type = "unknown";
       try { type = String(JSON.parse(readFileSync(f.meta, "utf8"))?.agentType ?? "unknown").slice(0, 60); } catch { /* older Claude Code: no meta */ }
-      runs.push({ type, model: s.model, usd: s.costUsd });
+      runs.push({ type, model: s.model, usd: s.costUsd, tok: [s.tokens.input, s.tokens.read, s.tokens.write, s.tokens.output, s.steps] });
     } catch { /* unreadable */ }
   }
   const group = (key: (r: (typeof runs)[number]) => string | undefined): Record<string, CostStat> => {
-    const m = new Map<string, Array<{ usd: number; model?: string }>>();
+    const m = new Map<string, Array<{ usd: number; model?: string; tok?: CostStat["tok"] }>>();
     for (const r of runs) {
       const k = key(r);
       if (k) m.set(k, [...(m.get(k) ?? []), r]);
@@ -212,16 +242,12 @@ export function estimateSubagent(costs: SubagentCosts, type: string, modelAlias?
   // inherits the parent's model (general-purpose and Explore ran on several
   // families on the author's history: they follow the parent).
   const model = (modelAlias ? aliasModel(modelAlias, costs) : undefined) ?? pinnedModel(costs, type) ?? parentModel ?? (byType && byType.n >= MIN_RUNS ? byType.model : undefined);
-  const scale = (from?: string, to?: string): number => {
-    const a = pricingFor(from), b = pricingFor(to);
-    return a && b && a.inputPerM > 0 ? b.inputPerM / a.inputPerM : 1;
-  };
   let base: CostStat | undefined, factor = 1;
   const exact = model ? costs.byTypeModel[`${type}|${model}`] : undefined;
   if (exact && exact.n >= MIN_RUNS) base = exact;
-  else if (byType && byType.n >= MIN_RUNS) { base = byType; factor = scale(byType.model, model ?? byType.model); }
+  else if (byType && byType.n >= MIN_RUNS) { base = byType; factor = priceRatio(byType.model, model ?? byType.model, byType); }
   else if (model && costs.byModel[model]?.n >= MIN_RUNS) base = costs.byModel[model];
-  else if (costs.all && costs.all.n >= MIN_RUNS) { base = costs.all; factor = scale(costs.all.model, model ?? costs.all.model); }
+  else if (costs.all && costs.all.n >= MIN_RUNS) { base = costs.all; factor = priceRatio(costs.all.model, model ?? costs.all.model, costs.all); }
   if (!base) return undefined;
   const est: FanoutEstimate = { type, model: model ?? base.model, median: base.median * factor, p90: base.p90 * factor, runs: base.n };
   const sonnet = aliasModel("sonnet", costs)!;
@@ -230,7 +256,7 @@ export function estimateSubagent(costs: SubagentCosts, type: string, modelAlias?
     const measured = costs.byTypeModel[`${type}|${sonnet}`];
     est.cheaper = measured && measured.n >= MIN_RUNS
       ? { model: sonnet, median: measured.median, measured: true }
-      : { model: sonnet, median: est.median * scale(est.model, sonnet), measured: false };
+      : { model: sonnet, median: est.median * priceRatio(est.model, sonnet, base), measured: false };
     if (!(est.cheaper.median < est.median)) delete est.cheaper;
   }
   return est;
