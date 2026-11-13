@@ -12,7 +12,11 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { claudeModelIds, unpricedClaudeIds } from "../modelids.js";
+
+/** The checkout: the suite runs from a folder of its own (scripts/test.mjs), so nothing is relative to the working folder. */
+const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 test("the ids a text names: Bedrock ids, first-party ids from version 4, display names; not app ids or old aliases", () => {
   const text = [
@@ -51,7 +55,7 @@ test("scripts/check-models.mjs: exit 0 when every model is priced, 1 naming the 
     const fresh = join(dir, "fresh.bin");
     writeFileSync(priced, "Claude Fable 5.2 and claude-opus-5-5");
     writeFileSync(fresh, Buffer.concat([Buffer.from([0, 255, 1]), Buffer.from("anthropic.claude-fable-5-2\u0000anthropic.claude-opus-6\u0000")]));
-    const run = (...args: string[]) => spawnSync(process.execPath, [join("scripts", "check-models.mjs"), ...args], { encoding: "utf8" });
+    const run = (...args: string[]) => spawnSync(process.execPath, [join(repoRoot, "scripts", "check-models.mjs"), ...args], { encoding: "utf8" });
     const ok = run("--file", priced);
     assert.equal(ok.status, 0, ok.stdout + ok.stderr);
     assert.match(ok.stdout, /all 2 Claude models priced/);

@@ -6,10 +6,14 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseConversation } from "../parse.js";
 import { profileConversation } from "../profile.js";
 import { renderProfile } from "../report.js";
 import { renderSubagents, subagentReport } from "../subagents.js";
+
+/** The checkout: the suite runs from a folder of its own (scripts/test.mjs), so nothing is relative to the working folder. */
+const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 test("a finding that names a file by its bare name does not leak it, whatever its type", () => {
   const messages: unknown[] = [];
@@ -54,7 +58,7 @@ test("session --redact prints neither the title (the first prompt) nor the trans
     { type: "assistant", uuid: "a1", timestamp: "2026-10-13T00:00:05Z", message: { id: "m1", role: "assistant", model: "claude-opus-5-5", content: [{ type: "text", text: "Done." }], usage: { input_tokens: 10, output_tokens: 5 } } },
   ];
   writeFileSync(file, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
-  const r = spawnSync(process.execPath, [join(process.cwd(), "dist", "cli.js"), "session", file, "--redact"], {
+  const r = spawnSync(process.execPath, [join(repoRoot, "dist", "cli.js"), "session", file, "--redact"], {
     encoding: "utf8",
     env: { ...process.env, HOME: dir, USERPROFILE: dir },
   });

@@ -18,6 +18,8 @@ import { packContext, renderPack } from "../pack.js";
 import { profileSketch, renderSketchProfile } from "../sketch.js";
 import { freePort } from "./freeport.js";
 import { sandboxEnv } from "./sandbox.js";
+/** The checkout: the suite runs from a folder of its own (scripts/test.mjs), so nothing is relative to the working folder. */
+const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const mcpPath = join(dirname(fileURLToPath(import.meta.url)), "..", "mcp.js");
 const DOC = Array.from({ length: 30 }, (_, i) => `## Section ${i}\n\n${i === 17 ? "Rotate the signing key with the keyctl command." : "Nothing about that here. ".repeat(40)}`).join("\n\n");
 async function httpServer() {
@@ -38,7 +40,7 @@ async function httpServer() {
     return { child, rpc };
 }
 test("compact results: ChatGPT (openai/* request meta) gets a short text plus structuredContent and _meta; others keep the full text", async () => {
-    const conversation = readFileSync("examples/sample-conversation.json", "utf8");
+    const conversation = readFileSync(join(repoRoot, "examples", "sample-conversation.json"), "utf8");
     const { child, rpc } = await httpServer();
     try {
         const full = await rpc("tools/call", { name: "profile_context", arguments: { conversation } });
@@ -75,7 +77,7 @@ test("result mode: an explicit CONTEXT_DOCTOR_RESULTS wins; unknown clients get 
     assert.equal(resultMode(undefined, { CONTEXT_DOCTOR_RESULTS: "compact" }), "compact");
 });
 test("compact forms are smaller than the full text on the sample conversation and a docs outline", () => {
-    const profile = profileConversation(parseConversation(readFileSync("examples/sample-conversation.json", "utf8")));
+    const profile = profileConversation(parseConversation(readFileSync(join(repoRoot, "examples", "sample-conversation.json"), "utf8")));
     const fullProfile = renderProfile(profile);
     const cp = compactProfile(profile, fullProfile);
     assert.ok(cp.text.length + JSON.stringify(cp.structured).length < fullProfile.length * 0.6, `${cp.text.length + JSON.stringify(cp.structured).length} vs ${fullProfile.length}`);

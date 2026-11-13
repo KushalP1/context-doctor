@@ -7,7 +7,7 @@
 //  - the test list is the compiled dist/test directory, so a new test file
 //    cannot be forgotten in package.json.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,7 +15,7 @@ const home = mkdtempSync(join(tmpdir(), "context-doctor-test-home-"));
 
 const files = readdirSync("dist/test")
   .filter((f) => f.endsWith(".test.js"))
-  .map((f) => `dist/test/${f}`)
+  .map((f) => join(process.cwd(), "dist", "test", f))
   .sort();
 
 // HOME for POSIX, USERPROFILE for Windows (os.homedir() reads that there).
@@ -35,6 +35,8 @@ delete env.CLAUDECODE;
 // Codex's home follows CODEX_HOME: never the developer's own.
 delete env.CODEX_HOME;
 delete env.CLAUDE_CODE_MANAGED_SETTINGS_PATH;
+// Claude Code's switch that makes no workspace trust count: the trust tests set it themselves.
+delete env.CLAUDE_CODE_IGNORE_PERSISTED_TRUST;
 env.CONTEXT_DOCTOR_NO_MANAGED_SETTINGS = "1";
 // On GitHub Actions, failing tests also become annotations: a job's log
 // needs a signed-in reader, its annotations do not, so a failure on a runner
@@ -42,7 +44,13 @@ env.CONTEXT_DOCTOR_NO_MANAGED_SETTINGS = "1";
 const ci = Boolean(process.env.GITHUB_ACTIONS);
 const tap = join(home, "results.tap");
 const reporters = ci ? ["--test-reporter=spec", "--test-reporter-destination=stdout", "--test-reporter=tap", `--test-reporter-destination=${tap}`] : [];
-const result = spawnSync(process.execPath, ["--test", ...reporters, ...files], { stdio: "inherit", env });
+// Run from a folder of its own, not the checkout: the code looks for a
+// .contextdoctorrc from the working folder up, and one in the checkout or
+// any folder above it (a stray `init`, a developer's own) set a budget that
+// turned hook tests red.
+const work = join(home, "work");
+mkdirSync(work);
+const result = spawnSync(process.execPath, ["--test", ...reporters, ...files], { stdio: "inherit", env, cwd: work });
 if (ci && result.status !== 0) {
   try {
     const lines = readFileSync(tap, "utf8").split("\n");

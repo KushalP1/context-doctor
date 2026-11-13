@@ -6,7 +6,11 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ciReport } from "../ci.js";
+
+/** The checkout: the suite runs from a folder of its own (scripts/test.mjs), so nothing is relative to the working folder. */
+const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 /** A repo with a memory file under a non-ASCII path; its CLAUDE.md can import a folder. */
 function repo(importFolder = false): { dir: string; base: string } {
@@ -54,7 +58,7 @@ test("a base git cannot resolve fails with a clear message instead of counting e
 
 test("the ci command reports an unknown base in one line, not a stack trace", () => {
   const { dir } = repo();
-  const cli = join(process.cwd(), "dist", "cli.js");
+  const cli = join(repoRoot, "dist", "cli.js");
   const r = spawnSync(process.execPath, [cli, "ci", "--base", "origin/mian"], { cwd: dir, encoding: "utf8" });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /^context-doctor: --base origin\/mian is not a commit/);

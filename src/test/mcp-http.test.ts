@@ -11,6 +11,9 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { freePort } from "./freeport.js";
 
+/** The checkout: the suite runs from a folder of its own (scripts/test.mjs), so nothing is relative to the working folder. */
+const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
+
 const mcpPath = join(dirname(fileURLToPath(import.meta.url)), "..", "mcp.js");
 const PORT = await freePort();
 
@@ -178,7 +181,7 @@ test("the tool definitions stay small: they ride on every request in clients tha
   const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
   const { estimateTokens } = await import("../tokens.js");
   const client = new Client({ name: "size-check", version: "1" });
-  await client.connect(new StdioClientTransport({ command: process.execPath, args: ["dist/mcp.js"] }));
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: [join(repoRoot, "dist", "mcp.js")] }));
   try {
     const { tools } = await client.listTools();
     // Counted as an upper bound, not an estimate: the definitions exactly as
@@ -236,7 +239,7 @@ test("our tools/list is the same on every launch and every listing: a changing l
   const listings: string[] = [];
   for (let launch = 0; launch < 2; launch++) {
     const client = new Client({ name: "stability-check", version: "1" });
-    await client.connect(new StdioClientTransport({ command: process.execPath, args: ["dist/mcp.js"] }));
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: [join(repoRoot, "dist", "mcp.js")] }));
     try {
       for (let i = 0; i < 2; i++) listings.push(JSON.stringify((await client.listTools()).tools));
     } finally {

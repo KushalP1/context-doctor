@@ -4,8 +4,11 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { claudeMcpConfigs, mcpUsage, measureServer, toolPrefixName } from "../mcpschema.js";
 import { mcpFindings } from "../overhead.js";
+/** The checkout: the suite runs from a folder of its own (scripts/test.mjs), so nothing is relative to the working folder. */
+const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 test("usage counts calls per server and the sessions that used tool search", () => {
     const dir = mkdtempSync(join(tmpdir(), "cd-mcp-"));
     const use = (name) => JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "x", name, input: {} }] } });
@@ -33,7 +36,7 @@ test("a name in several scopes is the one Claude Code runs: local over .mcp.json
     assert.deepEqual(claudeMcpConfigs(proj, home).map((c) => `${c.name}:${c.scope}:${c.command}`), ["db:.mcp.json:repo", "gh:project:local"]);
 });
 test("a real server is sized by listing its tools; a dead one reports an error instead of hanging", async () => {
-    const ok = await measureServer({ name: "context-doctor", scope: "user", command: process.execPath, args: ["dist/mcp.js"] });
+    const ok = await measureServer({ name: "context-doctor", scope: "user", command: process.execPath, args: [join(repoRoot, "dist", "mcp.js")] });
     assert.equal(ok.tools, 6);
     assert.ok(ok.schemaTokens > ok.nameTokens && ok.nameTokens > 10);
     const dead = await measureServer({ name: "dead", scope: "user", command: process.execPath, args: ["-e", "setTimeout(()=>{}, 60000)"] }, 1500);
@@ -75,7 +78,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 `);
     const shuffled = await measureServer({ name: "shuffle", scope: "user", command: process.execPath, args: [script] });
     assert.equal(shuffled.unstable, "order", JSON.stringify(shuffled));
-    const ours = await measureServer({ name: "context-doctor", scope: "user", command: process.execPath, args: ["dist/mcp.js"] });
+    const ours = await measureServer({ name: "context-doctor", scope: "user", command: process.execPath, args: [join(repoRoot, "dist", "mcp.js")] });
     assert.equal(ours.unstable, undefined);
     const findings = mcpFindings({ configs: [{ name: "shuffle", scope: "user" }], sizes: [shuffled], usage: { calls: new Map([["shuffle", 3]]), names: new Map(), resources: new Map(), sessions: 5, toolSearchSessions: 0 } });
     assert.equal(findings.length, 1, "flagged even though it is used");
