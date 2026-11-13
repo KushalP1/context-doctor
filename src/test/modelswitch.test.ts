@@ -34,6 +34,19 @@ test("the message prices the re-write on the new model and the read it replaces"
   assert.match(modelSwitchMessage({ to_model: "claude-opus-5-5", from_model: "claude-sonnet-5", context_tokens: 100_000 })!, /~100k-token/);
 });
 
+test("the switch is priced as the next request bills it: Haiku 5.5's over-100k tier, and the last request's US-only", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cd-pms-tier-"));
+  const t = transcript(dir, 400_000);
+  // 400k on Haiku 5.5 bills at its over-100k prices: $0.50/M x 2 = $0.40 at the 1-hour rate, not the short tier's $0.08.
+  assert.match(modelSwitchMessage({ transcript_path: t, from_model: "claude-sonnet-5", to_model: "claude-haiku-5-5", cache_ttl: "1h" })!, /about \$0\.400 once at the 1-hour/);
+  // And back from it: staying on Haiku 5.5 would read 400k at its long tier's $0.05/M.
+  assert.match(modelSwitchMessage({ transcript_path: t, from_model: "claude-haiku-5-5", to_model: "claude-sonnet-5", cache_ttl: "5m" })!, /next request on claude-haiku-5-5 would read it for \$0\.020/);
+  // A session on US-only inference stays on it: the write at 1.1x ($2.00 x 1.1).
+  const us = join(dir, "us.jsonl");
+  writeFileSync(us, JSON.stringify({ type: "assistant", message: { id: "m1", model: "claude-sonnet-5", role: "assistant", content: [], usage: { input_tokens: 10, cache_read_input_tokens: 399_990, cache_creation_input_tokens: 0, inference_geo: "us" } } }) + "\n");
+  assert.match(modelSwitchMessage({ transcript_path: us, from_model: "claude-sonnet-5", to_model: "claude-opus-5-5", cache_ttl: "5m" })!, /about \$2\.20 once/);
+});
+
 test("nothing to say: cold cache, no real switch, small context; unknown price says tokens only", () => {
   const dir = mkdtempSync(join(tmpdir(), "cd-pms-quiet-"));
   const t = transcript(dir, 400_000);

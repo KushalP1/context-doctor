@@ -35,7 +35,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
-import { CACHE_WRITE_1H, CACHE_WRITE_5M, formatUsd, pricingFor } from "./pricing.js";
+import { CACHE_WRITE_1H, CACHE_WRITE_5M, formatUsd, rateCard, ratesAt, writePerM } from "./pricing.js";
 import { formatTokens } from "./tokens.js";
 import { tailUsage } from "./statusline.js";
 
@@ -74,13 +74,17 @@ export function modelSwitchMessage(input: ModelSwitchInput): string | undefined 
   if (tokens < MIN_CONTEXT) return undefined;
   const oneHour = input.cache_ttl === "1h";
   const writeMult = oneHour ? CACHE_WRITE_1H : CACHE_WRITE_5M;
-  const toPrice = pricingFor(bare(to));
-  const fromPrice = from ? pricingFor(bare(from)) : undefined;
+  // Each model's rates as the next request bills this context (rateCard, as every report prices):
+  // its prompt's tier (Haiku 5.5 over 100k), fast mode and US-only as the last request recorded,
+  // the organization's rates where set, the price of today.
+  const at = (model: string) => { const c = rateCard(bare(model), live?.billing); return c && ratesAt(c, tokens); };
+  const toPrice = at(to);
+  const fromPrice = from ? at(from) : undefined;
   const size = `~${formatTokens(tokens)}-token`;
   if (!toPrice) {
     return `context-doctor: switching to ${to} writes this session's ${size} context into its own cache once (no known price for ${to}); the next request on ${from ?? "the current model"} would read it from cache instead.`;
   }
-  const writeUsd = (tokens / 1e6) * toPrice.inputPerM * writeMult;
+  const writeUsd = (tokens / 1e6) * writePerM(toPrice, writeMult);
   const stay = fromPrice ? `, where the next request on ${from} would read it for ${formatUsd((tokens / 1e6) * fromPrice.cacheReadPerM)}` : "";
   return (
     `context-doctor: switching to ${to} re-writes this session's ${size} context into its cache: ` +
