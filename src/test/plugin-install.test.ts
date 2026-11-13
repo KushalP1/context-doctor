@@ -78,10 +78,18 @@ test("doctor warns when the plugin and an install are both active, and install n
   const d = await run(home, ["doctor"]);
   assert.match(d.out, /! Plugin \+ install\s+.*plugin is enabled.*load twice/);
   assert.match(d.out, /MCP server in ~\/\.claude\.json/);
-  assert.match(d.out, /context-doctor uninstall/);
+  assert.match(d.out, /Run `context-doctor install`/);
 
+  // install now takes its own copies out itself, leaving Claude Code to the plugin.
   const again = await run(home, ["install"]);
-  assert.match(again.out, /earlier install is still in place/);
+  assert.equal(again.code, 0, again.err);
+  assert.match(again.out, /Taking out install's own copies/);
+  assert.equal(JSON.parse(readFileSync(join(home, ".claude.json"), "utf8")).mcpServers?.["context-doctor"], undefined);
+  assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).hooks, undefined);
+  assert.ok(!existsSync(join(home, ".claude", "skills", "context-doctor")));
+  assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).enabledPlugins[pluginKey()], true, "the user's plugin stays on");
+  const d3 = await run(home, ["doctor"]);
+  assert.ok(!/Plugin \+ install/.test(d3.out), d3.out);
 
   // Plugin only: no warning.
   const clean = homeWith({ enabledPlugins: { [pluginKey()]: true } });

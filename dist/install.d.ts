@@ -7,6 +7,7 @@
  * `context-doctor uninstall` reverses it.
  */
 import { type ClaudeCodeInstall, type ModelSwitchReadiness } from "./modelswitch.js";
+import { type ModReadiness } from "./claudeplugin.js";
 export declare function geminiSettingsPath(): string;
 /**
  * Gemini CLI reads its settings.json through strip-json-comments
@@ -45,15 +46,7 @@ export declare function launcherNamesMissingPackage(entry: {
     command?: unknown;
     args?: unknown;
 } | undefined): boolean;
-/**
- * The Claude Code plugin's key in enabledPlugins: "<plugin>@<marketplace>".
- * Our marketplace (.claude-plugin/marketplace.json) is named context-doctor
- * and lists one plugin, context-doctor, so the official key is
- * "context-doctor@context-doctor"; a copy listed in another marketplace keeps
- * the plugin name, so any "context-doctor@…" key is ours.
- */
-export declare const PLUGIN_KEY = "context-doctor@context-doctor";
-export declare function isOurPluginKey(key: string): boolean;
+export { PLUGIN_KEY, isOurPluginKey } from "./claudeplugin.js";
 /**
  * Is the context-doctor plugin switched on in the user's Claude Code
  * settings? The plugin brings its own MCP server, skills and hooks, so
@@ -63,6 +56,25 @@ export declare function isOurPluginKey(key: string): boolean;
 export declare function claudePluginEnabled(home?: string): boolean;
 /** What `install` put into Claude Code that the plugin also provides, by name. */
 export declare function claudeInstalledCopies(home?: string): string[];
+/**
+ * How install serves Claude Code this run (claudeplugin.ts has the why):
+ * through the plugin (`ours`: the keys are install's to write and to take
+ * out again; otherwise the user enabled it), or with install's own MCP
+ * server, skill and hooks: the plugin turned off by the user ("off"), a
+ * Claude Code here that predates mods ("old"), or no version found
+ * ("unknown"). Settings are shared by every Claude Code on the machine, so
+ * one route serves them all.
+ */
+export type ClaudeCodeRoute = {
+    via: "plugin";
+    ours: boolean;
+    readiness: ModReadiness;
+} | {
+    via: "hooks";
+    why: "off" | "old" | "unknown";
+    readiness: ModReadiness;
+};
+export declare function claudeCodeRoute(readiness?: ModReadiness): ClaudeCodeRoute;
 /**
  * A config that configures nothing: `{}`, or only empty `mcpServers` /
  * `hooks` containers (plus `extraKeys`, e.g. the `version` install writes

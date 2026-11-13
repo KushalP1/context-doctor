@@ -26,7 +26,7 @@ const root = join(dirname(cliPath), "..");
 
 function run(home: string, args: string[]): Promise<{ code: number; out: string; err: string }> {
   return new Promise((resolve) => {
-    execFile(process.execPath, [cliPath, ...args], { env: { ...sandboxEnv(home), CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS: "9.9.9" }, timeout: 60_000 }, (error, stdout, stderr) =>
+    execFile(process.execPath, [cliPath, ...args], { env: { ...sandboxEnv(home), CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS: "2.1.285" }, timeout: 60_000 }, (error, stdout, stderr) =>
       resolve({ code: error ? (error as { code?: number }).code ?? 1 : 0, out: stdout, err: stderr })
     );
   });

@@ -38,6 +38,10 @@ delete env.CLAUDE_CODE_MANAGED_SETTINGS_PATH;
 // Claude Code's switch that makes no workspace trust count: the trust tests set it themselves.
 delete env.CLAUDE_CODE_IGNORE_PERSISTED_TRUST;
 env.CONTEXT_DOCTOR_NO_MANAGED_SETTINGS = "1";
+// The Claude Code versions install and doctor plan for: none, as on CI, not
+// the developer's own (a Claude Code 2.1.286+ on PATH moved install to the
+// plugin). Tests that need versions set them.
+env.CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS = "";
 // On GitHub Actions, failing tests also become annotations: a job's log
 // needs a signed-in reader, its annotations do not, so a failure on a runner
 // nobody here can open (Windows, an older Node) still says which test and why.

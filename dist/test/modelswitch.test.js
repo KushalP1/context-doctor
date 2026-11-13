@@ -109,12 +109,12 @@ test("install writes PreModelSwitch only when no older Claude Code is around; un
     mkdirSync(join(home, ".claude"), { recursive: true });
     const settings = () => JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"));
     const ours = () => JSON.stringify(settings().hooks?.PreModelSwitch ?? []).includes("hook");
-    const ok = await runCli(home, ["install"], { CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS: "2.1.299" });
+    const ok = await runCli(home, ["install"], { CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS: "2.1.285" });
     assert.equal(ok.code, 0, ok.err);
     assert.match(ok.out, /model-switch warning installed/);
     assert.ok(ours());
     // An older Claude Code appears: install takes our entry out again, and says why.
-    const old = await runCli(home, ["install"], { CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS: "2.1.299,2.1.62" });
+    const old = await runCli(home, ["install"], { CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS: "2.1.285,2.1.62" });
     assert.equal(old.code, 0, old.err);
     assert.match(old.out, /model-switch warning skipped: Claude Code 2\.1\.62 .*predates PreModelSwitch \(2\.1\.251\)/);
     assert.equal(settings().hooks?.PreModelSwitch, undefined);
@@ -125,7 +125,7 @@ test("install writes PreModelSwitch only when no older Claude Code is around; un
     writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify(s));
     const doc = await runCli(home, ["doctor"], { CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS: "2.1.62" });
     assert.match(doc.out, /Model-switch warning[^\n]*2\.1\.62[^\n]*skips the whole file/);
-    const un = await runCli(home, ["uninstall"], { CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS: "2.1.299" });
+    const un = await runCli(home, ["uninstall"], { CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS: "2.1.285" });
     assert.equal(un.code, 0, un.err);
     assert.equal(existsSync(join(home, ".claude", "settings.json")) ? settings().hooks?.PreModelSwitch : undefined, undefined);
 });

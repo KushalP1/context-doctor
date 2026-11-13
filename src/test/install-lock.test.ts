@@ -38,7 +38,7 @@ test("install, uninstall, cache-ttl, compact-window and fix at the same moment: 
     `if (what === "fix") { const r = await applyFix({ id: "tool-search", title: "", basis: "", quality: "", change: "", state: "available", value: "auto" }, { home }); if (!r.ok) process.exit(1); }`,
     `if (what === "uninstall") await runUninstall();`,
   ].join("\n"));
-  const env = { ...sandboxEnv(h), CONTEXT_DOCTOR_NO_MANAGED_SETTINGS: "1", CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS: "2.1.309", PATH: "" };
+  const env = { ...sandboxEnv(h), CONTEXT_DOCTOR_NO_MANAGED_SETTINGS: "1", CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS: "2.1.285", PATH: "" };
   // Each job's exit code, with its stderr when it failed (a Windows runner's EPERM was invisible otherwise).
   const race = async (jobs: string[]) => {
     const go = Date.now() + 1500;

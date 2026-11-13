@@ -20,6 +20,7 @@ import { claudeCodePresent, claudeDir, claudeJsonPath } from "./claudedir.js";
 import { fallbackStateDir } from "./ledger.js";
 import { codexDir as codexHomeDir } from "./codexdir.js";
 import { scanCacheDir } from "./scan.js";
+import { isOurDeclaration, isOurPluginKey, MARKETPLACE, marketplaceDeclaration, marketplaceRegistered, MOD_SINCE, modReadiness, PLUGIN_KEY, pluginMarkerPath, pluginStage, readPluginMarker, type ModReadiness } from "./claudeplugin.js";
 import { editJsonText, parseSettingsText, sameJson, withSettingsLock, writeAtomic } from "./settingsedit.js";
 
 interface Target {
@@ -132,18 +133,8 @@ export function launcherNamesMissingPackage(entry: { command?: unknown; args?: u
   return rest.find((w) => !w.startsWith("-")) === "context-doctor-mcp";
 }
 
-/**
- * The Claude Code plugin's key in enabledPlugins: "<plugin>@<marketplace>".
- * Our marketplace (.claude-plugin/marketplace.json) is named context-doctor
- * and lists one plugin, context-doctor, so the official key is
- * "context-doctor@context-doctor"; a copy listed in another marketplace keeps
- * the plugin name, so any "context-doctor@…" key is ours.
- */
-export const PLUGIN_KEY = "context-doctor@context-doctor";
-
-export function isOurPluginKey(key: string): boolean {
-  return key === PLUGIN_KEY || key.startsWith("context-doctor@");
-}
+// The plugin's key lives in claudeplugin.ts with the rest of the plugin path.
+export { PLUGIN_KEY, isOurPluginKey } from "./claudeplugin.js";
 
 /**
  * Is the context-doctor plugin switched on in the user's Claude Code
@@ -172,6 +163,126 @@ export function claudeInstalledCopies(home = homedir()): string[] {
   } catch { /* unreadable */ }
   if (existsSync(join(claudeDir(home), "skills", "context-doctor", "SKILL.md"))) found.push("skill in ~/.claude/skills/context-doctor");
   return found;
+}
+
+/**
+ * How install serves Claude Code this run (claudeplugin.ts has the why):
+ * through the plugin (`ours`: the keys are install's to write and to take
+ * out again; otherwise the user enabled it), or with install's own MCP
+ * server, skill and hooks: the plugin turned off by the user ("off"), a
+ * Claude Code here that predates mods ("old"), or no version found
+ * ("unknown"). Settings are shared by every Claude Code on the machine, so
+ * one route serves them all.
+ */
+export type ClaudeCodeRoute =
+  | { via: "plugin"; ours: boolean; readiness: ModReadiness }
+  | { via: "hooks"; why: "off" | "old" | "unknown"; readiness: ModReadiness };
+
+export function claudeCodeRoute(readiness: ModReadiness = modReadiness(claudeCodeInstallsFromEnv())): ClaudeCodeRoute {
+  let enabled: Record<string, unknown> = {};
+  try {
+    const e = readJson(join(claudeDir(), "settings.json")).enabledPlugins;
+    if (isPlainObject(e)) enabled = e;
+  } catch { /* unreadable: the step that writes it reports that */ }
+  const on = Object.entries(enabled).some(([key, v]) => isOurPluginKey(key) && v === true);
+  if (on && !readPluginMarker()) return { via: "plugin", ours: false, readiness };
+  // Turned off by hand (install never writes false): the user's call stands.
+  if (enabled[PLUGIN_KEY] === false) return { via: "hooks", why: "off", readiness };
+  if (readiness.ok) return { via: "plugin", ours: true, readiness };
+  return { via: "hooks", why: readiness.old.length > 0 ? "old" : "unknown", readiness };
+}
+
+/**
+ * Switch the plugin on in ~/.claude/settings.json: this repository as a
+ * marketplace and the plugin enabled, each key only if it is not there
+ * already, written key by key under the settings lock (so uninstall gives
+ * the file back byte for byte), and what was added recorded in the marker.
+ * Returns whether the file changed.
+ */
+function enablePlugin(): boolean {
+  const path = join(claudeDir(), "settings.json");
+  return settingsUpdate(path, () => {
+    const settings = readJson(path);
+    for (const key of ["extraKnownMarketplaces", "enabledPlugins"]) {
+      if (settings[key] !== undefined && !isPlainObject(settings[key])) throw new Error(`"${key}" in ${path} is not an object; fix it, then re-run. Nothing was changed.`);
+    }
+    const marker = readPluginMarker() ?? { marketplace: false, enabled: false };
+    let changed = false;
+    // Declared already (either spelling), or a marketplace of that name Claude
+    // Code already knows (added with /plugin, perhaps from a local checkout):
+    // declaring this repository over it would move it to GitHub.
+    const declared = [settings.extraKnownMarketplaces, settings.additionalMarketplaces].some((m) => isPlainObject(m) && m[MARKETPLACE] !== undefined);
+    if (!declared && !marketplaceRegistered()) {
+      settings.extraKnownMarketplaces = { ...(settings.extraKnownMarketplaces ?? {}), [MARKETPLACE]: marketplaceDeclaration() };
+      marker.marketplace = true;
+      changed = true;
+    }
+    if (settings.enabledPlugins?.[PLUGIN_KEY] !== true) {
+      settings.enabledPlugins = { ...(settings.enabledPlugins ?? {}), [PLUGIN_KEY]: true };
+      marker.enabled = true;
+      changed = true;
+    }
+    if (!changed) return false;
+    // The record first: from here on a later install's backup step and
+    // uninstall see these keys as install's, not the user's.
+    writeAtomic(pluginMarkerPath(), JSON.stringify(marker) + "\n");
+    writeJsonWithBackup(path, settings);
+    return true;
+  });
+}
+
+/**
+ * Take out the plugin keys install wrote (each only if it still says what
+ * install wrote), then the marker. Returns whether settings.json changed.
+ */
+function disablePlugin(): boolean {
+  const marker = readPluginMarker();
+  let changed = false;
+  const path = join(claudeDir(), "settings.json");
+  if (marker && existsSync(path)) {
+    settingsUpdate(path, () => {
+      const settings = readJson(path);
+      if (dropOurPluginKeys(settings, marker)) {
+        writeUninstalled(path, settings);
+        changed = true;
+      }
+    });
+  }
+  rmSync(pluginMarkerPath(), { force: true });
+  return changed;
+}
+
+/** Install's own Claude Code hooks, by event, with the name each step prints. */
+const CLAUDE_HOOKS: Array<[event: string, label: string]> = [
+  ["UserPromptSubmit", "Claude Code every-prompt hook"],
+  ["PreCompact", "Claude Code compaction hook"],
+  ["SessionStart", "Claude Code session-start hook"],
+  ["PreModelSwitch", "Claude Code model-switch warning"],
+  ["PreToolUse", "Claude Code subagent price"],
+];
+
+/** Remove our MCP server from one app's config, as uninstall does. */
+function removeMcpEntry(name: string, configPath: string): void {
+  if (!existsSync(configPath)) return;
+  const config = readJson(configPath);
+  if (config.mcpServers?.["context-doctor"]) {
+    delete config.mcpServers["context-doctor"];
+    writeUninstalled(configPath, config);
+    done(`✓ ${name}: MCP server removed`);
+  }
+}
+
+/**
+ * Install's own Claude Code wiring out (the MCP server in ~/.claude.json,
+ * the skill, the hooks), each step on its own, as uninstall takes them out:
+ * beside the plugin each would run twice.
+ */
+function removeClaudeCodeCopies(attempt: (label: string, fn: () => void) => void): void {
+  const settings = join(claudeDir(), "settings.json");
+  for (const [event, label] of CLAUDE_HOOKS) attempt(label, () => uninstallHookFrom(settings, label, event));
+  attempt("Claude Code", () => removeMcpEntry("Claude Code", claudeJsonPath()));
+  attempt("Agent Skill", () => removeSkill(join(claudeDir(), "skills", "context-doctor"), "Agent Skill"));
+  attempt("Claude Code skill folders", () => removeSkillFolders(claudeDir()));
 }
 
 /**
@@ -478,11 +589,7 @@ function addHookEntry(settingsPath: string, event: string, opts: { matcher?: str
 /** Each hook removal on its own: a malformed file for one app must not leave the others installed. */
 function uninstallHook(attempt: (label: string, fn: () => void) => void): void {
   const claude = join(claudeDir(), "settings.json");
-  attempt("Claude Code every-prompt hook", () => uninstallHookFrom(claude, "Claude Code every-prompt hook"));
-  attempt("Claude Code compaction hook", () => uninstallHookFrom(claude, "Claude Code compaction hook", "PreCompact"));
-  attempt("Claude Code session-start hook", () => uninstallHookFrom(claude, "Claude Code session-start hook", "SessionStart"));
-  attempt("Claude Code model-switch warning", () => uninstallHookFrom(claude, "Claude Code model-switch warning", "PreModelSwitch"));
-  attempt("Claude Code subagent price", () => uninstallHookFrom(claude, "Claude Code subagent price", "PreToolUse"));
+  for (const [event, label] of CLAUDE_HOOKS) attempt(label, () => uninstallHookFrom(claude, label, event));
   attempt("Codex every-prompt hook", () => uninstallHookFrom(join(codexDir(), "hooks.json"), "Codex every-prompt hook"));
   attempt("Gemini CLI every-prompt hook", () => uninstallHookFrom(geminiSettingsPath(), "Gemini CLI every-prompt hook", "BeforeAgent"));
   attempt("Cursor hooks", () => uninstallCursorHook());
@@ -1080,6 +1187,48 @@ export interface InstallResult {
 }
 
 /**
+ * Claude Code's half of install for the route chosen: the plugin switched
+ * on (or found on) and install's own copies taken out, or the plugin keys
+ * install wrote taken out again before its own wiring goes in. Says which,
+ * and what each Claude Code here gets.
+ */
+function routeClaudeCode(route: ClaudeCodeRoute, attempt: (label: string, fn: () => void) => void): void {
+  const settingsPath = join(claudeDir(), "settings.json");
+  if (route.via === "plugin" && !route.ours) {
+    console.log("– Claude Code: skipped the MCP server, skill and hooks. The context-doctor plugin is enabled and");
+    console.log("  provides them already (and, on Claude Code 2.1.286+, its mod); installing them as well would load its instructions and tools twice.");
+  } else if (route.via === "plugin") {
+    const changed = enablePlugin();
+    console.log(changed
+      ? `✓ Claude Code: the context-doctor plugin enabled (${tilde(settingsPath)}: extraKnownMarketplaces, enabledPlugins), in place of install's own MCP server, skill and hooks`
+      : "✓ Claude Code: the context-doctor plugin already enabled, unchanged");
+    console.log(`  ${describeInstalls(route.readiness.installs)} ${route.readiness.installs.length === 1 ? "runs" : "run"} its mod: limit readings and Claude Code's own session cost after each turn,`);
+    console.log("  the Compact first button on a cold return, /context-doctor-fix; and the MCP server, skills and hooks install used to add itself.");
+    if (pluginStage().stage !== "installed") {
+      console.log("  Claude Code downloads it in the background at its next start and loads it from the session after (or at once: /reload-plugins).");
+    }
+  } else {
+    if (readPluginMarker()) {
+      if (disablePlugin()) console.log("– Claude Code: the context-doctor plugin install had enabled is turned off again (its keys removed from settings.json).");
+    }
+    const why =
+      route.why === "off"
+        ? "the context-doctor plugin is turned off in your settings (enabledPlugins); turn it on in /plugin for its mod, and install leaves Claude Code to it"
+        : route.why === "old"
+          ? `${describeInstalls(route.readiness.old)} predates mods (${MOD_SINCE}), and every Claude Code here reads the same settings; update or remove it, then run install again for the plugin and its mod`
+          : `no Claude Code version found to check (the plugin's mod needs ${MOD_SINCE} or later)`;
+    console.log(`– Claude Code: install's own MCP server, skill and hooks, not the plugin: ${why}.`);
+    return;
+  }
+  // Beside the plugin, install's own copies would run twice: out they go, as uninstall takes them out.
+  const copies = claudeInstalledCopies();
+  if (copies.length > 0) {
+    console.log(`  Taking out install's own copies (${copies.join(", ")}), which would load twice beside the plugin:`);
+    removeClaudeCodeCopies(attempt);
+  }
+}
+
+/**
  * Install into every detected app.
  *
  * A failure in one app must not stop the others: someone with a corrupt
@@ -1101,19 +1250,21 @@ export function runInstall(options: { statusLine?: boolean } = {}): InstallResul
   }
 
   const failures: string[] = [];
-  // The plugin already gives Claude Code the server, skill and hooks; a
-  // second copy of each makes every session load the instructions and the
-  // tools twice. Claude Code is skipped; the other apps are not.
-  const viaPlugin = claudePluginEnabled();
-  if (viaPlugin) {
-    console.log("– Claude Code: skipped the MCP server, skill and hooks. The context-doctor plugin is enabled and");
-    console.log("  provides them already; installing them as well would load its instructions and tools twice.");
-    const copies = claudeInstalledCopies();
-    if (copies.length > 0) {
-      console.log(`  An earlier install is still in place (${copies.join(", ")}): \`${selfCommand("uninstall")}\``);
-      console.log(`  removes it, then \`${selfCommand("install")}\` wires the other apps again.`);
+  const attempt = (label: string, fn: () => void): void => {
+    try {
+      fn();
+    } catch (e) {
+      console.error(`✗ ${label}: ${(e as Error).message}`);
+      failures.push(label);
     }
-  }
+  };
+  // Claude Code through the plugin (claudeplugin.ts) when it runs mods, or
+  // with install's own MCP server, skill and hooks. Never both: a second
+  // copy of each makes every session load the instructions and the tools
+  // twice. The other apps are wired either way.
+  const route = claudeCodePresent() ? claudeCodeRoute() : undefined;
+  const viaPlugin = route?.via === "plugin";
+  if (route) attempt("Claude Code plugin", () => routeClaudeCode(route, attempt));
   for (const target of found) {
     if (viaPlugin && target.name === "Claude Code") continue;
     try {
@@ -1331,7 +1482,28 @@ function withoutOurs(config: Record<string, any>): Record<string, any> {
     }
   }
   if (typeof c.statusLine?.command === "string" && isOurStatusLine(c.statusLine.command)) delete c.statusLine;
+  // The plugin keys count as ours only where install wrote them (its marker
+  // says so): an enabledPlugins entry the user made is theirs.
+  const marker = readPluginMarker();
+  if (marker) dropOurPluginKeys(c, marker);
   return c;
+}
+
+/**
+ * Take the plugin keys install wrote out of a settings object, each only if
+ * it still says what install wrote. Returns whether anything went.
+ */
+function dropOurPluginKeys(c: Record<string, any>, marker: { marketplace: boolean; enabled: boolean }): boolean {
+  let dropped = false;
+  if (marker.enabled && isPlainObject(c.enabledPlugins) && c.enabledPlugins[PLUGIN_KEY] === true) {
+    delete c.enabledPlugins[PLUGIN_KEY];
+    dropped = true;
+  }
+  if (marker.marketplace && isPlainObject(c.extraKnownMarketplaces) && isOurDeclaration(c.extraKnownMarketplaces[MARKETPLACE])) {
+    delete c.extraKnownMarketplaces[MARKETPLACE];
+    dropped = true;
+  }
+  return dropped;
 }
 
 /**
@@ -1365,7 +1537,8 @@ function installOrigin(path: string, extraKeys: string[]): { created: boolean; b
  */
 function writeUninstalled(path: string, config: Record<string, any>, extraKeys: string[] = []): void {
   const { created, before, empty } = installOrigin(path, extraKeys);
-  for (const key of ["mcpServers", "hooks"]) {
+  // The plugin's containers too (settings.json): install made them when the file had none.
+  for (const key of ["mcpServers", "hooks", "enabledPlugins", "extraKnownMarketplaces"]) {
     const v = config[key];
     if (v && typeof v === "object" && Object.keys(v).length === 0 && !(key in before)) delete config[key];
   }
@@ -1434,6 +1607,7 @@ const OUR_CLAUDE_FILES = [
   ".context-doctor-proxy.log",
   ".context-doctor-proxy-restart",
   ".context-doctor-limits.jsonl",
+  ".context-doctor-session-cost.jsonl",
   ".context-doctor-misses.jsonl",
   ".context-doctor-subagent-costs.json",
   ".context-doctor-budget.json",
@@ -1474,16 +1648,17 @@ export async function runUninstall(): Promise<void> {
     console.error(`✗ autopilot: ${(e as Error).message}`);
   }
   for (const target of targets().filter((t) => t.detect())) {
-    attempt(target.name, () => {
-      if (!existsSync(target.configPath)) return;
-      const config = readJson(target.configPath);
-      if (config.mcpServers?.["context-doctor"]) {
-        delete config.mcpServers["context-doctor"];
-        writeUninstalled(target.configPath, config);
-        done(`✓ ${target.name}: MCP server removed`);
-      }
-    });
+    attempt(target.name, () => removeMcpEntry(target.name, target.configPath));
   }
+  // The plugin keys install wrote; a plugin the user enabled stays theirs.
+  attempt("Claude Code plugin", () => {
+    if (disablePlugin()) {
+      done("✓ Claude Code: the context-doctor plugin turned off (the keys install added to ~/.claude/settings.json removed)");
+      if (pluginStage().stage !== "none") console.log("  Claude Code keeps its downloaded copy, disabled, under ~/.claude/plugins; `claude plugin uninstall context-doctor@context-doctor` deletes it.");
+    } else if (claudePluginEnabled()) {
+      console.log("– Claude Code: the context-doctor plugin stays enabled: you turned it on, not install (turn it off in /plugin).");
+    }
+  });
   attempt("Agent Skill", () => removeSkill(join(claudeDir(), "skills", "context-doctor"), "Agent Skill"));
   for (const dir of antigravityAllSkillDirs()) attempt(`Antigravity skill (${tilde(dir)})`, () => removeSkill(dir, "Antigravity skill"));
   attempt("Antigravity folders", () => uninstallAntigravityFolders());

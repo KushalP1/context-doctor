@@ -15,6 +15,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ledgerPath, readLedger } from "./ledger.js";
 import { costCheck } from "./modmeasure.js";
+import { ago, MOD_SINCE, modActivity, modReadiness, PLUGIN_KEY, pluginStage, readPluginMarker } from "./claudeplugin.js";
 import { loadConfig } from "./config.js";
 import { codexRouting } from "./codexroute.js";
 import { CURSOR_HOOK_EVENTS } from "./install.js";
@@ -239,6 +240,55 @@ function pluginEnabled(layers: Array<Record<string, any>>): boolean {
     }
   }
   return [...state.values()].some(Boolean);
+}
+
+/** A mod reading older than this is no longer "recording". */
+const MOD_FRESH_MS = 24 * 3600_000;
+
+/**
+ * Which way Claude Code gets context-doctor (claudeplugin.ts): the plugin,
+ * and how far Claude Code has got with it, or install's own wiring and why;
+ * then whether the mod is recording, from when it last wrote its ledgers.
+ */
+function claudeRouteChecks(layers: Array<Record<string, any>>, plugin: boolean, now = Date.now()): Check[] {
+  const readiness = modReadiness(claudeCodeInstallsFromEnv());
+  const userOff = layers.some((s) => isObject(s.enabledPlugins) && s.enabledPlugins[PLUGIN_KEY] === false);
+  if (!plugin) {
+    const why = userOff
+      ? "the context-doctor plugin is turned off in your settings"
+      : readiness.ok
+        ? `every Claude Code here runs mods (${describeInstalls(readiness.installs)}): run context-doctor install to move to the plugin and its mod`
+        : readiness.old.length > 0
+          ? `${describeInstalls(readiness.old)} predates mods (${MOD_SINCE}), and every Claude Code here reads the same settings`
+          : `no Claude Code version found to check (the plugin's mod needs ${MOD_SINCE} or later)`;
+    const mod: Check = { label: "Mod", status: readiness.ok && !userOff ? "warn" : "skip", detail: `not running: ${why}` };
+    // Nothing of ours in Claude Code at all is the hook check's failure, above.
+    return claudeInstalledCopies().length > 0 ? [{ label: "Claude Code route", status: "ok", detail: "install's own MCP server, skill and hooks, not the plugin" }, mod] : [mod];
+  }
+  const by = readPluginMarker() ? "enabled by install" : "enabled in your settings";
+  const st = pluginStage();
+  const route: Check =
+    st.stage === "installed"
+      ? { label: "Claude Code route", status: "ok", detail: `the context-doctor plugin (${by}), downloaded${st.version ? ` (${st.version})` : ""}: its MCP server, skills, hooks and mod` }
+      : {
+          label: "Claude Code route",
+          status: "warn",
+          detail: `the context-doctor plugin (${by}), ${st.stage === "registered" ? "its marketplace fetched but the plugin not downloaded yet" : "not fetched yet"}: Claude Code does that in the background at its next start and loads it from the session after (or at once: /reload-plugins)`,
+        };
+  let mod: Check;
+  const act = modActivity();
+  const limits = act.limits ? `; limits ledger written ${ago(act.limits, now)}` : "; no limit reading yet (Claude Code hands them over on Pro and Max plans)";
+  if (process.env.CONTEXT_DOCTOR_NO_MOD === "1") {
+    mod = { label: "Mod", status: "skip", detail: "off: CONTEXT_DOCTOR_NO_MOD=1" };
+  } else if (act.cost && now - act.cost < MOD_FRESH_MS) {
+    mod = { label: "Mod", status: "ok", detail: `recording: last measured ${ago(act.cost, now)} (~/.claude/.context-doctor-session-cost.jsonl)${limits}` };
+  } else if (act.cost) {
+    mod = { label: "Mod", status: "warn", detail: `last measured ${ago(act.cost, now)}: no session that loaded the plugin since, or the mod stopped${limits}` };
+  } else {
+    const old = readiness.old.length > 0 ? `; ${describeInstalls(readiness.old)} predates mods and never will` : "";
+    mod = { label: "Mod", status: "warn", detail: `has not measured yet: it records after each turn of a session that loaded the plugin (Claude Code ${MOD_SINCE}+ in the Desktop app, 2.1.287+ in a terminal)${old}` };
+  }
+  return [route, mod];
 }
 
 /** "headroom (pid 4242)", or "another program". */
@@ -590,9 +640,10 @@ export async function runDoctor(): Promise<void> {
       status: "warn",
       detail:
         `the context-doctor plugin is enabled and \`install\` also wired Claude Code (${copies.join(", ")}), so its instructions and tools load twice. ` +
-        "Keep one: `context-doctor uninstall` removes the installed copy (then `context-doctor install` re-wires other apps and skips Claude Code while the plugin is on), or disable the plugin",
+        "Run `context-doctor install`: it takes its own copies out while the plugin is on. Or disable the plugin",
     });
   }
+  if (claudeCodePresent()) checks.push(...claudeRouteChecks(layers, plugin));
 
   // Codex (OpenAI): MCP table in config.toml, hook in hooks.json, skill.
   const codexHome = codexDir();

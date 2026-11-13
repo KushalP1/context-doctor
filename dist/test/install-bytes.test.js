@@ -21,7 +21,7 @@ import { appendJsonItem, editJsonText, removeJsonItem, setJsonPath, ABSENT } fro
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
 function run(home, args) {
     return new Promise((resolve) => {
-        execFile(process.execPath, [cliPath, ...args], { env: { ...sandboxEnv(home), CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS: "9.9.9" }, timeout: 60_000 }, (error, stdout, stderr) => resolve({ code: error ? error.code ?? 1 : 0, out: stdout, err: stderr }));
+        execFile(process.execPath, [cliPath, ...args], { env: { ...sandboxEnv(home), CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS: "2.1.285" }, timeout: 60_000 }, (error, stdout, stderr) => resolve({ code: error ? error.code ?? 1 : 0, out: stdout, err: stderr }));
     });
 }
 function desktopConfig(home) {
