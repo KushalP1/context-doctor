@@ -6,7 +6,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { packContext, readSources, renderPack, secretFileReason } from "../pack.js";
+import { packContext, readSources, remotePathReason, renderPack, secretFileReason } from "../pack.js";
 import { sandboxEnv, withSandboxHome } from "./sandbox.js";
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
 const names = (r) => r.sources.map((s) => s.name.replace(/\\/g, "/")).sort();
@@ -264,4 +264,14 @@ test("pack - reads stdin beside the other paths", () => {
     assert.match(out.stdout, /beta from stdin/);
     assert.match(out.stdout, /alpha file/);
     assert.doesNotMatch(out.stdout, /﻿/);
+});
+test("pack_context will not open a Windows network share or device path a model names (SMB signs in as the user: an NTLM hash to whoever runs the share)", () => {
+    for (const p of ["\\\\attacker.example\\share\\notes.md", "//attacker.example/share/notes.md", "\\\\?\\UNC\\attacker.example\\s\\x.md", "\\\\.\\pipe\\x", " \\\\host\\s"]) {
+        assert.match(remotePathReason(p, "win32") ?? "", /network share or device path/, p);
+    }
+    for (const p of ["C:\\Users\\me\\notes.md", "\\Users\\me\\notes.md", "notes.md", "D:/docs"])
+        assert.equal(remotePathReason(p, "win32"), undefined, p);
+    // Elsewhere "//x" is an ordinary path (the same as /x).
+    assert.equal(remotePathReason("//tmp/x", "linux"), undefined);
+    assert.equal(remotePathReason("//tmp/x", "darwin"), undefined);
 });

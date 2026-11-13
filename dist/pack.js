@@ -412,6 +412,18 @@ const SECRET_IN_DIR = [
     [".gem", ["credentials"]],
 ];
 const SECRET_EXT = new Set([".pem", ".key", ".p12", ".pfx", ".keystore", ".jks"]);
+/**
+ * Why the MCP server will not open `path` on Windows: a network share
+ * (\\host\share\…, \\?\UNC\…) or a device or pipe (\\.\…). Opening a share
+ * connects to that host over SMB and signs in as the user, handing whoever
+ * runs it the user's NTLM hash; a document can ask the model to "pack
+ * \\host\share\notes.md". A path the user types on the CLI is theirs to name.
+ */
+export function remotePathReason(path, platform = process.platform) {
+    if (platform !== "win32")
+        return undefined;
+    return /^[\\/]{2}/.test(path.trim()) ? "a network share or device path (\\\\host\\share, \\\\.\\…): pack_context reads this computer's own files only" : undefined;
+}
 /** Why `path` looks like a secrets file, or undefined when it does not. */
 export function secretFileReason(path) {
     const name = basename(path);

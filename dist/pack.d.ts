@@ -105,6 +105,14 @@ export declare const PACK_LIMITS: {
     fileBytes: number;
     totalBytes: number;
 };
+/**
+ * Why the MCP server will not open `path` on Windows: a network share
+ * (\\host\share\…, \\?\UNC\…) or a device or pipe (\\.\…). Opening a share
+ * connects to that host over SMB and signs in as the user, handing whoever
+ * runs it the user's NTLM hash; a document can ask the model to "pack
+ * \\host\share\notes.md". A path the user types on the CLI is theirs to name.
+ */
+export declare function remotePathReason(path: string, platform?: NodeJS.Platform): string | undefined;
 /** Why `path` looks like a secrets file, or undefined when it does not. */
 export declare function secretFileReason(path: string): string | undefined;
 export interface ReadSourcesOptions {

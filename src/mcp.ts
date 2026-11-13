@@ -31,7 +31,7 @@ import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
 import { recordLedger } from "./ledger.js";
 import { renderSketchProfile, runSketchProfile } from "./sketch.js";
-import { packContextSemantic, readSourcesAsync, renderPack } from "./pack.js";
+import { packContextSemantic, readSourcesAsync, remotePathReason, renderPack } from "./pack.js";
 import { SERVER_INSTRUCTIONS } from "./rules.js";
 import { compactOutline, compactProfile, compactSketch, resultMode, type CompactResult } from "./compact.js";
 import { HANDOFF_LIMITS, handoffDir, listHandoffs, maskSecrets, readHandoff, renderMath, saveHandoff, tildify, tildifyAll, validateHandoff } from "./handoff.js";
@@ -296,7 +296,11 @@ server.tool(
       }
       // Asynchronous extraction under one time budget: a slow or hostile PDF
       // must not block the server (stdio serves every chat in Claude Desktop).
-      const { sources, skipped } = paths?.length ? await readSourcesAsync(paths) : { sources: [], skipped: [] as string[] };
+      // A path from the model is not opened when it names another machine (remotePathReason).
+      const remote = (paths ?? []).flatMap((p) => { const why = remotePathReason(p); return why ? [`${p}: refused, ${why}`] : []; });
+      const local = (paths ?? []).filter((p) => !remotePathReason(p));
+      const { sources, skipped } = local.length ? await readSourcesAsync(local) : { sources: [], skipped: [] as string[] };
+      skipped.unshift(...remote);
       if (http && files?.length) {
         const got = await sourcesFromOpenAiFiles(files);
         sources.push(...got.sources);
