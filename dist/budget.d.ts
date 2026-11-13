@@ -73,8 +73,9 @@ export declare function periodEnd(period: Period, now?: number): number;
  * way; `z` those priced past the day their model's price changed (index,
  * model, the day). `d` is requestCost's: each request's tier, fast mode,
  * US-only and web searches, and the output price in `r` is its own. `p`
- * fingerprints the organization's rates `d` was priced at (orgrates.ts;
- * absent at list prices): an entry priced under other rates is read again.
+ * fingerprints the price table `d` was priced by (pricing.ts priceTableKey)
+ * and the organization's rates (orgrates.ts), when set: an entry priced
+ * under another table or other rates is read again.
  */
 export interface FileEntry {
     t: Tool;

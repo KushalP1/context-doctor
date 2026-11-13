@@ -33,7 +33,7 @@ import { claudeCodePresent, claudeDir } from "./claudedir.js";
 import { claudeFileUsage, codexSessionsRoot, rolloutFiles, SUBAGENT_LOOKBACK_MS, USAGE_ROWS } from "./limits.js";
 import { subagentFiles } from "./subagents.js";
 import { codexFileSpend, codexFiles, geminiFileSpend, geminiFiles, TOOL_NAME, type Tool } from "./spend.js";
-import { isUnbilledModel, priceChangedText, requestCost, type RecordedUsage } from "./pricing.js";
+import { isUnbilledModel, priceChangedText, priceTableKey, requestCost, type RecordedUsage } from "./pricing.js";
 import { orgRates, orgRatesLine } from "./orgrates.js";
 import { anchorOf, rowsOf } from "./scan.js";
 import { realModel } from "./tokens.js";
@@ -195,8 +195,9 @@ export function periodEnd(period: Period, now = Date.now()): number {
  * way; `z` those priced past the day their model's price changed (index,
  * model, the day). `d` is requestCost's: each request's tier, fast mode,
  * US-only and web searches, and the output price in `r` is its own. `p`
- * fingerprints the organization's rates `d` was priced at (orgrates.ts;
- * absent at list prices): an entry priced under other rates is read again.
+ * fingerprints the price table `d` was priced by (pricing.ts priceTableKey)
+ * and the organization's rates (orgrates.ts), when set: an entry priced
+ * under another table or other rates is read again.
  */
 export interface FileEntry { t: Tool; s: number; m: number; i: number; k: string[]; d: number[]; o?: number; a?: string; r?: Array<[string, number, number, number]>; x?: Array<[number, string]>; y?: Array<[number, string]>; z?: Array<[number, string, string]>; p?: string }
 
@@ -482,9 +483,11 @@ export function wellFormed(e: FileEntry | undefined): e is FileEntry {
 export function refreshEntry(tool: Tool, file: string, prev: FileEntry | undefined, since: number, direct = false, own?: string): { e: FileEntry; read: number } | undefined {
   let s;
   try { s = statSync(file); } catch { return undefined; }
-  // An entry not in the shape this version writes (edited, or another version's), or priced at other rates, is read again.
+  // An entry not in the shape this version writes (edited, or another version's), or priced at other
+  // rates (the organization's, or another price table: an upgrade that corrected a price), is read again.
   const org = orgRates()?.key;
-  const e = wellFormed(prev) && prev.p === org ? prev : undefined;
+  const p = org ? `${priceTableKey()} ${org}` : priceTableKey();
+  const e = wellFormed(prev) && prev.p === p ? prev : undefined;
   if (e && e.t === tool && e.s === s.size && e.m === s.mtimeMs && e.i === s.ino) return { e, read: -1 };
   try {
     // Claude Code appends: a transcript that only grew is read from where the last read stopped.
@@ -497,10 +500,10 @@ export function refreshEntry(tool: Tool, file: string, prev: FileEntry | undefin
       const fd = openSync(file, "r");
       let a: string;
       try { a = anchorOf(fd, 0); } finally { closeSync(fd); }
-      const blank: FileEntry = { t: tool, s: 0, m: 0, i: s.ino, k: [], d: [], o: 0, a, r: [], ...(org ? { p: org } : {}) };
+      const blank: FileEntry = { t: tool, s: 0, m: 0, i: s.ino, k: [], d: [], o: 0, a, r: [], p };
       if (readAppended(blank, file, since, own)) return { e: { ...blank, s: s.size, m: s.mtimeMs }, read: s.size };
     }
-    return { e: { t: tool, s: s.size, m: s.mtimeMs, i: s.ino, ...readFile(tool, file, since, s.size), ...(org ? { p: org } : {}) }, read: s.size };
+    return { e: { t: tool, s: s.size, m: s.mtimeMs, i: s.ino, ...readFile(tool, file, since, s.size), p }, read: s.size };
   } catch {
     return undefined;
   }

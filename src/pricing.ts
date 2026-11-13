@@ -16,6 +16,7 @@
  * provider prices only per minute, per image or not at all has no row.
  */
 
+import { createHash } from "node:crypto";
 import { orgApplies, orgRates, orgRowFor } from "./orgrates.js";
 
 export interface ModelPricing {
@@ -275,6 +276,23 @@ const PRICING: Array<[pattern: RegExp, pricing: ModelPricing, billing?: RowBilli
   [/gemini.*flash/i, rate(0.1, 0.4, 0.025), FALLBACK],
   [/gemini.*pro/i, rate(1.25, 5, 0.31), FALLBACK],
 ];
+
+let tableKey: string | undefined;
+
+/**
+ * A fingerprint of this table and its billing constants. Dollars a ledger
+ * keeps per request (the budget's, a session's price) were priced by the
+ * table of the context-doctor that read them: under another table (an
+ * upgrade that corrected a price, as 0.46 did Fable 5.2's) they are stale
+ * and read again, not carried to the period's end.
+ */
+export function priceTableKey(): string {
+  tableKey ??= createHash("sha1")
+    .update(JSON.stringify([PRICING.map(([re, p, b]) => [re.source, re.flags, p, b ?? null]), CACHE_WRITE_5M, CACHE_WRITE_1H, CACHE_WRITE_OPENAI_30M, CACHE_WRITE_OPENAI_12H, US_ONLY_MULTIPLIER, WEB_SEARCH_USD]))
+    .digest("hex")
+    .slice(0, 12);
+  return tableKey;
+}
 
 function row(model?: string): (typeof PRICING)[number] | undefined {
   if (!model) return undefined;

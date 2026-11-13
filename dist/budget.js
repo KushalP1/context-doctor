@@ -32,7 +32,7 @@ import { claudeCodePresent, claudeDir } from "./claudedir.js";
 import { claudeFileUsage, codexSessionsRoot, rolloutFiles, SUBAGENT_LOOKBACK_MS, USAGE_ROWS } from "./limits.js";
 import { subagentFiles } from "./subagents.js";
 import { codexFileSpend, codexFiles, geminiFileSpend, geminiFiles, TOOL_NAME } from "./spend.js";
-import { isUnbilledModel, priceChangedText, requestCost } from "./pricing.js";
+import { isUnbilledModel, priceChangedText, priceTableKey, requestCost } from "./pricing.js";
 import { orgRates, orgRatesLine } from "./orgrates.js";
 import { anchorOf, rowsOf } from "./scan.js";
 import { realModel } from "./tokens.js";
@@ -495,9 +495,11 @@ export function refreshEntry(tool, file, prev, since, direct = false, own) {
     catch {
         return undefined;
     }
-    // An entry not in the shape this version writes (edited, or another version's), or priced at other rates, is read again.
+    // An entry not in the shape this version writes (edited, or another version's), or priced at other
+    // rates (the organization's, or another price table: an upgrade that corrected a price), is read again.
     const org = orgRates()?.key;
-    const e = wellFormed(prev) && prev.p === org ? prev : undefined;
+    const p = org ? `${priceTableKey()} ${org}` : priceTableKey();
+    const e = wellFormed(prev) && prev.p === p ? prev : undefined;
     if (e && e.t === tool && e.s === s.size && e.m === s.mtimeMs && e.i === s.ino)
         return { e, read: -1 };
     try {
@@ -517,11 +519,11 @@ export function refreshEntry(tool, file, prev, since, direct = false, own) {
             finally {
                 closeSync(fd);
             }
-            const blank = { t: tool, s: 0, m: 0, i: s.ino, k: [], d: [], o: 0, a, r: [], ...(org ? { p: org } : {}) };
+            const blank = { t: tool, s: 0, m: 0, i: s.ino, k: [], d: [], o: 0, a, r: [], p };
             if (readAppended(blank, file, since, own))
                 return { e: { ...blank, s: s.size, m: s.mtimeMs }, read: s.size };
         }
-        return { e: { t: tool, s: s.size, m: s.mtimeMs, i: s.ino, ...readFile(tool, file, since, s.size), ...(org ? { p: org } : {}) }, read: s.size };
+        return { e: { t: tool, s: s.size, m: s.mtimeMs, i: s.ino, ...readFile(tool, file, since, s.size), p }, read: s.size };
     }
     catch {
         return undefined;

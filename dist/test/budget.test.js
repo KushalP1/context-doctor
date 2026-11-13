@@ -345,6 +345,26 @@ test("a ledger entry in a shape this version does not write is read again, not t
         assert.ok(Array.isArray(JSON.parse(readFileSync(budgetStatePath(), "utf8")).files[transcript].k), "written back whole");
     });
 });
+test("dollars an older price table kept are read again, not carried to the period's end (0.45's Fable 5.2 after an upgrade)", async () => {
+    await inLedgerSandbox((home, transcript) => {
+        writeFileSync(transcript, [...reply(NOW - 2 * HOUR), ...reply(NOW - HOUR)].join("\n") + "\n");
+        assert.ok(Math.abs(periodSpend("day", NOW, home).usd - 0.4) < 1e-9);
+        // The ledger as an older context-doctor left it: the same file, its requests at that version's prices, no table fingerprint.
+        const st = JSON.parse(readFileSync(budgetStatePath(), "utf8"));
+        const e = st.files[transcript];
+        e.d = e.d.map(() => 1);
+        delete e.p;
+        writeFileSync(budgetStatePath(), JSON.stringify(st));
+        assert.ok(Math.abs(periodSpend("day", NOW, home).usd - 0.4) < 1e-9, "priced by this table");
+        // An append after it: the old rows are not kept at the old prices either.
+        const again = JSON.parse(readFileSync(budgetStatePath(), "utf8"));
+        again.files[transcript].d = again.files[transcript].d.map(() => 1);
+        again.files[transcript].p = "0123456789ab";
+        writeFileSync(budgetStatePath(), JSON.stringify(again));
+        appendFileSync(transcript, reply(NOW - HOUR / 2).join("\n") + "\n");
+        assert.ok(Math.abs(periodSpend("day", NOW, home).usd - 0.6) < 1e-9);
+    });
+});
 test("the status line keeps its own cost without a budget, and shows the budget's part in its place with one", () => {
     const input = { model: { id: "claude-sonnet-5" }, context_window: { context_window_size: 200_000, current_usage: { input_tokens: 50_000 } }, cost: { total_cost_usd: 1.5 } };
     assert.match(renderStatusLine(input) ?? "", /· \$1\.50$/);

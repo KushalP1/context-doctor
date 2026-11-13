@@ -43,6 +43,14 @@ export declare const CACHE_WRITE_1H = 2;
  */
 export declare const CACHE_WRITE_OPENAI_30M = 1.25;
 export declare const CACHE_WRITE_OPENAI_12H = 2.5;
+/**
+ * A fingerprint of this table and its billing constants. Dollars a ledger
+ * keeps per request (the budget's, a session's price) were priced by the
+ * table of the context-doctor that read them: under another table (an
+ * upgrade that corrected a price, as 0.46 did Fable 5.2's) they are stale
+ * and read again, not carried to the period's end.
+ */
+export declare function priceTableKey(): string;
 /** A model's list row, as the page lists it today (no tier, mode or date applied). */
 export declare function pricingFor(model?: string): ModelPricing | undefined;
 /**
