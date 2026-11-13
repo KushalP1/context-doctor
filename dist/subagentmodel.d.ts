@@ -31,6 +31,7 @@
  * Requests on a model no pricier than the candidate stay as billed.
  */
 import { type Extractor } from "./scan.js";
+import { type ModelPricing, type RecordedUsage } from "./pricing.js";
 import { SUBAGENT_CANDIDATE, SUBAGENT_CANDIDATE_NAME } from "./subagentpay.js";
 export { SUBAGENT_CANDIDATE, SUBAGENT_CANDIDATE_NAME };
 /** The environment variable the lever writes. */
@@ -114,6 +115,17 @@ export interface SubagentModelOptions {
 }
 /** The agent type Claude Code recorded beside a subagent's transcript ("unknown" for an older one without it). */
 export declare function agentTypeOf(transcript: string): string;
+/**
+ * A request at the baseline mix: prices are linear in each rate, so it costs
+ * the mix of what each model would bill it, each priced by its whole card (an
+ * organization's row keeps its own cache-write rate, and its multiplier
+ * scales the web searches as requestCost does). A mix of one model is
+ * exactly requestCost.
+ */
+export declare function atBaseline(base: ModelPricing, u: RecordedUsage, at: number, mix?: Record<string, number>): {
+    totalUsd: number;
+    rates: ModelPricing;
+};
 /**
  * Replay every subagent request in [since, until): as billed, and with the
  * requests CLAUDE_CODE_SUBAGENT_MODEL would move at the candidate model.

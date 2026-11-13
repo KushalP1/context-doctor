@@ -22,6 +22,7 @@ import { renderSubagents, subagentReport } from "../subagents.js";
 import { subagentPayback } from "../subagentpay.js";
 import { clearScanMemo } from "../scan.js";
 import { diagnosedMisses } from "../missledger.js";
+import { atBaseline } from "../subagentmodel.js";
 import { withSandboxHome } from "./sandbox.js";
 const near = (a, b, what) => assert.ok(Math.abs(a - b) < 1e-9, `${what}: ${a} vs ${b}`);
 const AT = Date.UTC(2026, 10, 11, 12);
@@ -278,5 +279,21 @@ test("cache-misses' diagnosed misses at the rates the rest of its report prices 
     }
     finally {
         rmSync(dir, { recursive: true, force: true });
+    }
+});
+test("subagent-model's baseline arm bills as requestCost does: the organization's write rate and its multiplier on web searches", async () => {
+    // Writes at both lifetimes and two web searches, on Opus 5.5.
+    const u = { input_tokens: 1_000, cache_read_input_tokens: 50_000, cache_creation_input_tokens: 20_000, cache_creation: { ephemeral_5m_input_tokens: 5_000, ephemeral_1h_input_tokens: 15_000 }, output_tokens: 2_000, server_tool_use: { web_search_requests: 2 } };
+    const row = { overrides: { "claude-opus-5-5": { input: 3, output: 15, cacheRead: 0.1, cacheWrite: 4 } } };
+    const cases = [["list", undefined], ["multiplier", { multiplier: 0.5 }], ["row", row], ["row and multiplier", { ...row, multiplier: 0.8 }]];
+    for (const [what, rates] of cases) {
+        await withManaged(rates, () => {
+            const base = { inputPerM: 1, outputPerM: 1, cacheReadPerM: 1 };
+            // A mix of one model is that model's bill.
+            near(atBaseline(base, u, AT, { "claude-opus-5-5": 1 }).totalUsd, requestCost("claude-opus-5-5", u, AT).totalUsd, what);
+            // A mix is the mix of the bills.
+            const mixed = 0.25 * requestCost("claude-opus-5-5", u, AT).totalUsd + 0.75 * requestCost("claude-sonnet-5-5", u, AT).totalUsd;
+            near(atBaseline(base, u, AT, { "claude-opus-5-5": 1, "claude-sonnet-5-5": 3 }).totalUsd, mixed, `${what}, mixed`);
+        });
     }
 });

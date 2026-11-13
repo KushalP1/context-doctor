@@ -40,6 +40,7 @@ import { claudeDir } from "./claudedir.js";
 import { subagentTranscripts } from "./cachettl.js";
 import { workflowRunOf } from "./subagents.js";
 import { managedDir } from "./effective.js";
+import { orgRates } from "./orgrates.js";
 import { SUBAGENT_CANDIDATE, SUBAGENT_CANDIDATE_NAME } from "./subagentpay.js";
 export { SUBAGENT_CANDIDATE, SUBAGENT_CANDIDATE_NAME };
 /** The environment variable the lever writes. */
@@ -251,11 +252,23 @@ function blend(mix, u, at) {
     const rate = (k) => parts.reduce((s, [p, w]) => s + (p[k] * w) / total, 0);
     return { inputPerM: rate("inputPerM"), outputPerM: rate("outputPerM"), cacheReadPerM: rate("cacheReadPerM") };
 }
-/** A request at the baseline mix (prices are linear in each rate: the blend of its costs), web searches as any Claude model bills them. */
-function atBaseline(base, u, at, mix) {
-    const rates = (mix && blend(mix, u, at)) || base;
+/**
+ * A request at the baseline mix: prices are linear in each rate, so it costs
+ * the mix of what each model would bill it, each priced by its whole card (an
+ * organization's row keeps its own cache-write rate, and its multiplier
+ * scales the web searches as requestCost does). A mix of one model is
+ * exactly requestCost.
+ */
+export function atBaseline(base, u, at, mix) {
     const searches = Number(u?.server_tool_use?.web_search_requests) > 0 ? Number(u.server_tool_use.web_search_requests) : 0;
-    return { totalUsd: usageCost(u, rates).totalUsd + searches * WEB_SEARCH_USD, rates };
+    const parts = Object.entries(mix ?? {}).flatMap(([m, w]) => { const c = w > 0 ? rateCard(m, u, at) : undefined; return c ? [{ c, w }] : []; });
+    const total = parts.reduce((n, p) => n + p.w, 0);
+    if (total > 0) {
+        const prompt = promptTokens(u);
+        const usd = parts.reduce((n, { c, w }) => n + (w / total) * (usageCost(u, ratesAt(c, prompt)).totalUsd + (c.webSearch ? searches * WEB_SEARCH_USD * (c.scale ?? 1) : 0)), 0);
+        return { totalUsd: usd, rates: blend(mix, u, at) ?? base };
+    }
+    return { totalUsd: usageCost(u, base).totalUsd + searches * WEB_SEARCH_USD * (orgRates()?.multiplier ?? 1), rates: base };
 }
 const cheaper = (a, b) => a.inputPerM < b.inputPerM || (a.inputPerM === b.inputPerM && a.outputPerM < b.outputPerM);
 /**
