@@ -471,8 +471,9 @@ export function plant(fault, src = REPO) {
 
 // -- The command line ----------------------------------------------------------------------------
 
-function report(label, r) {
-  const gh = !!process.env.GITHUB_ACTIONS;
+/** `planted`: a self-test's fault run, meant to be red: its failed checks are no Actions annotations. */
+function report(label, r, planted = false) {
+  const gh = !!process.env.GITHUB_ACTIONS && !planted;
   console.log(`\n${label}: Claude Code ${r.version || "(version unknown)"}`);
   for (const c of r.checks) {
     console.log(`${c.ok ? "✓" : c.soft ? "⚠" : "✗"} ${c.name}${c.detail && (!c.ok || process.argv.includes("--verbose")) ? ": " + c.detail : ""}`);
@@ -482,7 +483,8 @@ function report(label, r) {
   console.log(failed ? `RED: ${failed} of ${r.checks.length} checks failed` : `GREEN: ${r.checks.filter((c) => c.ok).length} of ${r.checks.length} checks passed${r.checks.some((c) => !c.ok) ? " (warnings above)" : ""}`);
   if (process.env.GITHUB_STEP_SUMMARY) {
     try {
-      appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### ${label}: Claude Code ${r.version} ${failed ? "RED" : "GREEN"}\n\n${r.checks.map((c) => `- ${c.ok ? "✅" : c.soft ? "⚠️" : "❌"} ${c.name}${c.detail && !c.ok ? `: ${c.detail}` : ""}`).join("\n")}\n\n`);
+      const verdict = planted ? (failed ? "RED, as it must be" : "GREEN: the fault was NOT caught") : failed ? "RED" : "GREEN";
+      appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### ${label}: Claude Code ${r.version} ${verdict}\n\n${r.checks.map((c) => `- ${c.ok ? "✅" : c.soft ? "⚠️" : "❌"} ${c.name}${c.detail && !c.ok ? `: ${c.detail}` : ""}`).join("\n")}\n\n`);
     } catch { /* the summary is a nicety */ }
   }
 }
@@ -500,9 +502,9 @@ async function main(argv) {
   const verbose = argv.includes("--verbose"), keep = argv.includes("--keep");
   const fault = opt("--plant");
   if (fault && !FAULTS[fault]) { console.error(`canary: no such fault ${fault} (one of ${Object.keys(FAULTS).join(", ")})`); return 2; }
-  const one = async (label, dir) => {
+  const one = async (label, dir, planted = false) => {
     const r = await canary({ claude, pluginDir: dir, verbose, keep });
-    report(label, r);
+    report(label, r, planted && argv.includes("--self-test"));
     if (keep) console.log(`(kept: ${r.root})`);
     return r.ok;
   };
@@ -520,7 +522,7 @@ async function main(argv) {
     for (const [name, f] of Object.entries(FAULTS)) {
       const dir = plant(name, pluginDir);
       try {
-        if (await one(`planted fault ${name} (${f.what})`, dir)) missed.push(name);
+        if (await one(`planted fault ${name} (${f.what})`, dir, true)) missed.push(name);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
