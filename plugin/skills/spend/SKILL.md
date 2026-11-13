@@ -9,7 +9,7 @@ Run this and show the user its output as it is (it is already formatted), then a
 node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" spend
 ```
 
-Pass `--days <n>` if the user asked about a different period. Prices are list prices; Cursor's figure is an estimate (its history has no cache split) and replies on Cursor's Auto are counted, not priced. Do not round the numbers up or restate them as an invoice. If subagents are a large share, offer `/context-doctor:fix`, which prices running them on a cheaper model.
+Pass `--days <n>` if the user asked about a different period. Prices are list prices; Cursor's figure is an estimate (its history has no cache split) and replies on Cursor's Auto are counted, not priced. Do not round the numbers up or restate them as an invoice. If subagents are a large share, offer `/context-doctor:fix`, which prices running them on a cheaper model. A "Not in it" line about subagent progress summaries is an estimate outside the total (no transcript records them); `/context-doctor:fix` offers turning them off.
 
 To set a budget, only with an amount the user gave:
 
