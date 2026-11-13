@@ -263,7 +263,10 @@ export function restartService(home = homedir(), exec = tryRun) {
 export function startDetached(args, log) {
     mkdirSync(dirname(log), { recursive: true });
     const out = openSync(log, "a");
-    const child = spawn(args[0], args.slice(1), { detached: true, stdio: ["ignore", out, out], windowsHide: true });
+    // Not the caller's folder: the every-prompt hook restarts the proxy from
+    // the project it runs in, and on Windows a process standing in a folder
+    // keeps it from being renamed or deleted for as long as the proxy lives.
+    const child = spawn(args[0], args.slice(1), { cwd: toolCwd(), detached: true, stdio: ["ignore", out, out], windowsHide: true });
     child.unref();
 }
 export async function health(port, timeoutMs = 800) {

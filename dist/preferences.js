@@ -9,6 +9,7 @@
  * edited, so a long chat continues in a new one from a short brief.
  */
 import { spawnSync } from "node:child_process";
+import { toolCwd } from "./toolcwd.js";
 export const CHAT_PREFERENCES = [
     "Context hygiene: summarize anything long I paste into the points you will use; refer to it by name, never re-quote it,",
     "never inline base64. When I ask about tokens, limits, cost or speed, and once past ~30 turns: if profile_context exists,",
@@ -27,7 +28,7 @@ export function copyToClipboard(text, platform = process.platform) {
         : platform === "win32" ? [["clip", []]]
             : [["wl-copy", []], ["xclip", ["-selection", "clipboard"]], ["xsel", ["--clipboard", "--input"]]];
     for (const [cmd, args] of candidates) {
-        const r = spawnSync(cmd, args, { input: text, stdio: ["pipe", "ignore", "ignore"] });
+        const r = spawnSync(cmd, args, { cwd: toolCwd(), input: text, stdio: ["pipe", "ignore", "ignore"] });
         if (!r.error && r.status === 0)
             return true;
     }

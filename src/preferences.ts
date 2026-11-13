@@ -10,6 +10,7 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { toolCwd } from "./toolcwd.js";
 
 export const CHAT_PREFERENCES = [
   "Context hygiene: summarize anything long I paste into the points you will use; refer to it by name, never re-quote it,",
@@ -32,7 +33,7 @@ export function copyToClipboard(text: string, platform: NodeJS.Platform = proces
     : platform === "win32" ? [["clip", []]]
     : [["wl-copy", []], ["xclip", ["-selection", "clipboard"]], ["xsel", ["--clipboard", "--input"]]];
   for (const [cmd, args] of candidates) {
-    const r = spawnSync(cmd, args, { input: text, stdio: ["pipe", "ignore", "ignore"] });
+    const r = spawnSync(cmd, args, { cwd: toolCwd(), input: text, stdio: ["pipe", "ignore", "ignore"] });
     if (!r.error && r.status === 0) return true;
   }
   return false;

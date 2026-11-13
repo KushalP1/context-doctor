@@ -15,11 +15,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { platform, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sandboxEnv } from "./sandbox.js";
+import { startDetached } from "../autopilot.js";
+import { copyToClipboard } from "../preferences.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
 const skip = platform() === "win32" && "a stand-in on PATH must be an executable on Windows";
@@ -79,4 +81,29 @@ test("ci runs git from the temp folder, with the repository named by -C", { skip
   const seen = cwds(log);
   assert.ok(seen.length > 0);
   assert.deepEqual(seen.filter((c) => c.startsWith(dir)), [], `run inside the repository: ${seen.join(", ")}`);
+});
+
+test("the clipboard tool runs from the temp folder (handoff --copy, instructions --copy, --share --copy)", { skip }, () => {
+  const { bin, log } = standIns();
+  for (const name of ["wl-copy", "pbcopy"]) {
+    writeFileSync(join(bin, name), `#!/bin/sh\npwd -P >> "${log}"\ncat > /dev/null\n`);
+    chmodSync(join(bin, name), 0o755);
+  }
+  const saved = process.env.PATH;
+  process.env.PATH = `${bin}${delimiter}${saved ?? ""}`;
+  try {
+    assert.equal(copyToClipboard("hello", platform() === "darwin" ? "darwin" : "linux"), true);
+  } finally {
+    process.env.PATH = saved;
+  }
+  assert.deepEqual(cwds(log), [realpathSync(tmpdir())]);
+});
+
+test("autopilot's detached proxy does not stand in the folder it was started from (Windows keeps such a folder locked)", { skip }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cd-toolcwd-detached-"));
+  const out = join(dir, "cwd.txt");
+  startDetached(["/bin/sh", "-c", `pwd -P > "${out}.tmp" && mv "${out}.tmp" "${out}"`], join(dir, "proxy.log"));
+  for (let i = 0; i < 100 && !existsSync(out); i++) await new Promise((r) => setTimeout(r, 50));
+  assert.equal(readFileSync(out, "utf8").trim(), realpathSync(tmpdir()));
+  assert.notEqual(readFileSync(out, "utf8").trim(), realpathSync(process.cwd()));
 });
