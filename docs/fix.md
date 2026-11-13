@@ -27,6 +27,7 @@ Every replay prices a request as `spend` does ([what is billed](spend.md)): its 
 | `subagent-model`: subagents on Sonnet 5.5 when they ran on a pricier model ([below](#the-subagents-model-subagent-model)) | `env.CLAUDE_CODE_SUBAGENT_MODEL = "claude-sonnet-5-5"` | **it changes the model your subagents run on**; not measured here, `context-doctor ab` can. Applied only when named: `--apply all` leaves it out |
 | `tool-output`: long Bash output to a file sooner ([below](#long-bash-output-tool-output)) | `bashOutputMaxChars` (8,000-20,000, from your history) | long output goes to a file the model can still open; it sees the first 2,000 characters and the path. In `--apply all`: nothing is lost, only moved |
 | `codex-compact`: Codex compacts earlier, at 150k tokens ([below](#codexs-auto-compact-limit-codex-compact)) | `model_auto_compact_token_limit` in `~/.codex/config.toml` | as `compact-window`: each compaction keeps a summary, not the full history |
+| `progress-summaries`: Claude Code's subagent progress summaries off ([below](#subagent-progress-summaries-progress-summaries)) | `env.CLAUDE_CODE_DISABLE_AGENT_PROGRESS_SUMMARIES = "1"` (Claude Code 2.1.318+) | none to the work: a summary never enters the subagent's context; the 3-5 word progress line on a running subagent's task row goes. In `--apply all` |
 
 The `/compact` offer at cold returns is listed under "Advice you act on": it is the every-prompt hook's job, and `fix` says whether the hook is there to make it.
 
@@ -43,6 +44,7 @@ The `/compact` offer at cold returns is listed under "Advice you act on": it is 
 - the subagents' model: the subagent requests it moved, priced at the models they ran on before (the mix measured when it was set, by tokens, those already on Sonnet or cheaper included) against as billed. An estimate: the same token counts either way;
 - long Bash output: the results Claude Code moved to a file since that the cap before (30,000 characters, or yours) left inline, priced at the requests that re-read them no more. An estimate: a file the model opened again is not counted;
 - Codex's limit: each Codex compaction since that came before Codex's own trigger, priced as the context it took off every later request until the session would have reached that trigger, less the compaction's request and a 5k-token summary.
+- the progress summaries: the summaries the timer would have sent since for background subagents on Claude Code 2.1.318+ (an older one ignores the variable), replayed and priced as notes, as `spend` estimates them; the whole-context figure beside it.
 
 **On the author's machine** (last 30 days, read-only, 2026-10-28): $2,781 of input; 1. compact earlier at 400k, $1,418 (51%); 2. the main conversation's cache at 1 hour, $197 (7%); autopilot is on but cannot reach the desktop app where all 34 sessions ran; advice: `/compact` at cold returns, $640 over 197 returns. The first had its own command since 0.25 and was still not applied: the reason `fix` exists. After the QA fixes `fix` takes 19 s there (was 35 s): with autopilot already on it skips autopilot's replay, with a window set it skips the compaction replay, and it reads every transcript for unused servers only when the project has servers or skills to prune.
 
@@ -107,6 +109,26 @@ Codex re-sends the whole conversation on every request too, and compacts it only
 **On the author's machine** (2026-11-04, read-only): 4 rollouts, 6 requests and $0.05 of Codex input in the last 30 days, no compaction: nothing to save, so `fix` does not offer it there. Over the last year (123 rollouts, $7.63): 150k would have saved $1.24 (16%), 4 compactions instead of 1. At the list prices read 2026-11-06 (gpt-5.5 $5 in, $0.50 cached, until then priced as gpt-5 at $1.25): $22.90 of input, 150k $4.24 (19%). The tests run the replay on synthetic rollouts.
 
 **Gemini CLI.** Its documented setting is `model.compressionThreshold` in `settings.json` (the share of the context window at which it compresses the history; default `0.5`, restart required; [configuration reference](https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/configuration.md)). Not measured and not offered: there is no Gemini CLI history on the author's machine to replay.
+
+## Subagent progress summaries: `progress-summaries`
+
+While a background subagent runs, Claude Code asks a model every 30 seconds for the 3-5 word line on its task row ("Running auth module tests"). That request is made with `skipTranscript`, so no report that reads transcripts saw it ([#86879](https://github.com/anthropics/claude-code/issues/86879): 22.7% of one subagent-heavy session's requests, 18% of its weighted tokens). Claude Code 2.1.318 added `CLAUDE_CODE_DISABLE_AGENT_PROGRESS_SUMMARIES`, documented in 2.1.323 ([CHANGELOG](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md)): set to `1`, it turns the summaries off "and the requests that write them".
+
+**What was verified, and how** (2026-11-13). The issue and its 15 comments (GitHub's API); the CHANGELOG; the 2.1.321 binary bundled with the Desktop app and the Desktop app's own bundle (5.11492), read with `strings`:
+- The variable is read as Claude Code's other booleans are (`1`, `true`, `yes`, `on`), when an agent's summaries would start ("No progress summaries for … is set") and at every tick. Passed on to the sessions Claude Code starts in the background only as `1`, so `fix` writes `1`. No settings key does the same.
+- Who gets them: an agent run in the background, when the host asked (the SDK's `agentProgressSummaries`; `CLAUDE_CODE_AGENT_PROGRESS_SUMMARIES` sets that for SDK hosts and can only turn it on), or in an interactive session (the terminal) with the fork gate open (on by default; `CLAUDE_CODE_FORK_SUBAGENT=0` closes it, and with it the `fork` agent type) or coordinator mode on. Forks started in the background always get them. Foreground agents only when the host asked; workflow agents never. The Desktop app runs Claude Code through the SDK and never sets the option: no summaries there.
+- How often: every 30 s from the agent's start; a tick sends nothing while the agent has fewer than 3 messages or none new since the last summary.
+- What each sends: either a one-turn fork of the agent's whole conversation on the agent's model, no cache write, all tools denied; or about 1,500 tokens of notes about its recent steps plus a short instruction, prompt caching off, low effort, on the agent's model (or Haiku, when served from an experiment). Which one is chosen per model on Anthropic's side. Anthropic said on 2026-11-09 that the summaries now consume "99% less".
+
+**How it is measured.** As `spend` estimates them ([spend](spend.md#one-bill-context-doctor-spend)): each background subagent's transcript of the period replayed through the timer, every summary priced at the agent's model as notes (the low figure, offered) and as the whole context (the high one, said beside it). The share is of the subagents' own bill.
+
+**Quality.** None to the work: the summary is a separate request whose answer never enters the subagent's context, so every other request is the same. What goes is the progress line on a running subagent's task row (the spinner text); the task row and the subagent's result stay. So `--apply all` applies it, as it does the cache lifetime.
+
+**When it is not offered.** Under $1 over the period, or when no background subagent ran where Claude Code writes summaries: `fix` then says where they ran ("your 160 background subagents ran in the Desktop app, where Claude Code writes no progress summaries: nothing to turn off").
+
+**Yours stays yours.** A value you set, in your `settings.json` or the environment Claude Code starts in, is never overwritten, `0` included: the plan names it (as applied when it turns them off). A project's, local or managed settings `env` that keeps them wins over the user's file, and the plan says so. An installed Claude Code older than 2.1.318 ignores the variable, and is named.
+
+**On the author's machine** (last 30 days, read-only, 2026-11-13): 170 subagents, 160 of them in the background, every one in the Desktop app: none summarized, nothing to turn off. The roadmap's $390-$1,040 assumed every subagent got them. Replayed as if they had run in a terminal: 5,525 summaries, **$74 as notes, $463 at the whole context**.
 
 ## The prompt cache's lifetime: `context-doctor cache-ttl`
 

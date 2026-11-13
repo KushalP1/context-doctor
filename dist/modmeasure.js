@@ -199,12 +199,13 @@ export function costGaps(lines) {
  * What a gap can come from, by its sign. Ours below Claude Code's: requests
  * the transcript keeps no usage for, which Claude Code's ledger holds as
  * billed and context-doctor estimates (a compaction's own request:
- * compactcost.ts), a model with no price, rates from MDM or server-managed
+ * compactcost.ts) or leaves out (subagent progress summaries:
+ * progresssummaries.ts), a model with no price, rates from MDM or server-managed
  * settings.
  * Ours above: a price in context-doctor's table, or contracted rates it
  * does not read.
  */
-const UNDER = "Claude Code's figure holds as billed what the transcript keeps no usage for and context-doctor only estimates (a compaction's own request: its thinking, its instruction); a model with no price, or contracted rates set by an MDM profile or server-managed settings (context-doctor reads modelPricing from the managed settings files only), show up here too";
+const UNDER = "Claude Code's figure holds as billed what the transcript keeps no usage for and context-doctor only estimates (a compaction's own request: its thinking, its instruction) or leaves out (a background subagent's progress summaries in a terminal session, which context-doctor spend estimates beside its total); a model with no price, or contracted rates set by an MDM profile or server-managed settings (context-doctor reads modelPricing from the managed settings files only), show up here too";
 const OVER = "A price in context-doctor's table that is off, or contracted rates set by an MDM profile or server-managed settings (context-doctor reads modelPricing from the managed settings files only), show up here";
 const pct = (x) => `${x >= 0 ? "+" : ""}${(x * 100).toFixed(Math.abs(x) < 0.1 ? 1 : 0)}%`;
 /**

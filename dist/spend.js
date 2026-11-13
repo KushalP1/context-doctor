@@ -29,6 +29,11 @@
  * (scan.ts), so a second run reads only what was appended since; Cursor's
  * replies are kept per chat until the chat changes.
  *
+ * Not in the total: Claude Code's subagent progress summaries, side requests
+ * no transcript records (progresssummaries.ts). They are estimated per
+ * background subagent and shown beside the total as a range, the two ways
+ * Anthropic may serve them (short notes, or the whole context).
+ *
  * `savings` bills a narrower slice of the same Claude Code requests: the main
  * conversation's input (cache writes and reads included, output not), in
  * sessions with 10+ requests. `spend` counts every request, its output and
@@ -38,7 +43,8 @@ import { basename, dirname, join } from "node:path";
 import { codexDir } from "./codexdir.js";
 import { homedir } from "node:os";
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
-import { claudeFileUsage, claudeUsageFiles, codexEventKey, codexSessionsRoot, rolloutFiles } from "./limits.js";
+import { claudeFileUsage, claudeUsageFiles, codexEventKey, codexSessionsRoot, rolloutFiles, USAGE_ROWS } from "./limits.js";
+import { estimateProgressSummaries, PROGRESS_ROWS, PROGRESS_SUMMARIES_ENV } from "./progresssummaries.js";
 import { listGeminiChats, readGeminiMessages } from "./gemini.js";
 import { cursorClaudeId, cursorUsage, SqliteUnavailableError } from "./cursor.js";
 import { addModifiers, isUnbilledModel, NO_MODIFIERS, openAIUsage, priceChangedText, requestCost } from "./pricing.js";
@@ -49,7 +55,7 @@ import { managedSourcesLine, orgRates, orgRatesLine, priceBasis } from "./orgrat
  * "At list prices" was true before those were priced; it no longer is.
  */
 const spendBasis = () => (orgRates() ? priceBasis() : "as billed at list rates");
-import { pick, rowsOf } from "./scan.js";
+import { pick, prescan, rowsOf } from "./scan.js";
 import { formatTokens } from "./tokens.js";
 import { withInvocation } from "./invocation.js";
 const DAY = 86_400_000;
@@ -607,6 +613,14 @@ export function summarizeSpend(items, days, since, until, skipped = []) {
         skipped,
     };
 }
+/** The subagent progress summaries Claude Code wrote in the window, for the report. */
+function claudeProgressSummaries(since, until, tops, o) {
+    if (o?.set && o.offSince === undefined)
+        return { set: o.set };
+    const files = claudeUsageFiles(since, tops).filter((f) => f.subagent && !f.run).map((f) => f.file);
+    const e = estimateProgressSummaries(files, { since, until, forkGateOff: o?.forkGateOff, offSince: o?.offSince });
+    return e.calls ? { agents: e.summarized, calls: e.calls, notesUsd: e.notesUsd, forkUsd: e.forkUsd } : undefined;
+}
 /**
  * The longest window: ten years, older than any history these tools keep.
  * Unbounded, `--days 10000000` listed every empty day of it (51 s, and
@@ -619,6 +633,9 @@ export function spendReport(days = 30, opts = {}) {
     const until = opts.now ?? Date.now();
     const since = until - days * DAY;
     const home = opts.home ?? homedir();
+    // A subagent's transcript read once for its usage and its timeline (the progress summaries).
+    if (opts.progress !== false)
+        prescan([{ paths: claudeUsageFiles(since, opts.claudePaths).filter((f) => f.subagent && !f.run).map((f) => f.file), extractors: [USAGE_ROWS, PROGRESS_ROWS] }]);
     const items = [...claudeSpend(since, until, opts.claudePaths, opts.onProgress), ...codexSpend(since, until, home), ...geminiSpend(since, until, home)];
     const skipped = [];
     try {
@@ -628,7 +645,9 @@ export function spendReport(days = 30, opts = {}) {
         if (e instanceof SqliteUnavailableError)
             skipped.push({ tool: "cursor", reason: "reading Cursor's history needs SQLite: Node 22.13+ or the sqlite3 command" });
     }
-    return summarizeSpend(items, days, since, until, skipped);
+    const report = summarizeSpend(items, days, since, until, skipped);
+    const progress = opts.progress === false ? undefined : claudeProgressSummaries(since, until, opts.claudePaths, opts.progress);
+    return progress ? { ...report, progressSummaries: progress } : report;
 }
 // ---------------------------------------------------------------------------
 // Rendering
@@ -709,6 +728,14 @@ export function renderSpend(r, top = 8) {
     const claude = r.tools.find((t) => t.tool === "claude");
     if (claude?.subagentUsd)
         lines.push(`  Claude Code subagents ${usd(claude.subagentUsd)} (${share(claude.subagentUsd, r.usd)}): context-doctor subagents says which paid off`);
+    // Side requests no transcript records: a range, outside the total.
+    const ps = r.progressSummaries;
+    if (ps && "calls" in ps) {
+        lines.push(`  Not in it: ~${ps.calls.toLocaleString("en-US")} subagent progress summaries (${ps.agents} background ${ps.agents === 1 ? "agent" : "agents"}), an estimate:`);
+        lines.push(`  ${usd(ps.notesUsd)} as notes, ${usd(ps.forkUsd)} at the whole context; no transcript records them`);
+    }
+    else if (ps)
+        lines.push(`  Subagent progress summaries: not estimated, ${PROGRESS_SUMMARIES_ENV} is set in ${ps.set}`);
     if (claude?.workflowUsd)
         lines.push(`  Claude Code workflow agents ${usd(claude.workflowUsd)} (${share(claude.workflowUsd, r.usd)}), in ${runsText(claude.workflowRuns ?? 0)}`);
     lines.push("  Biggest sessions:");
@@ -771,6 +798,9 @@ export function renderSpendShare(r) {
         lines.push(`Of it, ${usd(r.priceChanged.reduce((s, c) => s + c.usd, 0))} is on models priced past the day their price changed, an estimate.`);
     if (r.modifiers)
         lines.push(`Billed above list rates: ${modifiersText(r.modifiers)}.`);
+    const ps = r.progressSummaries;
+    if (ps && "calls" in ps)
+        lines.push(`Not in it: Claude Code's subagent progress summaries, which no transcript records: ${usd(ps.notesUsd)}-${usd(ps.forkUsd)}, an estimate.`);
     const parts = [["cache writes", r.parts.writeUsd], ["cache reads", r.parts.readUsd], ["output", r.parts.outputUsd], ["uncached input", r.parts.inputUsd], ["web searches", r.parts.webSearchUsd ?? 0]];
     const [bigPart, bigUsd] = parts.sort((a, b) => b[1] - a[1])[0];
     const busiest = [...r.daily].sort((a, b) => b.usd - a.usd)[0];

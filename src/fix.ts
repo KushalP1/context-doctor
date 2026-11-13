@@ -27,7 +27,10 @@
  *    ran on before against as billed (the same token counts: an estimate);
  *  - long Bash output: the results moved to a file that the cap before left
  *    inline, priced at the requests that re-read them no more (an estimate:
- *    a file the model opens again is not counted).
+ *    a file the model opens again is not counted);
+ *  - subagent progress summaries: the summaries Claude Code would have
+ *    written for the background subagents since (2.1.318+, which read the
+ *    variable), estimated as `spend` estimates them (progresssummaries.ts).
  *
  * The subagents' model is the one lever with a quality cost `fix` cannot
  * measure: it is offered with that said, applied only when named (never by
@@ -41,19 +44,20 @@ import { forEachLine, listSessions, isClaudeSession } from "./session.js";
 import { rateCard, ratesAt } from "./pricing.js";
 import { priceBasis } from "./orgrates.js";
 import { contextWindowFor, realModel } from "./tokens.js";
-import { adviseTtl, CACHE_TTL_SINCE, estimateCacheTtl, type CacheTtlReport, type CurrentTtl, type TtlKind } from "./cachettl.js";
+import { adviseTtl, CACHE_TTL_SINCE, estimateCacheTtl, subagentTranscripts, type CacheTtlReport, type CurrentTtl, type TtlKind } from "./cachettl.js";
 import { compareVersions, describeInstalls, type ClaudeCodeInstall } from "./modelswitch.js";
 import { ABSENT, getPath, parseSettingsText, readSettings, removeFile, sameJson, setJsonPath, SettingsError, settingsLockPath, withLock, withSettingsLock, writeAtomic } from "./settingsedit.js";
-import { compactWindowOverrides, processEnvWhere, settingsSources, shellSet, ttlOverrides } from "./effective.js";
+import { compactWindowOverrides, effectiveEnv, processEnvWhere, settingsSources, shellSet, ttlOverrides, underClaudeCode } from "./effective.js";
 import { tilde } from "./claudedir.js";
 import { applyPrune, undoPrune, type ProjectPlan } from "./prune.js";
 import { fallbackStateDir, readLedger } from "./ledger.js";
 import { claudeDir } from "./claudedir.js";
 import { movedFromNames, renderSubagentTypes, subagentModelSavedSince, SUBAGENT_CANDIDATE, SUBAGENT_CANDIDATE_NAME, SUBAGENT_MODEL_ENV, type SubagentModelReplay } from "./subagentmodel.js";
 import { BASH_OUTPUT_DEFAULT, BASH_OUTPUT_KEY, BASH_OUTPUT_SINCE, breakEven, renderToolOutputCaps, toolOutputSavedSince, type ToolOutputReplay } from "./tooloutput.js";
+import { disablesSummaries, estimateProgressSummaries, hostName, PROGRESS_SUMMARIES_ENV, PROGRESS_SUMMARIES_OFF, PROGRESS_SUMMARIES_SINCE, type ProgressSummaryEstimate } from "./progresssummaries.js";
 import { CODEX_COMPACT_KEY, CODEX_COMPACT_LIMIT, codexCompactOverrides, codexCompactSavedSince, codexConfigPath, renderCodexLimits, setTopLevelInt, topLevelValue, type CodexCompactReport } from "./codexcompact.js";
 
-export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model" | "tool-output" | "codex-compact";
+export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model" | "tool-output" | "codex-compact" | "progress-summaries";
 
 export interface Fix {
   id: FixId;
@@ -117,6 +121,10 @@ export interface FixInputs {
   claudeCodeInstalls?: ClaudeCodeInstall[];
   /** model_auto_compact_token_limit at the top of the user's config.toml, as written: never overwritten. */
   codexCompactSet?: { raw: string; where: string };
+  /** The subagents' progress summaries Claude Code wrote, estimated (progresssummaries.ts). */
+  progressSummaries?: ProgressSummaryEstimate;
+  /** CLAUDE_CODE_DISABLE_AGENT_PROGRESS_SUMMARIES where it is set (progressSummariesState): never overwritten. */
+  progressSummariesSet?: { value: string; where: string };
 }
 
 /**
@@ -127,7 +135,7 @@ export interface FixInputs {
  * the subagent variable ahead of agent definitions there). autoCompactWindow
  * is not in 2.1.62 and the changelog does not say when it came: not named.
  */
-const SINCE: Partial<Record<FixId, string>> = { "cache-ttl": CACHE_TTL_SINCE, "cache-ttl-subagents": CACHE_TTL_SINCE, "tool-output": BASH_OUTPUT_SINCE };
+const SINCE: Partial<Record<FixId, string>> = { "cache-ttl": CACHE_TTL_SINCE, "cache-ttl-subagents": CACHE_TTL_SINCE, "tool-output": BASH_OUTPUT_SINCE, "progress-summaries": PROGRESS_SUMMARIES_SINCE };
 
 /** Below this a priced fix is not worth a setting. */
 const MIN_USD = 1;
@@ -295,6 +303,30 @@ export function planFixes(i: FixInputs): Fix[] {
       detail: renderCodexLimits(cx, CODEX_COMPACT_LIMIT),
     });
   }
+  const ps = i.progressSummaries;
+  const psSet = i.progressSummariesSet;
+  if (psSet) {
+    const off = disablesSummaries(psSet.value);
+    const less = !off && ps && ps.notesUsd >= MIN_USD ? ` (turning them off would have saved about ${money(ps.notesUsd)})` : "";
+    fixes.push({ id: "progress-summaries", title: "Subagent progress summaries", basis: "set", quality: "", change: `env.${PROGRESS_SUMMARIES_ENV}`, state: off ? "applied" : "not-here", note: `${PROGRESS_SUMMARIES_ENV}=${psSet.value} in ${psSet.where}${off ? "" : `: left as you set it${less}`}`, value: psSet.value });
+  } else if (ps && ps.summarized > 0 && ps.notesUsd >= MIN_USD) {
+    const billed = i.subagentModel?.billedUsd ?? 0;
+    fixes.push({
+      id: "progress-summaries",
+      title: "Subagent progress summaries off",
+      savedUsd: ps.notesUsd,
+      savedShare: billed > 0 ? ps.notesUsd / billed : undefined,
+      shareOf: "of subagents",
+      basis: `${ps.calls.toLocaleString("en-US")} summaries for ${ps.summarized} background subagent${ps.summarized === 1 ? "" : "s"}, one each 30 s while one ran and its transcript changed; no transcript records them, so an estimate: ~1,850 tokens of notes each (what Anthropic serves since November 2026), ${money(ps.forkUsd)} if each sent the whole context, as before`,
+      quality: "none to the work: a summary never enters the subagent's context; you lose the 3-5 word progress line on a running subagent's task row",
+      change: `${where}: env.${PROGRESS_SUMMARIES_ENV} = "${PROGRESS_SUMMARIES_OFF}" (Claude Code ${PROGRESS_SUMMARIES_SINCE}+)`,
+      state: "available",
+      value: PROGRESS_SUMMARIES_OFF,
+    });
+  } else if (ps && ps.summarized === 0 && (ps.none.host ?? 0) > 0) {
+    const n = ps.none.host!;
+    fixes.push({ id: "progress-summaries", title: "Subagent progress summaries", basis: "", quality: "", change: "", state: "not-here", note: `your ${n} background subagent${n === 1 ? "" : "s"} ran in ${ps.hosts.map(hostName).join(" and ")}, where Claude Code writes no progress summaries: nothing to turn off` });
+  }
   for (const f of fixes) {
     const o = i.overrides?.[f.id];
     if (o?.length && f.state === "available") f.overriddenBy = o;
@@ -405,10 +437,14 @@ const KEY_PATH: Partial<Record<FixId, string[]>> = {
   "tool-search": ["env", "ENABLE_TOOL_SEARCH"],
   "subagent-model": ["env", SUBAGENT_MODEL_ENV],
   "tool-output": [BASH_OUTPUT_KEY],
+  "progress-summaries": ["env", PROGRESS_SUMMARIES_ENV],
 };
 
 /** Fixes that never overwrite a value already there: the user set it. */
-const YOURS = new Set<FixId>(["subagent-model", "tool-output"]);
+const YOURS = new Set<FixId>(["subagent-model", "tool-output", "progress-summaries"]);
+
+/** The environment variable a settings fix writes, when the shell's own value is the user's too. */
+const SHELL_ENV: Partial<Record<FixId, string>> = { "subagent-model": SUBAGENT_MODEL_ENV, "progress-summaries": PROGRESS_SUMMARIES_ENV };
 
 /** Fixes with a quality cost not measured here: applied only when named, never by `--apply all`. */
 const NAMED_ONLY = new Set<FixId>(["subagent-model"]);
@@ -432,6 +468,10 @@ export function fixOverrides(id: FixId, deps: { home?: string; cwd?: string; env
     const out: string[] = [];
     for (const s of sources) if (s.name !== "user" && s.settings.env?.[SUBAGENT_MODEL_ENV] !== undefined) out.push(`${SUBAGENT_MODEL_ENV}=${s.settings.env[SUBAGENT_MODEL_ENV]} in ${tilde(s.path)} env`);
     return out;
+  }
+  if (id === "progress-summaries") {
+    // A project's, local or managed env is applied over the user's: a value there that does not turn them off wins.
+    return sources.filter((s) => s.name !== "user" && s.settings.env?.[PROGRESS_SUMMARIES_ENV] !== undefined && s.settings.env[PROGRESS_SUMMARIES_ENV] !== null && !disablesSummaries(s.settings.env[PROGRESS_SUMMARIES_ENV])).map((s) => `${PROGRESS_SUMMARIES_ENV}=${s.settings.env[PROGRESS_SUMMARIES_ENV]} in ${tilde(s.path)} env`);
   }
   if (id === "tool-output") {
     // Merged settings: a project's or managed value wins over the user's (BASH_MAX_OUTPUT_LENGTH does not: the setting replaces it).
@@ -548,8 +588,9 @@ export async function applyFix(fix: Fix, deps: FixDeps = {}, context: { oneHourS
       // The environment Claude Code starts in is the user's too: a value there is theirs (settings.json would override it).
       // Not a value Claude Code copied from a settings file into the session this runs in, nor fix's own left from before an undo.
       const env = deps.env ?? process.env;
-      const shell = fix.id === "subagent-model" && shellSet(SUBAGENT_MODEL_ENV, settingsSources({ home: deps.home, cwd: deps.cwd, env }), env, String(fix.value)) ? env[SUBAGENT_MODEL_ENV]! : undefined;
-      if (shell) return { ok: false, lines: [`✗ ${fix.id}: ${processEnvWhere(SUBAGENT_MODEL_ENV, shell, env)}, a value you set: left as it is. Nothing was changed.`] };
+      const name = SHELL_ENV[fix.id];
+      const shell = name && shellSet(name, settingsSources({ home: deps.home, cwd: deps.cwd, env }), env, String(fix.value)) ? env[name]! : undefined;
+      if (name && shell) return { ok: false, lines: [`✗ ${fix.id}: ${processEnvWhere(name, shell, env)}, a value you set: left as it is. Nothing was changed.`] };
       const lines = applySetting(fix, home, at, { oneHourShareBefore: context.oneHourShare, modelsBefore: context.modelsBefore });
       const over = fixOverrides(fix.id, deps);
       if (over.length) lines.push(`  ⚠ written, but it will not take effect while ${over.join("; ")} ${over.length === 1 ? "overrides" : "override"} it.`);
@@ -683,6 +724,39 @@ export async function undoFixes(ids: FixId[] | undefined, deps: FixDeps = {}): P
 
 // -- What each applied fix saved since ------------------------------------------------
 
+/**
+ * Where CLAUDE_CODE_DISABLE_AGENT_PROGRESS_SUMMARIES is set, as Claude Code
+ * sees it: the highest settings file whose env names it (managed, local,
+ * project, user: each applied over the one before and over the shell), else
+ * the shell's own value. A project's or managed value that keeps them is not
+ * the user's (fixOverrides names it); the user's own one is never
+ * overwritten. `offSince`: when fix turned them off (its record).
+ * `forkGateOff`: CLAUDE_CODE_FORK_SUBAGENT off, which in a terminal session
+ * also keeps ordinary background subagents from getting summaries.
+ */
+export function progressSummariesState(deps: { home?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {}): { set?: { value: string; where: string }; offSince?: number; forkGateOff: boolean } {
+  const env = deps.env ?? process.env;
+  const sources = settingsSources({ home: deps.home, cwd: deps.cwd, env });
+  const fork = effectiveEnv("CLAUDE_CODE_FORK_SUBAGENT", sources, env);
+  const forkGateOff = !!fork && ["0", "false", "no", "off"].includes(fork.value.trim().toLowerCase());
+  const rec = readFixRecords(deps.home).find((r) => r.id === "progress-summaries");
+  const off = (value: string, where: string) => ({ set: { value, where }, ...(disablesSummaries(value) && rec ? { offSince: rec.at } : {}), forkGateOff });
+  for (const s of sources) {
+    const v = s.settings.env?.[PROGRESS_SUMMARIES_ENV];
+    if (v === undefined || v === null || String(v).trim() === "") continue;
+    if (disablesSummaries(v) || s.name === "user") return off(String(v), `${tilde(s.path)} env`);
+    return { forkGateOff };
+  }
+  // The shell's value, unless it is fix's own copied into a session started before an undo.
+  if (shellSet(PROGRESS_SUMMARIES_ENV, sources, env, PROGRESS_SUMMARIES_OFF)) return off(env[PROGRESS_SUMMARIES_ENV]!, underClaudeCode(env) ? "this Claude Code session's environment" : "the environment");
+  return { forkGateOff };
+}
+
+/** The summaries fix's variable stopped since `at`: the background subagents on Claude Code 2.1.318+ since, estimated as if it were not set. */
+export function progressSummariesSavedSince(at: number, subagentPaths?: string[], forkGateOff = false): ProgressSummaryEstimate {
+  return estimateProgressSummaries(subagentPaths ?? subagentTranscripts(at), { since: at, minVersion: PROGRESS_SUMMARIES_SINCE, forkGateOff });
+}
+
 export interface SinceResult {
   id: FixId;
   at: number;
@@ -775,6 +849,9 @@ export function savedSince(records: FixRecord[], opts: { paths?: string[]; subag
       const paths = opts.paths || opts.subagentPaths ? [...(opts.paths ?? []), ...(opts.subagentPaths ?? [])] : undefined;
       const s = toolOutputSavedSince(r.at, typeof r.previous === "number" ? r.previous : BASH_OUTPUT_DEFAULT, paths);
       out.push({ id: r.id, at: r.at, savedUsd: s.moved ? s.savedUsd : undefined, detail: s.moved ? `estimated: ${s.moved.toLocaleString("en-US")} Bash results moved to a file that were inline before, priced at the requests that would have re-read them; files the model opened again not counted` : "no Bash output over the cap since" });
+    } else if (r.id === "progress-summaries") {
+      const s = progressSummariesSavedSince(r.at, opts.subagentPaths);
+      out.push({ id: r.id, at: r.at, savedUsd: s.summarized ? s.notesUsd : undefined, detail: s.summarized ? `estimated: ${s.calls.toLocaleString("en-US")} summaries it stopped for ${s.summarized} background subagent${s.summarized === 1 ? "" : "s"} on Claude Code ${PROGRESS_SUMMARIES_SINCE}+, as notes (${money(s.forkUsd)} at the whole context)` : "no background subagent in a terminal session since" });
     } else if (r.id === "autopilot") {
       const ledger = opts.ledger ?? readLedger();
       const ev = ledger.filter((e) => e.ev === "proxy" && e.ts >= r.at);
@@ -799,6 +876,7 @@ const LABEL: Record<FixId, string> = {
   "subagent-model": "Subagent model",
   "tool-output": "Long Bash output",
   "codex-compact": "Codex auto-compact limit",
+  "progress-summaries": "Subagent progress summaries",
 };
 
 /**
@@ -815,6 +893,7 @@ const OVERLAPS: Array<[FixId, FixId, string]> = [
   ["tool-output", "cache-ttl-subagents", "the subagents' cache lifetime changes how often their long output is written to the cache again"],
   ["tool-output", "subagent-model", "long output in subagents is priced at the subagents' model, which subagent-model changes"],
   ["subagent-model", "cache-ttl-subagents", "the subagents' cache is priced at their model's rates, which subagent-model changes"],
+  ["progress-summaries", "subagent-model", "the progress summaries run on the subagents' model, which subagent-model changes"],
 ];
 
 /** The overlap lines for the priced fixes in a plan, "a and b: why;" each. */

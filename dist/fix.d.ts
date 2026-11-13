@@ -27,7 +27,10 @@
  *    ran on before against as billed (the same token counts: an estimate);
  *  - long Bash output: the results moved to a file that the cap before left
  *    inline, priced at the requests that re-read them no more (an estimate:
- *    a file the model opens again is not counted).
+ *    a file the model opens again is not counted);
+ *  - subagent progress summaries: the summaries Claude Code would have
+ *    written for the background subagents since (2.1.318+, which read the
+ *    variable), estimated as `spend` estimates them (progresssummaries.ts).
  *
  * The subagents' model is the one lever with a quality cost `fix` cannot
  * measure: it is offered with that said, applied only when named (never by
@@ -39,8 +42,9 @@ import { type ProjectPlan } from "./prune.js";
 import { readLedger } from "./ledger.js";
 import { type SubagentModelReplay } from "./subagentmodel.js";
 import { type ToolOutputReplay } from "./tooloutput.js";
+import { type ProgressSummaryEstimate } from "./progresssummaries.js";
 import { type CodexCompactReport } from "./codexcompact.js";
-export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model" | "tool-output" | "codex-compact";
+export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model" | "tool-output" | "codex-compact" | "progress-summaries";
 export interface Fix {
     id: FixId;
     title: string;
@@ -129,6 +133,13 @@ export interface FixInputs {
         raw: string;
         where: string;
     };
+    /** The subagents' progress summaries Claude Code wrote, estimated (progresssummaries.ts). */
+    progressSummaries?: ProgressSummaryEstimate;
+    /** CLAUDE_CODE_DISABLE_AGENT_PROGRESS_SUMMARIES where it is set (progressSummariesState): never overwritten. */
+    progressSummariesSet?: {
+        value: string;
+        where: string;
+    };
 }
 export declare function planFixes(i: FixInputs): Fix[];
 export interface FixRecord {
@@ -198,6 +209,30 @@ export declare function applyFix(fix: Fix, deps?: FixDeps, context?: {
 }>;
 /** Undo what fix applied: every fix, or the ones named. Returns what it did, line by line. */
 export declare function undoFixes(ids: FixId[] | undefined, deps?: FixDeps): Promise<string[]>;
+/**
+ * Where CLAUDE_CODE_DISABLE_AGENT_PROGRESS_SUMMARIES is set, as Claude Code
+ * sees it: the highest settings file whose env names it (managed, local,
+ * project, user: each applied over the one before and over the shell), else
+ * the shell's own value. A project's or managed value that keeps them is not
+ * the user's (fixOverrides names it); the user's own one is never
+ * overwritten. `offSince`: when fix turned them off (its record).
+ * `forkGateOff`: CLAUDE_CODE_FORK_SUBAGENT off, which in a terminal session
+ * also keeps ordinary background subagents from getting summaries.
+ */
+export declare function progressSummariesState(deps?: {
+    home?: string;
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+}): {
+    set?: {
+        value: string;
+        where: string;
+    };
+    offSince?: number;
+    forkGateOff: boolean;
+};
+/** The summaries fix's variable stopped since `at`: the background subagents on Claude Code 2.1.318+ since, estimated as if it were not set. */
+export declare function progressSummariesSavedSince(at: number, subagentPaths?: string[], forkGateOff?: boolean): ProgressSummaryEstimate;
 export interface SinceResult {
     id: FixId;
     at: number;

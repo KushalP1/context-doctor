@@ -29,6 +29,11 @@
  * (scan.ts), so a second run reads only what was appended since; Cursor's
  * replies are kept per chat until the chat changes.
  *
+ * Not in the total: Claude Code's subagent progress summaries, side requests
+ * no transcript records (progresssummaries.ts). They are estimated per
+ * background subagent and shown beside the total as a range, the two ways
+ * Anthropic may serve them (short notes, or the whole context).
+ *
  * `savings` bills a narrower slice of the same Claude Code requests: the main
  * conversation's input (cache writes and reads included, output not), in
  * sessions with 10+ requests. `spend` counts every request, its output and
@@ -39,7 +44,8 @@ import { basename, dirname, join } from "node:path";
 import { codexDir } from "./codexdir.js";
 import { homedir } from "node:os";
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
-import { claudeFileUsage, claudeUsageFiles, codexEventKey, codexSessionsRoot, rolloutFiles } from "./limits.js";
+import { claudeFileUsage, claudeUsageFiles, codexEventKey, codexSessionsRoot, rolloutFiles, USAGE_ROWS } from "./limits.js";
+import { estimateProgressSummaries, PROGRESS_ROWS, PROGRESS_SUMMARIES_ENV, type ProgressOptions } from "./progresssummaries.js";
 import { listGeminiChats, readGeminiMessages } from "./gemini.js";
 import { cursorClaudeId, cursorUsage, SqliteUnavailableError } from "./cursor.js";
 import { addModifiers, isUnbilledModel, NO_MODIFIERS, openAIUsage, priceChangedText, requestCost, type Modifiers, type RecordedUsage } from "./pricing.js";
@@ -51,7 +57,7 @@ import { managedSourcesLine, orgRates, orgRatesLine, priceBasis } from "./orgrat
  * "At list prices" was true before those were priced; it no longer is.
  */
 const spendBasis = (): string => (orgRates() ? priceBasis() : "as billed at list rates");
-import { pick, rowsOf, type Extractor } from "./scan.js";
+import { pick, prescan, rowsOf, type Extractor } from "./scan.js";
 import { formatTokens } from "./tokens.js";
 import { withInvocation } from "./invocation.js";
 
@@ -536,6 +542,13 @@ export interface SpendReport {
   priceChanged?: Array<{ model: string; on: string; requests: number; usd: number }>;
   /** Claude Code's compactions, each one's own request estimated (no row records its usage): inside `usd`; absent when none. */
   compactions?: { requests: number; usd: number };
+  /**
+   * Claude Code's subagent progress summaries, estimated (no transcript records them): NOT in `usd`.
+   * `notesUsd` as short notes (served since November 2026), `forkUsd` as the whole context (before).
+   * `set`: CLAUDE_CODE_DISABLE_AGENT_PROGRESS_SUMMARIES is set there, since when unknown: not estimated.
+   * Absent when no subagent got any.
+   */
+  progressSummaries?: { agents: number; calls: number; notesUsd: number; forkUsd: number } | { set: string };
   sessions: Array<{ tool: Tool; project: string; session: string; model?: string; usd: number; requests: number; first: number; last: number }>;
   /** A tool that could not be read (Cursor without SQLite), and why. */
   skipped: Array<{ tool: Tool; reason: string }>;
@@ -648,6 +661,19 @@ export interface SpendOptions {
   claudePaths?: string[];
   onProgress?: (done: number, total: number) => void;
   now?: number;
+  /**
+   * The progress summaries' estimate: the fork gate, when the variable turned them off
+   * (fix's record), or where it is set with no record (then not estimated); false: none.
+   */
+  progress?: false | (Pick<ProgressOptions, "forkGateOff" | "offSince"> & { set?: string });
+}
+
+/** The subagent progress summaries Claude Code wrote in the window, for the report. */
+function claudeProgressSummaries(since: number, until: number, tops: string[] | undefined, o: Exclude<SpendOptions["progress"], false>): SpendReport["progressSummaries"] {
+  if (o?.set && o.offSince === undefined) return { set: o.set };
+  const files = claudeUsageFiles(since, tops).filter((f) => f.subagent && !f.run).map((f) => f.file);
+  const e = estimateProgressSummaries(files, { since, until, forkGateOff: o?.forkGateOff, offSince: o?.offSince });
+  return e.calls ? { agents: e.summarized, calls: e.calls, notesUsd: e.notesUsd, forkUsd: e.forkUsd } : undefined;
 }
 
 /**
@@ -663,6 +689,8 @@ export function spendReport(days = 30, opts: SpendOptions = {}): SpendReport {
   const until = opts.now ?? Date.now();
   const since = until - days * DAY;
   const home = opts.home ?? homedir();
+  // A subagent's transcript read once for its usage and its timeline (the progress summaries).
+  if (opts.progress !== false) prescan([{ paths: claudeUsageFiles(since, opts.claudePaths).filter((f) => f.subagent && !f.run).map((f) => f.file), extractors: [USAGE_ROWS, PROGRESS_ROWS] }]);
   const items: SpendItem[] = [...claudeSpend(since, until, opts.claudePaths, opts.onProgress), ...codexSpend(since, until, home), ...geminiSpend(since, until, home)];
   const skipped: SpendReport["skipped"] = [];
   try {
@@ -670,7 +698,9 @@ export function spendReport(days = 30, opts: SpendOptions = {}): SpendReport {
   } catch (e) {
     if (e instanceof SqliteUnavailableError) skipped.push({ tool: "cursor", reason: "reading Cursor's history needs SQLite: Node 22.13+ or the sqlite3 command" });
   }
-  return summarizeSpend(items, days, since, until, skipped);
+  const report = summarizeSpend(items, days, since, until, skipped);
+  const progress = opts.progress === false ? undefined : claudeProgressSummaries(since, until, opts.claudePaths, opts.progress);
+  return progress ? { ...report, progressSummaries: progress } : report;
 }
 
 // ---------------------------------------------------------------------------
@@ -747,6 +777,12 @@ export function renderSpend(r: SpendReport, top = 8): string {
   if (r.compactions) lines.push(`  Of it, ${r.compactions.requests.toLocaleString("en-US")} Claude Code ${r.compactions.requests === 1 ? "compaction's own request" : "compactions' own requests"} ${usd(r.compactions.usd)}, an estimate (no row records their usage)`);
   const claude = r.tools.find((t) => t.tool === "claude");
   if (claude?.subagentUsd) lines.push(`  Claude Code subagents ${usd(claude.subagentUsd)} (${share(claude.subagentUsd, r.usd)}): context-doctor subagents says which paid off`);
+  // Side requests no transcript records: a range, outside the total.
+  const ps = r.progressSummaries;
+  if (ps && "calls" in ps) {
+    lines.push(`  Not in it: ~${ps.calls.toLocaleString("en-US")} subagent progress summaries (${ps.agents} background ${ps.agents === 1 ? "agent" : "agents"}), an estimate:`);
+    lines.push(`  ${usd(ps.notesUsd)} as notes, ${usd(ps.forkUsd)} at the whole context; no transcript records them`);
+  } else if (ps) lines.push(`  Subagent progress summaries: not estimated, ${PROGRESS_SUMMARIES_ENV} is set in ${ps.set}`);
   if (claude?.workflowUsd) lines.push(`  Claude Code workflow agents ${usd(claude.workflowUsd)} (${share(claude.workflowUsd, r.usd)}), in ${runsText(claude.workflowRuns ?? 0)}`);
   lines.push("  Biggest sessions:");
   for (const s of r.sessions.slice(0, Math.min(top, 5))) {
@@ -798,6 +834,8 @@ export function renderSpendShare(r: SpendReport): string {
   if (r.tools.some((t) => t.estimated)) lines.push(`Of it, ${usd(estimated)} is on models priced as their family, an estimate.`);
   if (r.priceChanged) lines.push(`Of it, ${usd(r.priceChanged.reduce((s, c) => s + c.usd, 0))} is on models priced past the day their price changed, an estimate.`);
   if (r.modifiers) lines.push(`Billed above list rates: ${modifiersText(r.modifiers)}.`);
+  const ps = r.progressSummaries;
+  if (ps && "calls" in ps) lines.push(`Not in it: Claude Code's subagent progress summaries, which no transcript records: ${usd(ps.notesUsd)}-${usd(ps.forkUsd)}, an estimate.`);
   const parts: Array<[string, number]> = [["cache writes", r.parts.writeUsd], ["cache reads", r.parts.readUsd], ["output", r.parts.outputUsd], ["uncached input", r.parts.inputUsd], ["web searches", r.parts.webSearchUsd ?? 0]];
   const [bigPart, bigUsd] = parts.sort((a, b) => b[1] - a[1])[0];
   const busiest = [...r.daily].sort((a, b) => b.usd - a.usd)[0];

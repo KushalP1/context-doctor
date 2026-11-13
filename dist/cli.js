@@ -68,7 +68,8 @@ import { currentTranscript, findSession, recall, renderRecall } from "./recall.j
 import { measureSubagentCosts, renderCostMedians, saveSubagentCosts } from "./fanout.js";
 import { applyPrune, canonical, installedSkills, planPrune, renderPrune, undoPrune } from "./prune.js";
 import { lensOverSessions, renderLens, sessionLens, LENS_ROWS } from "./lens.js";
-import { applyFix, fixOverrides, loadFixRecords, parseFixIds, planFixes, readFixRecords, renderFixPlan, renderFixShare, savedSince, undoFixes } from "./fix.js";
+import { applyFix, fixOverrides, loadFixRecords, parseFixIds, planFixes, progressSummariesState, readFixRecords, renderFixPlan, renderFixShare, savedSince, undoFixes } from "./fix.js";
+import { disablesSummaries, estimateProgressSummaries, PROGRESS_ROWS } from "./progresssummaries.js";
 import { claudeMcpConfigs, MCP_ROWS } from "./mcpschema.js";
 import { effectiveEnv, settingsSources, shellSet, underClaudeCode } from "./effective.js";
 import { SettingsError } from "./settingsedit.js";
@@ -384,7 +385,7 @@ async function measureFixInputs(days) {
     // Each transcript read once for every replay below; what an earlier run kept is not read again (scan.ts).
     prescan([
         { paths: claudeTranscripts(days), extractors: [savingsRows(!autopilotOnNow), REQUEST_ROWS, TOOL_OUTPUT_ROWS] },
-        { paths: subagentTranscripts(Date.now() - days * 86_400_000), extractors: [REQUEST_ROWS, SUBAGENT_ROWS, TOOL_OUTPUT_ROWS] },
+        { paths: subagentTranscripts(Date.now() - days * 86_400_000), extractors: [REQUEST_ROWS, SUBAGENT_ROWS, TOOL_OUTPUT_ROWS, PROGRESS_ROWS] },
         ...(setWindow === undefined ? [{ paths: claudeTranscripts(60), extractors: [QUALITY_ROWS] }] : []),
         { paths: codexRollouts(Date.now() - days * 86_400_000), extractors: [CODEX_COMPACT_ROWS] },
     ], replaying.tick);
@@ -434,6 +435,10 @@ async function measureFixInputs(days) {
             : shellSet(BASH_OUTPUT_ENV, sources, process.env)
                 ? { name: BASH_OUTPUT_ENV, value: process.env[BASH_OUTPUT_ENV], where: underClaudeCode() ? "this Claude Code session's environment" : "the environment" }
                 : undefined;
+    // The subagents' progress summaries: estimated from their transcripts; a value of the variable the user set is theirs.
+    const psState = progressSummariesState({ cwd });
+    const psSince = Date.now() - days * 86_400_000;
+    const progressSummaries = estimateProgressSummaries(subagentTranscripts(psSince), { since: psSince, forkGateOff: psState.forkGateOff, offSince: psState.offSince });
     // Codex's auto-compact limit: its rollouts replayed at earlier limits; a limit the user set is theirs.
     const codexCompact = replayCodexCompact({ days });
     const cxSet = currentCodexCompact();
@@ -461,7 +466,7 @@ async function measureFixInputs(days) {
         recordProblem = e.message;
     }
     const sessions = report.sessions.length;
-    const ids = ["compact-window", "cache-ttl", "cache-ttl-subagents", "tool-search", "subagent-model", "tool-output", "codex-compact"];
+    const ids = ["compact-window", "cache-ttl", "cache-ttl-subagents", "tool-search", "subagent-model", "tool-output", "codex-compact", "progress-summaries"];
     return {
         prunePlan,
         inputs: {
@@ -478,6 +483,8 @@ async function measureFixInputs(days) {
             subagentModelSet,
             toolOutput,
             toolOutputSet,
+            progressSummaries,
+            ...(psState.set ? { progressSummariesSet: psState.set } : {}),
             ...(codexCompact.requests > 0 ? { codexCompact } : {}),
             ...(cxSet ? { codexCompactSet: { raw: cxSet.raw, where: cxSet.where } } : {}),
             overrides: Object.fromEntries(ids.map((id) => [id, fixOverrides(id, { cwd })])),
@@ -1433,7 +1440,9 @@ async function main() {
         if (args.share && args.json)
             usageError("--share and --json do not go together: --share prints a few lines to paste.");
         const reading = progressLine("Reading your usage across tools");
-        const report = spendReport(args.days ?? 30, { onProgress: reading.tick });
+        // The progress summaries' estimate: none after the variable turned them off (fix's record), none at all when set with no record.
+        const ps = progressSummariesState({ cwd: process.cwd() });
+        const report = spendReport(args.days ?? 30, { onProgress: reading.tick, progress: { forkGateOff: ps.forkGateOff, offSince: ps.offSince, ...(ps.set && disablesSummaries(ps.set.value) ? { set: ps.set.where } : {}) } });
         reading.clear();
         if (args.json)
             console.log(JSON.stringify(report, null, 2));
