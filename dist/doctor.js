@@ -32,7 +32,7 @@ import { periodSpend, readBudget } from "./budget.js";
 import { sessionPriceThresholds } from "./sessionprice.js";
 import { claudeSpend, codexSpend } from "./spend.js";
 import { hasKnownPrice, isUnbilledModel, priceChangedText } from "./pricing.js";
-import { orgRatesLine } from "./orgrates.js";
+import { managedSourcesLine, orgRatesLine } from "./orgrates.js";
 function claudeDesktopConfigPath() {
     switch (platform()) {
         case "darwin": return join(homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
@@ -859,6 +859,10 @@ export async function runDoctor() {
         const org = orgRatesLine();
         if (org)
             checks.push({ label: "Prices", status: "ok", detail: org });
+        // Server-managed settings or an MDM profile come before the files in Claude Code, and alone: rates context-doctor cannot see.
+        const ahead = managedSourcesLine();
+        if (ahead)
+            checks.push({ label: "Prices", status: "warn", detail: ahead });
     }
     checks.push(await checkMcpHandshake());
     // Autopilot: optional, so "off" is a skip, not a failure. When it is on, a

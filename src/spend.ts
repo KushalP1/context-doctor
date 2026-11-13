@@ -43,7 +43,7 @@ import { claudeFileUsage, claudeUsageFiles, codexEventKey, codexSessionsRoot, ro
 import { listGeminiChats, readGeminiMessages } from "./gemini.js";
 import { cursorClaudeId, cursorUsage, SqliteUnavailableError } from "./cursor.js";
 import { addModifiers, isUnbilledModel, NO_MODIFIERS, openAIUsage, priceChangedText, requestCost, type Modifiers, type RecordedUsage } from "./pricing.js";
-import { orgRates, orgRatesLine, priceBasis } from "./orgrates.js";
+import { managedSourcesLine, orgRates, orgRatesLine, priceBasis } from "./orgrates.js";
 
 /**
  * What spend's dollars are: each request as it was billed (its tier, fast mode,
@@ -697,6 +697,8 @@ export function renderSpend(r: SpendReport, top = 8): string {
   lines.push(`Last ${r.days === 1 ? "day" : `${r.days} days`}, ${spendBasis()}`);
   const org = orgRatesLine();
   if (org) lines.push(org);
+  const ahead = managedSourcesLine();
+  if (ahead) lines.push(ahead);
   lines.push("─".repeat(60));
   for (const t of r.tools) {
     const unit = t.tool === "cursor" ? "replies" : "requests";

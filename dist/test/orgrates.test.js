@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { canonicalClaude, orgRates, orgRatesLine, parseOrgRates, priceBasis, readOrgRatesFrom, resetOrgRates } from "../orgrates.js";
+import { canonicalClaude, managedSourcesAhead, managedSourcesLine, orgRates, orgRatesLine, parseOrgRates, priceBasis, readOrgRatesFrom, resetOrgRates } from "../orgrates.js";
 import { requestCost } from "../pricing.js";
 import { claudeSpend, renderSpend, summarizeSpend } from "../spend.js";
 import { periodSpend, renderBudgetStatus } from "../budget.js";
@@ -295,5 +295,29 @@ test("subagent-model's baseline arm bills as requestCost does: the organization'
             const mixed = 0.25 * requestCost("claude-opus-5-5", u, AT).totalUsd + 0.75 * requestCost("claude-sonnet-5-5", u, AT).totalUsd;
             near(atBaseline(base, u, AT, { "claude-opus-5-5": 1, "claude-sonnet-5-5": 3 }).totalUsd, mixed, `${what}, mixed`);
         });
+    }
+});
+test("server-managed settings or an MDM profile on this machine: reports say Claude Code reads them before the files, and alone", () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-org-ahead-"));
+    const prefs = join(home, "Managed Preferences");
+    const env = { ...process.env, CONTEXT_DOCTOR_NO_MANAGED_SETTINGS: "" };
+    delete env.CLAUDE_CONFIG_DIR;
+    try {
+        assert.deepEqual(managedSourcesAhead(env, home, prefs), []);
+        assert.equal(managedSourcesLine(env, home, prefs), undefined, "none here: nothing said");
+        // Claude Code's copy of the server-managed settings, in its own folder.
+        mkdirSync(join(home, ".claude"), { recursive: true });
+        writeFileSync(join(home, ".claude", "remote-settings.json"), "{}");
+        assert.deepEqual(managedSourcesAhead(env, home, prefs), [`server-managed settings (Claude Code's copy: ${join(home, ".claude", "remote-settings.json")})`]);
+        if (process.platform === "darwin") {
+            mkdirSync(prefs, { recursive: true });
+            writeFileSync(join(prefs, "com.anthropic.claudecode.plist"), "");
+            assert.equal(managedSourcesAhead(env, home, prefs).length, 2);
+        }
+        assert.match(managedSourcesLine(env, home, prefs), /^Claude Code takes its managed settings from server-managed settings .* before the managed settings files, and only from the first it finds: its own cost figures may use contracted rates \(modelPricing\) set there, which context-doctor does not read; these reports price at list rates\.$/);
+        assert.deepEqual(managedSourcesAhead({ ...env, CONTEXT_DOCTOR_NO_MANAGED_SETTINGS: "1" }, home, prefs), [], "managed settings ignored altogether");
+    }
+    finally {
+        rmSync(home, { recursive: true, force: true });
     }
 });

@@ -73,3 +73,21 @@ export declare function priceBasis(plural?: boolean, env?: NodeJS.ProcessEnv): s
  * which files set them and what they are. Undefined at list prices.
  */
 export declare function orgRatesLine(env?: NodeJS.ProcessEnv): string | undefined;
+/**
+ * The managed sources Claude Code reads before the managed settings files,
+ * found on this machine. Read from the 2.1.321 binary: the policy origin is
+ * server-managed settings when present, else an MDM profile (a macOS
+ * managed-preferences plist, the Windows HKLM policy key), else the files,
+ * and by default only the first source found counts ("first-wins"): with
+ * either of the others present, Claude Code prices at their modelPricing,
+ * or at list, never at the files'. context-doctor reads neither (the
+ * server-managed copy, `remote-settings.json` in Claude Code's folder, is an
+ * undocumented, signed cache); this only says that one is there. The
+ * Windows key is not looked up (it needs reg.exe).
+ */
+export declare function managedSourcesAhead(env?: NodeJS.ProcessEnv, home?: string, prefs?: string): string[];
+/**
+ * The line a report adds when Claude Code may take its rates from a source
+ * context-doctor does not read: undefined when none is on this machine.
+ */
+export declare function managedSourcesLine(env?: NodeJS.ProcessEnv, home?: string, prefs?: string): string | undefined;

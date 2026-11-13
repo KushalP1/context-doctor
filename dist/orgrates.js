@@ -24,8 +24,10 @@
  *    order, nested blocks merged key by key). MDM profiles and
  *    server-managed settings are not read.
  */
-import { readFileSync } from "node:fs";
-import { basename } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { userInfo } from "node:os";
+import { basename, join } from "node:path";
+import { claudeDir } from "./claudedir.js";
 import { managedSettingsPaths } from "./effective.js";
 const isObject = (v) => Boolean(v) && typeof v === "object" && !Array.isArray(v);
 /** Nested blocks merged key by key, the later value winning (Claude Code's rule for managed-settings.d). */
@@ -162,4 +164,51 @@ export function orgRatesLine(env = process.env) {
         ...(keys.length ? [`${keys.length === 1 ? "a row" : `${keys.length} rows`} for ${keys.slice(0, 3).join(", ")}${keys.length > 3 ? " and others" : ""}`] : []),
     ];
     return `Claude requests priced at your organization's rates (Claude Code's managed modelPricing: ${parts.join("; ")}; in ${r.sources.map((s) => basename(s)).join(", ")}), as Claude Code's own cost figures are; other providers at list prices.`;
+}
+/**
+ * The managed sources Claude Code reads before the managed settings files,
+ * found on this machine. Read from the 2.1.321 binary: the policy origin is
+ * server-managed settings when present, else an MDM profile (a macOS
+ * managed-preferences plist, the Windows HKLM policy key), else the files,
+ * and by default only the first source found counts ("first-wins"): with
+ * either of the others present, Claude Code prices at their modelPricing,
+ * or at list, never at the files'. context-doctor reads neither (the
+ * server-managed copy, `remote-settings.json` in Claude Code's folder, is an
+ * undocumented, signed cache); this only says that one is there. The
+ * Windows key is not looked up (it needs reg.exe).
+ */
+export function managedSourcesAhead(env = process.env, home, prefs = "/Library/Managed Preferences") {
+    if (env.CONTEXT_DOCTOR_NO_MANAGED_SETTINGS)
+        return [];
+    const out = [];
+    try {
+        const remote = join(claudeDir(home, env), "remote-settings.json");
+        if (existsSync(remote))
+            out.push(`server-managed settings (Claude Code's copy: ${remote})`);
+    }
+    catch { /* no config folder */ }
+    if (process.platform === "darwin") {
+        let user = "";
+        try {
+            user = userInfo().username;
+        }
+        catch { /* none */ }
+        for (const p of [...(user ? [join(prefs, user, "com.anthropic.claudecode.plist")] : []), join(prefs, "com.anthropic.claudecode.plist")]) {
+            if (existsSync(p)) {
+                out.push(`an MDM profile (${p})`);
+                break;
+            }
+        }
+    }
+    return out;
+}
+/**
+ * The line a report adds when Claude Code may take its rates from a source
+ * context-doctor does not read: undefined when none is on this machine.
+ */
+export function managedSourcesLine(env = process.env, home, prefs) {
+    const ahead = managedSourcesAhead(env, home, prefs);
+    if (!ahead.length)
+        return undefined;
+    return `Claude Code takes its managed settings from ${ahead.join(" and ")} before the managed settings files, and only from the first it finds: its own cost figures may use contracted rates (modelPricing) set there, which context-doctor does not read; these reports price ${orgRates(env) ? "at the files' rates" : "at list rates"}.`;
 }
