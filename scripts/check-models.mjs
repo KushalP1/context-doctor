@@ -4,7 +4,9 @@
 //   node scripts/check-models.mjs --binary <claude binary>   the model catalog of an installed Claude Code
 //   node scripts/check-models.mjs --url <url> [--url <url>]  Claude Code's CHANGELOG, the price page
 //   node scripts/check-models.mjs --file <path>
-// Needs a build (dist/). Exit 0: every model priced; 1: some are not; 2: a source could not be read.
+// Needs a build (dist/). Exit 0: every model priced; 1: some are not; 2: a local file could not be read
+// or the arguments are wrong. A --url that cannot be fetched (the page down, a network error) is a
+// warning (a GitHub Actions annotation) and is left out: the check fails only on a model it read.
 import { readFileSync, realpathSync } from "node:fs";
 import { claudeModelIds, unpricedClaudeIds } from "../dist/modelids.js";
 
@@ -36,6 +38,12 @@ for (const { flag, value } of sources) {
       text = readFileSync(realpathSync(value)).toString(flag === "--binary" ? "latin1" : "utf8");
     }
   } catch (e) {
+    if (flag === "--url") {
+      // Not this repository's fault, and not an unpriced model: say so where CI shows it, and go on.
+      console.log(`::warning title=check-models::${value} could not be fetched (${e.message}); its models were not checked`);
+      console.error(`⚠ ${value}: could not fetch it (${e.message}); not checked`);
+      continue;
+    }
     console.error(`✗ ${value}: could not read it (${e.message})`);
     process.exit(2);
   }

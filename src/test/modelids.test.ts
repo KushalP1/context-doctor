@@ -59,6 +59,12 @@ test("scripts/check-models.mjs: exit 0 when every model is priced, 1 naming the 
     assert.equal(bad.status, 1, bad.stdout + bad.stderr);
     assert.match(bad.stdout, /1 of 2 Claude models have no price of their own in src\/pricing\.ts: claude-opus-6/);
     assert.equal(run("--file", join(dir, "missing.txt")).status, 2);
+    // A page that cannot be fetched is a warning (an Actions annotation), not a failure; a model it can read still fails.
+    const down = run("--url", "http://127.0.0.1:1/CHANGELOG.md", "--file", priced);
+    assert.equal(down.status, 0, down.stdout + down.stderr);
+    assert.match(down.stdout, /^::warning title=check-models::http:\/\/127\.0\.0\.1:1\/CHANGELOG\.md could not be fetched \(.+\); its models were not checked$/m);
+    assert.match(down.stdout, /all 2 Claude models priced/);
+    assert.equal(run("--url", "http://127.0.0.1:1/x", "--binary", fresh).status, 1);
     assert.equal(run("--nope").status, 2);
   } finally {
     rmSync(dir, { recursive: true, force: true });
