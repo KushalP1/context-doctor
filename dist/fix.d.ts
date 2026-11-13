@@ -57,6 +57,12 @@ export interface Fix {
     basis: string;
     /** What it costs in quality, plainly. */
     quality: string;
+    /**
+     * The quality line is "none": the model sees the same content, or the same
+     * content moved where it can still open it, and runs on the same model. A
+     * bare `context-doctor` offers these together under one question (firstfix.ts).
+     */
+    qualityFree?: boolean;
     /** What it writes, where. */
     change: string;
     state: "available" | "applied" | "not-here";
@@ -141,6 +147,9 @@ export interface FixInputs {
         where: string;
     };
 }
+export declare const money: (n: number) => string;
+/** " (48%)", or " (37% of subagents)" for a share of something else. */
+export declare const share: (f: Fix) => string;
 export declare function planFixes(i: FixInputs): Fix[];
 export interface FixRecord {
     id: FixId;

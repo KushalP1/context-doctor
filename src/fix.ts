@@ -71,6 +71,12 @@ export interface Fix {
   basis: string;
   /** What it costs in quality, plainly. */
   quality: string;
+  /**
+   * The quality line is "none": the model sees the same content, or the same
+   * content moved where it can still open it, and runs on the same model. A
+   * bare `context-doctor` offers these together under one question (firstfix.ts).
+   */
+  qualityFree?: boolean;
   /** What it writes, where. */
   change: string;
   state: "available" | "applied" | "not-here";
@@ -140,11 +146,11 @@ const SINCE: Partial<Record<FixId, string>> = { "cache-ttl": CACHE_TTL_SINCE, "c
 /** Below this a priced fix is not worth a setting. */
 const MIN_USD = 1;
 
-const money = (n: number): string => (n >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
+export const money = (n: number): string => (n >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 const k = (n: number) => `${Math.round(n / 1000)}k`;
 /** " (48%)", or " (37% of subagents)" for a share of something else. */
-const share = (f: Fix) => (f.savedShare !== undefined ? ` (${pct(f.savedShare)}${f.shareOf ? ` ${f.shareOf}` : ""})` : "");
+export const share = (f: Fix) => (f.savedShare !== undefined ? ` (${pct(f.savedShare)}${f.shareOf ? ` ${f.shareOf}` : ""})` : "");
 
 export function planFixes(i: FixInputs): Fix[] {
   const fixes: Fix[] = [];
@@ -183,6 +189,7 @@ export function planFixes(i: FixInputs): Fix[] {
         savedShare: a.savedShare,
         basis: `the same ${r.requests.toLocaleString("en-US")} requests priced at each lifetime (${pct(r.oneHourShare)} of writes at 1 hour as billed${a.ttl === "1h" && r.keptWarmAt1h ? `; ${r.keptWarmAt1h} cold re-writes kept warm` : ""})`,
         quality: "none: the same content is sent; only the price of keeping it cached changes",
+        qualityFree: true,
         change: `${where}: ${key} = "${a.ttl}" (Claude Code 2.1.243+)`,
         state: "available",
         value: a.ttl,
@@ -217,6 +224,7 @@ export function planFixes(i: FixInputs): Fix[] {
       title: "MCP tool search back on",
       basis: `ENABLE_TOOL_SEARCH=${i.toolSearchOff} loads every tool definition of your ${i.mcpServers} MCP server${i.mcpServers === 1 ? "" : "s"} into every request; with search on Claude Code loads one when it is needed (Anthropic: ~77k tokens to ~8.7k on a large set, tool choice more accurate, not less)`,
       quality: "none expected: Anthropic measured better tool choice with search on (Opus 4.5: 79.5% to 88.1%)",
+      qualityFree: true,
       change: `${where}: env.ENABLE_TOOL_SEARCH = "auto"`,
       state: "available",
       value: "auto",
@@ -229,6 +237,7 @@ export function planFixes(i: FixInputs): Fix[] {
       title: `Switch off ${names.length} unused MCP server${names.length === 1 ? "" : "s"} or skill${names.length === 1 ? "" : "s"} in this project`,
       basis: `none used in ${i.prune.sessions} sessions of this project in ${i.days} days: ${names.slice(0, 5).join(", ")}${names.length > 5 ? ", …" : ""}`,
       quality: "none while they stay unused; undo brings them back",
+      qualityFree: true,
       change: join(i.prune.cwd, ".claude", "settings.local.json"),
       state: "available",
     });
@@ -277,6 +286,8 @@ export function planFixes(i: FixInputs): Fix[] {
       shareOf: "of input, subagents included",
       basis: `${best.moved.toLocaleString("en-US")} of ${best.results.toLocaleString("en-US")} Bash results were longer; the tokens past a 2,000-character preview priced at each later request that re-read them until a compaction (cache reads, one write); an estimate: a file the model opens again costs about ${money(each)} a time and is not counted, and the saving covers it opening up to ${pct(breakEven(best))} of them`,
       quality: "long output goes to a file the model can still open; it sees the first 2,000 characters and the path, as it already does past 30,000",
+      // Nothing is lost, only moved (in `--apply all` for the same reason).
+      qualityFree: true,
       change: `${where}: ${BASH_OUTPUT_KEY} = ${best.cap} (Claude Code 2.1.261+)`,
       state: "available",
       value: best.cap,
