@@ -180,6 +180,23 @@ function hookBinaryMissing(command) {
  * Claude Code's settings files, lowest precedence first: user, project,
  * local. A later file's value for a key wins, as in Claude Code itself.
  */
+/**
+ * A hooks event's entries, whatever the file holds there. A config written
+ * by hand can hold an object, a string or a null where a list belongs; the
+ * app ignores it, and doctor must not stop at it (it printed "settings.json
+ * unreadable (entries.map is not a function)").
+ */
+function hookEntries(v) {
+    return Array.isArray(v) ? v.filter(isObject) : [];
+}
+/** The first command of a Claude Code-shaped hook entry ({ hooks: [{ command }] }), or "". */
+function firstCommand(e) {
+    const h = Array.isArray(e.hooks) ? e.hooks[0] : undefined;
+    return isObject(h) && typeof h.command === "string" ? h.command : "";
+}
+function isObject(v) {
+    return v !== null && typeof v === "object" && !Array.isArray(v);
+}
 function claudeSettingsLayers() {
     const paths = [
         join(claudeDir(), "settings.json"),
@@ -188,7 +205,9 @@ function claudeSettingsLayers() {
     ];
     return [...new Set(paths)].flatMap((p) => {
         try {
-            return existsSync(p) ? [JSON.parse(readFileSync(p, "utf8"))] : [];
+            const v = existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : undefined;
+            // A file holding null, an array or a number is no settings at all (Claude Code ignores it).
+            return isObject(v) ? [v] : [];
         }
         catch {
             return []; // an unreadable user settings.json is reported by the hook check
@@ -205,7 +224,7 @@ function claudeSettingsLayers() {
 function pluginEnabled(layers) {
     const state = new Map();
     for (const s of layers) {
-        for (const [key, on] of Object.entries((s.enabledPlugins ?? {}))) {
+        for (const [key, on] of Object.entries(isObject(s.enabledPlugins) ? s.enabledPlugins : {})) {
             if (isOurPluginKey(key))
                 state.set(key, on === true);
         }
@@ -223,8 +242,7 @@ function occupantName(o) {
  */
 function fanoutCheck(settings, plugin) {
     const label = "Subagent price";
-    const entries = Array.isArray(settings.hooks?.PreToolUse) ? settings.hooks.PreToolUse : [];
-    const ours = entries.find((e) => /context-doctor|cli\.js"?\s+hook/.test(e.hooks?.[0]?.command ?? ""));
+    const ours = hookEntries(settings.hooks?.PreToolUse).find((e) => /context-doctor|cli\.js"?\s+hook/.test(firstCommand(e)));
     let costs;
     try {
         costs = JSON.parse(readFileSync(subagentCostsPath(), "utf8"));
@@ -246,8 +264,7 @@ function fanoutCheck(settings, plugin) {
  */
 function modelSwitchCheck(settings, plugin) {
     const label = "Model-switch warning";
-    const entries = settings.hooks?.PreModelSwitch ?? [];
-    const ours = entries.some((e) => /context-doctor|cli\.js"?\s+hook/.test(e.hooks?.[0]?.command ?? ""));
+    const ours = hookEntries(settings.hooks?.PreModelSwitch).some((e) => /context-doctor|cli\.js"?\s+hook/.test(firstCommand(e)));
     const readiness = modelSwitchReadiness(claudeCodeInstallsFromEnv());
     if (Array.isArray(settings.hooks?.PreModelSwitch) && readiness.old.length > 0) {
         return {
@@ -535,8 +552,7 @@ export async function runDoctor() {
     if (existsSync(settingsPath) || claudeCodePresent()) {
         try {
             const settings = readConfig(settingsPath) ?? {};
-            const entries = settings.hooks?.UserPromptSubmit ?? [];
-            const ours = entries.map((e) => e.hooks?.[0]?.command ?? "").find((c) => /context-doctor|cli\.js"?\s+hook/.test(c));
+            const ours = hookEntries(settings.hooks?.UserPromptSubmit).map(firstCommand).find((c) => /context-doctor|cli\.js"?\s+hook/.test(c));
             if (hooksDisabled(layers)) {
                 // Registered or not, nothing runs: say that first, it is the fix.
                 checks.push({
@@ -561,8 +577,7 @@ export async function runDoctor() {
                 checks.push(missing
                     ? { label: "Every-prompt hook", status: "fail", detail: `registered, but ${missing} no longer exists — re-run: context-doctor install` }
                     : { label: "Every-prompt hook", status: "ok", detail: "registered in ~/.claude/settings.json; command resolves" });
-                const pre = settings.hooks?.PreCompact ?? [];
-                const preOurs = plugin || pre.some((e) => /context-doctor|cli\.js"?\s+hook/.test(e.hooks?.[0]?.command ?? ""));
+                const preOurs = plugin || hookEntries(settings.hooks?.PreCompact).some((e) => /context-doctor|cli\.js"?\s+hook/.test(firstCommand(e)));
                 checks.push(preOurs
                     ? { label: "Compaction hook", status: "ok", detail: "PreCompact: each compaction's summary keeps the session's files, open tasks, your instructions and failing commands" }
                     : { label: "Compaction hook", status: "warn", detail: "not registered: compactions use generic instructions; run context-doctor install" });
@@ -613,8 +628,7 @@ export async function runDoctor() {
         try {
             const hooksPath = join(codexHome, "hooks.json");
             const hooks = readConfig(hooksPath) ?? {};
-            const entries = hooks.hooks?.UserPromptSubmit ?? [];
-            const ours = entries.map((e) => e.hooks?.[0]?.command ?? "").find((c) => /context-doctor|cli\.js"?\s+hook/.test(c));
+            const ours = hookEntries(hooks.hooks?.UserPromptSubmit).map(firstCommand).find((c) => /context-doctor|cli\.js"?\s+hook/.test(c));
             if (!ours) {
                 checks.push(missingHook("Codex hook", codexMcp));
             }
@@ -660,8 +674,7 @@ export async function runDoctor() {
                     ? missingPackageCheck("Gemini CLI MCP")
                     : { label: "Gemini CLI MCP", status: "ok", detail: "wired in ~/.gemini/settings.json" };
             checks.push(geminiMcp);
-            const entries = settings.hooks?.BeforeAgent ?? [];
-            const ours = entries.map((e) => e.hooks?.[0]?.command ?? "").find((c) => /context-doctor|cli\.js"?\s+hook/.test(c));
+            const ours = hookEntries(settings.hooks?.BeforeAgent).map(firstCommand).find((c) => /context-doctor|cli\.js"?\s+hook/.test(c));
             const missing = ours ? hookBinaryMissing(ours) : undefined;
             checks.push(!ours
                 ? missingHook("Gemini CLI hook", geminiMcp)
@@ -712,7 +725,7 @@ export async function runDoctor() {
         const hooksPath = join(homedir(), ".cursor", "hooks.json");
         try {
             const hooks = readConfig(hooksPath, ["version"]) ?? {};
-            const oursIn = (event) => (hooks.hooks?.[event] ?? []).map((e) => e.command ?? "").find((c) => /(cli\.js|context-doctor(\.cmd|\.exe|\.bat)?)"?\s+hook\s*$/.test(c));
+            const oursIn = (event) => hookEntries(hooks.hooks?.[event]).map((e) => (typeof e.command === "string" ? e.command : "")).find((c) => /(cli\.js|context-doctor(\.cmd|\.exe|\.bat)?)"?\s+hook\s*$/.test(c));
             const ours = oursIn("postToolUse");
             const missing = ours ? hookBinaryMissing(ours) : undefined;
             const fallbacks = CURSOR_HOOK_EVENTS.filter((e) => !oursIn(e));
@@ -769,7 +782,10 @@ export async function runDoctor() {
     const skillPath = join(claudeDir(), "skills", "context-doctor", "SKILL.md");
     checks.push(existsSync(skillPath)
         ? skillCheck("Agent Skill", [skillPath])
-        : { label: "Agent Skill", status: "skip", detail: "not installed (run context-doctor install on a Claude Code machine)" });
+        : plugin
+            // The plugin carries the skill, and install skips it while the plugin is on: "run install" sent people round in a circle.
+            ? { label: "Agent Skill", status: "ok", detail: "provided by the context-doctor plugin" }
+            : { label: "Agent Skill", status: "skip", detail: "not installed (run context-doctor install on a Claude Code machine)" });
     // Ledger writable. Tested without writing an entry: recordLedger swallows
     // errors (so this could never fail), and the entry it wrote counted as a
     // hook check in every report.

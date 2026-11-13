@@ -68,12 +68,41 @@ test("an enabled context-doctor plugin counts as the MCP server and the hook", a
     assert.match(r.out, /✓ Claude Code\s+.*plugin/);
     assert.match(r.out, /✓ Every-prompt hook\s+.*plugin/);
     assert.match(r.out, /✓ Compaction hook\s+.*plugin/);
+    // The plugin carries the skill too; install skips it while the plugin is on, so "run install" led nowhere.
+    assert.match(r.out, /✓ Agent Skill\s+provided by the context-doctor plugin/);
+    assert.doesNotMatch(r.out, /Agent Skill\s+not installed/);
     // Disabled is not enabled. (~/.claude.json with Claude Code's own state:
     // without one, Claude Code reads as not installed and so does the hook.)
     const off = claudeHome({ enabledPlugins: { "context-doctor@context-doctor": false } });
     writeFileSync(join(off, ".claude.json"), JSON.stringify({ numStartups: 4 }));
     const r2 = await doctor(off);
     assert.match(r2.out, /✗ Every-prompt hook\s+not registered/);
+});
+test("settings that hold null, or a list where one belongs, are ignored as Claude Code ignores them: no crash, no \"unreadable\"", async () => {
+    // Claude Code's settings: null (doctor stopped with a TypeError before printing a line); a project's too.
+    const nul = claudeHome();
+    writeFileSync(join(nul, ".claude", "settings.json"), "null");
+    writeFileSync(join(nul, ".claude.json"), JSON.stringify({ numStartups: 4 }));
+    const project = mkdtempSync(join(tmpdir(), "ctxdoc-nullproj-"));
+    mkdirSync(join(project, ".claude"));
+    writeFileSync(join(project, ".claude", "settings.json"), "null");
+    const r = await doctor(nul, project);
+    assert.doesNotMatch(r.err, /TypeError/, r.err);
+    assert.match(r.out, /✗ Every-prompt hook\s+not registered/, r.out);
+    // An object, a string or nulls where a list of hook entries belongs, beside our real entry.
+    const odd = claudeHome({ enabledPlugins: [1], hooks: { UserPromptSubmit: [null, { hooks: null }, { hooks: [null] }, ourHook], PreCompact: "x", PreToolUse: { a: 1 }, PreModelSwitch: 5 } });
+    writeFileSync(join(odd, ".claude.json"), JSON.stringify({ numStartups: 4 }));
+    const r2 = await doctor(odd);
+    assert.doesNotMatch(r2.out, /unreadable|is not a function|Cannot read/, r2.out);
+    assert.match(r2.out, /✓ Every-prompt hook\s+registered/, r2.out);
+    // Gemini CLI's and Cursor's hook lists the same way.
+    const apps = mkdtempSync(join(tmpdir(), "ctxdoc-oddapps-"));
+    mkdirSync(join(apps, ".gemini"));
+    writeFileSync(join(apps, ".gemini", "settings.json"), JSON.stringify({ theme: "x", hooks: { BeforeAgent: "x" } }));
+    mkdirSync(join(apps, ".cursor"));
+    writeFileSync(join(apps, ".cursor", "hooks.json"), JSON.stringify({ version: 1, hooks: { postToolUse: "x", sessionStart: [null] } }));
+    const r3 = await doctor(apps);
+    assert.doesNotMatch(r3.out, /unreadable|is not a function|Cannot read/, r3.out);
 });
 test("~/.claude without settings.json means the hook is not registered, not that Claude Code is absent", async () => {
     const home = claudeHome();
