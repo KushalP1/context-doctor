@@ -67,6 +67,20 @@ The first connects to the MCP server the way a client does (it takes any launch 
 
 `bash scripts/verify-local.sh` runs everything before a release: build, tests, both smokes plus the Gemini proxy smoke, the published package, the Python package and its parity fixtures, every CLI command on your real history (read-only; anything that writes the ledger runs in a throwaway HOME), an install/uninstall round trip and the GitHub Action's steps.
 
+**The plugin live on a real Claude Code: the canary.** Claude Code ships about a version a day, and the plugin's hooks and mod depend on its behaviour, not only its file formats. `scripts/canary.mjs` runs one headless session of a real Claude Code with this checkout as its plugin, against a local mock of the Messages API:
+
+```bash
+node scripts/canary.mjs                      # the newest Claude Code here (the Desktop app's on macOS, else claude on PATH)
+node scripts/canary.mjs --claude <binary>    # a given one, e.g. npm's newest installed into a scratch prefix
+node scripts/canary.mjs --self-test          # green as committed, then red on each planted fault
+```
+
+It runs `claude -p --plugin-dir <checkout>` with stream-json in and out and `--include-hook-events`: a first prompt the mock answers with a subagent call, a second past a $0.05 session-price threshold, a `set_model` control request, then `/compact`. It passes when the plugin loads (init lists it, no `plugin_errors`) and its MCP server connects; SessionStart, UserPromptSubmit, PreToolUse on Agent and PreModelSwitch run and exit 0, the prompt hook and the model-switch hook say their lines, and the PreCompact hook's instructions reach the compaction request; the mod's `session.measure` fires (it does under `-p`) and `context-doctor mod measure` writes the limits ledger (the 5-hour and weekly windows from the mock's `anthropic-ratelimit-unified-5h-*` / `-7d-*` headers) and the session-cost ledger (Claude Code's cost beside ours); and `claude plugin validate --profile directory --strict` passes. `--verbose` prints each event, `--keep` keeps the throwaway folder (Claude Code's `--debug-file` log is in it). Exit 0 green, 1 red, 2 when it could not run.
+
+It cannot reach the real API. Claude Code gets an environment built from nothing but `PATH`: `ANTHROPIC_BASE_URL` is the mock on 127.0.0.1, the only credential is a made-up unsigned token, `HOME`, `CLAUDE_CONFIG_DIR` and the XDG folders are inside a fresh temporary folder, and `HTTPS_PROXY` is the mock too, which refuses and names any attempt to reach another host. Before each start it checks all of that (and that the mock answers with its own nonce) and refuses to run otherwise; a request carrying any other credential, or any attempt to reach an Anthropic host, turns it red. The token is shaped like a Claude gateway's (`aud: "claude-gateway"`) because Claude Code reads the rate-limit headers only for a claude.ai sign-in or a gateway; with an API key `session.measure` gets no windows. `--self-test` plants each fault in a copy of the plugin (hooks/hooks.json not valid JSON, the mod throwing on load, the mod listening for a renamed event, the hook exiting 1, the hook printing invalid JSON) and fails unless every one turns it red; a copy with no fault must be green.
+
+`verify-local.sh` runs the self-test on the newest Claude Code installed here; `.github/workflows/canary.yml` runs it every week on `npm i @anthropic-ai/claude-code@latest`, with no secrets.
+
 ## Good first issues
 
 - **A new session format.** `src/session.ts` reads Claude Code transcripts,

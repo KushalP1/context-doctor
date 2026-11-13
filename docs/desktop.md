@@ -37,3 +37,7 @@ Nothing happens without a press: the mod never compacts and never applies a fix 
 - **Every mod at once:** Claude Code's own switches: `"disableAllHooks": true` (which also stops settings hooks and the status line), or `--safe-mode` for one session. Disabling the context-doctor plugin in `/plugin` removes the mod with the rest of the plugin.
 
 An older Claude Code (before 2.1.286) does not run mods. The mod is named in `hooks/hooks.json`, beside only the model-switch hook, so a version that refused that file would lose that one hook and nothing else of the plugin.
+
+## Checked every week on the newest Claude Code
+
+A canary ([`scripts/canary.mjs`](../scripts/canary.mjs)) runs the plugin in a real Claude Code with no person and no network: `claude -p --plugin-dir` against a local mock of Anthropic's API, in a throwaway home with a made-up credential. It checks that the plugin loads, its hooks run (the every-prompt hook, the subagent and model-switch prices, the compaction instructions), that the mod's `session.measure` fires and writes the limits and cost ledgers above, and that `claude plugin validate --profile directory --strict` passes. It runs weekly on npm's newest Claude Code and in the release checks, and goes red on each planted fault (a broken hooks file, a mod that throws on load, a renamed event, a hook that fails or prints invalid JSON). The band and its buttons are drawn by the app, which a headless session does not show; the mods test harness checks those. Details in [CONTRIBUTING](../CONTRIBUTING.md#checks-beyond-npm-test).
