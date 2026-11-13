@@ -15,7 +15,8 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyOutcome, band, duration, fixArgv, money, outcome, paneRows, parsePlan, passedThreshold, tokens, withPresses } from "../mod/logic.js";
+import { applyOutcome, band, duration, fixArgv, money, outcome, paneRows, parsePlan, passedThreshold, thresholdsFrom, tokens, withPresses } from "../mod/logic.js";
+import { sessionPriceThresholds } from "../sessionprice.js";
 import { register, state, COMMAND, PANE } from "../mod/register.js";
 import { costCheck, costGaps, readCostLines, recordModEvent, recordSessionCost, statusLineRateLimits } from "../modmeasure.js";
 import { sandboxEnv } from "./sandbox.js";
@@ -78,6 +79,22 @@ test("band: the price past a threshold, Hide hides that state only, and `always`
     // Claude Code's figure alone (the CLI could not run): said as Claude Code's.
     const cc = band({ at: T, coldMinTokens: 150_000, thresholds: [25], ccUsd: 30 }, T, "desktop");
     assert.equal(cc.text, "context-doctor: session $30.00 (Claude Code's figure)");
+});
+test("band: a 5-minute cache warns in its last minute, not after every turn; the 1-hour cache in its last five", () => {
+    const five = data({ ttlMs: 5 * MIN });
+    assert.equal(band(five, T + MIN, "desktop").kind, "none", "a minute after the reply: four left, no band");
+    assert.equal(band(five, T + 3.5 * MIN, "desktop").kind, "none");
+    assert.equal(band(five, T + 4.5 * MIN, "desktop").kind, "warm");
+    assert.equal(band(five, T + 7 * MIN, "desktop").kind, "expired");
+    assert.equal(band(data(), T + 54 * MIN, "desktop").kind, "none");
+    assert.equal(band(data(), T + 56 * MIN, "desktop").kind, "warm");
+    assert.equal(band(five, T + MIN, "desktop", { always: true }).kind, "warm", "`always` keeps the clock up");
+});
+test("thresholds without the CLI: the mod reads the environment as the session price does", () => {
+    for (const [raw, off] of [[undefined, undefined], ["", undefined], ["10, $50 200", undefined], ["50 10 50", undefined], ["nonsense", undefined], ["10", "1"], [undefined, "0"]]) {
+        const env = { ...(raw !== undefined ? { CONTEXT_DOCTOR_SESSION_PRICE: raw } : {}), ...(off !== undefined ? { CONTEXT_DOCTOR_NO_SESSION_PRICE: off } : {}) };
+        assert.deepEqual(thresholdsFrom(raw, off), sessionPriceThresholds(env), JSON.stringify(env));
+    }
 });
 test("formatting: money, tokens, durations, thresholds", () => {
     assert.deepEqual([money(0), money(0.004), money(0.42), money(99.994), money(1240.4)], ["$0.00", "<$0.01", "$0.42", "$99.99", "$1,240"]);
@@ -315,6 +332,20 @@ test("after /clear or a resume the band is gone: no Compact first for the next s
         assert.equal(s.compacts, 0);
     }
 });
+test("a compaction Claude Code refuses for its own reason says that reason", async () => {
+    const now = Date.now();
+    const { home, cwd } = sessionHome(80, now);
+    const s = engine(home, { cwd, now });
+    s.$.session.compact = async () => { throw new Error("Not enough messages to compact."); };
+    await fire(s, "session.start", { cwd, surface: "desktop", isInteractive: true });
+    await fire(s, "session.measure", { context: { window: 1e6 }, rateLimits: [], changed: ["context"] }, () => ({ changed: ["context"] }));
+    await button(await render(s, "AbovePrompt", "desktop", {}), "cd-compact").props.onPress({});
+    assert.deepEqual(s.toasts, ["context-doctor: not compacted: Not enough messages to compact."]);
+    // A rejection with no words of its own: the likely reason, said as one.
+    s.$.session.compact = async () => { throw undefined; };
+    await button(await render(s, "AbovePrompt", "desktop", {}), "cd-compact").props.onPress({});
+    assert.match(s.toasts[1], /not compacted; Claude Code may be busy/);
+});
 test("the compact button: a turn in flight is a toast, not a compaction; Hide hides it", async () => {
     const now = Date.now();
     const { home, cwd } = sessionHome(80, now);
@@ -324,7 +355,7 @@ test("the compact button: a turn in flight is a toast, not a compaction; Hide hi
     const tree = await render(s, "AbovePrompt", "terminal", {});
     await button(tree, "cd-compact").props.onPress({});
     assert.equal(s.compacts, 0);
-    assert.match(s.toasts[0], /busy; compact once the turn ends/);
+    assert.equal(s.toasts[0], "context-doctor: not compacted: a turn is running");
     await button(tree, "cd-hide").props.onPress({});
     assert.equal(await render(s, "AbovePrompt", "terminal", {}), "ENGINE");
 });
@@ -339,6 +370,15 @@ test("graceful: no Node for the CLI keeps Claude Code's own figure; CONTEXT_DOCT
     await fire(s, "command.run", { command: COMMAND });
     await new Promise((r) => setTimeout(r, 20));
     assert.match(texts(await render(s, "Pane", "desktop", {}, PANE)).join("\n"), /could not run: spawn node ENOENT\. It needs Node\.js on the PATH/);
+    // Without the CLI the thresholds still follow the environment: a lower one, or none at all.
+    const low = engine(home, { noProcess: true, env: { CONTEXT_DOCTOR_SESSION_PRICE: "5" } });
+    await fire(low, "session.start", { cwd: home, surface: "desktop", isInteractive: true });
+    await fire(low, "session.measure", { context: { window: 1e6 }, rateLimits: [], cost: { usd: 6 }, changed: ["cost"] });
+    assert.equal(texts(await render(low, "AbovePrompt", "desktop", {}))[0], "context-doctor: session $6.00 (Claude Code's figure)");
+    const none = engine(home, { noProcess: true, env: { CONTEXT_DOCTOR_NO_SESSION_PRICE: "1" } });
+    await fire(none, "session.start", { cwd: home, surface: "desktop", isInteractive: true });
+    await fire(none, "session.measure", { context: { window: 1e6 }, rateLimits: [], cost: { usd: 120 }, changed: ["cost"] });
+    assert.equal(await render(none, "AbovePrompt", "desktop", {}), "ENGINE");
     const off = engine(home, { env: { CONTEXT_DOCTOR_NO_MOD: "1" } });
     await fire(off, "session.start", { cwd: home, surface: "desktop", isInteractive: true });
     assert.deepEqual(off.commands, []);

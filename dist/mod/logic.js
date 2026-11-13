@@ -8,9 +8,31 @@
  * `fix --apply`, `fix undo`), the same code as in a terminal. The node test
  * suite exercises these functions directly.
  */
-/** The band shows within this long of the cache going cold. */
+/** The band shows within this long of the cache going cold... */
 export const WARN_BEFORE_MS = 5 * 60_000;
 const MIN = 60_000;
+/**
+ * ...or within this share of the cache's life, when that is shorter: the last
+ * minute of a 5-minute cache (WARN_BEFORE_MS would be all of it, the band
+ * after every turn), the last five of the 1-hour cache.
+ */
+export const WARN_SHARE = 1 / 5;
+/** How long before the cache goes cold the band warns, for a cache that lives `ttlMs`. */
+export function warnBeforeMs(ttlMs) {
+    return Math.min(WARN_BEFORE_MS, ttlMs * WARN_SHARE);
+}
+/** The session price thresholds when the CLI cannot say them (no Node): the defaults, the environment's own, or none. */
+export const DEFAULT_THRESHOLDS = [25, 100, 500];
+/** CONTEXT_DOCTOR_SESSION_PRICE and CONTEXT_DOCTOR_NO_SESSION_PRICE read as sessionprice.ts reads them. */
+export function thresholdsFrom(raw, off) {
+    if (off === "1")
+        return [];
+    const text = raw?.trim();
+    if (!text)
+        return DEFAULT_THRESHOLDS;
+    const set = text.split(/[\s,]+/).map((v) => Number(v.replace(/^\$/, ""))).filter((v) => Number.isFinite(v) && v > 0);
+    return set.length ? [...new Set(set)].sort((a, b) => a - b) : DEFAULT_THRESHOLDS;
+}
 /** "$0.42", "$3.10", "$112", "$1,240". */
 export function money(n) {
     if (!Number.isFinite(n))
@@ -95,7 +117,7 @@ export function band(d, now, surface, opts = {}) {
         if (now >= expiresAt && (big || opts.always)) {
             return show({ kind: "expired", key: `expired:${d.lastReplyAt}`, text: `context-doctor: the cache expired, so your next message re-writes ${rewrite}${tail}` });
         }
-        if (now < expiresAt && (opts.always || (big && expiresAt - now <= WARN_BEFORE_MS))) {
+        if (now < expiresAt && (opts.always || (big && expiresAt - now <= warnBeforeMs(d.ttlMs)))) {
             return show({ kind: "warm", key: `warm:${d.lastReplyAt}`, text: `context-doctor: cache warm for ${duration(expiresAt - now)}, then your next message re-writes ${rewrite}${tail}` });
         }
     }

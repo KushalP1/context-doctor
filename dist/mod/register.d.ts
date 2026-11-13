@@ -36,6 +36,8 @@ export declare const PANE = "context-doctor-fix";
 interface State {
     off: boolean;
     always: boolean;
+    /** The session price thresholds in force, for when the CLI cannot say them (no Node). */
+    thresholds: number[];
     data?: BandData;
     hidden: Set<string>;
     drawn: string;

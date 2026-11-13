@@ -29,7 +29,7 @@
  * functions declared at the top of this file.
  */
 
-import { applyOutcome, band, fixArgv, MODEL_CHANGE, outcome, paneRows, parsePlan, withPresses, type BandData, type PlanJson } from "./logic.js";
+import { applyOutcome, band, DEFAULT_THRESHOLDS, fixArgv, MODEL_CHANGE, outcome, paneRows, parsePlan, thresholdsFrom, withPresses, type BandData, type PlanJson } from "./logic.js";
 import type { Element, Engine, MeasureEvent, On, RenderEvent } from "./api.js";
 
 /** JSX's factory: a global of the mods runtime (`h(type, props, ...children)`). */
@@ -47,6 +47,8 @@ const MEASURE_TIMEOUT_MS = 30_000;
 interface State {
   off: boolean;
   always: boolean;
+  /** The session price thresholds in force, for when the CLI cannot say them (no Node). */
+  thresholds: number[];
   data?: BandData;
   hidden: Set<string>;
   drawn: string;
@@ -60,7 +62,7 @@ interface State {
   presses: Map<string, "applied" | "undone">;
 }
 
-const fresh = (): State => ({ off: false, always: false, hidden: new Set(), drawn: "", compacting: false, loading: false, presses: new Map() });
+const fresh = (): State => ({ off: false, always: false, thresholds: DEFAULT_THRESHOLDS, hidden: new Set(), drawn: "", compacting: false, loading: false, presses: new Map() });
 let S: State = fresh();
 
 /** For tests: the state the hooks share. */
@@ -82,7 +84,7 @@ function bandKey(now: number, surface: string): string {
 
 /** Hand the reading to the CLI; with no CLI (no node on PATH), keep what Claude Code said. */
 async function measure($: Engine, e: MeasureEvent): Promise<void> {
-  const fallback: BandData = { at: await $.clock.now(), coldMinTokens: 150_000, thresholds: [25, 100, 500], ...(e.cost ? { ccUsd: e.cost.usd } : {}) };
+  const fallback: BandData = { at: await $.clock.now(), coldMinTokens: 150_000, thresholds: S.thresholds, ...(e.cost ? { ccUsd: e.cost.usd } : {}) };
   try {
     const sessionId = await $.session.id();
     const cwd = await $.session.cwd();
@@ -114,8 +116,10 @@ async function compact($: Engine): Promise<void> {
         await $.process.run(["node", cliOf($), "mod", "event"], { stdin: JSON.stringify({ sessionId, ev: "compact", tokens }), timeoutMs: MEASURE_TIMEOUT_MS });
       } catch { /* the count is a nicety */ }
     }
-  } catch {
-    $.ui.toast("context-doctor: Claude Code is busy; compact once the turn ends.");
+  } catch (err) {
+    // Claude Code rejects a compaction while a turn runs, and for its own reasons (nothing to compact, a failed summary): say which.
+    const why = err instanceof Error && err.message.trim() ? err.message.trim() : typeof err === "string" && err.trim() ? err.trim() : "";
+    $.ui.toast(why ? `context-doctor: not compacted: ${why}` : "context-doctor: not compacted; Claude Code may be busy: compact once the turn ends.");
   } finally {
     S.compacting = false;
     $.ui.invalidate("ui.render");
@@ -186,6 +190,7 @@ export function register(on: On): void {
     try {
       S.off = (await $.env.get("CONTEXT_DOCTOR_NO_MOD")) === "1";
       S.always = (await $.env.get("CONTEXT_DOCTOR_MOD_BAND")) === "always";
+      S.thresholds = thresholdsFrom(await $.env.get("CONTEXT_DOCTOR_SESSION_PRICE"), await $.env.get("CONTEXT_DOCTOR_NO_SESSION_PRICE"));
       if (!S.off) {
         await $.command.register({ name: "context-doctor-fix", description: "context-doctor: the fix plan, with an Apply and an Undo button per lever (nothing applies without a press)" });
         $.clock.every(TICK_MS, () => void tick($));

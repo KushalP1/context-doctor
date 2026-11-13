@@ -50,8 +50,20 @@ export type Band = {
     text: string;
     compact: string;
 };
-/** The band shows within this long of the cache going cold. */
+/** The band shows within this long of the cache going cold... */
 export declare const WARN_BEFORE_MS: number;
+/**
+ * ...or within this share of the cache's life, when that is shorter: the last
+ * minute of a 5-minute cache (WARN_BEFORE_MS would be all of it, the band
+ * after every turn), the last five of the 1-hour cache.
+ */
+export declare const WARN_SHARE: number;
+/** How long before the cache goes cold the band warns, for a cache that lives `ttlMs`. */
+export declare function warnBeforeMs(ttlMs: number): number;
+/** The session price thresholds when the CLI cannot say them (no Node): the defaults, the environment's own, or none. */
+export declare const DEFAULT_THRESHOLDS: number[];
+/** CONTEXT_DOCTOR_SESSION_PRICE and CONTEXT_DOCTOR_NO_SESSION_PRICE read as sessionprice.ts reads them. */
+export declare function thresholdsFrom(raw: string | undefined, off: string | undefined): number[];
 /** "$0.42", "$3.10", "$112", "$1,240". */
 export declare function money(n: number): string;
 /** "820", "45k", "520k", "1.2M". */
