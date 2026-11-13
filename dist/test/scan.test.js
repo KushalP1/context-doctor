@@ -167,7 +167,13 @@ test("pruning: other versions, gone or long-untouched transcripts and stray temp
         const home = history();
         const dir = mkdtempSync(join(tmpdir(), "cd-scan-prune-"));
         try {
-            const keep = transcripts(home).slice(0, 4);
+            // Copies written now: the fixture's own files keep their fixed 2026 times (old.jsonl, 2026-08-18), which
+            // pruning counted as untouched for 120 days from 2026-12-16 on, and this test failed on every machine.
+            const keep = transcripts(home).slice(0, 4).map((p, i) => {
+                const copy = join(dir, `keep-${i}.jsonl`);
+                writeFileSync(copy, readFileSync(p));
+                return copy;
+            });
             for (const p of keep)
                 rowsOf(p, REQUEST_ROWS);
             const gone = join(dir, "gone.jsonl");
