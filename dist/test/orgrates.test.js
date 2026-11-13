@@ -21,6 +21,7 @@ import { sessionPriceDue } from "../sessionprice.js";
 import { renderSubagents, subagentReport } from "../subagents.js";
 import { subagentPayback } from "../subagentpay.js";
 import { clearScanMemo } from "../scan.js";
+import { diagnosedMisses } from "../missledger.js";
 import { withSandboxHome } from "./sandbox.js";
 const near = (a, b, what) => assert.ok(Math.abs(a - b) < 1e-9, `${what}: ${a} vs ${b}`);
 const AT = Date.UTC(2026, 10, 11, 12);
@@ -262,5 +263,20 @@ test("the budget's ledger, priced at list, is priced again when the organization
     finally {
         Date.now = real;
         rmSync(home, { recursive: true, force: true });
+    }
+});
+test("cache-misses' diagnosed misses at the rates the rest of its report prices with: the multiplier, a row's own write rate", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cd-org-miss-"));
+    const log = join(dir, "misses.jsonl");
+    try {
+        // 400k tokens re-written on the 1-hour cache by Opus 5.5 ($4 in, writes 2x, reads $0.20): $3.12 above a read at list.
+        writeFileSync(log, JSON.stringify({ ts: AT, at: AT / 1000, s: "s1", m: "claude-opus-5-5", n: 1, tok: 400_000, ttl: "1h", causes: ["tools_changed"] }) + "\n");
+        near((await withManaged(undefined, () => diagnosedMisses(0, log))).extraUsd, (400_000 * (8 - 0.2)) / 1e6, "list");
+        near((await withManaged({ multiplier: 0.5 }, () => diagnosedMisses(0, log))).extraUsd, (0.5 * 400_000 * (8 - 0.2)) / 1e6, "multiplier");
+        const row = { overrides: { "claude-opus-5-5": { input: 3, output: 15, cacheRead: 0.1, cacheWrite: 4 } } };
+        near((await withManaged(row, () => diagnosedMisses(0, log))).extraUsd, (400_000 * (4 - 0.1)) / 1e6, "a row's one write rate");
+    }
+    finally {
+        rmSync(dir, { recursive: true, force: true });
     }
 });

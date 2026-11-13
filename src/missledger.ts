@@ -19,7 +19,7 @@
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { statePath } from "./ledger.js";
-import { CACHE_WRITE_1H, CACHE_WRITE_5M, pricingFor } from "./pricing.js";
+import { CACHE_WRITE_1H, CACHE_WRITE_5M, rateCard, writePerM } from "./pricing.js";
 
 /** Beside the limits log: ~/.claude/.context-doctor-misses.jsonl. */
 export function missLogPath(): string {
@@ -211,9 +211,11 @@ export function diagnosedMisses(since = 0, path = missLogPath()): DiagnosedMisse
     // status line runs, the line names the cause of the last one only, so
     // its share of the tokens goes to that cause and the rest to "unseen".
     const k = Math.max(1, prev && l.n >= prev.n ? l.n - prev.n : l.n);
-    const price = pricingFor(l.m);
+    // At the rates the rest of the report prices with (rateCard, as requestCost): the
+    // organization's when set (its own cache-write rate), the price of the miss's day.
+    const price = rateCard(l.m, undefined, l.at * 1000)?.rates;
     // No ttl recorded: Claude Code's default, 5 minutes (as the status line prices it).
-    const perToken = price ? (price.inputPerM * (l.ttl === "1h" ? CACHE_WRITE_1H : CACHE_WRITE_5M) - price.cacheReadPerM) / 1e6 : 0;
+    const perToken = price ? (writePerM(price, l.ttl === "1h" ? CACHE_WRITE_1H : CACHE_WRITE_5M) - price.cacheReadPerM) / 1e6 : 0;
     misses += k;
     tokens += tok;
     extraUsd += tok * perToken;
