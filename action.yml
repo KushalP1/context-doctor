@@ -23,7 +23,7 @@ inputs:
     required: false
     default: claude-sonnet-5
   comment:
-    description: Post (and keep updating) one comment on the pull request. Needs `pull-requests: write`.
+    description: "Post (and keep updating) one comment on the pull request. Needs `pull-requests: write`."
     required: false
     default: "true"
   version:

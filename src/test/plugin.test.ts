@@ -107,6 +107,40 @@ test("the GitHub Action installs context-doctor outside the checkout, so a pull 
   assert.match(r.stdout, /^cmd node .*context-doctor-cli\/node_modules\/context-doctor\/dist\/cli\.js$/m, r.stdout);
 });
 
+/**
+ * Plain (unquoted) YAML values with ": " inside, which a parser refuses
+ * ("mapping values are not allowed in this context"). action.yml's
+ * `comment` input said "Needs `pull-requests: write`." unquoted, so the
+ * runner could not load the Action at all (libyaml, which GitHub's YAML
+ * library follows, stops there). No YAML parser is a dependency here, so
+ * this reads the lines: block scalars (| and >) are skipped.
+ */
+function plainScalarProblems(yaml: string): string[] {
+  const out: string[] = [];
+  let block = -1; // the column of the key whose block scalar is being read
+  yaml.split(/\r?\n/).forEach((line, i) => {
+    const indent = line.search(/\S/);
+    if (block >= 0) {
+      if (indent === -1 || indent > block) return;
+      block = -1;
+    }
+    const m = /^(\s*(?:- )?)[\w.-]+:\s+(.*)$/.exec(line);
+    if (!m) return;
+    const value = m[2];
+    if (/^[|>][-+]?\s*$/.test(value)) block = m[1].length;
+    // A comment after the value (" # …") is fine; ": " before it is not.
+    else if (!/^["'[{&*!#]/.test(value) && /: /.test(value.replace(/\s+#.*$/, ""))) out.push(`line ${i + 1}: ${line.trim()}`);
+  });
+  return out;
+}
+
+test("action.yml and the workflows hold no unquoted value with ': ' inside, which a YAML parser refuses", () => {
+  assert.deepEqual(plainScalarProblems('a:\n  description: Needs `pull-requests: write`.\n'), ["line 2: description: Needs `pull-requests: write`."], "the check sees the case it is for");
+  assert.deepEqual(plainScalarProblems('run: |\n  echo "a: b # c"\nnext: "x: y"\nid-token: write # a: comment\n'), [], "block scalars, quoted values and comments are fine");
+  const files = ["action.yml", ...readdirSync(join(root, ".github", "workflows")).map((f) => join(".github", "workflows", f))];
+  for (const f of files) assert.deepEqual(plainScalarProblems(readFileSync(join(root, f), "utf8")), [], f);
+});
+
 test("the build scripts find their own folder in a checkout whose path has a space (a URL's pathname is %20-encoded)", () => {
   for (const f of readdirSync(join(root, "scripts")).filter((n) => /\.m?js$/.test(n))) {
     const text = readFileSync(join(root, "scripts", f), "utf8");
