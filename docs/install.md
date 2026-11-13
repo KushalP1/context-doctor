@@ -12,7 +12,7 @@ npm install -g context-doctor && context-doctor install
 
 ## What it writes
 
-Before its first edit of a config, install keeps the file as it was beside it as `<name>.context-doctor.backup` (a later install keeps that first copy; uninstall leaves it and lists it):
+Before its first edit of a config, install keeps the file as it was beside it as `<name>.context-doctor.backup` (a later install keeps that first copy; uninstall leaves it and lists it). For Claude Code it takes one of two routes ([below](#claude-code-the-plugin-or-installs-own-wiring)): the plugin, or the MCP server, skill and hooks in items 2 and 4-6.
 
 1. **Claude Desktop config** (`claude_desktop_config.json`) — registers the MCP server
 2. **Claude Code config** (`~/.claude.json`) — registers the MCP server
@@ -29,6 +29,40 @@ Before its first edit of a config, install keeps the file as it was beside it as
 10. **GitHub Copilot**, when present (the Copilot CLI, the GitHub Copilot app, or VS Code, which ships Copilot): the MCP server in `~/.copilot/mcp-config.json` (`$COPILOT_HOME` when set), which Copilot's sessions read in the CLI, the app and VS Code alike, and a hook file of its own, `~/.copilot/hooks/context-doctor.json`, whose `sessionStart` gives each new or resumed session the standing rules (Copilot keeps that context in memory and does not restore it on resume, so a resume gets it again). If `mcp-config.json` cannot be read, the hook is not written either, since the rules name the MCP tools; uninstall removes each file on its own, and removes `~/.copilot` or its `hooks` folder only if install created it (a marker, `.context-doctor-created.json`, records which). That is all Copilot allows: the Copilot CLI includes an MCP server's instructions only for some servers (all of them with `--allow-all-mcp-server-instructions`), and of its hooks that can add context (`sessionStart`, `postToolUse`, `postToolUseFailure`) none is given a transcript, so there is no size check to run ([hooks reference](https://docs.github.com/en/copilot/reference/hooks-reference)). VS Code's user-profile `mcp.json` is left alone: VS Code's docs label it deprecated and say VS Code forwards it into the same Copilot sessions, so a context-doctor entry there as well could load the tools twice; `doctor` warns when it finds one
 11. **Antigravity**, when present (Google's app, IDE or CLI; its own folders under `~/.gemini`, not `~/.gemini` alone, which Gemini CLI also makes): the MCP server in `~/.gemini/config/mcp_config.json`, the file the IDE and the CLI read and the app links to (an install from before that shared folder gets the app's own `~/.gemini/antigravity/mcp_config.json`); Antigravity creates the file empty, and uninstall leaves it empty again. The skill goes to `~/.gemini/config/skills/context-doctor/` (the app and the IDE; the IDE's legacy `~/.gemini/antigravity/skills/` on an older install) and to `~/.gemini/antigravity-cli/skills/` when the CLI is there ([MCP](https://www.antigravity.google/docs/mcp), [skills](https://www.antigravity.google/docs/skills)); a skills folder install made is removed with it, and so is `~/.gemini/config` on a CLI-only install that did not have it, recorded in `~/.gemini/.context-doctor-created.json`. No hooks: Antigravity's hooks hand over a transcript path, but its format is undocumented, so there is no size check to run, and the rules arrive with the MCP server. `doctor` checks both and warns when the server is `"disabled"` there
 12. With `--statusline`: live context size, cache share, until when the cache is warm, and cost in Claude Code's status bar ([details](./editor-and-statusline.md))
+
+### Claude Code: the plugin, or install's own wiring
+
+**On Claude Code 2.1.286 or later, install enables the context-doctor plugin** and wires none of items 2 and 4-6 itself. The plugin brings the same MCP server, skills and hooks, plus the [mod](./desktop.md) that only a plugin can carry: limit readings and Claude Code's own session cost after each turn (in the Desktop app and VS Code too, where the status line never runs), the Compact first button on a cold return, and `/context-doctor-fix`. Install writes two keys into `~/.claude/settings.json`, each only if it is not there, edited in place like every other key it writes:
+
+```json
+"extraKnownMarketplaces": {
+  "context-doctor": { "source": { "source": "github", "repo": "KushalP1/context-doctor" }, "autoUpdate": true }
+},
+"enabledPlugins": { "context-doctor@context-doctor": true }
+```
+
+Claude Code does the rest: at its next start it fetches the marketplace in the background, then downloads the plugin, and loads it from the session after (`/reload-plugins` loads it in the running one). `autoUpdate` lets Claude Code update the plugin when a release changes its version, as the npx-launched MCP server follows npm. Which keys install added is recorded in `~/.claude/.context-doctor-plugin.json`; nothing else counts as install's.
+
+Settings are one file for every Claude Code on the machine, so the plugin route needs **every** Claude Code install can find to be 2.1.286 or later: CLIs on PATH and in the usual places, and the newest Claude Code the Desktop app has downloaded. Otherwise install keeps its own wiring for all of them and says why:
+
+| On this machine | Claude Code gets |
+|---|---|
+| Only 2.1.286+ (e.g. the Desktop app's 2.1.321 and a Homebrew 2.1.311) | The plugin: MCP server, skills, hooks and the mod |
+| A 2.1.286+ and an older one (e.g. the Desktop app's 2.1.321 and a Homebrew 2.1.62) | Install's own MCP server, skill and hooks, for both (no model-switch hook while the older one is there); install names the older one to update |
+| No version found | Install's own wiring |
+| The plugin turned off in your settings (`enabledPlugins` false) | Install's own wiring; your choice stands |
+| The plugin enabled by you already | Nothing from install; it leaves Claude Code to the plugin |
+
+Running install again moves an existing install between routes, so nothing runs twice: once the plugin is on (enabled by install or by you), install takes its own hooks, skill and MCP entry out as uninstall would; when an older Claude Code appears, it takes out the plugin keys it wrote and wires its own again. Should both be there for a moment (say, a plugin enabled by hand before install runs again), the plugin's hooks stay quiet for each event install's own copy still covers. `uninstall` takes out exactly the keys install added (the settings file comes back byte for byte, or goes if install created it); a plugin you enabled stays. Claude Code keeps its downloaded copy of the plugin, disabled, under `~/.claude/plugins`; `claude plugin uninstall context-doctor@context-doctor` deletes it.
+
+`doctor` says which route is active, how far Claude Code has got with the plugin, and whether the mod is recording:
+
+```
+✓ Claude Code route      the context-doctor plugin (enabled by install), downloaded (0.46.0): its MCP server, skills, hooks and mod
+✓ Mod                    recording: last measured 4 min ago (~/.claude/.context-doctor-session-cost.jsonl); limits ledger written 4 min ago
+```
+
+Before the first session, the route line says the plugin is not fetched yet and the mod line that it has not measured yet. The status line (`--statusline`) is a user setting a plugin cannot carry, so install adds it on either route.
 
 `context-doctor autopilot on` is separate and opt-in: it adds the background proxy service and, after the proxy has answered a health check, `env.ANTHROPIC_BASE_URL` to `~/.claude/settings.json`, plus `env.ENABLE_TOOL_SEARCH=auto` unless you set that yourself ([details](./autopilot.md)).
 

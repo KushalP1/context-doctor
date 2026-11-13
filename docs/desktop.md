@@ -4,6 +4,13 @@
 
 Claude Code's status line never runs in the Desktop app's Code tab or in the VS Code extension, so there the [status line](./editor-and-statusline.md#context-health-in-claude-codes-status-bar)'s cache clock never showed, and the limit ledger `context-doctor limits` reads stayed empty. The Claude Code plugin now carries a **mod**: code that Claude Code runs inside the session (in the terminal from 2.1.287, the Desktop app from 2.1.286, the VS Code extension from 2.1.299). It does three things.
 
+**Getting it.** `context-doctor install` gives it to you: when every Claude Code on the machine is 2.1.286 or later (the Desktop app's bundled one counts), install enables the plugin in `~/.claude/settings.json` instead of wiring its own hooks, skill and MCP server ([what install writes](./install.md#claude-code-the-plugin-or-installs-own-wiring)). Claude Code fetches it in the background at its next start and loads it from the session after (`/reload-plugins` loads it at once). Or add it yourself: `/plugin marketplace add KushalP1/context-doctor`, then `/plugin install context-doctor@context-doctor`. `context-doctor doctor` says whether it is loaded and when the mod last measured:
+
+```
+✓ Claude Code route      the context-doctor plugin (enabled by install), downloaded (0.46.0): its MCP server, skills, hooks and mod
+✓ Mod                    recording: last measured 4 min ago (~/.claude/.context-doctor-session-cost.jsonl); limits ledger written 4 min ago
+```
+
 **After each turn, it keeps the measurements.** Claude Code hands mods the rate-limit windows (Pro and Max) and its own cost of the session (`/cost`'s figure). The mod passes them to `context-doctor mod measure`, which:
 
 - appends the 5-hour and weekly readings to `~/.claude/.context-doctor-limits.jsonl`, in the status line's format and with its rules (only changes, at most once a minute, never a lower figure of the same window from a parallel session), so `context-doctor limits` gets Claude readings from the Desktop app too;
@@ -36,7 +43,7 @@ Nothing happens without a press: the mod never compacts and never applies a fix 
 - **Parts of what it keeps:** `CONTEXT_DOCTOR_NO_LIMITS_LOG=1` (the limit readings, as for the status line), `CONTEXT_DOCTOR_NO_COST_LOG=1` (the cost ledger).
 - **Every mod at once:** Claude Code's own switches: `"disableAllHooks": true` (which also stops settings hooks and the status line), or `--safe-mode` for one session. Disabling the context-doctor plugin in `/plugin` removes the mod with the rest of the plugin.
 
-An older Claude Code (before 2.1.286) does not run mods. The mod is named in `hooks/hooks.json`, beside only the model-switch hook, so a version that refused that file would lose that one hook and nothing else of the plugin.
+An older Claude Code (before 2.1.286) does not run mods; with one on the machine, `install` keeps its own wiring for every Claude Code there and says which one to update. The mod is named in `hooks/hooks.json`, beside only the model-switch hook, so a version that refused that file would lose that one hook and nothing else of the plugin.
 
 ## Checked every week on the newest Claude Code
 
