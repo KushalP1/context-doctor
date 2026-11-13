@@ -6,8 +6,8 @@
  * declarations Claude Code 2.1.321 writes (`claude-code.d.ts`): `$.process.run`,
  * `$.session.{id,model,compact}`, `$.ui.{open,resolve,invalidate,toast}`,
  * `$.command.register`, `$.clock.{now,every}`, `$.env.get`, `$.plugin.root`,
- * and the events `session.start`, `session.measure`, `command.run`,
- * `ui.render`. A subset, structurally compatible: no runtime code.
+ * and the events `session.start`, `session.measure`, `session.end`,
+ * `command.run`, `ui.render`. A subset, structurally compatible: no runtime code.
  */
 export type Surface = "terminal" | "desktop" | "vscode" | "mobile";
 export interface RateLimit {
@@ -113,6 +113,12 @@ export interface On {
     }>): unknown;
     (event: "session.measure", hook: Hook<MeasureEvent, {
         changed: string[];
+    }>): unknown;
+    (event: "session.end", hook: Hook<{
+        reason: string;
+        sessionId: string;
+    }, {
+        sessionId: string;
     }>): unknown;
     (event: "command.run", matcher: {
         command: string;

@@ -292,6 +292,22 @@ test("after a turn: the readings reach the limits ledger and the cost ledger thr
     // The old context's figures are gone: no second offer for it.
     assert.equal(await render(s, "AbovePrompt", "desktop", {}), "ENGINE");
 });
+test("after /clear or a resume the band is gone: no Compact first for the next session on the old one's figures", async () => {
+    for (const reason of ["clear", "resume"]) {
+        const now = Date.now();
+        const { home, cwd } = sessionHome(80, now);
+        const s = engine(home, { cwd, now });
+        await fire(s, "session.start", { cwd, surface: "desktop", isInteractive: true });
+        await fire(s, "session.measure", { context: { window: 1e6 }, rateLimits: [], changed: ["context"] }, () => ({ changed: ["context"] }));
+        assert.ok(button(await render(s, "AbovePrompt", "desktop", {}), "cd-compact"), reason);
+        // The process goes on under another session id; Claude Code raises no session.start for it.
+        const ended = await fire(s, "session.end", { reason, sessionId: "sess-1", resume: { id: "sess-1" } }, (e) => ({ sessionId: e.sessionId }));
+        assert.deepEqual(ended, { sessionId: "sess-1" }, "the engine's end step still runs");
+        assert.equal(await render(s, "AbovePrompt", "desktop", {}), "ENGINE", reason);
+        assert.equal(await render(s, "AbovePrompt", "terminal", {}), "ENGINE", reason);
+        assert.equal(s.compacts, 0);
+    }
+});
 test("the compact button: a turn in flight is a toast, not a compaction; Hide hides it", async () => {
     const now = Date.now();
     const { home, cwd } = sessionHome(80, now);

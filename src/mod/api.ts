@@ -6,8 +6,8 @@
  * declarations Claude Code 2.1.321 writes (`claude-code.d.ts`): `$.process.run`,
  * `$.session.{id,model,compact}`, `$.ui.{open,resolve,invalidate,toast}`,
  * `$.command.register`, `$.clock.{now,every}`, `$.env.get`, `$.plugin.root`,
- * and the events `session.start`, `session.measure`, `command.run`,
- * `ui.render`. A subset, structurally compatible: no runtime code.
+ * and the events `session.start`, `session.measure`, `session.end`,
+ * `command.run`, `ui.render`. A subset, structurally compatible: no runtime code.
  */
 
 export type Surface = "terminal" | "desktop" | "vscode" | "mobile";
@@ -61,6 +61,7 @@ export type Hook<E, R> = ($: Engine, e: E, next: Next<E, R>) => R | Promise<R>;
 export interface On {
   (event: "session.start", hook: Hook<{ cwd: string; surface: Surface | null; isInteractive: boolean }, { cwd: string }>): unknown;
   (event: "session.measure", hook: Hook<MeasureEvent, { changed: string[] }>): unknown;
+  (event: "session.end", hook: Hook<{ reason: string; sessionId: string }, { sessionId: string }>): unknown;
   (event: "command.run", matcher: { command: string }, hook: Hook<{ command: string; args?: string }, { text: string }>): unknown;
   (event: "ui.render", matcher: { component: string; requestId?: string }, hook: Hook<RenderEvent, Element>): unknown;
 }

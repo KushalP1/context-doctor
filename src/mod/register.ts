@@ -204,6 +204,15 @@ export function register(on: On): void {
     return r;
   });
 
+  // A `/clear` or a resume ends this session and the process goes on under another, with no
+  // session.start for it: the band's figures were the old session's, and its Compact first button
+  // would compact the new one on them. Nothing is shown until the next turn measures the new one.
+  on("session.end", async ($, e, next) => {
+    S.data = undefined;
+    try { $.ui.invalidate("ui.render"); } catch { /* ending anyway */ }
+    return next(e);
+  });
+
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
     if (S.off || e.props.hasSurvey) return next(e);
     const b = band(S.data, await $.clock.now(), e.surface, { hidden: S.hidden, always: S.always });
