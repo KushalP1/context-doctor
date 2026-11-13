@@ -94,6 +94,14 @@ test("every documented command has its own help", () => {
         assert.match(r.stdout, new RegExp(`context-doctor ${c}\\b`), c);
     }
 });
+test("--model and --redact are in the help of the commands that take them (analyze's and ci's listed neither)", () => {
+    const full = run("--help").stdout;
+    for (const c of ["analyze", "session", "cursor", "diff", "watch", "pack", "cache-plan", "ci", "ab", "experiment"])
+        assert.match(commandHelp(full, c) ?? "", /--model <name>/, c);
+    for (const c of ["analyze", "session", "cursor"])
+        assert.match(commandHelp(full, c) ?? "", /--redact/, c);
+    assert.doesNotMatch(commandHelp(full, "savings") ?? "", /--model|--redact/, "not where they do nothing");
+});
 test("--json is JSON or an error: never a text report a script then fails to parse", () => {
     // These printed their text report with exit 0.
     for (const args of [["report"], ["autopilot", "status"], ["doctor"], ["instructions"], ["diff", "a", "b"]]) {

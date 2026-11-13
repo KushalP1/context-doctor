@@ -277,11 +277,13 @@ Input: a conversation JSON file (OpenAI or Anthropic message format, or a bare
 message array). Use "-" to read from stdin.
 
 Options:
-  --model <name>          Model name for window-size math (e.g. claude-sonnet-5, gpt-4o)
+  --model <name>          (analyze, session, cursor, diff, watch, pack, cache-plan, ci, ab,
+                          experiment) Model to count and price for (e.g. claude-sonnet-5, gpt-4o)
   --exact                 (analyze) Add an exact token count: Anthropic count-tokens API for
                           Claude models (needs ANTHROPIC_API_KEY), tiktoken for GPT (if installed)
-  --redact                Mask message previews and file paths in the report, so it can be
-                          shared in a bug report without leaking conversation content
+  --redact                (analyze, session, cursor) Mask message previews and file paths in
+                          the report, so it can be shared in a bug report without leaking
+                          conversation content
   --json                  ${optionText(`(${JSON_COMMANDS.join(", ")}) Machine-readable output on stdout`)}
   --fail-over-budget      (analyze/session) Exit 1 when the .contextdoctorrc budget is
                           exceeded — lets CI gate a pull request on context size
