@@ -70,6 +70,7 @@ import { applyPrune, canonical, installedSkills, planPrune, renderPrune, undoPru
 import { lensOverSessions, renderLens, sessionLens, LENS_ROWS } from "./lens.js";
 import { applyFix, fixOverrides, loadFixRecords, parseFixIds, planFixes, progressSummariesState, readFixRecords, renderFixPlan, renderFixShare, savedSince, undoFixes } from "./fix.js";
 import { disablesSummaries, estimateProgressSummaries, PROGRESS_ROWS } from "./progresssummaries.js";
+import { firstQuestion, renderFirstScreen, splitFirstFixes } from "./firstfix.js";
 import { claudeMcpConfigs, MCP_ROWS } from "./mcpschema.js";
 import { effectiveEnv, settingsSources, shellSet, underClaudeCode } from "./effective.js";
 import { SettingsError } from "./settingsedit.js";
@@ -117,15 +118,16 @@ Start here:
                                                 What your recent Claude Code sessions cost, and what
                                                 /compact at cold resumes, autopilot and an earlier
                                                 auto-compact window would save, replayed and priced
-                                                as billed. --share: totals only, to paste. Also
-                                                what a bare \`context-doctor\` shows
+                                                as billed. --share: totals only, to paste
   context-doctor fix [--apply ids|all] [--share] What to change, ranked by dollars on your own
                                                 sessions (compact earlier, the cache lifetime,
                                                 autopilot, MCP tool search, unused servers, the
                                                 subagents' model): each applied only on a yes
                                                 (the subagents' model only by name, never by
                                                 "all"), \`fix undo\` reverts them, later runs show
-                                                what each saved since
+                                                what each saved since. A bare \`context-doctor\`
+                                                in a terminal shows the same plan on one screen
+                                                and asks once about the fixes with no quality cost
   context-doctor doctor                         Self-check the installation (configs, hook, skill,
                                                 MCP handshake) with one pasteable diagnosis
   context-doctor uninstall                      Undo install
@@ -745,6 +747,35 @@ function hasClaudeSessions() {
         return false;
     }
 }
+/**
+ * Apply the chosen fixes through applyFix, in the order given: `fix`'s
+ * answers and `--apply`, and a bare `context-doctor`'s one question, write
+ * the same settings and the same records.
+ */
+async function applyChosenFixes(chosen, fixes, inputs, prunePlan, port) {
+    const results = [];
+    for (const id of chosen) {
+        const f = fixes.find((x) => x.id === id);
+        if (!f || f.state !== "available") {
+            results.push({ id, ok: false, lines: [`${id}: ${f?.note ?? "not available here"}; skipped.`] });
+            continue;
+        }
+        const kind = id === "cache-ttl" ? "main" : id === "cache-ttl-subagents" ? "subagents" : undefined;
+        const r = await applyFix(f, { autopilotOn: () => autopilotOn(port ?? DEFAULT_AUTOPILOT_PORT) }, { oneHourShare: kind ? inputs.ttl?.[kind].oneHourShare : undefined, prune: prunePlan, modelsBefore: inputs.subagentModel ? shares(inputs.subagentModel.before) : undefined });
+        results.push({ id, ...r });
+    }
+    return results;
+}
+/** What each applied fix wrote, and where to undo it. */
+function printApplied(results) {
+    if (!results.length)
+        return;
+    console.log("");
+    for (const r of results)
+        console.log(r.lines.join("\n"));
+    if (results.some((r) => r.ok))
+        console.log(`\nNew ${results.every((r) => !r.ok || r.id === "codex-compact") ? "Codex" : results.some((r) => r.ok && r.id === "codex-compact") ? "Claude Code and Codex" : "Claude Code"} sessions pick these up. Undo: ${selfCommand("fix undo")}; ${selfCommand("fix")} later shows what each saved since.`);
+}
 async function main() {
     const args = parseArgs(process.argv.slice(2));
     if (args.command && !COMMANDS.includes(args.command)) {
@@ -1026,10 +1057,39 @@ async function main() {
             process.exitCode = 1;
         return;
     }
-    if (args.command === "savings" || (!args.command && process.stdout.isTTY && hasClaudeSessions())) {
+    if (!args.command && !args.json && !args.share && process.stdout.isTTY && hasClaudeSessions()) {
         // A bare `context-doctor` in a terminal, with Claude Code history on the
-        // machine, answers the question people install this for: what would it
-        // save me? Scripts and pipes still get the help text.
+        // machine: fix's plan (one scan), the quality-free fixes under one y/N
+        // question, the others with their dollars and the command for each.
+        // Asked only when stdin is a terminal too; scripts and pipes still get
+        // the Start here screen, and `--json`/`--share` the savings report.
+        const { inputs, prunePlan } = await measureFixInputs(args.days ?? 30);
+        const fixes = planFixes(inputs);
+        const { free } = splitFirstFixes(fixes);
+        const ask = !!process.stdin.isTTY && free.length > 0 && !inputs.recordProblem;
+        console.log(renderFirstScreen({ days: inputs.days, billedUsd: inputs.billedUsd, codexBilledUsd: inputs.codexCompact?.billedUsd, fixes, command: selfCommand, recordProblem: inputs.recordProblem, ask }));
+        if (!ask)
+            return;
+        const rl = (await import("node:readline/promises")).createInterface({ input: process.stdin, output: process.stdout });
+        // Ctrl-D or a closed terminal is a no, never a wait.
+        const answer = await new Promise((resolve) => {
+            rl.once("close", () => resolve(""));
+            rl.question(firstQuestion(free.length, selfCommand)).then(resolve, () => resolve(""));
+        });
+        rl.close();
+        if (!/^(y|yes)$/i.test(answer.trim())) {
+            console.log(`Nothing changed. ${selfCommand("fix")} asks about each lever, the ones above included.`);
+            return;
+        }
+        const results = await applyChosenFixes(free.map((f) => f.id), fixes, inputs, prunePlan, args.port);
+        if (results.some((r) => !r.ok))
+            process.exitCode = 1;
+        printApplied(results);
+        return;
+    }
+    if (args.command === "savings" || (!args.command && process.stdout.isTTY && hasClaudeSessions())) {
+        // `savings`, and a bare `context-doctor --json` or `--share` in a terminal
+        // with Claude Code history (what a bare run printed before the one-question screen).
         const replaying = progressLine("Replaying your Claude Code sessions through autopilot");
         // Each transcript read once for every report below; what an earlier run kept is not read again (scan.ts).
         prescan([
@@ -1076,8 +1136,6 @@ async function main() {
         else {
             console.log(renderSavings(report, on, cwLine, cacheMissesSignificant(misses) ? cacheMissesLine(misses) : undefined, limitLines, renderLens(lens)));
             console.log(`\nNext: ${selfCommand("fix")} ranks every fix by what it saves you and applies only the ones you say yes to (${selfCommand("fix undo")} reverts them).`);
-            if (!args.command)
-                console.log(`All commands: ${selfCommand("--help")}`);
         }
         return;
     }
@@ -1325,35 +1383,20 @@ async function main() {
             }
             rl.close();
         }
-        const results = [];
-        for (const id of chosen) {
-            const f = fixes.find((x) => x.id === id);
-            if (!f || f.state !== "available") {
-                results.push({ id, ok: false, lines: [`${id}: ${f?.note ?? "not available here"}; skipped.`] });
-                continue;
-            }
-            const kind = id === "cache-ttl" ? "main" : id === "cache-ttl-subagents" ? "subagents" : undefined;
-            const r = await applyFix(f, { autopilotOn: () => autopilotOn(args.port ?? DEFAULT_AUTOPILOT_PORT) }, { oneHourShare: kind ? inputs.ttl?.[kind].oneHourShare : undefined, prune: prunePlan, modelsBefore: inputs.subagentModel ? shares(inputs.subagentModel.before) : undefined });
-            results.push({ id, ...r });
-        }
+        const results = await applyChosenFixes(chosen, fixes, inputs, prunePlan, args.port);
         // Naming fixes that are not there (or nothing at all, with "all") is not a silent success.
         if (args.apply !== undefined && (chosen.length === 0 || results.some((r) => !r.ok)))
             process.exitCode = 1;
         if (args.json) {
-            console.log(JSON.stringify({ days: inputs.days, billedUsd: inputs.billedUsd, ...(inputs.codexCompact ? { codexBilledUsd: inputs.codexCompact.billedUsd } : {}), fixes, since, ...(args.apply !== undefined ? { applied: results } : {}), ...(inputs.recordProblem ? { recordProblem: inputs.recordProblem } : {}) }, null, 2));
+            // qualityFree is the bare screen's grouping, not part of fix's JSON.
+            console.log(JSON.stringify({ days: inputs.days, billedUsd: inputs.billedUsd, ...(inputs.codexCompact ? { codexBilledUsd: inputs.codexCompact.billedUsd } : {}), fixes: fixes.map(({ qualityFree: _q, ...f }) => f), since, ...(args.apply !== undefined ? { applied: results } : {}), ...(inputs.recordProblem ? { recordProblem: inputs.recordProblem } : {}) }, null, 2));
             if (args.apply !== undefined && chosen.length === 0)
                 console.error("--apply: no fix available to apply.");
             return;
         }
         if (args.apply !== undefined && chosen.length === 0)
             console.error("\n--apply: no fix available to apply.");
-        if (!results.length)
-            return;
-        console.log("");
-        for (const r of results)
-            console.log(r.lines.join("\n"));
-        if (results.some((r) => r.ok))
-            console.log(`\nNew ${results.every((r) => !r.ok || r.id === "codex-compact") ? "Codex" : results.some((r) => r.ok && r.id === "codex-compact") ? "Claude Code and Codex" : "Claude Code"} sessions pick these up. Undo: ${selfCommand("fix undo")}; ${selfCommand("fix")} later shows what each saved since.`);
+        printApplied(results);
         return;
     }
     if (args.command === "cache-ttl") {
