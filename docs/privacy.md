@@ -16,7 +16,7 @@ context-doctor (the npm package, the Claude Code plugin, its MCP server and the 
 
 - `context-doctor autopilot on`: a proxy on 127.0.0.1 that forwards Claude Code's own API requests, edited only when the prompt cache is cold, to the same Anthropic endpoint they were going to. It stores no request content.
 - `context-doctor analyze --exact`: sends the conversation you name to Anthropic's token-counting API with the `ANTHROPIC_API_KEY` you set.
-- `context-doctor ab --yes`: runs its own test tasks on Anthropic's Messages API, billed to your `ANTHROPIC_API_KEY`.
+- `context-doctor ab --yes`: runs its own test tasks on Anthropic's Messages API, billed to your `ANTHROPIC_API_KEY`, or with `--via claude-code` through your own Claude Code (`claude -p`, on your sign-in).
 - `pack --semantic`: sends the chunks of the files you name to the Ollama you run (`OLLAMA_HOST`, by default on this machine) for embeddings.
 - The MCP server over HTTP (`context-doctor mcp --http`) answers on the address you start it on, and stores no handoff there unless you pass `--store-handoffs`.
 
