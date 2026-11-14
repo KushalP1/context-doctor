@@ -1,7 +1,10 @@
-# Weekly: fails when Claude Code's CHANGELOG or Anthropic's price page names a
-# Claude model that src/pricing.ts has no price of its own for (it would be
-# priced by its family's row, an estimate). Claude Code ships a model days
-# before a context-doctor release; this says so before users run it.
+# Weekly: fails when a model that Claude Code's CHANGELOG, Anthropic's,
+# OpenAI's or Google's price page, Codex's model catalog or Gemini CLI's
+# model list names has no price of its own in src/pricing.ts (it would be
+# priced by its family's row, an estimate, or not at all), or when a row's
+# price ends within 14 days with no successor price recorded (ROADMAP K1, E7).
+# Hosts ship models days before a context-doctor release; this says so before
+# users run them. A page that is down is a warning, not a failure.
 # Read-only: no secrets, no writes.
 name: Model prices
 
@@ -26,8 +29,13 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci && npm run build
-      - name: Every Claude model in Claude Code's CHANGELOG and on the price page has a price
+      - name: Every model the hosts and price pages name has a price; no dated row ends without a successor
         run: >-
           node scripts/check-models.mjs
           --url https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md
           --url https://platform.claude.com/docs/en/about-claude/pricing.md
+          --openai https://developers.openai.com/api/docs/pricing.md
+          --codex https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json
+          --google https://ai.google.dev/gemini-api/docs/pricing.md.txt
+          --gemini-cli https://raw.githubusercontent.com/google-gemini/gemini-cli/main/packages/core/src/config/models.ts
+          --dated
