@@ -108,6 +108,15 @@ if [ -n "$CC" ]; then
 else
   echo "- live canary skipped: no Claude Code found"
 fi
+# E5: the folder Anthropic's directory would get (scripts/build-directory-plugin.mjs): validate --profile directory
+# --strict with no warning, with the mod and without (the fallback), each in a throwaway HOME; the canary on the build.
+if [ -n "$CC" ] && env -u CLAUDECODE "$CC" plugin validate --help 2>&1 | grep -q -- --profile; then
+  run "plugin: the directory build validates (--profile directory --strict), with the mod" node scripts/build-directory-plugin.mjs --validate --claude "$CC"
+  run "plugin: the directory build validates (--profile directory --strict), without the mod" node scripts/build-directory-plugin.mjs --no-mod --validate --claude "$CC"
+  run "plugin: live canary on the directory build" node scripts/canary.mjs --plugin-dir build/directory-plugin --claude "$CC"
+else
+  echo "- directory build checks skipped: no Claude Code with validate --profile found"
+fi
 # K1: every model the newest Claude Code here knows (its Bedrock catalog, its claude-* ids) has a price of its own, not a family row's.
 if [ -n "$CC" ]; then
   run "pricing: every Claude model in Claude Code's catalog has a price ($CC)" node scripts/check-models.mjs --binary "$CC"

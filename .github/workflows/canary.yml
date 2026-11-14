@@ -35,3 +35,15 @@ jobs:
         run: npm install --prefix "$RUNNER_TEMP/claude-code" --no-audit --no-fund @anthropic-ai/claude-code@latest
       - name: The plugin and its mod on it (green), and each planted fault (red)
         run: node scripts/canary.mjs --self-test --claude "$RUNNER_TEMP/claude-code/node_modules/.bin/claude"
+      # ROADMAP E5: the folder Anthropic's directory would get, with the mod and without (the fallback):
+      # validate --profile directory --strict with no warning, and the canary on the build.
+      - name: The directory build passes validate --profile directory --strict, with the mod and without
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/build-directory-plugin.mjs --validate --claude "$RUNNER_TEMP/claude-code/node_modules/.bin/claude"
+          node scripts/build-directory-plugin.mjs --no-mod --validate --claude "$RUNNER_TEMP/claude-code/node_modules/.bin/claude"
+      - name: The canary on the directory build
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/build-directory-plugin.mjs
+          node scripts/canary.mjs --plugin-dir build/directory-plugin --claude "$RUNNER_TEMP/claude-code/node_modules/.bin/claude"
