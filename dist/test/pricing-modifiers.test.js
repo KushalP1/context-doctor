@@ -130,6 +130,8 @@ test("OpenAI over 272k input tokens: 2x input, cached input and writes, 1.5x out
     for (const [m, s, l] of [
         ["gpt-5.5", [5, 0.5, 30], [10, 1, 45]], ["gpt-6-astra", [10, 1, 50], [20, 2, 75]], ["gpt-5.4", [2.5, 0.25, 15], [5, 0.5, 22.5]],
         ["gpt-6.1-sol", [2, 0.1, 10], [4, 0.2, 15]], ["gpt-5.6-terra", [2, 0.2, 12], [4, 0.4, 18]], ["gpt-5.4-pro", [30, 30, 180], [60, 60, 270]],
+        // gpt-6-cyber's long-context row on the Specialized table (read 2026-11-14): $40 / $150 / $4.
+        ["gpt-6-cyber", [20, 2, 100], [40, 4, 150]],
     ]) {
         near(requestCost(m, fiveMin(short), AT).totalUsd, at(short, s[0], s[1], s[2]), `${m} at 272k`);
         const c = requestCost(m, fiveMin(long), AT);
@@ -137,7 +139,7 @@ test("OpenAI over 272k input tokens: 2x input, cached input and writes, 1.5x out
         near(c.modifiers.longUsd, at(long, l[0], l[1], l[2]) - at(long, s[0], s[1], s[2]), `${m}: the tier's part`);
     }
     // No long-context column on the page: no tier.
-    for (const m of ["gpt-5.4-mini", "gpt-5.2", "gpt-6-cyber", "gpt-5-codex"])
+    for (const m of ["gpt-5.4-mini", "gpt-5.2", "gpt-5.6-cyber", "gpt-5-codex"])
         assert.equal(requestCost(m, fiveMin(long), AT).modifiers.longUsd, 0, m);
 });
 test("Gemini 3.1 Pro and 2.5 Pro over 200k prompt tokens", () => {

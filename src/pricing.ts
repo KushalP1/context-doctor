@@ -200,12 +200,15 @@ const PRICING: Array<[pattern: RegExp, pricing: ModelPricing, billing?: RowBilli
   // Fast mode (priority processing; Codex records only its thread's
   // `service_tier`, not each request's) and the 10% regional uplift.
   [openai("gpt-6-astra"), ...openaiLong(10, 50, 1)],
+  // GPT-6 Astra for Law's price is promotional "at least through December
+  // 31, 2026" (read 2026-11-14): no end date to record yet.
   [openai("gpt-6-astra-law"), rate(10, 50, 1)],
   [openai("gpt-6.1-sol"), ...openaiLong(2, 10, 0.1)],
   [openai("gpt-6.1-terra"), ...openaiLong(1, 5, 0.05)],
   [openai("gpt-6-sol"), ...openaiLong(2, 10, 0.2)],
   [openai("gpt-6-luna"), ...openaiLong(0.1, 0.5, 0.01)],
-  [openai("gpt-6-cyber"), rate(20, 100, 2)],
+  // gpt-6-cyber's long-context row ($40 / $150 / $4, read 2026-11-14) is 2x / 1.5x.
+  [openai("gpt-6-cyber"), ...openaiLong(20, 100, 2)],
   [openai("gpt-6-rosalind"), ...openaiLong(15, 75, 1.5)],
   [openai("gpt-rosalind-research"), rate(5, 25, 0.5)],
   [openai("gpt-rosalind-discovery"), rate(5, 25, 0.5)],
@@ -220,6 +223,8 @@ const PRICING: Array<[pattern: RegExp, pricing: ModelPricing, billing?: RowBilli
   [openai("gpt-5.5"), ...openaiLong(5, 30, 0.5)],
   [openai("gpt-5.5-pro"), ...openaiLong(30, 180, 30)],
   [openai("gpt-5.5-cyber"), rate(12.5, 75, 1.25)],
+  // The page names it gpt-5.5-cyber-preview now (read 2026-11-14), at the same price.
+  [openai("gpt-5.5-cyber-preview"), rate(12.5, 75, 1.25)],
   [openai("gpt-5.4"), ...openaiLong(2.5, 15, 0.25)],
   [openai("gpt-5.4-mini"), rate(0.75, 4.5, 0.075)],
   [openai("gpt-5.4-nano"), rate(0.2, 1.25, 0.02)],
@@ -239,6 +244,8 @@ const PRICING: Array<[pattern: RegExp, pricing: ModelPricing, billing?: RowBilli
   [openai("o3"), rate(2, 8, 0.5)],
   [openai("o3-pro"), rate(20, 80, 20)],
   [openai("chat-latest"), rate(5, 30, 0.5)],
+  // Specialized models, Search (read 2026-11-14); its web search fee is per call, not modelled.
+  [openai("gpt-5-search-api"), rate(1.25, 10, 0.125)],
   // Fallbacks for OpenAI ids not on the page (gpt-5-codex, gpt-5.1-codex-max,
   // gpt-4.1-nano, gpt-4-turbo, o1, o3-mini...): older approximate prices.
   [/gpt-5.*(mini|nano)/i, rate(0.25, 2, 0.025), FALLBACK],
@@ -251,8 +258,13 @@ const PRICING: Array<[pattern: RegExp, pricing: ModelPricing, billing?: RowBilli
   // Google: ai.google.dev/gemini-api/docs/pricing (paid tier, Standard, text),
   // read 2026-11-06; the dates and the Pro tiers read again 2026-11-08.
   // Gemini 4 Argon's $2 / $10 / $0.10 hold "through November 30, 2026";
-  // "starting December 1, 2026" it is $4 / $20 / $0.20.
+  // "starting December 1, 2026" it is $4 / $20 / $0.20. Read again
+  // 2026-11-14: unchanged; Gemini 4 Carbon is new at the same prices and
+  // dates, Gemini 4 Hydrogen new at $1.50 / $7.50 / $0.075 with no date.
+  // Neither has a long-prompt tier (one 1M-token context).
+  [gemini("gemini-4-carbon"), rate(2, 10, 0.1), { changes: "2026-12-01", then: rate(4, 20, 0.2) }],
   [gemini("gemini-4-argon"), rate(2, 10, 0.1), { changes: "2026-12-01", then: rate(4, 20, 0.2) }],
+  [gemini("gemini-4-hydrogen"), rate(1.5, 7.5, 0.075)],
   // 3.6 and 3.8 Flash double "starting January 1, 2027" ($1.50 / $7.50 / $0.15).
   [gemini("gemini-3.8-flash"), rate(0.75, 3.75, 0.075), { changes: "2027-01-01", then: rate(1.5, 7.5, 0.15) }],
   [gemini("gemini-3.6-flash"), rate(0.75, 3.75, 0.075), { changes: "2027-01-01", then: rate(1.5, 7.5, 0.15) }],
