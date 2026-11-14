@@ -35,6 +35,7 @@
  * fetch (this package has no runtime dependencies), and tests plug in a
  * local mock server through ANTHROPIC_BASE_URL.
  */
+import { type ChildProcess } from "node:child_process";
 import { type AbTask } from "./abtasks.js";
 import { type ModelPricing, type RecordedUsage } from "./pricing.js";
 export declare const AB_LEVERS: readonly ["rules", "autoclear", "pack", "compact"];
@@ -43,6 +44,8 @@ export type AbArm = "none" | "rules" | "autoclear" | "pack" | "compact-generic" 
 export declare const DEFAULT_AB_MODEL = "claude-opus-5-5";
 /** The Messages API version the harness sends (sampling parameters are not sent). */
 export declare const AB_API_VERSION = "2026-10-21";
+/** A smoke test or hidden check that runs longer is killed (and fails). */
+export declare const CHECK_TIMEOUT_MS = 30000;
 export interface AbContentBlock {
     type: string;
     id?: string;
@@ -76,6 +79,16 @@ export declare function anthropicProvider(options: {
     retries?: number;
     timeoutMs?: number;
 }): AbProvider;
+/** Children in flight and run folders on disk, for Ctrl-C. */
+export interface Live {
+    children: Set<ChildProcess>;
+    roots: Set<string>;
+    /** A smoke test or hidden check running longer is killed. */
+    timeoutMs: number;
+}
+/** Kill a child and everything in its process group (the child leads one). */
+export declare function killTree(child: ChildProcess): void;
+export declare function removeRoot(root: string, live: Live): void;
 export interface AbRun {
     task: string;
     arm: AbArm;
@@ -97,7 +110,7 @@ export interface AbRun {
     /** autoclear: tokens it kept off the wire, over all requests. */
     leverTokens: number;
 }
-/** Ends that say nothing about the lever: the API failed or declined, or the harness's own caps cut the run. */
+/** Ends that say nothing about the lever: the API failed or declined, the harness's own caps cut the run, or (through Claude Code) the plan's usage limit or the run's time limit stopped it. */
 export declare const STOPPED_EARLY: Set<string>;
 export interface AbOptions {
     provider: AbProvider;
@@ -118,6 +131,16 @@ export interface AbOptions {
     /** Called as each run finishes. */
     onRun?: (run: AbRun, done: number, total: number) => void;
 }
+export interface RunPaths {
+    root: string;
+    repo: string;
+    home: string;
+}
+export declare function taskPrompt(task: AbTask): string;
+/** The hidden check: written outside the repository, run with it as the working directory. */
+export declare function verifyRun(task: AbTask, run: RunPaths, live: Live): Promise<boolean>;
+/** A fresh run folder: the repository, and a home for the code it runs. */
+export declare function makeRun(task: AbTask, live: Live): RunPaths;
 /**
  * The verdict on files as they stand, for the tests and the self-check:
  * a fresh run folder with `files`, the hidden check, everything removed.
@@ -135,9 +158,13 @@ export interface AbEstimate {
 /**
  * A planning figure, not a quote: six requests a run, the task's files in
  * context from the second request on, ~800 output tokens a request (thinking,
- * tool calls, the files the agent writes).
+ * tool calls, the files the agent writes). `shape` changes the request count
+ * and the fixed prompt (Claude Code's own system prompt and tools).
  */
-export declare function estimateAb(tasks: AbTask[], arms: AbArm[], repeat: number, pricing: ModelPricing): AbEstimate;
+export declare function estimateAb(tasks: AbTask[], arms: readonly string[], repeat: number, pricing: ModelPricing, shape?: {
+    requests?: number;
+    baseTokens?: number;
+}): AbEstimate;
 export interface AbResult {
     model: string;
     provider: string;
@@ -180,7 +207,15 @@ export interface AbCommandOptions {
     json: boolean;
     out?: string;
     list: boolean;
+    /** "api" (the Messages API, the default) or "claude-code" (`claude -p` on the person's own sign-in, one arm per model). */
+    via?: string;
+    /** --via claude-code: the models compared with --model. */
+    compare?: string[];
+    /** --via claude-code: seconds before a run is killed. */
+    timeoutS?: number;
 }
+/** Why `--out` cannot be written, checked before anything is spent; undefined when it can. */
+export declare function outProblem(out: string): string | undefined;
 /**
  * `context-doctor ab`: the exit code. 1 for a refusal, a bad argument, a key
  * the API refused, or an arm all of whose runs ended on an API error.

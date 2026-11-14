@@ -33,8 +33,10 @@
  *    variable), estimated as `spend` estimates them (progresssummaries.ts).
  *
  * The subagents' model is the one lever with a quality cost `fix` cannot
- * measure: it is offered with that said, applied only when named (never by
- * `--apply all`), and never over a value the user set.
+ * measure from history: its quality line quotes the newest `ab --via
+ * claude-code` comparison when there is one (abstore.ts), and says so when
+ * there is none. It is applied only when named (never by `--apply all`),
+ * and never over a value the user set.
  */
 import { existsSync, mkdirSync, readFileSync, rmdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -51,6 +53,7 @@ import { tilde } from "./claudedir.js";
 import { applyPrune, undoPrune } from "./prune.js";
 import { fallbackStateDir, readLedger } from "./ledger.js";
 import { claudeDir } from "./claudedir.js";
+import { comparisonLine } from "./abstore.js";
 import { movedFromNames, renderSubagentTypes, subagentModelSavedSince, SUBAGENT_CANDIDATE, SUBAGENT_CANDIDATE_NAME, SUBAGENT_MODEL_ENV } from "./subagentmodel.js";
 import { BASH_OUTPUT_DEFAULT, BASH_OUTPUT_KEY, BASH_OUTPUT_SINCE, breakEven, renderToolOutputCaps, toolOutputSavedSince } from "./tooloutput.js";
 import { disablesSummaries, estimateProgressSummaries, hostName, PROGRESS_SUMMARIES_ENV, PROGRESS_SUMMARIES_OFF, PROGRESS_SUMMARIES_SINCE } from "./progresssummaries.js";
@@ -184,7 +187,7 @@ export function planFixes(i) {
             // The subagents' own bill, not the main conversations' input the plan's first line names.
             shareOf: "of subagents",
             basis: `${reqs.toLocaleString("en-US")} subagent requests priced at ${SUBAGENT_CANDIDATE_NAME} with the token counts they had (${money(sm.billedUsd)} billed for all ${sm.agents} subagents); an estimate: another model tokenizes and works differently`,
-            quality: `this changes the model your subagents run on (${moved.map((t) => t.type).join(", ")}); the quality cost is not measured here: context-doctor ab can measure it (its tasks with --model ${SUBAGENT_CANDIDATE} and without)`,
+            quality: `this changes the model your subagents run on (${moved.map((t) => t.type).join(", ")}); ${i.abComparison ? `measured by context-doctor ab ${comparisonLine(i.abComparison)} (${i.abComparison.tasks} small coding tasks, ${i.abComparison.repeat} run${i.abComparison.repeat === 1 ? "" : "s"} each; your subagents' own work may differ)` : `the quality cost is not measured here: context-doctor ab can measure it (its tasks with --model ${SUBAGENT_CANDIDATE} and without)`}`,
             change: `${where}: env.${SUBAGENT_MODEL_ENV} = "${SUBAGENT_CANDIDATE}"`,
             state: "available",
             value: SUBAGENT_CANDIDATE,

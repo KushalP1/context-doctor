@@ -61,7 +61,7 @@ export const AB_API_VERSION = "2026-10-21";
 /** Output cap per request; also the output side of each request's worst case for the budget. */
 const MAX_TOKENS = 16000;
 /** A smoke test or hidden check that runs longer is killed (and fails). */
-const CHECK_TIMEOUT_MS = 30_000;
+export const CHECK_TIMEOUT_MS = 30_000;
 
 /** What each lever is compared against, and what it is. */
 const LEVER_INFO: Record<AbLever, { base: AbArm; arm: AbArm; what: string }> = {
@@ -155,7 +155,7 @@ export function anthropicProvider(options: { apiKey: string; baseUrl?: string; r
 // -- Running the agent's code --------------------------------------------------
 
 /** Children in flight and run folders on disk, for Ctrl-C. */
-interface Live {
+export interface Live {
   children: Set<ChildProcess>;
   roots: Set<string>;
   /** A smoke test or hidden check running longer is killed. */
@@ -173,7 +173,7 @@ function minimalEnv(home: string): NodeJS.ProcessEnv {
 }
 
 /** Kill a child and everything in its process group (the child leads one). */
-function killTree(child: ChildProcess): void {
+export function killTree(child: ChildProcess): void {
   if (child.pid === undefined) return;
   if (process.platform === "win32") {
     spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { cwd: toolCwd(), stdio: "ignore", windowsHide: true });
@@ -232,7 +232,7 @@ function makeWritable(path: string): void {
   if (st.isDirectory()) for (const name of readdirSync(path)) makeWritable(join(path, name));
 }
 
-function removeRoot(root: string, live: Live): void {
+export function removeRoot(root: string, live: Live): void {
   killLeftovers(root);
   makeWritable(root);
   try {
@@ -443,8 +443,8 @@ export interface AbRun {
   leverTokens: number;
 }
 
-/** Ends that say nothing about the lever: the API failed or declined, or the harness's own caps cut the run. */
-export const STOPPED_EARLY = new Set(["error", "budget", "turns", "refusal", "max_tokens"]);
+/** Ends that say nothing about the lever: the API failed or declined, the harness's own caps cut the run, or (through Claude Code) the plan's usage limit or the run's time limit stopped it. */
+export const STOPPED_EARLY = new Set(["error", "budget", "turns", "refusal", "max_tokens", "limit", "timeout"]);
 
 /** Autopilot with every request as if after an idle gap: clearing is allowed on each one. */
 class ColdEveryRequest extends AutoClearer {
@@ -509,13 +509,13 @@ interface Shared {
   live: Live;
 }
 
-interface RunPaths {
+export interface RunPaths {
   root: string;
   repo: string;
   home: string;
 }
 
-function taskPrompt(task: AbTask): string {
+export function taskPrompt(task: AbTask): string {
   const list = Object.keys(task.files)
     .sort()
     .map((p) => `- ${p} (${(Buffer.byteLength(task.files[p]) / 1024).toFixed(1)} KB)`)
@@ -536,7 +536,7 @@ function worstCaseUsd(body: Record<string, unknown>, pricing: ModelPricing): num
 }
 
 /** The hidden check: written outside the repository, run with it as the working directory. */
-async function verifyRun(task: AbTask, run: RunPaths, live: Live): Promise<boolean> {
+export async function verifyRun(task: AbTask, run: RunPaths, live: Live): Promise<boolean> {
   try {
     makeWritable(run.root); // the agent's code may have locked its folders
     const script = join(run.root, "verify.mjs");
@@ -551,7 +551,7 @@ async function verifyRun(task: AbTask, run: RunPaths, live: Live): Promise<boole
 }
 
 /** A fresh run folder: the repository, and a home for the code it runs. */
-function makeRun(task: AbTask, live: Live): RunPaths {
+export function makeRun(task: AbTask, live: Live): RunPaths {
   const root = mkdtempSync(join(tmpdir(), `ctxdoc-ab-${task.id}-`));
   live.roots.add(root);
   const repo = join(root, "repo");
@@ -689,12 +689,13 @@ export interface AbEstimate {
 /**
  * A planning figure, not a quote: six requests a run, the task's files in
  * context from the second request on, ~800 output tokens a request (thinking,
- * tool calls, the files the agent writes).
+ * tool calls, the files the agent writes). `shape` changes the request count
+ * and the fixed prompt (Claude Code's own system prompt and tools).
  */
-export function estimateAb(tasks: AbTask[], arms: AbArm[], repeat: number, pricing: ModelPricing): AbEstimate {
-  const R = 6;
+export function estimateAb(tasks: AbTask[], arms: readonly string[], repeat: number, pricing: ModelPricing, shape: { requests?: number; baseTokens?: number } = {}): AbEstimate {
+  const R = shape.requests ?? 6;
   const OUT = 800;
-  const base = estimateTokens(BASE_SYSTEM + SERVER_INSTRUCTIONS + JSON.stringify([...BASE_TOOLS, PACK_TOOL]), "claude");
+  const base = shape.baseTokens ?? estimateTokens(BASE_SYSTEM + SERVER_INSTRUCTIONS + JSON.stringify([...BASE_TOOLS, PACK_TOOL]), "claude");
   let expected = 0;
   let upper = 0;
   for (const task of tasks) {
@@ -892,10 +893,16 @@ export interface AbCommandOptions {
   json: boolean;
   out?: string;
   list: boolean;
+  /** "api" (the Messages API, the default) or "claude-code" (`claude -p` on the person's own sign-in, one arm per model). */
+  via?: string;
+  /** --via claude-code: the models compared with --model. */
+  compare?: string[];
+  /** --via claude-code: seconds before a run is killed. */
+  timeoutS?: number;
 }
 
 /** Why `--out` cannot be written, checked before anything is spent; undefined when it can. */
-function outProblem(out: string): string | undefined {
+export function outProblem(out: string): string | undefined {
   const path = resolve(out);
   try {
     if (statSync(path).isDirectory()) return `--out ${out} is a folder`;
@@ -926,7 +933,20 @@ export async function abCommand(o: AbCommandOptions): Promise<number> {
     for (const l of AB_LEVERS) console.log(`  ${l.padEnd(10)} ${LEVER_INFO[l].what}`);
     return 0;
   }
+  const via = (o.via ?? "api").trim().toLowerCase();
+  if (via !== "api" && via !== "claude-code") {
+    console.error(`Unknown --via "${o.via}": api (the Messages API, on ANTHROPIC_API_KEY) or claude-code (claude -p, on your own Claude Code sign-in).`);
+    return 1;
+  }
   const leverNames = (o.levers ?? []).flatMap((l) => l.split(",")).map((l) => l.trim()).filter(Boolean);
+  if (via === "claude-code" && leverNames.length) {
+    console.error("--lever arms run through the Messages API harness; --via claude-code compares models instead (--model, --compare). Nothing was run.");
+    return 1;
+  }
+  if (via === "api" && (o.compare?.length || o.timeoutS !== undefined)) {
+    console.error(`${o.compare?.length ? "--compare" : "--timeout"} is for --via claude-code (models compared through your own Claude Code). Nothing was sent.`);
+    return 1;
+  }
   const unknownLever = leverNames.find((l) => l !== "all" && !(AB_LEVERS as readonly string[]).includes(l));
   if (unknownLever) {
     console.error(`Unknown lever "${unknownLever}". Levers: ${AB_LEVERS.join(", ")}, or all.`);
@@ -940,6 +960,11 @@ export async function abCommand(o: AbCommandOptions): Promise<number> {
     return 1;
   }
   const tasks = taskIds.length ? AB_TASKS.filter((t) => taskIds.includes(t.id)) : AB_TASKS;
+  if (via === "claude-code") {
+    // Loaded here: abclaude.ts builds on this module.
+    const { abClaudeCodeCommand } = await import("./abclaude.js");
+    return abClaudeCodeCommand({ model: o.model, compare: o.compare, tasks, repeat: o.repeat, maxTurns: o.maxTurns, timeoutS: o.timeoutS, concurrency: o.concurrency, budgetUsd: o.budgetUsd, yes: o.yes, json: o.json, out: o.out });
+  }
   const model = o.model ?? DEFAULT_AB_MODEL;
   const pricing = exactClaudePricingFor(model);
   if (!pricing) {

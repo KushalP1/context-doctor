@@ -23,6 +23,7 @@ import { claudeCodeInstallsFromEnv, claudePluginEnabled, runInstall, runUninstal
 import { listSessions, parseSessionFile, pickCurrentSession, isClaudeSession } from "./session.js";
 import { runHook } from "./hook.js";
 import { abCommand } from "./ab.js";
+import { latestModelComparison } from "./abstore.js";
 import { buildImpactReport } from "./impact.js";
 import { measureTokenizer, renderTokenizer } from "./tokenizer-measure.js";
 import { autopilotOff, autopilotOn, autopilotPauseResult, autopilotPaths, autopilotStatus, DEFAULT_AUTOPILOT_PORT } from "./autopilot.js";
@@ -184,6 +185,13 @@ Measure:
                                                 side. Bills ANTHROPIC_API_KEY: prints the estimate,
                                                 sends nothing without --yes, never passes --budget usd.
                                                 --list shows the tasks; --model (default claude-opus-5-5)
+  context-doctor ab --via claude-code [--model m] [--compare m2] [--repeat n] [--yes]
+                                                The same tasks through your own Claude Code (claude -p,
+                                                your sign-in: on a plan, its limits, not dollars), one
+                                                arm per model: --model (default claude-sonnet-5-5) vs
+                                                --compare (default claude-opus-5-5). Each run confined
+                                                to a temp copy under Claude Code's sandbox; --timeout s
+                                                per run (default 600). fix quotes the result
 
 Fix automatically:
   context-doctor autopilot on|off|pause|resume|status
@@ -319,6 +327,11 @@ Options:
   --check <cmd>           (experiment) Command whose exit code is the pass/fail for each arm
   --existing <id>         (experiment) Session id to fork the second arm from (never mutated)
   --budget <usd>          (experiment) Spend cap per arm (default 1)
+  --via <api|claude-code> (ab) The Messages API on ANTHROPIC_API_KEY (default), or claude -p on
+                          your own Claude Code sign-in, one arm per model
+  --compare <model>       (ab --via claude-code) Model(s) to run against --model (default
+                          claude-opus-5-5; "none" for --model alone)
+  --timeout <s>           (ab --via claude-code) Seconds before a run is killed (default 600)
   --dry-run               (experiment) Print the claude commands and stop
   --allow-dirty           (experiment) Skip the clean-tree check (uncommitted changes will be lost)
   --statusline            (install) Also set Claude Code's statusLine to context-doctor (never
@@ -483,6 +496,8 @@ async function measureFixInputs(days) {
             prune: prunePlan,
             subagentModel,
             subagentModelSet,
+            // The newest ab --via claude-code comparison of Sonnet 5.5 with another model: the subagent-model line quotes it.
+            abComparison: latestModelComparison(),
             toolOutput,
             toolOutputSet,
             progressSummaries,
@@ -541,6 +556,9 @@ const FLAGS = [
     { names: ["--repeat"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.repeat = v; } },
     { names: ["--max-turns"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.maxTurns = v; } },
     { names: ["--concurrency"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.concurrency = v; } },
+    { names: ["--via"], value: "text", set: (a, v) => { a.via = v; } },
+    { names: ["--compare"], value: "text", set: (a, v) => { (a.compare ??= []).push(v); } },
+    { names: ["--timeout"], value: "number", num: { min: 1, integer: true }, set: (a, v) => { a.timeoutS = v; } },
     { names: ["--yes"], set: (a) => { a.yes = true; } },
     { names: ["--dry-run"], set: (a) => { a.dryRun = true; } },
     { names: ["--copy"], set: (a) => { a.copy = true; } },
@@ -866,6 +884,7 @@ async function main() {
         process.exitCode = await abCommand({
             levers: args.levers, tasks: args.abTasks, model: args.model, repeat: args.repeat, maxTurns: args.maxTurns,
             concurrency: args.concurrency, budgetUsd: args.budgetUsd, yes: args.yes === true, json: args.json, out: args.out, list: args.list,
+            via: args.via, compare: args.compare, timeoutS: args.timeoutS,
         });
         return;
     }

@@ -33,13 +33,16 @@
  *    variable), estimated as `spend` estimates them (progresssummaries.ts).
  *
  * The subagents' model is the one lever with a quality cost `fix` cannot
- * measure: it is offered with that said, applied only when named (never by
- * `--apply all`), and never over a value the user set.
+ * measure from history: its quality line quotes the newest `ab --via
+ * claude-code` comparison when there is one (abstore.ts), and says so when
+ * there is none. It is applied only when named (never by `--apply all`),
+ * and never over a value the user set.
  */
 import { type CacheTtlReport, type CurrentTtl } from "./cachettl.js";
 import { type ClaudeCodeInstall } from "./modelswitch.js";
 import { type ProjectPlan } from "./prune.js";
 import { readLedger } from "./ledger.js";
+import { type AbStoredResult } from "./abstore.js";
 import { type SubagentModelReplay } from "./subagentmodel.js";
 import { type ToolOutputReplay } from "./tooloutput.js";
 import { type ProgressSummaryEstimate } from "./progresssummaries.js";
@@ -111,6 +114,8 @@ export interface FixInputs {
     recordProblem?: string;
     /** Every subagent request replayed at Sonnet 5.5 (subagentmodel.ts). */
     subagentModel?: SubagentModelReplay;
+    /** The newest kept `ab --via claude-code` comparison of the candidate with another model (abstore.ts): the subagent-model line quotes it. */
+    abComparison?: AbStoredResult;
     /** CLAUDE_CODE_SUBAGENT_MODEL as the user set it (their settings.json env, or the environment fix runs in): never overwritten. */
     subagentModelSet?: {
         value: string;
