@@ -2,8 +2,9 @@
  * The Claude Code plugin (.claude-plugin/) is what users get from
  * `/plugin install context-doctor@context-doctor`. Older Claude Code rejects a
  * manifest with any key it does not know (2.1.62 refused `displayName`), and
- * does not install npm dependencies, so: known keys only, every referenced
- * file exists, and the MCP server bundle runs with no node_modules at all.
+ * the plugin must run from its committed files alone, so: known keys only,
+ * every referenced file exists, the MCP server bundle runs with no
+ * node_modules at all, and Claude Code's dependency install finds nothing to do.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -22,6 +23,27 @@ test("plugin manifest uses only keys every supported Claude Code accepts", () =>
   for (const k of Object.keys(manifest)) assert.ok(known.has(k), `unknown manifest key ${k}`);
   assert.equal(market.plugins[0].name, manifest.name, "entry name and manifest name must match");
   assert.equal(market.plugins[0].source, "./");
+});
+
+// The marketplace entry's source is "./", the repository root, which is also
+// the npm package: package.json beside package-lock.json. Claude Code runs
+// `npm ci --ignore-scripts` in every marketplace copy that has both
+// (code.claude.com/docs/en/plugins/loading, "Node.js package dependencies"),
+// and its package.json takes devDependencies too: 80 MB (typescript, esbuild,
+// the MCP SDKs) and 23 s from the registry at the first session, for a plugin
+// that runs from dist/ alone. From 2.1.286 it skips the install for a
+// package.json that sets `overrides` (the same page, "No overrides or
+// patches"); `{}` changes nothing for npm. 2.1.105 to 2.1.285 still install
+// (`npm ci --ignore-scripts` in place), as before. The plugin's runtime needs no
+// package, so dependencies must stay empty: a plugin that listed one would
+// lose it here.
+test("Claude Code's dependency install skips the plugin: package.json sets overrides and lists no runtime dependencies", () => {
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  assert.deepEqual(pkg.overrides, {}, "package.json `overrides: {}` keeps Claude Code from installing the devDependencies into the plugin");
+  for (const k of ["dependencies", "optionalDependencies", "peerDependencies", "bundleDependencies", "bundledDependencies"]) assert.equal(pkg[k], undefined, `package.json ${k}: the plugin and the npm package run from dist/ alone`);
+  for (const k of ["preinstall", "install", "postinstall", "prepare"]) assert.equal(pkg.scripts?.[k], undefined, `package.json scripts.${k}: nothing runs at install time`);
+  const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+  assert.equal(lock.packages[""].dependencies, undefined, "package-lock.json lists no runtime dependencies");
 });
 
 test("every file the plugin references exists, and every skill has frontmatter", () => {

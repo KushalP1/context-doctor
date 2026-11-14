@@ -85,6 +85,7 @@
     "typescript": "^5.5.0",
     "zod": "^4.6.7"
   },
+  "overrides": {},
   "homepage": "https://github.com/KushalP1/context-doctor#readme",
   "bugs": {
     "url": "https://github.com/KushalP1/context-doctor/issues"
