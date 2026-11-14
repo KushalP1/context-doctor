@@ -31,7 +31,11 @@
 // credential is an unsigned token shaped like a gateway's (aud
 // "claude-gateway"); with a plain API key `session.measure` gets no windows.
 //
-//   node scripts/canary.mjs [--claude <binary>] [--plugin-dir <dir>] [--verbose] [--keep]
+//   node scripts/canary.mjs [--claude <binary>] [--plugin-dir <dir>] [--verbose] [--keep] [--mcp-legacy]
+//
+// Claude Code 2.1.323+ connects stdio MCP servers at protocol 2026-07-28;
+// --mcp-legacy sets MCP_PROTOCOL_NEGOTIATION=legacy, its 2025-era handshake.
+// Which one the plugin's server negotiated is read from Claude Code's debug log.
 //   node scripts/canary.mjs --plant <fault>    # a copy of the plugin with one fault: must go red
 //   node scripts/canary.mjs --self-test        # green on the plugin as it is, red on every fault
 //
@@ -406,12 +410,13 @@ function validatePlugin(claude, env, pluginDir) {
   return { code: r.status ?? -1, out: (r.stdout ?? "") + (r.stderr ?? ""), args };
 }
 
-export async function canary({ claude, pluginDir = REPO, verbose = false, keep = false }) {
+export async function canary({ claude, pluginDir = REPO, verbose = false, keep = false, mcpLegacy = false }) {
   const root = mkdtempSync(join(tmpdir(), "cd-canary-"));
   const mock = await startMock();
   const log = verbose ? (s) => console.log(`  · ${s}`) : () => {};
   try {
     const env = claudeEnv({ root, mockUrl: mock.url, token: dummyToken() });
+    if (mcpLegacy) env.MCP_PROTOCOL_NEGOTIATION = "legacy";
     const cwd = join(root, "project");
     mkdirSync(cwd, { recursive: true });
     await assertSafe(env, mock, root);
@@ -434,6 +439,10 @@ export async function canary({ claude, pluginDir = REPO, verbose = false, keep =
     const measured = /hooks module context-doctor@\S+ session\.measure settled/.test(debug);
     out.checks.push({ ok: modLoaded, name: "Claude Code's debug log: the mod loaded", detail: modLoaded ? "" : (debug.match(/.*hooks module context-doctor.*/g) ?? []).slice(0, 3).join(" | ") || "no line about it", soft: true });
     out.checks.push({ ok: measured, name: "Claude Code's debug log: session.measure reached the mod", detail: "", soft: true });
+    // The MCP protocol its server got: 2026-07-28 by default on 2.1.323+, a 2025-era one with --mcp-legacy.
+    const negotiated = debug.match(/MCP server "[^"]*context-doctor[^"]*": Connection established with capabilities: .*"negotiatedProtocolVersion":"([^"]+)"/)?.[1];
+    const wanted = mcpLegacy ? /^202[45]-/.test(negotiated ?? "") : negotiated === "2026-07-28";
+    out.checks.push({ ok: wanted, name: `Claude Code's debug log: its MCP server negotiated ${mcpLegacy ? "a 2025-era protocol (MCP_PROTOCOL_NEGOTIATION=legacy)" : "2026-07-28"}`, detail: negotiated ?? "no line about it", soft: true });
     return { version, root, ...out, ok: out.checks.every((c) => c.ok || c.soft) };
   } finally {
     await mock.close();
@@ -493,7 +502,7 @@ function report(label, r, planted = false) {
 
 async function main(argv) {
   const opt = (n) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : undefined; };
-  const known = new Set(["--claude", "--plugin-dir", "--plant", "--self-test", "--verbose", "--keep"]);
+  const known = new Set(["--claude", "--plugin-dir", "--plant", "--self-test", "--verbose", "--keep", "--mcp-legacy"]);
   for (let i = 0; i < argv.length; i++) {
     if (!known.has(argv[i])) { console.error(`canary: unknown argument ${argv[i]}`); return 2; }
     if (["--claude", "--plugin-dir", "--plant"].includes(argv[i])) i++;
@@ -501,11 +510,11 @@ async function main(argv) {
   const claude = opt("--claude") ?? findClaude();
   if (!claude || !existsSync(claude)) { console.error(`canary: no Claude Code found${claude ? ` at ${claude}` : ""}; pass --claude <binary>`); return 2; }
   const pluginDir = resolve(opt("--plugin-dir") ?? REPO);
-  const verbose = argv.includes("--verbose"), keep = argv.includes("--keep");
+  const verbose = argv.includes("--verbose"), keep = argv.includes("--keep"), mcpLegacy = argv.includes("--mcp-legacy");
   const fault = opt("--plant");
   if (fault && !FAULTS[fault]) { console.error(`canary: no such fault ${fault} (one of ${Object.keys(FAULTS).join(", ")})`); return 2; }
   const one = async (label, dir, planted = false) => {
-    const r = await canary({ claude, pluginDir: dir, verbose, keep });
+    const r = await canary({ claude, pluginDir: dir, verbose, keep, mcpLegacy });
     report(label, r, planted && argv.includes("--self-test"));
     if (keep) console.log(`(kept: ${r.root})`);
     return r.ok;
