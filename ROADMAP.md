@@ -335,7 +335,7 @@ the estimator to noise. Calibration needs a real tokenizer, not this data.
 
 Each release with the measurements behind it. Dollar figures are as measured when the release shipped, with the prices and counting of the time; the 0.32 audit fixed both, and the README's headline figures are the re-measured ones.
 
-## Shipped on main, not yet released
+## Shipped in 0.47.0: one keystroke, the mod through install, a weekly live check, and an audit of 0.46
 
 From the research of 2026-11-13 ([above](#research-2026-11-13-from-built-to-used)): E1-E4; then an independent audit of 0.46.0 (two auditors: pricing, the hook, the status line and the mod; install, the MCP server, the proxy, `pack`, the CLI, the Action and the docs), each fix with a regression test that fails on the code before.
 
