@@ -68,4 +68,4 @@ Where there is no hook and no MCP at all (claude.ai on the web, the Claude and C
 
 Prompts, in clients that show them (Claude Desktop's **+** menu, Claude Code's slash menu, VS Code, Cursor, Gemini CLI): `context_checkup`, `handoff` (write, save and continue in a new chat) and `ask_file` (a path and a question, answered through `pack_context`). Resources, on the local server: `handoff://latest` and `handoff://<id>`, attachable in Claude Desktop, Cursor, VS Code (Add Context) and Claude Code (`@`).
 
-What the tools cost: their definitions ride on every request in clients that load them up front, at most ~2,344 Claude tokens for the six over stdio (an upper bound, [performance](./performance.md)); over HTTP there are five (no `recall`).
+What the tools cost: their definitions ride on every request in clients that load them up front, at most ~2,220 Claude tokens for the six over stdio (an upper bound, [performance](./performance.md)); over HTTP there are five (no `recall`).
