@@ -81,6 +81,20 @@ It cannot reach the real API. Claude Code gets an environment built from nothing
 
 `verify-local.sh` runs the self-test on the newest Claude Code installed here; `.github/workflows/canary.yml` runs it every week on `npm i @anthropic-ai/claude-code@latest`, with no secrets.
 
+**Prices and hosts that change under us.** `scripts/check-models.mjs` fails when a model a host or a price page names has no price of its own in `src/pricing.ts` (a family row's estimate, or no price at all):
+
+```bash
+node scripts/check-models.mjs --binary <claude binary>                        # Claude Code's model catalog
+node scripts/check-models.mjs --url https://platform.claude.com/docs/en/about-claude/pricing.md
+node scripts/check-models.mjs --openai https://developers.openai.com/api/docs/pricing.md --codex <models.json>
+node scripts/check-models.mjs --google https://ai.google.dev/gemini-api/docs/pricing.md.txt --gemini-cli <models.ts>
+node scripts/check-models.mjs --dated [--today 2026-11-16]                    # rows whose price ends within 14 days
+```
+
+`--dated` fails when a row's price ends within 14 days (or has ended) and the table has no successor price (`then`, or `routes` for a model billed as another): re-read the provider's page, and add the price once it is published; never guess one. A model a page names that has no price of its own on purpose (it is not on its provider's page) goes in `UNPRICED_ON_PURPOSE` in `src/modelids.ts`, with the reason. A page that is down is a warning, not a failure. `.github/workflows/models.yml` runs all of it every Monday.
+
+`scripts/claude-surface.mjs` reads the environment variables, settings keys, `plugin.json` keys, hook events and mod events of the newest Claude Code (the Desktop app's here, npm's in CI) and prints what is new or removed against `docs/hosts-reviewed.json`, with the CHANGELOG entries that add, remove or rename any of them since then (`--changelog <url|file>`). It is a list to read, never a failure; models.yml puts it in the job summary every week. Once the new names are reviewed (does any change what context-doctor measures or offers?), `node scripts/claude-surface.mjs --claude <binary> --write` takes that binary's surface as the reviewed list; prefer the linux-x64 package's binary (`npm pack @anthropic-ai/claude-code-linux-x64@<version>`), which is what CI reads.
+
 ## Good first issues
 
 - **A new session format.** `src/session.ts` reads Claude Code transcripts,
@@ -104,11 +118,21 @@ It cannot reach the real API. Claude Code gets an environment built from nothing
 | `VSCE_PAT` | VS Code Marketplace on `vscode-v*` tags | Azure DevOps PAT, scope Marketplace > Manage, for the `gai-ventures` publisher |
 | `OVSX_PAT` | Open VSX (where Cursor installs from) | open-vsx.org > Settings > Access Tokens |
 
+**The release train: one release a week, on Tuesdays.** Every release reaches every active install within about a day (npx re-fetches the package; see below), so releases go out together, once a week, after the weekly canary (Tuesday morning UTC) has run on the newest Claude Code. What goes in: whatever is on `main` and green by then. What does not wait for the train: a price fix (a model priced by a family row or not at all, a price that changed, a dated row whose successor was just published) and a security fix; each of those goes out the day it lands, with the same checks. Anything else that misses a Tuesday waits for the next one.
+
+Before tagging, on an up-to-date `main`:
+
+```bash
+node scripts/release-check.mjs           # GO or NO-GO; --quick skips verify-local, --plan lists the checks
+```
+
+It runs, and blocks the release on: a checkout that is not clean or not `origin/main`; `npm test`; a `dist/` that does not match `src/`; CI on this commit not green (via `gh`); the newest weekly canary or model-price run not green; `check-models` against the hosts and price pages (the list in `models.yml`, read now); `verify-local.sh` (smokes, the published package, Python, every command on your real history read-only, the canary on the newest Claude Code here, an install round trip); nothing to release. It warns, without blocking, on: a dated price ending within 14 days with no successor (a release cannot add a price nobody has published, and every version says once the date passes that the price changed); new Claude Code surface to review; a release on another day or less than a week after the last; no `## Shipped in X.Y.Z` section for the next version in ROADMAP.md. It changes nothing and publishes nothing.
+
 **Each release:**
 
 ```bash
+node scripts/release-check.mjs   # GO first
 npm version minor        # or patch/major: bumps package.json and tags vX.Y.Z
-npm test                 # the full suite; CI runs it on 3 OSes x Node 20/22/24
 git push --follow-tags   # npm publish + GitHub release with the .mcpb attached
 ```
 
