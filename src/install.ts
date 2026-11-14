@@ -1613,6 +1613,8 @@ const OUR_CLAUDE_FILES = [
   ".context-doctor-budget.json",
   ".context-doctor-budget-state.json",
   ".context-doctor-budget-said.d",
+  // ab --via claude-code's kept comparisons (abstore.ts), which fix quotes.
+  ".context-doctor-ab.json",
 ];
 
 export async function runUninstall(): Promise<void> {
