@@ -5,6 +5,9 @@
 # price ends within 14 days with no successor price recorded (ROADMAP K1, E7).
 # Hosts ship models days before a context-doctor release; this says so before
 # users run them. A page that is down is a warning, not a failure.
+# Also a report, never a failure: what the newest Claude Code added to or
+# removed from its environment variables, settings keys, plugin.json keys,
+# hook and mod events since the reviewed list (docs/hosts-reviewed.json).
 # Read-only: no secrets, no writes.
 name: Model prices
 
@@ -39,3 +42,25 @@ jobs:
           --google https://ai.google.dev/gemini-api/docs/pricing.md.txt
           --gemini-cli https://raw.githubusercontent.com/google-gemini/gemini-cli/main/packages/core/src/config/models.ts
           --dated
+
+  surface:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          # Claude Code's npm package needs Node 22 or later.
+          node-version: 22
+      - name: Install the newest Claude Code (npm, into a scratch prefix)
+        run: npm install --prefix "$RUNNER_TEMP/claude-code" --no-audit --no-fund @anthropic-ai/claude-code@latest
+      - name: What it adds or removes since the reviewed list (job summary)
+        # A list to read, never a failure: the step also passes when the extractors need updating.
+        continue-on-error: true
+        run: >-
+          node scripts/claude-surface.mjs
+          --claude "$RUNNER_TEMP/claude-code/node_modules/.bin/claude"
+          --changelog https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md
+          --summary "$GITHUB_STEP_SUMMARY"
