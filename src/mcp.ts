@@ -18,11 +18,25 @@
  *   save_handoff      — store a handoff brief the next chat starts from (a chat's history cannot be cut)
  *   recall            — search this session's own transcript (compacted turns, cleared output); stdio only
  * Prompts: context_checkup, handoff, ask_file. Resources (stdio): handoff://latest, handoff://<id>.
+ *
+ * Built on the MCP SDK's v2 packages: one server definition answers both
+ * protocol eras, a 2025-era client's `initialize` (2024-10-07 to 2025-11-25)
+ * and a 2026-07-28 client's `server/discover`, over stdio and --http.
  */
 
-import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import {
+  McpServer,
+  ProtocolError,
+  ProtocolErrorCode,
+  ResourceTemplate,
+  SdkError,
+  SdkErrorCode,
+  inputRequired,
+  inputResponse,
+  type InputRequiredResult,
+  type ServerContext,
+} from "@modelcontextprotocol/server";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
 import { resolve as resolvePath } from "node:path";
 import { parseConversation } from "./parse.js";
@@ -58,7 +72,33 @@ function shaped(requestMeta: unknown, full: string, compact: () => CompactResult
   return { content: [{ type: "text" as const, text: c.text }], structuredContent: c.structured, _meta: c.meta };
 }
 
-type Consent = { asked: false } | { asked: true; ok: boolean; content: Record<string, unknown>; why?: string };
+/** How long a 2026-07-28 client may keep a list that changes only with a release (the most a client keeps one: a day). */
+const LIST_CACHE = { ttlMs: 86_400_000, cacheScope: "private" as const };
+
+type Consent =
+  | { asked: false }
+  | { asked: true; ok: boolean; content: Record<string, unknown>; why?: string }
+  /** 2026-07-28: the form goes back to the client as the call's result; the client retries the call with the answer. */
+  | { pending: InputRequiredResult };
+
+type ConsentFields = Record<string, { type: "boolean"; title: string; default?: boolean }>;
+
+/** The key our consent form travels under in a 2026-07-28 `input_required` result and its retry. */
+const CONSENT_KEY = "consent";
+const FAILED = "the consent form failed, so nothing was assumed";
+
+/** The client capabilities a 2026-07-28 request declares in its own `_meta` envelope, if it is one. */
+function envelopeCapabilities(ctx: ServerContext): { elicitation?: { form?: unknown } } | undefined {
+  const envelope = ctx.mcpReq.envelope as Record<string, unknown> | undefined;
+  return envelope?.["io.modelcontextprotocol/clientCapabilities"] as { elicitation?: { form?: unknown } } | undefined;
+}
+
+/** An accepted answer fits the form: each field it carries is one the form asked for, as a boolean. */
+function fitsForm(content: unknown, properties: ConsentFields): content is Record<string, boolean> {
+  if (content === undefined) return true;
+  if (!content || typeof content !== "object" || Array.isArray(content)) return false;
+  return Object.entries(content).every(([k, v]) => k in properties && typeof v === "boolean");
+}
 
 /**
  * Ask the user through the client's own form (MCP elicitation), when the
@@ -67,16 +107,41 @@ type Consent = { asked: false } | { asked: true; ok: boolean; content: Record<st
  * declared it, the answer fails closed: a decline, a dismissal, an answer
  * that does not fit the form, a client error or no answer in two minutes is
  * a no, never "go ahead".
+ *
+ * Two eras, one rule. A 2025-era connection (initialize) is asked as before,
+ * with a request to the client while the call waits. A 2026-07-28 request
+ * has no server-to-client requests: the call returns the form as an
+ * `input_required` result (`pending`, returned as is), and the client calls
+ * again with the answer in `inputResponses`, which this reads.
  */
-async function askConsent(server: McpServer, message: string, properties: Record<string, { type: "boolean"; title: string; default?: boolean }>): Promise<Consent> {
+async function askConsent(server: McpServer, ctx: ServerContext, message: string, properties: ConsentFields): Promise<Consent> {
+  if (ctx.mcpReq.envelope) {
+    if (!envelopeCapabilities(ctx)?.elicitation?.form) return { asked: false };
+    const answer = inputResponse(ctx.mcpReq.inputResponses, CONSENT_KEY);
+    if (answer.kind === "missing") {
+      return {
+        pending: inputRequired({
+          inputRequests: { [CONSENT_KEY]: inputRequired.elicit({ mode: "form", message, requestedSchema: { type: "object", properties } }) },
+        }),
+      };
+    }
+    if (answer.kind !== "elicit") return { asked: true, ok: false, content: {}, why: FAILED };
+    if (answer.action === "accept") {
+      return fitsForm(answer.content, properties) ? { asked: true, ok: true, content: answer.content ?? {} } : { asked: true, ok: false, content: {}, why: FAILED };
+    }
+    return { asked: true, ok: false, content: {}, why: answer.action === "decline" ? "the user declined" : "the user dismissed the prompt" };
+  }
   if (!server.server.getClientCapabilities()?.elicitation?.form) return { asked: false };
   try {
-    const r = await server.server.elicitInput({ mode: "form", message, requestedSchema: { type: "object", properties } }, { timeout: 120_000 });
-    if (r.action === "accept") return { asked: true, ok: true, content: (r.content ?? {}) as Record<string, unknown> };
+    // Deprecated in the SDK only for 2026-07-28 requests, which take the branch above.
+    const r = await ctx.mcpReq.elicitInput({ mode: "form", message, requestedSchema: { type: "object", properties } }, { timeout: 120_000 });
+    if (r.action === "accept") {
+      return fitsForm(r.content, properties) ? { asked: true, ok: true, content: (r.content ?? {}) as Record<string, unknown> } : { asked: true, ok: false, content: {}, why: FAILED };
+    }
     return { asked: true, ok: false, content: {}, why: r.action === "decline" ? "the user declined" : "the user dismissed the prompt" };
   } catch (e) {
-    if (e instanceof McpError && e.code === ErrorCode.RequestTimeout) return { asked: true, ok: false, content: {}, why: "no answer within two minutes" };
-    return { asked: true, ok: false, content: {}, why: "the consent form failed, so nothing was assumed" };
+    if (e instanceof SdkError && e.code === SdkErrorCode.RequestTimeout) return { asked: true, ok: false, content: {}, why: "no answer within two minutes" };
+    return { asked: true, ok: false, content: {}, why: FAILED };
   }
 }
 
@@ -102,15 +167,21 @@ function createServer({ http = false, storeHandoffs = !http }: { http?: boolean;
       // No call of ours needs more than a few hundred array elements and
       // object members (a sketch's blocks, pack's ids and paths); refusing a
       // payload past this before zod walks it keeps an oversized one over
-      // --http from exhausting memory (MCP SDK 1.32.0+).
+      // --http from exhausting memory (an McpServer option, in both eras).
       maxToolInputElements: 10_000,
+      // 2026-07-28 clients may keep a list result for its `ttlMs`, across
+      // sessions: ours change only with a release (the client keys its cache
+      // by name@version), so a day. The saved-handoff list and reads change
+      // with every save and keep the SDK's default, 0.
+      cacheHints: { "tools/list": LIST_CACHE, "prompts/list": LIST_CACHE, "resources/templates/list": LIST_CACHE, "server/discover": LIST_CACHE },
     }
   );
 
-  server.tool(
+  server.registerTool(
   "profile_context",
-  "Profile a conversation's context: token breakdown, largest blocks, wasted context. Pass `conversation` (JSON or text) or, in a chat app, a `sketch` (~120 tokens). Call it when the user asks about tokens, cost, speed or limits, and once past ~30 turns or 3+ large pastes. Act on the top finding.",
   {
+  description: "Profile a conversation's context: token breakdown, largest blocks, wasted context. Pass `conversation` (JSON or text) or, in a chat app, a `sketch` (~120 tokens). Call it when the user asks about tokens, cost, speed or limits, and once past ~30 turns or 3+ large pastes. Act on the top finding.",
+  inputSchema: z.object({
     conversation: z.string().optional().describe("JSON or text; in a chat app pass `sketch`"),
     sketch: z.object({
       turns: z.number().int().nonnegative().describe("Exchanges so far"),
@@ -130,10 +201,11 @@ function createServer({ http = false, storeHandoffs = !http }: { http?: boolean;
       })).describe("Only blocks over ~500 tokens, repeated, or images."),
     }).optional().describe("For chat apps. One size hint per block: lines for code, words for prose, chars for logs."),
     model: z.string().optional().describe("e.g. claude-sonnet-5"),
-  },
+  }),
   // Pure: reads its input and returns text. Clients (Codex, ChatGPT) may skip approval for read-only tools.
-  { title: "Profile context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  async ({ conversation, sketch, model }, extra) => {
+  annotations: { title: "Profile context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async ({ conversation, sketch, model }, ctx) => {
     if (sketch) {
       const bad = (text: string) => ({ isError: true, content: [{ type: "text" as const, text }] });
       if (sketch.turns > 100_000) return bad(`sketch.turns is ${sketch.turns}; the most that makes sense is 100000.`);
@@ -154,7 +226,7 @@ function createServer({ http = false, storeHandoffs = !http }: { http?: boolean;
       const both = conversation ? "Note: both `conversation` and `sketch` were passed; profiled the sketch only. Pass one.\n\n" : "";
       const p = runSketchProfile({ ...sketch, model: sketch.model ?? model }, { record: !http });
       const full = both + renderSketchProfile(p);
-      return shaped(extra?._meta, full, () => {
+      return shaped(ctx.mcpReq._meta, full, () => {
         const c = compactSketch(p, full);
         return { ...c, text: both + c.text };
       });
@@ -167,23 +239,25 @@ function createServer({ http = false, storeHandoffs = !http }: { http?: boolean;
     }
     const profile = profileConversation(parseConversation(conversation), model);
     const full = renderProfile(profile);
-    return shaped(extra?._meta, full, () => compactProfile(profile, full));
+    return shaped(ctx.mcpReq._meta, full, () => compactProfile(profile, full));
   }
 );
 
-server.tool(
+server.registerTool(
   "optimize_context",
-  "Rewrite a conversation to reclaim tokens (dedupe, trim stale tool results, strip base64; prune-history is lossy). Returns slimmed JSON and the savings. Use after profile_context finds waste the user wants fixed; prune-history only with the user's consent, then write the summary the result asks for.",
   {
+  description: "Rewrite a conversation to reclaim tokens (dedupe, trim stale tool results, strip base64; prune-history is lossy). Returns slimmed JSON and the savings. Use after profile_context finds waste the user wants fixed; prune-history only with the user's consent, then write the summary the result asks for.",
+  inputSchema: z.object({
     conversation: z.string().describe("Conversation JSON"),
     strategies: z.array(z.enum(STRATEGY_IDS)).optional()
       .describe("Default: dedupe, trim-tool-results, strip-base64"),
     keep_recent: z.number().int().nonnegative().optional().describe("Tail messages kept (default 6)"),
     max_tool_result_tokens: z.number().int().positive().optional().describe("Per trimmed result (default 300)"),
-  },
+  }),
   // Pure: reads its input and returns text. Clients (Codex, ChatGPT) may skip approval for read-only tools.
-  { title: "Optimize context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  async ({ conversation, strategies, keep_recent, max_tool_result_tokens }) => {
+  annotations: { title: "Optimize context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async ({ conversation, strategies, keep_recent, max_tool_result_tokens }, ctx) => {
     // prune-history is lossy. Where the client can show a form, the user
     // confirms it there; elsewhere the tool description asks the model to
     // get consent in the chat first, as before.
@@ -191,9 +265,11 @@ server.tool(
     if (strategies?.includes("prune-history")) {
       const c = await askConsent(
         server,
+        ctx,
         `Prune old turns from this conversation? It is lossy: all but the last ${Math.max(2, keep_recent ?? 6)} messages are replaced by a summary the assistant writes.`,
         { prune: { type: "boolean", title: "Replace old turns with a summary", default: true } }
       );
+      if ("pending" in c) return c.pending;
       if (c.asked && (!c.ok || c.content.prune === false)) {
         strategies = strategies.filter((s) => s !== "prune-history");
         consentNote = `\nprune-history skipped: ${c.ok ? "the user unticked it" : c.why}.`;
@@ -277,12 +353,12 @@ server.tool(
     "pack_context",
     {
       description: "Read only the parts of large files a question needs: the chunks that best match `query` within `max_tokens`, with ids and line ranges. No query: an outline; pick with `ids`. Use instead of reading a big doc, log or folder whole when not editing it. Text, code, PDF, Word, PowerPoint, ODT.",
-      inputSchema: packInput,
+      inputSchema: z.object(packInput),
       // Reads files, never writes. Clients (Codex, ChatGPT) may skip approval for read-only tools.
       annotations: { title: "Pack context", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       ...(http ? { _meta: { "openai/fileParams": ["files"] } } : {}),
     },
-    async (args: Record<string, any>, extra: { _meta?: Record<string, unknown> }) => {
+    async (args: Record<string, any>, ctx: ServerContext) => {
       const { paths, text, query, max_tokens, ids, model, semantic, files } = args as {
         paths?: string[]; text?: string; query?: string; max_tokens?: number; ids?: string[]; model?: string; semantic?: boolean;
         files?: Array<{ download_url: string; file_id: string; mime_type?: string; file_name?: string }>;
@@ -320,7 +396,7 @@ server.tool(
       const note = skipped.length ? `\nSkipped: ${skipped.slice(0, 10).join("; ")}${skipped.length > 10 ? ` (+${skipped.length - 10} more)` : ""}` : "";
       const full = renderPack(result) + note;
       if (result.mode !== "outline") return { content: [{ type: "text" as const, text: full }] };
-      return shaped(extra?._meta, full, () => {
+      return shaped(ctx.mcpReq._meta, full, () => {
         const c = compactOutline(result, full);
         return { ...c, text: c.text + note };
       });
@@ -330,9 +406,9 @@ server.tool(
   // A prompt shows up in Claude Desktop's "+" menu, so a user can run a checkup
   // with one click instead of typing a request. It is the only proactive
   // surface MCP offers besides `instructions`.
-  server.prompt(
+  server.registerPrompt(
     "context_checkup",
-    "Profile this conversation's context and apply the top fix. One click, no typing.",
+    { description: "Profile this conversation's context and apply the top fix. One click, no typing." },
     async () => ({
       messages: [
         {
@@ -358,7 +434,7 @@ server.tool(
     {
       title: "Hand off to a new chat",
       description: "Write a short brief of this chat, save it, and continue in a new chat: the only way to cut a long chat's cost.",
-      argsSchema: { focus: z.string().max(200).optional().describe("What the next chat should work on (optional)") },
+      argsSchema: z.object({ focus: z.string().max(200).optional().describe("What the next chat should work on (optional)") }),
     },
     async ({ focus }) => ({
       messages: [
@@ -383,10 +459,10 @@ server.tool(
     {
       title: "Ask a big file",
       description: "Answer from a big file or folder without reading it whole: pack_context returns only the parts the question needs.",
-      argsSchema: {
+      argsSchema: z.object({
         path: z.string().max(1000).describe("Absolute path to the file or folder"),
         question: z.string().max(2000).describe("What you want to know from it"),
-      },
+      }),
     },
     async ({ path, question }) => ({
       messages: [
@@ -411,19 +487,19 @@ server.tool(
       description: `Save a handoff for continuing in a new chat (a chat's history cannot be cut; a new chat can). Write \`brief\` yourself (≤${HANDOFF_LIMITS.briefTargetTokens} tokens: goal, decisions, state, open items, identifiers); put what must stay exact in \`verbatim\`. Only when the user agrees.`,
       // Bounds (sizes, counts) are checked by validateHandoff, not spelled out
       // here: every schema keyword rides in each request's tool definitions.
-      inputSchema: {
+      inputSchema: z.object({
         brief: z.string(),
         verbatim: z.array(z.object({ label: z.string(), text: z.string() })).optional().describe("Code, config, figures"),
         title: z.string().optional(),
         chat_tokens: z.number().optional().describe("Chat size, from profile_context"),
         turns: z.number().optional(),
         model: z.string().optional(),
-      },
+      }),
       // Over HTTP without --store-handoffs it writes nothing and is read-only;
       // otherwise it writes a file under the home directory (never anything else).
       annotations: { title: "Save handoff", readOnlyHint: !storeHandoffs, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async ({ brief, verbatim, title, chat_tokens, turns, model }) => {
+    async ({ brief, verbatim, title, chat_tokens, turns, model }, ctx) => {
       const input = { brief, verbatim, title, model, chatTokens: chat_tokens, turns };
       const problems = validateHandoff(input);
       if (problems.length) return { isError: true, content: [{ type: "text" as const, text: `Not saved: ${problems.join(" ")}` }] };
@@ -433,10 +509,12 @@ server.tool(
         // The form shows the title and block labels: masked, like what is saved.
         const c = await askConsent(
           server,
+          ctx,
           // Masked before it is cut: a secret split at the cut would escape the patterns.
           `Save a handoff of this chat on this computer (${tildify(handoffDir())}) to start a new chat from? "${maskSecrets(title ?? brief.split("\n")[0]).text.slice(0, 80)}"${n ? `, with ${n} verbatim block(s): ${maskSecrets(verbatim!.map((b) => b.label).join(", ")).text.slice(0, 200)}` : ""}.`,
           n ? { include_verbatim: { type: "boolean", title: "Include the verbatim blocks", default: true } } : {}
         );
+        if ("pending" in c) return c.pending;
         if (c.asked && !c.ok) {
           return { content: [{ type: "text" as const, text: `Not saved: ${c.why}. Do not retry; ask the user in the chat if they still want a handoff.` }] };
         }
@@ -506,7 +584,7 @@ server.tool(
       { title: "Saved handoff", description: "A saved handoff, by id.", mimeType: "text/markdown" },
       async (uri, { id }) => {
         const h = readHandoff(String(Array.isArray(id) ? id[0] : id));
-        if (!h) throw new McpError(ErrorCode.InvalidParams, `No saved handoff at ${uri.href}. List them with resources/list, or run \`context-doctor handoff list\`.`);
+        if (!h) throw new ProtocolError(ProtocolErrorCode.InvalidParams, `No saved handoff at ${uri.href}. List them with resources/list, or run \`context-doctor handoff list\`.`);
         return { contents: [{ uri: uri.href, mimeType: "text/markdown", text: h.markdown }] };
       }
     );
@@ -519,7 +597,7 @@ server.tool(
       "recall",
       {
         description: "Search this session's transcript on disk (compacted turns, cleared tool output) for `query`: best excerpts with time and position. Use before asking the user again.",
-        inputSchema: { query: z.string(), max_tokens: z.number().optional() },
+        inputSchema: z.object({ query: z.string(), max_tokens: z.number().optional() }),
         annotations: { title: "Recall", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       },
       async ({ query, max_tokens }) => {
@@ -536,39 +614,56 @@ server.tool(
     );
   }
 
-  server.tool(
+  server.registerTool(
     "context_best_practices",
-    "Checklist for keeping context lean and prompts cacheable, optionally per provider.",
     {
-      provider: z.enum(["general", "anthropic", "openai"]).optional().describe("Default: general"),
+      description: "Checklist for keeping context lean and prompts cacheable, optionally per provider.",
+      inputSchema: z.object({
+        provider: z.enum(["general", "anthropic", "openai"]).optional().describe("Default: general"),
+      }),
+      // Pure: reads its input and returns text. Clients (Codex, ChatGPT) may skip approval for read-only tools.
+      annotations: { title: "Context best practices", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    // Pure: reads its input and returns text. Clients (Codex, ChatGPT) may skip approval for read-only tools.
-    { title: "Context best practices", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async ({ provider }) => {
       const tips = [...BEST_PRACTICES.general, ...(provider && provider !== "general" ? BEST_PRACTICES[provider] : [])];
       return { content: [{ type: "text", text: tips.map((t, i) => `${i + 1}. ${t}`).join("\n") }] };
     }
   );
 
-  dropSchemaDialect(server);
+  leanToolSchemas(server);
   return server;
 }
 
 /**
- * Every tool's JSON schema came with `"$schema": "http://json-schema.org/draft-07/schema#"`
- * (the SDK's converter adds it): 52 characters a tool, in every request of
- * clients that load the definitions up front, telling the model nothing. The
- * SDK builds tools/list itself, so its handler is wrapped to leave it out.
- * Should the SDK's internals change, the list goes out as the SDK makes it
- * (the budget test then says so).
+ * Every tool's JSON schema came with a `"$schema"` dialect line (the SDK's
+ * converter adds it): 50-odd characters a tool, in every request of clients
+ * that load the definitions up front, telling the model nothing. Zod 4 also
+ * spells out every integer's range as ±9007199254740991 (Number's safe
+ * integers), which no number a JSON parser hands us can pass anyway. The SDK
+ * builds tools/list itself, so its handler is wrapped to leave both out; the
+ * input is still validated against the full schema. Should the SDK's
+ * internals change, the list goes out as the SDK makes it (the budget test
+ * then says so).
  */
-function dropSchemaDialect(server: McpServer): void {
+function leanToolSchemas(server: McpServer): void {
   const handlers = (server.server as unknown as { _requestHandlers?: Map<string, (req: unknown, extra: unknown) => Promise<unknown>> })._requestHandlers;
   const list = handlers?.get("tools/list");
   if (!handlers || !list) return;
+  const lean = (node: unknown): void => {
+    if (Array.isArray(node)) return node.forEach(lean);
+    if (!node || typeof node !== "object") return;
+    const o = node as Record<string, unknown>;
+    if (o.maximum === Number.MAX_SAFE_INTEGER) delete o.maximum;
+    if (o.minimum === -Number.MAX_SAFE_INTEGER) delete o.minimum;
+    Object.values(o).forEach(lean);
+  };
   handlers.set("tools/list", async (req, extra) => {
     const r = (await list(req, extra)) as { tools?: Array<{ inputSchema?: Record<string, unknown> }> };
-    for (const t of r?.tools ?? []) if (t.inputSchema) delete t.inputSchema.$schema;
+    for (const t of r?.tools ?? []) {
+      if (!t.inputSchema) continue;
+      delete t.inputSchema.$schema;
+      lean(t.inputSchema);
+    }
     return r;
   });
 }
@@ -594,22 +689,42 @@ const BEST_PRACTICES: Record<string, string[]> = {
 };
 
 /**
- * Set a header on a Node request so every downstream reader sees it.
- *
- * `req.headers` is a parsed convenience copy; the MCP transport reconstructs a
- * Web Request from `req.rawHeaders`, so a header written to only one of them is
- * invisible to the other.
+ * The Node request as a Web `Request`, the shape the SDK's HTTP entries take.
+ * The body was read (capped) and parsed already: it goes along as
+ * `parsedBody`, so the Request carries none. `accept` replaces the client's
+ * Accept header (see the dispatch below).
  */
-function setHeader(req: import("node:http").IncomingMessage, name: string, value: string): void {
-  req.headers[name] = value;
+function toWebRequest(req: import("node:http").IncomingMessage, accept: string, signal: AbortSignal): Request {
+  const headers = new Headers();
   const raw = req.rawHeaders;
   for (let i = 0; i < raw.length; i += 2) {
-    if (raw[i].toLowerCase() === name) {
-      raw[i + 1] = value;
-      return;
-    }
+    const name = raw[i].toLowerCase();
+    if (name === "accept" || name === "content-length" || name === "transfer-encoding" || name === "connection") continue;
+    headers.append(name, raw[i + 1]);
   }
-  raw.push(name, value);
+  headers.set("accept", accept);
+  return new Request(`http://${req.headers.host ?? "localhost"}${req.url ?? "/mcp"}`, { method: req.method, headers, signal });
+}
+
+/** Write a Web `Response` (JSON or an SSE stream) to the Node response. */
+async function sendWebResponse(res: import("node:http").ServerResponse, response: Response): Promise<void> {
+  res.statusCode = response.status;
+  response.headers.forEach((value, name) => res.setHeader(name, value));
+  if (!response.body) {
+    res.end();
+    return;
+  }
+  res.flushHeaders();
+  const reader = response.body.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!res.write(value)) await new Promise((r) => res.once("drain", r));
+    }
+  } finally {
+    res.end();
+  }
 }
 
 // -- Transport dispatch --------------------------------------------------------
@@ -617,6 +732,13 @@ function setHeader(req: import("node:http").IncomingMessage, name: string, value
 // --http [--port N] [--host H]: streamable-HTTP endpoint at /mcp for clients
 // that connect to a URL instead of spawning a process — ChatGPT developer-mode
 // connectors (which require a reachable URL), web MCP clients, remote setups.
+//
+// Both serve two protocol eras from the one createServer: a 2025-era client
+// (an `initialize` handshake: Claude Desktop, Cursor, Codex, Gemini CLI,
+// Copilot, ChatGPT, and Claude Code with MCP_PROTOCOL_NEGOTIATION=legacy) gets
+// the server it got before; a 2026-07-28 client (Claude Code 2.1.323's
+// default: it opens with `server/discover` and stamps every request) gets
+// that revision.
 const argv = process.argv.slice(2);
 if (argv.includes("--http")) {
   const argAfter = (flag: string): string | undefined => {
@@ -631,7 +753,13 @@ if (argv.includes("--http")) {
   // Host and Origin checks against DNS rebinding and cross-site requests (httpguard.ts).
   const guard = makeGuard(host, argAfter("--allowed-hosts"), argAfter("--allowed-origins"));
   const { createServer: createHttpServer } = await import("node:http");
-  const { StreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
+  const { WebStandardStreamableHTTPServerTransport, createMcpHandler, isJsonContentType, isLegacyRequest } = await import("@modelcontextprotocol/server");
+  // 2026-07-28 requests: the SDK's per-request entry, a fresh server for each
+  // (stateless, nothing shared). 2025-era requests are routed around it below.
+  // Its default response is a single JSON body, upgraded to a stream only
+  // when a handler sends something before its result, which ours never do
+  // (2026-07-28 consent is a result, not a request mid-call).
+  const modern = createMcpHandler(() => createServer({ http: true, storeHandoffs }), { legacy: "reject" });
 
   const httpServer = createHttpServer(async (req, res) => {
     try {
@@ -683,7 +811,12 @@ if (argv.includes("--http")) {
         res.end(JSON.stringify({ error: "Stateless server: POST /mcp only" }));
         return;
       }
-      // Read (capped) and parse the body here; the transport gets it parsed.
+      // The SDK's entries leave the media type to whoever routes to them.
+      if (!isJsonContentType(req.headers["content-type"])) {
+        req.resume();
+        return deny(415, -32000, "Unsupported Media Type: Content-Type must be application/json");
+      }
+      // Read (capped) and parse the body here; the SDK gets it parsed.
       const body = await readJsonBody(req);
       if (!("value" in body)) return deny(body.status, body.code, body.message);
       // The streamable-HTTP spec says a client MUST accept both
@@ -694,25 +827,29 @@ if (argv.includes("--http")) {
       // stream, so those clients get a plain JSON body instead of a refusal.
       const accept = String(req.headers.accept ?? "");
       const askedForSse = accept.includes("text/event-stream");
-      if (!askedForSse || !accept.includes("application/json")) {
-        // The transport rebuilds the request from rawHeaders (via Hono), so
-        // setting req.headers alone changes nothing it will ever look at.
-        setHeader(req, "accept", "application/json, text/event-stream");
-      }
+      const aborted = new AbortController();
+      res.on("close", () => aborted.abort());
+      const request = toWebRequest(req, askedForSse && accept.includes("application/json") ? accept : "application/json, text/event-stream", aborted.signal);
 
-      // Fresh server + transport per request (stateless — nothing shared).
-      const server = createServer({ http: true, storeHandoffs });
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
-        // A client that never asked for a stream gets plain JSON back.
-        enableJsonResponse: !askedForSse,
-      });
-      res.on("close", () => {
-        void transport.close();
-        void server.close();
-      });
-      await server.connect(transport);
-      await transport.handleRequest(req, res, body.value);
+      let response: Response;
+      if (await isLegacyRequest(request, body.value)) {
+        // A 2025-era request: a fresh server and transport for it alone, as before.
+        const server = createServer({ http: true, storeHandoffs });
+        const transport = new WebStandardStreamableHTTPServerTransport({
+          sessionIdGenerator: undefined,
+          // A client that never asked for a stream gets plain JSON back.
+          enableJsonResponse: !askedForSse,
+        });
+        res.on("close", () => {
+          void transport.close();
+          void server.close();
+        });
+        await server.connect(transport);
+        response = await transport.handleRequest(request, { parsedBody: body.value });
+      } else {
+        response = await modern.fetch(request, { parsedBody: body.value });
+      }
+      await sendWebResponse(res, response);
     } catch (e) {
       if (!res.headersSent) res.statusCode = 500;
       res.end(JSON.stringify({ error: (e as Error).message }));
@@ -732,6 +869,6 @@ if (argv.includes("--http")) {
     );
   });
 } else {
-  const transport = new StdioServerTransport();
-  await createServer().connect(transport);
+  // One server per connection, pinned to the era its opening chose.
+  serveStdio(() => createServer());
 }

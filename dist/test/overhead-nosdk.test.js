@@ -45,5 +45,6 @@ test("overhead --mcp with no node_modules measures servers through the bundled S
 test("the npm package declares no runtime dependencies", () => {
     const pkg = JSON.parse(readFileSync(join(dist, "..", "package.json"), "utf8"));
     assert.deepEqual(Object.keys(pkg.dependencies ?? {}), [], "they are bundled into dist/mcp.js and dist/mcpclient.js");
-    assert.ok(pkg.devDependencies["@modelcontextprotocol/sdk"] && pkg.devDependencies.zod, "still needed to build the bundles");
+    // The v2 packages build the bundles; the v1 SDK stays only as the tests' 2025-era client.
+    assert.ok(pkg.devDependencies["@modelcontextprotocol/server"] && pkg.devDependencies["@modelcontextprotocol/client"] && pkg.devDependencies.zod, "still needed to build the bundles");
 });

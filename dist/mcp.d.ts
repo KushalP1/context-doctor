@@ -18,5 +18,9 @@
  *   save_handoff      — store a handoff brief the next chat starts from (a chat's history cannot be cut)
  *   recall            — search this session's own transcript (compacted turns, cleared output); stdio only
  * Prompts: context_checkup, handoff, ask_file. Resources (stdio): handoff://latest, handoff://<id>.
+ *
+ * Built on the MCP SDK's v2 packages: one server definition answers both
+ * protocol eras, a 2025-era client's `initialize` (2024-10-07 to 2025-11-25)
+ * and a 2026-07-28 client's `server/discover`, over stdio and --http.
  */
 export {};
