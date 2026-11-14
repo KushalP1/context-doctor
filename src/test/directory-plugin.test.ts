@@ -27,13 +27,21 @@ function files(dir: string, base = dir): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(dir, e.name), base) : [relative(base, join(dir, e.name)).split("\\").join("/")]));
 }
 
+/**
+ * The server's tools/list reply. Settles only once the server has exited:
+ * its working folder is the build, and Windows refuses to remove a folder
+ * a process still has as its own (EBUSY, Node 20).
+ */
 function mcpAnswers(bundle: string, cwd: string): Promise<string> {
   const child = spawn(process.execPath, [bundle], { stdio: ["pipe", "pipe", "ignore"], cwd });
   const send = (m: unknown) => child.stdin.write(JSON.stringify(m) + "\n");
+  const exited = new Promise<void>((res) => child.once("close", () => res()));
   return new Promise<string>((resolve, reject) => {
     let out = "";
-    const t = setTimeout(() => { child.kill(); reject(new Error(`no tools/list reply: ${out.slice(0, 200)}`)); }, 15_000);
-    child.stdout.on("data", (d) => { out += d; if (out.includes(`"id":2`)) { clearTimeout(t); child.kill(); resolve(out); } });
+    let ended = false;
+    const end = (settle: () => void) => { if (ended) return; ended = true; clearTimeout(t); child.kill(); void exited.then(settle); };
+    const t = setTimeout(() => end(() => reject(new Error(`no tools/list reply: ${out.slice(0, 200)}`))), 15_000);
+    child.stdout.on("data", (d) => { out += d; if (out.includes(`"id":2`)) end(() => resolve(out)); });
     send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } } });
     send({ jsonrpc: "2.0", method: "notifications/initialized" });
     send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
@@ -95,7 +103,7 @@ test("the directory build: listing fields and engines, only what the plugin runs
     assert.ok(bundle.startsWith("#!/usr/bin/env node\n") && !bundle.split("\n").slice(1).some((l) => l.startsWith("#!")), "one shebang, on the first line");
     for (const b of ["mcp.bundle.js", "mcp.js"]) assert.match(await mcpAnswers(join(out, "dist", b), out), /profile_context/, b);
   } finally {
-    rmSync(dirname(out), { recursive: true, force: true });
+    rmSync(dirname(out), { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -111,7 +119,7 @@ test("the --no-mod build: no hooks module, the rest unchanged", () => {
     assert.ok(!existsSync(join(out, "dist", "mod")));
     assert.ok(existsSync(join(out, "dist", "cli.js")) && existsSync(join(out, "dist", "mcp.bundle.js")));
   } finally {
-    rmSync(dirname(out), { recursive: true, force: true });
+    rmSync(dirname(out), { recursive: true, force: true, maxRetries: 10 });
   }
 });
 
@@ -136,6 +144,6 @@ test("the build replaces only an earlier build of itself, and keeps a git checko
     assert.equal(readFileSync(join(out, ".git", "HEAD"), "utf8"), "ref: refs/heads/directory\n");
     assert.ok(!existsSync(join(out, "dist", "mod")));
   } finally {
-    rmSync(tmp, { recursive: true, force: true });
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 10 });
   }
 });
