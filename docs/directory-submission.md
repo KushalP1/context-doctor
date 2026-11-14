@@ -7,7 +7,7 @@ The owner's package for listing context-doctor in Anthropic's plugin directory (
 ## In short
 
 - **The directory accepts mods.** Its platform page says it lists a mod (code named under `modules` in `hooks/hooks.json`) for Claude Code, and its checklist names a `modules` array as a valid `hooks/hooks.json`. What it does not publish are the "rules of its own" that `claude plugin validate` says the portal applies to a hooks module; only the portal's **Validate** shows them.
-- **Submit the directory build, from a branch.** `scripts/build-directory-plugin.mjs` makes a folder with only what the plugin runs (115 files) and a plugin.json with `engines["claude-code"]` and the listing fields. `claude plugin validate --profile directory --strict` passes on it with no error, no warning and no directory finding, and the canary runs green on it (25 of 25).
+- **Submit the directory build, from a branch.** `scripts/build-directory-plugin.mjs` makes a folder with only what the plugin runs (115 files) and a plugin.json with `engines["claude-code"]` and the listing fields. `claude plugin validate --profile directory --strict` passes on it with no error, no warning and no directory finding, and the canary runs green on it (26 of 26).
 - **Fallback:** the same build with `--no-mod` (no hooks module), also strict-clean. Use it only if the portal or a reviewer refuses the mod.
 - **Expect a reviewer.** Some holds cannot be avoided (below), so plan on a reviewer reading the plugin before it goes live, not on an automatic publish.
 
@@ -143,7 +143,7 @@ HOME=$SAMPLE node dist/cli.js spend    # $145 across 276 requests, by project
 
 ## Evidence: the canary
 
-`scripts/canary.mjs` runs the plugin in a real Claude Code with no person and no network: `claude -p --plugin-dir` against a local mock of the Messages API, in a throwaway HOME with a made-up credential. On the directory build, 2.1.325: **GREEN, 25 of 25** (the plugin loads with no `plugin_errors`, its MCP server connects, all five hooks run and exit 0 and say their lines, the PreCompact instructions reach the compaction request, the mod's `session.measure` writes the limits and cost ledgers, context-doctor's price within 2% of Claude Code's, `validate --profile directory --strict` passes, nothing tried to reach another host). On the `--no-mod` build: everything but the four mod checks green, as expected. `verify-local.sh` and the weekly canary workflow (npm's newest Claude Code) validate both builds strictly and run the canary on the build. Details: [CONTRIBUTING](../CONTRIBUTING.md#checks-beyond-npm-test).
+`scripts/canary.mjs` runs the plugin in a real Claude Code with no person and no network: `claude -p --plugin-dir` against a local mock of the Messages API, in a throwaway HOME with a made-up credential. On the directory build, 2.1.325: **GREEN, 26 of 26** (the plugin loads with no `plugin_errors`, its MCP server connects and negotiates MCP 2026-07-28, all five hooks run and exit 0 and say their lines, the PreCompact instructions reach the compaction request, the mod's `session.measure` writes the limits and cost ledgers, context-doctor's price within 2% of Claude Code's, `validate --profile directory --strict` passes, nothing tried to reach another host). On the `--no-mod` build: everything but the four mod checks green, as expected. `verify-local.sh` and the weekly canary workflow (npm's newest Claude Code) validate both builds strictly and run the canary on the build. Details: [CONTRIBUTING](../CONTRIBUTING.md#checks-beyond-npm-test).
 
 ## What a reviewer may raise
 
