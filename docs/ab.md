@@ -2,7 +2,7 @@
 
 [← README](../README.md)
 
-Everything context-doctor removes is supposed to be waste. `ab` checks that on tasks with a right answer: each task of a small suite runs twice, with and without a lever, through the Anthropic Messages API, and is scored by a hidden check. A smaller context only counts if the task still passes.
+Everything context-doctor removes is supposed to be waste. `ab` checks that on tasks with a right answer: each task of a small suite runs twice, with and without a lever, through the Anthropic Messages API, and is scored by a hidden check. A smaller context only counts if the task still passes. With no API key, `--via claude-code` runs the same tasks through your own Claude Code on two models, on your plan ([below](#on-your-own-plan---via-claude-code)).
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
@@ -57,7 +57,7 @@ With one run per task, a one-task difference is noise. Use `--repeat 3` or more 
 
 ## Spending
 
-`ab` is the only command besides `experiment` that spends money, and it bills the key in `ANTHROPIC_API_KEY`:
+`ab` is the only command besides `experiment` that spends money, and it bills the key in `ANTHROPIC_API_KEY` (with `--via claude-code`, whatever your Claude Code is signed in with instead: [below](#on-your-own-plan---via-claude-code)):
 
 - it always prints the plan and an estimate first (with prompt caching, and the upper end if nothing caches), and refuses to start without the key;
 - without `--yes` it sends nothing;
@@ -68,6 +68,61 @@ With one run per task, a one-task difference is noise. Use `--repeat 3` or more 
 `ANTHROPIC_BASE_URL` is honoured and printed, so a proxy in the way (autopilot's included) is visible: point it at the API itself for a clean baseline.
 
 On accounts that enforce thinking-block binding (created on or after 2026-08-31), an edited history before a thinking block is refused; the wrapper then resends the request unedited, as in production, and the `autoclear` row shows how many requests it actually changed.
+
+## On your own plan: `--via claude-code`
+
+The levers above run on an API key. The question `fix` could not answer without one is the subagent lever's: do your subagents do the same work on Sonnet 5.5 as on Opus 5.5? `--via claude-code` runs the same eight tasks through your own Claude Code (`claude -p`, on its sign-in), one arm per model, and scores them with the same hidden checks:
+
+```bash
+context-doctor ab --via claude-code                       # the plan: who pays, the estimate; nothing runs
+context-doctor ab --via claude-code --repeat 3 --yes --out ab-plan.json
+context-doctor ab --via claude-code --model claude-sonnet-5-5 --compare claude-opus-5-5 --yes
+```
+
+`--model` defaults to `claude-sonnet-5-5` and `--compare` (repeatable, or comma-separated; `none` for one model alone) to `claude-opus-5-5`. Full model ids only: an alias such as `sonnet` has no price to estimate with. `--lever` does not apply here (the levers are arms of the Messages API harness).
+
+**Who pays.** Before anything runs, `ab` asks Claude Code itself (`claude --version`, `claude --help`, `claude auth status --json`; nothing is sent to a model) and says so:
+
+- signed in to claude.ai: the runs draw on your plan's usage limits (the 5-hour and weekly windows), not dollars. The estimate is printed at API list prices, and, when `context-doctor limits` has fitted your readings, as a share of your weekly limit or of a 5-hour window. There is no `--budget` by default: the plan's limit is the cap;
+- on an API key (`ANTHROPIC_API_KEY` set, or a console sign-in): it bills that key in dollars, and `--budget` defaults to the upper estimate plus 25%, as on the Messages API;
+- not signed in, a `claude` that cannot be run (`CONTEXT_DOCTOR_CLAUDE_BIN` points at another one), or a Claude Code whose `--help` lacks a flag below: refused, nothing run.
+
+Nothing runs without `--yes`.
+
+**Each run.** A fresh temporary copy of the task's repository, and one `claude -p` in it, the prompt (the same request, file list and instructions the Messages API agent gets) on stdin:
+
+| Flag | Why |
+|---|---|
+| `--model <id>` | the arm |
+| `--output-format stream-json --verbose` | the `init` event (version, tools), `rate_limit_event`, and the `result`: `total_cost_usd`, `usage`, `num_turns`, `permission_denials` |
+| `--max-turns 30` (`--max-turns`) | a run that loops ends as `error_max_turns`; not listed by `--help`, accepted by every version checked |
+| `--restricted` | the file tools only reach the working folder; user, project and local settings files are ignored, so your hooks, permission rules and plugins stay out |
+| `--safe-mode`, `--strict-mcp-config`, `--disable-slash-commands` | no CLAUDE.md, skills, plugins, hooks, MCP servers, agents or output styles: your setup does not change the comparison or add tokens |
+| `--no-session-persistence` | no transcript under `~/.claude/projects`, so the runs never show up in `savings`, `spend` or `fix` |
+| `--tools Read,Edit,Write,Glob,Grep,Bash` | the tools a general-purpose subagent works with |
+| `--allowedTools "Read Edit Write Glob Grep Bash(node test.mjs)"`, `--disallowedTools "Edit(test.mjs) Write(test.mjs)"` | the smoke test is the only command; the smoke test itself cannot be changed |
+| `--permission-mode dontAsk --permission-prompts none` | anything not allowed above is refused, and nobody is asked |
+| `--settings '{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":false,"allowUnsandboxedCommands":false}}'` | `node test.mjs` runs code the model wrote: under Claude Code's sandbox it cannot write outside the run folder and temp, or reach the network; if the sandbox is not available, Claude Code fails rather than run without it |
+| `--max-budget-usd <usd>` | only with `--budget`: each run's share of what is left (a run that passes it ends as `error_max_budget_usd`) |
+
+Never `--dangerously-skip-permissions`, `bypassPermissions` or `--bare` (which would ignore a claude.ai sign-in). Claude Code's own environment is yours (its sign-in lives there), less `CLAUDECODE`, so it can run from inside a Claude Code session. Two runs at a time (`--concurrency`), the models alternating within each task, so a limit reached halfway leaves both arms with the same tasks.
+
+**Verified** with Claude Code 2.1.311 and 2.1.325, in a throwaway `HOME` against a local mock of the Messages API with a dummy token (nothing reached Anthropic): every flag above accepted; Write and Read outside the folder refused ("--restricted confines the file tools to the working directory"); Edit and Write of `test.mjs` refused; `node test.mjs` ran, while `touch <outside>`, `node test.mjs && touch ../x` and `node ./test.mjs` were refused; code the model wrote and `node test.mjs` imported got `EPERM` writing a file outside the run folder and temp and `EPERM` opening a connection, and without the sandbox setting the same write landed; no `~/.claude/projects` was written; `--max-turns 4` ended as `error_max_turns`, `--max-budget-usd 0.01` as `error_max_budget_usd`; a 429 with the plan's headers came back as a rejected `rate_limit_event` and a result with `api_error_status: 429`; no sign-in as an assistant `error: "authentication_failed"`. Then `ab --via claude-code` itself, on the real Claude Code 2.1.325 against that mock: the mock's model wrote each fix with Claude Code's Write tool and ran the smoke test with Bash, and the hidden check passed the runs that had the fix and failed the one that did not. The package's tests run the command against a fake `claude` on `PATH`.
+
+**Scoring and output.** The hidden check decides, as above. Tokens and cost are Claude Code's own: the result's `usage` and `total_cost_usd`. On a plan that figure is the list-price equivalent, shown as "at list prices, drawn from your usage limits, not billed". A table per task and model, pass counts over the completed runs, tokens per run, cost, the calls Claude Code's permissions refused, and one line: "Sonnet 5.5 passed 7/8, Opus 5.5 8/8."
+
+**Stopping.** The plan's usage limit reached mid-run (a rejected `rate_limit_event`, or a result with status 429) stops the suite: no further run starts, the exit code is 1, and the runs not started are not counted. So does a refused sign-in, or a Claude Code that never starts a session (an unknown flag, the sandbox unavailable). A run past `--timeout` seconds (default 600) is killed with everything in its process group and counted apart, as are runs that hit the turn cap or the budget. Ctrl-C kills every `claude` the suite started and removes every run folder (exit 130). The sandbox is offered on macOS and Linux (WSL included): on Windows `--via claude-code` refuses.
+
+**Kept for `fix`.** A comparison that finished with at least two models completing runs is kept in `.context-doctor-ab.json` beside the other state files (`~/.claude`, or the fallback state folder; the newest 20; `uninstall` removes it). `fix`'s subagent-model line quotes the newest one that compared Sonnet 5.5 with another model ([fix](fix.md#the-subagents-model-subagent-model)).
+
+**Running it on your plan.** About 16 runs at `--repeat 1`, 48 at `--repeat 3`; each Opus 5.5 run comes to roughly $0.10 to $0.40 at list prices, a Sonnet 5.5 run half that. Start with one repeat, read `context-doctor limits` before and after, then `--repeat 3` for a figure worth quoting:
+
+```bash
+context-doctor ab --via claude-code                          # read the plan line: "signed in to claude.ai (max plan): ... not dollars"
+context-doctor ab --via claude-code --yes --out ab-plan-1.json
+context-doctor ab --via claude-code --repeat 3 --yes --out ab-plan-3.json
+context-doctor fix                                           # the subagent-model line now quotes it
+```
 
 ## In code
 
