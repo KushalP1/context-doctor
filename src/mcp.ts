@@ -158,7 +158,7 @@ async function askConsent(server: McpServer, ctx: ServerContext, message: string
 function createServer({ http = false, storeHandoffs = !http }: { http?: boolean; storeHandoffs?: boolean } = {}): McpServer {
   const fileAccess = !http;
   const server = new McpServer(
-    { name: "context-doctor", version: "0.47.0" },
+    { name: "context-doctor", version: "0.48.0" },
     // Server instructions are injected by MCP clients (Claude Desktop, Cursor, …)
     // into the system context of EVERY conversation where this server is
     // enabled: standing context-hygiene rules in every chat, no hook needed.
