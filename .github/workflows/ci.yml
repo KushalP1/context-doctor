@@ -40,7 +40,8 @@ jobs:
         shell: bash
         run: |
           export HOME=$(mktemp -d)
-          node scripts/smoke-mcp.mjs node dist/mcp.js
+          node scripts/smoke-mcp.mjs --protocol legacy node dist/mcp.js
+          node scripts/smoke-mcp.mjs --protocol 2026-07-28 node dist/mcp.js
           node scripts/smoke-openai-proxy.mjs
           node scripts/smoke-gemini-proxy.mjs
       - name: Verify committed dist/ is in sync with src/

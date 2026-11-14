@@ -5,6 +5,13 @@
 //   node scripts/smoke-mcp.mjs node dist/mcp.js
 //   node scripts/smoke-mcp.mjs npx -y context-doctor mcp
 //   node scripts/smoke-mcp.mjs --http http://127.0.0.1:8808/mcp
+//   node scripts/smoke-mcp.mjs --protocol 2026-07-28 node dist/mcp.js
+//
+// --protocol picks the client's era: `legacy` (an initialize handshake, as
+// Claude Desktop, Cursor, Codex, Gemini CLI and Copilot connect), a revision
+// to pin (2026-07-28: server/discover, as Claude Code 2.1.323+ connects by
+// default), or `auto` (the default: probe, fall back to initialize). The
+// run fails if the era it asked for is not the one it got.
 //
 // Exits 1 on the first failed check. Calls write to the ledger (and
 // save_handoff to ~/.context-doctor/handoffs) of whatever HOME the server runs
@@ -14,15 +21,20 @@
 // handoff:// resources) are checked when the server has them; SMOKE_STRICT=1
 // requires them (verify-local.sh sets it for the local build, not for the
 // published package, which may predate them).
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 
 const args = process.argv.slice(2);
-if (args.length === 0) {
-  console.error("usage: smoke-mcp.mjs <command> [args...] | --http <url>");
+let protocol = "auto";
+if (args[0] === "--protocol") {
+  protocol = args[1];
+  args.splice(0, 2);
+}
+if (args.length === 0 || !protocol) {
+  console.error("usage: smoke-mcp.mjs [--protocol legacy|auto|<revision>] <command> [args...] | --http <url>");
   process.exit(2);
 }
+const mode = protocol === "legacy" || protocol === "auto" ? protocol : { pin: protocol };
 const transport =
   args[0] === "--http"
     ? new StreamableHTTPClientTransport(new URL(args[1]))
@@ -48,10 +60,12 @@ const conversation = JSON.stringify({
   ],
 });
 
-const client = new Client({ name: "context-doctor-smoke", version: "1.0.0" });
+const client = new Client({ name: "context-doctor-smoke", version: "1.0.0" }, { versionNegotiation: { mode } });
 const started = Date.now();
 await client.connect(transport);
-check(true, "handshake", `${Date.now() - started} ms`);
+check(true, "handshake", `${Date.now() - started} ms, protocol ${client.getNegotiatedProtocolVersion()} (${client.getProtocolEra()})`);
+if (protocol === "legacy") check(client.getProtocolEra() === "legacy", "2025-era handshake (initialize)");
+else if (protocol !== "auto") check(client.getNegotiatedProtocolVersion() === protocol, `negotiated ${protocol}`);
 
 const info = client.getServerVersion();
 check(info?.name === "context-doctor", "server name", `${info?.name} ${info?.version}`);
@@ -83,8 +97,9 @@ if (!hasHandoff) {
   const st = text(saved);
   if (overHttp) {
     check(!saved.isError && /not stored/.test(st) && /Saves ~/.test(st), "save_handoff over HTTP (stores nothing)", st.split("\n")[0]);
-    const res = await client.listResources().then(() => "listed", (e) => String(e.message ?? e));
-    check(res !== "listed", "no handoff resources over HTTP", res.slice(0, 60));
+    // The v2 client answers an empty list for a server without the resources capability.
+    const res = await client.listResources().then((r) => (r.resources.length ? `listed ${r.resources.length}` : "none"), (e) => String(e.message ?? e));
+    check(!client.getServerCapabilities()?.resources && !res.startsWith("listed"), "no handoff resources over HTTP", res.slice(0, 60));
   } else {
     check(!saved.isError && /^Handoff saved: /.test(st) && /Saves ~/.test(st), "save_handoff", st.split("\n")[0]);
     const id = st.match(/Handoff saved: (\S+)/)?.[1];

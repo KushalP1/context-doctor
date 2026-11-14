@@ -22,10 +22,13 @@ run "committed dist/ matches src/" git diff --exit-code --quiet -- dist
 
 echo "== 2. End-to-end smoke (local mocks, throwaway HOME)"
 # SMOKE_STRICT=1: the local build must have every surface the smoke knows (handoff included).
-run "MCP over stdio (local build)" env HOME=$(sb) SMOKE_STRICT=1 node scripts/smoke-mcp.mjs node dist/mcp.js
+# Both protocol eras: an initialize handshake (Claude Desktop, Cursor, Codex, Gemini CLI, Copilot) and 2026-07-28 (Claude Code's default).
+run "MCP over stdio (local build), 2025-era client" env HOME=$(sb) SMOKE_STRICT=1 node scripts/smoke-mcp.mjs --protocol legacy node dist/mcp.js
+run "MCP over stdio (local build), 2026-07-28 client" env HOME=$(sb) SMOKE_STRICT=1 node scripts/smoke-mcp.mjs --protocol 2026-07-28 node dist/mcp.js
 P=$(node -e 'const s=require("net").createServer().listen(0,()=>{console.log(s.address().port);s.close()})')
 H=$(sb); HOME=$H node dist/mcp.js --http --port $P >/dev/null 2>&1 & MP=$!; sleep 1.5
-run "MCP over streamable HTTP" env HOME=$H SMOKE_STRICT=1 node scripts/smoke-mcp.mjs --http http://127.0.0.1:$P/mcp
+run "MCP over streamable HTTP, 2025-era client" env HOME=$H SMOKE_STRICT=1 node scripts/smoke-mcp.mjs --protocol legacy --http http://127.0.0.1:$P/mcp
+run "MCP over streamable HTTP, 2026-07-28 client" env HOME=$H SMOKE_STRICT=1 node scripts/smoke-mcp.mjs --protocol 2026-07-28 --http http://127.0.0.1:$P/mcp
 kill $MP 2>/dev/null
 run "OpenAI proxy + autopilot" env HOME=$(sb) node scripts/smoke-openai-proxy.mjs
 run "Gemini proxy + autopilot" env HOME=$(sb) node scripts/smoke-gemini-proxy.mjs
