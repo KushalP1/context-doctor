@@ -207,6 +207,36 @@ function makeWritable(path) {
         for (const name of readdirSync(path))
             makeWritable(join(path, name));
 }
+/**
+ * Ctrl-C (or SIGTERM): kill every child with its process group, wait until
+ * each child has exited and this process has reaped it (at most 5 s), then
+ * remove every run folder and exit 130 (143). Waiting is what makes "killed"
+ * true at exit: a SIGKILL is only sent, and a process exiting right after it
+ * left a child still dying, or a zombie, behind it for a moment (Linux, Node
+ * 22 and 24). While it waits, live.stopping holds every run where it is: no
+ * process is started and no run finishes, so the suite never goes on to
+ * print or keep a result. Returns what removes the handlers.
+ */
+export function stopOnSignal(live) {
+    const stop = async (signal) => {
+        live.stopping = true;
+        const children = [...live.children];
+        const exited = children.map((c) => (c.exitCode === null && c.signalCode === null ? new Promise((res) => c.once("exit", () => res())) : undefined));
+        for (const c of children)
+            killTree(c);
+        await Promise.race([Promise.all(exited), new Promise((res) => setTimeout(res, 5000))]);
+        for (const root of [...live.roots])
+            removeRoot(root, live);
+        process.exit(signal === "SIGINT" ? 130 : 143);
+    };
+    const handler = (signal) => void stop(signal);
+    process.once("SIGINT", handler);
+    process.once("SIGTERM", handler);
+    return () => {
+        process.off("SIGINT", handler);
+        process.off("SIGTERM", handler);
+    };
+}
 export function removeRoot(root, live) {
     killLeftovers(root);
     makeWritable(root);
@@ -225,6 +255,8 @@ export function removeRoot(root, live) {
 function runNode(args, cwd, home, live) {
     const timeoutMs = live.timeoutMs;
     return new Promise((resolveRun) => {
+        if (live.stopping)
+            return; // Ctrl-C: held until the exit
         let tail = "";
         let timedOut = false;
         const child = spawn(process.execPath, args, { cwd, env: minimalEnv(home), stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32", windowsHide: true });
@@ -240,7 +272,7 @@ function runNode(args, cwd, home, live) {
         }, timeoutMs);
         let finished = false;
         const finish = (code) => {
-            if (finished)
+            if (finished || live.stopping)
                 return;
             finished = true;
             clearTimeout(timer);
@@ -639,15 +671,7 @@ export async function runAbSuite(options) {
         live: { children: new Set(), roots: new Set(), timeoutMs: options.checkTimeoutMs ?? CHECK_TIMEOUT_MS },
     };
     // Ctrl-C: nothing of the agent's keeps running, no run folder stays behind.
-    const interrupt = (signal) => {
-        for (const child of ctx.live.children)
-            killTree(child);
-        for (const root of [...ctx.live.roots])
-            removeRoot(root, ctx.live);
-        process.exit(signal === "SIGINT" ? 130 : 143);
-    };
-    process.once("SIGINT", interrupt);
-    process.once("SIGTERM", interrupt);
+    const unhook = stopOnSignal(ctx.live);
     const queue = [];
     for (let rep = 1; rep <= repeat; rep++)
         for (const task of tasks)
@@ -656,7 +680,7 @@ export async function runAbSuite(options) {
     const runs = [];
     let next = 0;
     const worker = async () => {
-        while (next < queue.length && !ctx.fatal) {
+        while (next < queue.length && !ctx.fatal && !ctx.live.stopping) {
             const { task, arm, rep } = queue[next++];
             const run = await runOne(task, arm, rep, ctx);
             runs.push(run);
@@ -667,8 +691,7 @@ export async function runAbSuite(options) {
         await Promise.all(Array.from({ length: Math.max(1, Math.min(options.concurrency ?? 4, queue.length)) }, worker));
     }
     finally {
-        process.off("SIGINT", interrupt);
-        process.off("SIGTERM", interrupt);
+        unhook();
     }
     const order = (r) => queue.findIndex((q) => q.task.id === r.task && q.arm === r.arm && q.rep === r.rep);
     runs.sort((a, b) => order(a) - order(b));

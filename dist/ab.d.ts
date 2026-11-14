@@ -85,9 +85,22 @@ export interface Live {
     roots: Set<string>;
     /** A smoke test or hidden check running longer is killed. */
     timeoutMs: number;
+    /** Ctrl-C is being handled: nothing new starts and no run finishes (stopOnSignal). */
+    stopping?: boolean;
 }
 /** Kill a child and everything in its process group (the child leads one). */
 export declare function killTree(child: ChildProcess): void;
+/**
+ * Ctrl-C (or SIGTERM): kill every child with its process group, wait until
+ * each child has exited and this process has reaped it (at most 5 s), then
+ * remove every run folder and exit 130 (143). Waiting is what makes "killed"
+ * true at exit: a SIGKILL is only sent, and a process exiting right after it
+ * left a child still dying, or a zombie, behind it for a moment (Linux, Node
+ * 22 and 24). While it waits, live.stopping holds every run where it is: no
+ * process is started and no run finishes, so the suite never goes on to
+ * print or keep a result. Returns what removes the handlers.
+ */
+export declare function stopOnSignal(live: Live): () => void;
 export declare function removeRoot(root: string, live: Live): void;
 export interface AbRun {
     task: string;

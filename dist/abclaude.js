@@ -53,7 +53,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { AB_TASKS } from "./abtasks.js";
-import { CHECK_TIMEOUT_MS, DEFAULT_AB_MODEL, estimateAb, killTree, makeRun, outProblem, removeRoot, STOPPED_EARLY, taskPrompt, verifyRun } from "./ab.js";
+import { CHECK_TIMEOUT_MS, DEFAULT_AB_MODEL, estimateAb, killTree, makeRun, outProblem, removeRoot, STOPPED_EARLY, stopOnSignal, taskPrompt, verifyRun } from "./ab.js";
 import { claudeLimitFit, limitsReport } from "./limits.js";
 import { abResultsPath, appendAbResult, onPlan, passLine } from "./abstore.js";
 import { exactClaudePricingFor, formatUsd } from "./pricing.js";
@@ -182,6 +182,8 @@ async function runOne(task, model, rep, ctx) {
         let stderr = "";
         let timedOut = false;
         const code = await new Promise((resolveRun) => {
+            if (ctx.live.stopping)
+                return; // Ctrl-C: held until the exit
             let child;
             try {
                 child = spawn(ctx.bin, claudeArgs(model, ctx.maxTurns, cap), { cwd: paths.repo, env: claudeEnv(), stdio: ["pipe", "pipe", "pipe"], detached: process.platform !== "win32", windowsHide: true });
@@ -207,7 +209,7 @@ async function runOne(task, model, rep, ctx) {
             const timer = setTimeout(() => { timedOut = true; killTree(child); }, ctx.timeoutMs);
             let done = false;
             const finish = (c) => {
-                if (done)
+                if (done || ctx.live.stopping)
                     return;
                 done = true;
                 clearTimeout(timer);
@@ -292,16 +294,8 @@ export async function runClaudeCodeAb(options, info = {}) {
         reserved: 0,
         live: { children: new Set(), roots: new Set(), timeoutMs: CHECK_TIMEOUT_MS },
     };
-    // Ctrl-C: every Claude Code and everything it started is killed, no run folder stays behind.
-    const interrupt = (signal) => {
-        for (const child of ctx.live.children)
-            killTree(child);
-        for (const root of [...ctx.live.roots])
-            removeRoot(root, ctx.live);
-        process.exit(signal === "SIGINT" ? 130 : 143);
-    };
-    process.once("SIGINT", interrupt);
-    process.once("SIGTERM", interrupt);
+    // Ctrl-C: every Claude Code and everything it started is killed (and gone before the exit), no run folder stays behind.
+    const unhook = stopOnSignal(ctx.live);
     // Models alternate within each task, so a limit reached halfway leaves both arms with the same tasks.
     const queue = [];
     for (let rep = 1; rep <= repeat; rep++)
@@ -311,7 +305,7 @@ export async function runClaudeCodeAb(options, info = {}) {
     const runs = [];
     let next = 0;
     const worker = async () => {
-        while (next < queue.length && !ctx.fatal) {
+        while (next < queue.length && !ctx.fatal && !ctx.live.stopping) {
             const { task, model, rep } = queue[next++];
             const run = await runOne(task, model, rep, ctx);
             runs.push(run);
@@ -322,8 +316,7 @@ export async function runClaudeCodeAb(options, info = {}) {
         await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
     }
     finally {
-        process.off("SIGINT", interrupt);
-        process.off("SIGTERM", interrupt);
+        unhook();
     }
     const order = (r) => queue.findIndex((q) => q.task.id === r.task && q.model === r.model && q.rep === r.rep);
     runs.sort((a, b) => order(a) - order(b));
