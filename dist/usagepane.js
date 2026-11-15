@@ -13,8 +13,11 @@
  *    does not scan every refresh (warm, the scan is ~150 ms on the author's
  *    22,000 requests; cold, ~2.7 s);
  *  - the limit windows from the limits ledger (the 5-hour one only when the
- *    plan has it: Ultra has none), each with its pace and, when a fit of the
- *    readings is good enough to quote, the list-price dollars per 1%;
+ *    plan has it: Ultra has none), each with its pace, read on every refresh;
+ *    and, with the history (it reads the transcripts over the readings'
+ *    span), `limits`' per-reset figures (limitsByReset, ROADMAP F4): the
+ *    list-price dollars per 1% of the current weekly window, or the last one
+ *    that had a figure, and the latest move in that figure, dated;
  *  - each running subagent the mod names (from `$.agent.list()`): its
  *    model and context from its transcript's tail, its cost so far from the
  *    session's price entries, which the every-prompt hook and `mod measure`
@@ -29,7 +32,7 @@
 import { closeSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { claudeSpend, localDay } from "./spend.js";
-import { cleanReadings, limitsReport, readClaudeReadings, windowStatus } from "./limits.js";
+import { cleanReadings, limitsByReset, readClaudeReadings, windowStatus } from "./limits.js";
 import { scanCacheDir } from "./scan.js";
 import { findTranscript } from "./modmeasure.js";
 import { saveIfWorthIt, sessionTotal } from "./sessionprice.js";
@@ -41,7 +44,7 @@ const DAY = 24 * HOUR;
 /** The history part is measured again at most this often, whoever asks (two sessions' panes share it). */
 export const HISTORY_TTL_MS = 5 * MIN;
 /** The cache file's format; a file of another is measured again. */
-const HISTORY_VERSION = 1;
+const HISTORY_VERSION = 2;
 /** Models listed per period; the rest are summed as "other". */
 const TOP_MODELS = 6;
 /** A subagent transcript's tail read for its model and context. */
@@ -92,13 +95,26 @@ export function summarizeHistory(items, now) {
     });
     return { at: now, periods, ...(unpriced ? { unpriced } : {}) };
 }
-/** List-price dollars per 1% of each Claude window, from fits good enough to quote; none otherwise. */
-export function usdPerPctOf(fits) {
-    const out = {};
-    for (const f of fits)
-        if (f.app === "claude" && f.usable && f.pctPerUsd && f.pctPerUsd > 0)
-            out[f.window] = round(1 / f.pctPerUsd);
-    return Object.keys(out).length ? out : undefined;
+/**
+ * What the pane takes of `limits`' per-reset view (F4): for each Claude
+ * window, dollars per 1% of the current window (or of the last one that had
+ * a figure: a new window has too few stretches), the latest move in that
+ * figure, and whether the plan has no 5-hour window (Ultra).
+ */
+export function limitFitsOf(r) {
+    const fits = {};
+    for (const w of ["five_hour", "seven_day"]) {
+        const rs = r.resets.filter((x) => x.app === "claude" && x.window === w && x.usdPerPct !== undefined).sort((a, b) => b.resetsAt - a.resetsAt);
+        const best = rs.find((x) => x.current) ?? rs[0];
+        if (best)
+            fits[w] = { usdPerPct: round(best.usdPerPct), ...(best.relSe !== undefined ? { relSe: round(best.relSe) } : {}), current: best.current, resetsAt: best.resetsAt };
+    }
+    const move = r.changes.filter((c) => c.window === "five_hour" || c.window === "seven_day").sort((a, b) => b.at - a.at)[0];
+    return {
+        ...(Object.keys(fits).length ? { limitFits: fits } : {}),
+        ...(move ? { limitMove: { window: move.window, at: move.at, before: round(move.usdPerPctBefore), after: round(move.usdPerPctAfter), factor: round(move.factor) } } : {}),
+        ...(r.noFiveHour ? { noFiveHour: true } : {}),
+    };
 }
 function historyFile() {
     return join(scanCacheDir(), "usage-pane.json");
@@ -135,11 +151,9 @@ export function historyUse(now, fresh = false) {
         return { h: cached, from: "cache", ms: Date.now() - t0 };
     const h = summarizeHistory(claudeSpend(now - 30 * DAY, now), now);
     try {
-        const per = usdPerPctOf(limitsReport(30, { now, claudeOnly: true }).fits);
-        if (per)
-            h.usdPerPct = per;
+        Object.assign(h, limitFitsOf(limitsByReset(30, { now, claudeOnly: true })));
     }
-    catch { /* no fit: the windows show without it */ }
+    catch { /* no figure: the windows show without it */ }
     writeHistory(h);
     return { h, from: "measured", ms: Date.now() - t0 };
 }
@@ -149,7 +163,7 @@ export function historyUse(now, fresh = false) {
  * A window with no reading in the last 8 days is not shown: a plan with no
  * 5-hour window (Ultra) has only the weekly one.
  */
-export function limitWindows(now, usdPerPct, readings) {
+export function limitWindows(now, fits, readings) {
     const all = readings ?? readClaudeReadings(now - 8 * DAY);
     const by = new Map();
     for (const r of all)
@@ -167,7 +181,7 @@ export function limitWindows(now, usdPerPct, readings) {
             ...(s.resetsAt !== undefined ? { resetsAt: s.resetsAt } : {}),
             ...(s.recentPerHour !== undefined ? { perHour: round(s.recentPerHour) } : {}),
             ...(s.runsOutAt !== undefined ? { runsOutAt: Math.round(s.runsOutAt), beforeReset: s.beforeReset } : {}),
-            ...(usdPerPct?.[w] !== undefined ? { usdPerPct: usdPerPct[w] } : {}),
+            ...(fits?.[w] ? { usdPerPct: fits[w].usdPerPct, ...(fits[w].relSe !== undefined ? { relSe: fits[w].relSe } : {}), ...(fits[w].current ? {} : { fitFromEarlier: true }) } : {}),
         });
     }
     return out;
@@ -261,7 +275,7 @@ export function usagePane(input, now = Date.now()) {
         catch { /* the pane shows the rest */ }
     }
     try {
-        out.limits = limitWindows(now, out.history?.usdPerPct ?? readHistory(now)?.usdPerPct);
+        out.limits = limitWindows(now, (out.history ?? readHistory(now))?.limitFits);
     }
     catch { /* no ledger */ }
     try {

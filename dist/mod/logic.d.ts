@@ -268,7 +268,23 @@ export interface HistoryUse {
     at: number;
     periods: PeriodUse[];
     unpriced?: number;
-    usdPerPct?: Partial<Record<string, number>>;
+    /** `limits`' per-reset figures (F4): dollars per 1% of each window, of the current one or else the last with a figure. */
+    limitFits?: Partial<Record<string, {
+        usdPerPct: number;
+        relSe?: number;
+        current: boolean;
+        resetsAt: number;
+    }>>;
+    /** The latest move in that figure: before and after, after / before, when. */
+    limitMove?: {
+        window: string;
+        at: number;
+        before: number;
+        after: number;
+        factor: number;
+    };
+    /** Weekly readings and no 5-hour ones: a plan without that window (Ultra). */
+    noFiveHour?: boolean;
 }
 export interface LimitWindow {
     window: string;
@@ -281,6 +297,8 @@ export interface LimitWindow {
     runsOutAt?: number;
     beforeReset?: boolean;
     usdPerPct?: number;
+    relSe?: number;
+    fitFromEarlier?: boolean;
 }
 export interface AgentUse {
     id: string;

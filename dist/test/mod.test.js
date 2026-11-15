@@ -17,7 +17,7 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyOutcome, band, bar, duration, fixArgv, KEEP_WARM_COMMAND, keepWarmRefusal, keepWarmStep, mergeLimits, money, outcome, paneRows, parseKeepWarm, parsePlan, parseUsage, passedThreshold, pctText, PING_EVERY_1H_MS, PING_EVERY_5M_MS, PING_PROMPT, pingOutcome, ringSvg, shortModel, thresholdsFrom, tokens, usageDue, usageText, usageView, withPresses } from "../mod/logic.js";
 import { PING_EVERY_1H_MS as REPLAY_1H, PING_EVERY_5M_MS as REPLAY_5M } from "../coldreturns.js";
-import { summarizeHistory } from "../usagepane.js";
+import { limitFitsOf, limitWindows, summarizeHistory } from "../usagepane.js";
 import { sessionPriceThresholds } from "../sessionprice.js";
 import { register, state, COMMAND, PANE, USAGE_COMMAND, USAGE_PANE } from "../mod/register.js";
 import { costCheck, costGaps, readCostLines, recordModEvent, recordSessionCost, statusLineRateLimits } from "../modmeasure.js";
@@ -534,7 +534,7 @@ const usageData = (over = {}) => ({
         ],
     },
     limits: [
-        { window: "five_hour", label: "5-hour", pct: 31, at: T - 10 * MIN, resetsAt: T + 2 * HOUR + 10 * MIN, resetSince: false, perHour: 6.2, runsOutAt: T + 90 * MIN, beforeReset: true, usdPerPct: 1.2 },
+        { window: "five_hour", label: "5-hour", pct: 31, at: T - 10 * MIN, resetsAt: T + 2 * HOUR + 10 * MIN, resetSince: false, perHour: 6.2, runsOutAt: T + 90 * MIN, beforeReset: true, usdPerPct: 1.2, relSe: 0.08 },
         { window: "seven_day", label: "Weekly", pct: 18, at: T - 10 * MIN, resetsAt: T + 3 * 24 * HOUR, resetSince: false },
     ],
     agents: [{ id: "a1", model: "claude-sonnet-5-5", contextTokens: 84_000, window: 200_000, usd: 0.42, requests: 9 }],
@@ -544,7 +544,7 @@ test("usage view: the context ring, both windows with their pace and dollars per
     const v = usageView({ data: usageData(), live: { at: T, context: { tokens: 412_000, window: 1_000_000, percent: 41 }, model: "claude-opus-5-5" }, agents: [{ id: "a1", type: "Explore", description: "Find the auth code", status: "running" }, { id: "a2", type: "Plan", description: "done one", status: "completed" }], now: T });
     assert.deepEqual(v.context, { pct: 41, text: "412k of 1.0M tokens (41%) · Opus 5.5" });
     assert.deepEqual(v.limits.map((l) => [l.label, l.text, l.sub]), [
-        ["5-hour", "31% · resets in 2h 10m · +6.2 points an hour lately, runs out in 1h 30m (before the reset)", "≈ $1.20 of list price per 1%, fitted on your readings"],
+        ["5-hour", "31% · resets in 2h 10m · +6.2 points an hour lately, runs out in 1h 30m (before the reset)", "≈ $1.20 of list-price use per 1% (±8%), this window"],
         ["Weekly", "18% · resets in 3 days", undefined],
     ]);
     assert.equal(v.limitsNote, undefined);
@@ -614,6 +614,29 @@ test("usage history: today, 7 and 30 days by model, the six largest and the rest
     assert.deepEqual([month[6].model, month[6].usd, month[6].requests], ["3 other models", 1.3, 3]);
     assert.equal(h.unpriced, 1);
     assert.equal(usageView({ data: { at: now, history: h, limits: [], agents: [] }, now, period: "30d" }).period.rows[6].model, "3 other models");
+});
+test("usage limits from `limits`' per-reset view (F4): the current window's dollars per 1%, else the last with a figure; the latest move, dated; Ultra from the ledger", () => {
+    const D = 24 * HOUR;
+    const reset = (over) => ({ window: "seven_day", label: "Claude weekly", app: "claude", start: 0, resetsAt: 0, current: false, readings: 20, firstReading: 0, lastReading: 0, pctUsed: 40, pctMatched: 30, pctElsewhere: 0, stretches: 9, requests: 100, usd: 300, tokens: 1e8, byEntrypoint: [], byModel: [], versions: [], ...over });
+    const r = {
+        now: T, windows: [], readings: 40, noFiveHour: true,
+        resets: [reset({ resetsAt: T - 7 * D, usdPerPct: 25, relSe: 0.1 }), reset({ resetsAt: T + 2 * D, current: true, usdPerPct: 5.04, relSe: 0.12 }), reset({ app: "codex", window: "codex:10080", resetsAt: T, usdPerPct: 1 })],
+        changes: [{ window: "seven_day", label: "Claude weekly", kind: "reset", at: T - 7 * D, usdPerPctBefore: 25, usdPerPctAfter: 5.04, factor: 0.2016, sigma: 9, versionsBefore: [], versionsAfter: [] }],
+    };
+    const f = limitFitsOf(r);
+    assert.deepEqual(f, { limitFits: { seven_day: { usdPerPct: 5.04, relSe: 0.12, current: true, resetsAt: T + 2 * D } }, limitMove: { window: "seven_day", at: T - 7 * D, before: 25, after: 5.04, factor: 0.2016 }, noFiveHour: true });
+    // A new window with too few stretches: the last one that had a figure, said as such.
+    const early = limitFitsOf({ ...r, resets: [r.resets[0], reset({ resetsAt: T + 6 * D, current: true })], changes: [], noFiveHour: false });
+    assert.deepEqual(early, { limitFits: { seven_day: { usdPerPct: 25, relSe: 0.1, current: false, resetsAt: T - 7 * D } } });
+    assert.deepEqual(limitFitsOf({ ...r, resets: [], changes: [], noFiveHour: false }), {});
+    const data = usageData({ history: { ...usageData().history, ...f }, limits: limitWindows(T, f.limitFits, [{ ts: T - HOUR, app: "claude", window: "seven_day", pct: 30, resetsAt: T + 2 * D, windowMs: 7 * D }]) });
+    const v = usageView({ data, now: T });
+    assert.deepEqual(v.limits.map((l) => [l.label, l.sub]), [["Weekly", "≈ $5.04 of list-price use per 1% (±12%), this window; 1% moved from $25.00 to $5.04 7 days ago (5.0x less use per 1%)"]]);
+    assert.equal(v.limitsNote, "No 5-hour window on this plan (Ultra has none): the weekly limit only.");
+    const fromEarlier = usageView({ data: usageData({ limits: limitWindows(T, early.limitFits, [{ ts: T - HOUR, app: "claude", window: "seven_day", pct: 3, resetsAt: T + 6 * D, windowMs: 7 * D }]) }), now: T });
+    assert.equal(fromEarlier.limits[0].sub, "≈ $25.00 of list-price use per 1% (±10%), in the last window with enough readings");
+    // The 5-hour window not read yet on a plan that has one: no Ultra note.
+    assert.equal(usageView({ data: usageData({ history: { ...usageData().history, noFiveHour: false }, limits: [usageData().limits[1]] }), now: T }).limitsNote, undefined);
 });
 /** A home with a session's main transcript (today and 3 days ago), a running subagent's, and a weekly-only limits ledger (Ultra). */
 function usageHome(now = Date.now()) {

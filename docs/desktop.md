@@ -45,8 +45,8 @@ Context
 
 Limits
 5-hour   ███████░░░░░░░░░░░░░░░░░ 31% · resets in 2h 10m · +6.2 points an hour lately, runs out in 1h 30m (before the reset)
-         ≈ $1.20 of list price per 1%, fitted on your readings
 Weekly   ████░░░░░░░░░░░░░░░░░░░░ 18% · resets in 3 days
+         ≈ $5.04 of list-price use per 1% (±12%), this window; 1% moved from $25.00 to $5.04 7 days ago (5.0x less use per 1%)
 
 Claude Code: tokens and dollars by model
 [ Today $42.10 · 3.1M tokens ]  [ 7 days $841 · 90.0M tokens ]  [ 30 days $3,490 · 640.0M tokens ]
@@ -63,7 +63,7 @@ general-purpose: Review the diff
 ```
 
 - **The context ring** is Claude Code's own figure (what `/context` and the status line count: the last reply's input, cache reads and writes against the model's window), handed to the mod after each turn. The Desktop app and VS Code draw it as a ring, amber past 80% and red past 95%; the terminal as a bar.
-- **The limit windows** are your plan's 5-hour and weekly windows, as Claude Code last reported them, with the pace and when the window runs out at that pace from the readings the mod keeps ([limits](./profiling.md#your-plans-limits-context-doctor-limits)). A plan with no 5-hour window (Ultra) shows the weekly one alone and says so. The dollars per 1% appear only when the fit of your readings is good enough to quote; until then the line is left out. Off a subscription (an API key) there are no windows, and the pane says why.
+- **The limit windows** are your plan's 5-hour and weekly windows, as Claude Code last reported them, with the pace and when the window runs out at that pace from the readings the mod keeps ([limits](./profiling.md#your-plans-limits-context-doctor-limits)). A plan with no 5-hour window (Ultra) shows the weekly one alone and says so. Under the weekly window, `limits`' per-reset figures ([limits](./profiling.md#your-plans-limits-context-doctor-limits)): the list-price dollars of use per 1% in this window (or, early in a window, in the last one with enough readings, said as such), with its error, and the latest move in that figure, dated. A window with too few readings for a figure gets no line. Off a subscription (an API key) there are no windows, and the pane says why.
 - **Tokens and dollars by model** for today (since local midnight), the last 7 and the last 30 days, from the same requests [`spend`](./spend.md) reads, at list price; a button picks the period the by-model rows are for. Claude Code only: `spend` has Codex, Gemini CLI and Cursor.
 - **Running subagents**, each with its type and task, its model, its context on its last request, and what it has cost so far (its transcript, priced as the session's price is). A finished one leaves the list.
 

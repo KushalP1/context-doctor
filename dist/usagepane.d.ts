@@ -13,8 +13,11 @@
  *    does not scan every refresh (warm, the scan is ~150 ms on the author's
  *    22,000 requests; cold, ~2.7 s);
  *  - the limit windows from the limits ledger (the 5-hour one only when the
- *    plan has it: Ultra has none), each with its pace and, when a fit of the
- *    readings is good enough to quote, the list-price dollars per 1%;
+ *    plan has it: Ultra has none), each with its pace, read on every refresh;
+ *    and, with the history (it reads the transcripts over the readings'
+ *    span), `limits`' per-reset figures (limitsByReset, ROADMAP F4): the
+ *    list-price dollars per 1% of the current weekly window, or the last one
+ *    that had a figure, and the latest move in that figure, dated;
  *  - each running subagent the mod names (from `$.agent.list()`): its
  *    model and context from its transcript's tail, its cost so far from the
  *    session's price entries, which the every-prompt hook and `mod measure`
@@ -27,7 +30,7 @@
  * command prints `{}` at worst and exits 0.
  */
 import { type SpendItem } from "./spend.js";
-import { type LimitFit, type LimitReading } from "./limits.js";
+import { type LimitReading, type LimitsByReset } from "./limits.js";
 import type { AgentUse, HistoryUse, LimitWindow, UsagePaneData } from "./mod/logic.js";
 /** The history part is measured again at most this often, whoever asks (two sessions' panes share it). */
 export declare const HISTORY_TTL_MS: number;
@@ -44,8 +47,13 @@ export interface UsagePaneInput {
 }
 /** Sum the requests into today, the last 7 and the last 30 days, each by model, the most dollars first. */
 export declare function summarizeHistory(items: SpendItem[], now: number): HistoryUse;
-/** List-price dollars per 1% of each Claude window, from fits good enough to quote; none otherwise. */
-export declare function usdPerPctOf(fits: LimitFit[]): Partial<Record<string, number>> | undefined;
+/**
+ * What the pane takes of `limits`' per-reset view (F4): for each Claude
+ * window, dollars per 1% of the current window (or of the last one that had
+ * a figure: a new window has too few stretches), the latest move in that
+ * figure, and whether the plan has no 5-hour window (Ultra).
+ */
+export declare function limitFitsOf(r: LimitsByReset): Pick<HistoryUse, "limitFits" | "limitMove" | "noFiveHour">;
 /** The history part: from the cache while it is fresh, else measured (spend's scan, then the limit fits over the same requests). */
 export declare function historyUse(now: number, fresh?: boolean): {
     h: HistoryUse;
@@ -57,7 +65,7 @@ export declare function historyUse(now: number, fresh?: boolean): {
  * A window with no reading in the last 8 days is not shown: a plan with no
  * 5-hour window (Ultra) has only the weekly one.
  */
-export declare function limitWindows(now: number, usdPerPct?: Partial<Record<string, number>>, readings?: LimitReading[]): LimitWindow[];
+export declare function limitWindows(now: number, fits?: HistoryUse["limitFits"], readings?: LimitReading[]): LimitWindow[];
 /** A subagent's model and context, from the last request in its transcript's tail. */
 export declare function agentTail(file: string): {
     model?: string;

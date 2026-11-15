@@ -463,8 +463,18 @@ export function keepWarmStatusText(kw: KeepWarm | undefined, d: BandData | undef
 /** `mod usage`'s answer (usagepane.ts prints exactly this shape). */
 export interface ModelUse { model: string; usd: number; tokens: number; requests: number }
 export interface PeriodUse { key: "today" | "7d" | "30d"; label: string; usd: number; tokens: number; requests: number; models: ModelUse[] }
-export interface HistoryUse { at: number; periods: PeriodUse[]; unpriced?: number; usdPerPct?: Partial<Record<string, number>> }
-export interface LimitWindow { window: string; label: string; pct: number; at: number; resetsAt?: number; resetSince: boolean; perHour?: number; runsOutAt?: number; beforeReset?: boolean; usdPerPct?: number }
+export interface HistoryUse {
+  at: number;
+  periods: PeriodUse[];
+  unpriced?: number;
+  /** `limits`' per-reset figures (F4): dollars per 1% of each window, of the current one or else the last with a figure. */
+  limitFits?: Partial<Record<string, { usdPerPct: number; relSe?: number; current: boolean; resetsAt: number }>>;
+  /** The latest move in that figure: before and after, after / before, when. */
+  limitMove?: { window: string; at: number; before: number; after: number; factor: number };
+  /** Weekly readings and no 5-hour ones: a plan without that window (Ultra). */
+  noFiveHour?: boolean;
+}
+export interface LimitWindow { window: string; label: string; pct: number; at: number; resetsAt?: number; resetSince: boolean; perHour?: number; runsOutAt?: number; beforeReset?: boolean; usdPerPct?: number; relSe?: number; fitFromEarlier?: boolean }
 export interface AgentUse { id: string; model?: string; contextTokens?: number; window?: number; usd?: number; requests?: number }
 export interface UsagePaneData { at: number; history?: HistoryUse; historyFrom?: "cache" | "measured"; historyMs?: number; limits: LimitWindow[]; agents: AgentUse[] }
 
@@ -589,11 +599,16 @@ export function usageView(v: UsageViewInput): UsageView {
       const outIn = w.runsOutAt !== undefined && w.runsOutAt > now ? `, runs out in ${duration(w.runsOutAt - now)}${w.beforeReset ? " (before the reset)" : ""}` : "";
       parts.push(`+${per(w.perHour)} points an hour lately${outIn}`);
     }
-    const sub = w.usdPerPct !== undefined ? `≈ ${money(w.usdPerPct)} of list price per 1%, fitted on your readings` : undefined;
-    return { key: w.window, label: w.label, pct: w.pct, text: `${pctText(w.pct)}${parts.length ? ` · ${parts.join(" · ")}` : ""}`, ...(sub ? { sub } : {}) };
+    const subs: string[] = [];
+    if (w.usdPerPct !== undefined) subs.push(`≈ ${money(w.usdPerPct)} of list-price use per 1%${w.relSe !== undefined ? ` (±${Math.round(w.relSe * 100)}%)` : ""}, ${w.fitFromEarlier ? "in the last window with enough readings" : "this window"}`);
+    const mv = data?.history?.limitMove;
+    if (mv && mv.window === w.window && mv.at <= now) subs.push(`1% moved from ${money(mv.before)} to ${money(mv.after)} ${duration(now - mv.at)} ago (${mv.factor < 1 ? `${per(1 / mv.factor)}x less use per 1%` : `${per(mv.factor)}x more use per 1%`})`);
+    return { key: w.window, label: w.label, pct: w.pct, text: `${pctText(w.pct)}${parts.length ? ` · ${parts.join(" · ")}` : ""}`, ...(subs.length ? { sub: subs.join("; ") } : {}) };
   });
+  // A plan with no 5-hour window (Ultra): `limits` says so from the ledger (F4); with no history yet, the windows Claude Code reported say it.
+  const noFive = data?.history?.noFiveHour ?? (limits.length > 0 && !limits.some((l) => l.key === "five_hour"));
   const limitsNote = limits.length
-    ? limits.some((l) => l.key === "five_hour") ? undefined : "No 5-hour window on this plan (Ultra has none): the weekly limit only."
+    ? noFive && !limits.some((l) => l.key === "five_hour") ? "No 5-hour window on this plan (Ultra has none): the weekly limit only." : undefined
     : data || live ? "No limit readings yet: Claude Code reports the windows on a Pro, Max or Ultra sign-in, after the first reply." : undefined;
 
   const hist = data?.history;

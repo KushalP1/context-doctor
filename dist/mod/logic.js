@@ -453,11 +453,18 @@ export function usageView(v) {
             const outIn = w.runsOutAt !== undefined && w.runsOutAt > now ? `, runs out in ${duration(w.runsOutAt - now)}${w.beforeReset ? " (before the reset)" : ""}` : "";
             parts.push(`+${per(w.perHour)} points an hour lately${outIn}`);
         }
-        const sub = w.usdPerPct !== undefined ? `≈ ${money(w.usdPerPct)} of list price per 1%, fitted on your readings` : undefined;
-        return { key: w.window, label: w.label, pct: w.pct, text: `${pctText(w.pct)}${parts.length ? ` · ${parts.join(" · ")}` : ""}`, ...(sub ? { sub } : {}) };
+        const subs = [];
+        if (w.usdPerPct !== undefined)
+            subs.push(`≈ ${money(w.usdPerPct)} of list-price use per 1%${w.relSe !== undefined ? ` (±${Math.round(w.relSe * 100)}%)` : ""}, ${w.fitFromEarlier ? "in the last window with enough readings" : "this window"}`);
+        const mv = data?.history?.limitMove;
+        if (mv && mv.window === w.window && mv.at <= now)
+            subs.push(`1% moved from ${money(mv.before)} to ${money(mv.after)} ${duration(now - mv.at)} ago (${mv.factor < 1 ? `${per(1 / mv.factor)}x less use per 1%` : `${per(mv.factor)}x more use per 1%`})`);
+        return { key: w.window, label: w.label, pct: w.pct, text: `${pctText(w.pct)}${parts.length ? ` · ${parts.join(" · ")}` : ""}`, ...(subs.length ? { sub: subs.join("; ") } : {}) };
     });
+    // A plan with no 5-hour window (Ultra): `limits` says so from the ledger (F4); with no history yet, the windows Claude Code reported say it.
+    const noFive = data?.history?.noFiveHour ?? (limits.length > 0 && !limits.some((l) => l.key === "five_hour"));
     const limitsNote = limits.length
-        ? limits.some((l) => l.key === "five_hour") ? undefined : "No 5-hour window on this plan (Ultra has none): the weekly limit only."
+        ? noFive && !limits.some((l) => l.key === "five_hour") ? "No 5-hour window on this plan (Ultra has none): the weekly limit only." : undefined
         : data || live ? "No limit readings yet: Claude Code reports the windows on a Pro, Max or Ultra sign-in, after the first reply." : undefined;
     const hist = data?.history;
     const periods = (hist?.periods ?? []).map((p) => ({ key: p.key, text: `${p.label} ${money(p.usd)} · ${tokens(p.tokens)} tokens` }));
