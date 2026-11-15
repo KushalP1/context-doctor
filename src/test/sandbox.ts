@@ -22,6 +22,11 @@ export function sandboxEnv(home: string): NodeJS.ProcessEnv {
   delete env.COPILOT_HOME;
   delete env.CODEX_HOME;
   delete env.CLAUDE_CONFIG_DIR;
+  // OpenCode's and Cline's data follow these (spend reads them): never the developer's own.
+  delete env.OPENCODE_DATA_DIR;
+  delete env.CLINE_DATA_DIR;
+  delete env.XDG_DATA_HOME;
+  delete env.XDG_CONFIG_HOME;
   // Run from inside a Claude Code session, the suite must behave as on CI.
   delete env.CLAUDECODE;
   return env;
@@ -29,10 +34,10 @@ export function sandboxEnv(home: string): NodeJS.ProcessEnv {
 
 /** Run `fn` with the current process's home redirected, restoring afterwards. */
 export async function withSandboxHome<T>(home: string, fn: () => T | Promise<T>): Promise<T> {
-  const keys = ["HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_STATE_HOME", "COPILOT_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"] as const;
+  const keys = ["HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_STATE_HOME", "COPILOT_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "OPENCODE_DATA_DIR", "CLINE_DATA_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME"] as const;
   const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
   Object.assign(process.env, sandboxEnv(home));
-  for (const k of ["XDG_STATE_HOME", "COPILOT_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"]) delete process.env[k];
+  for (const k of ["XDG_STATE_HOME", "COPILOT_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "OPENCODE_DATA_DIR", "CLINE_DATA_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME"]) delete process.env[k];
   try {
     return await fn();
   } finally {

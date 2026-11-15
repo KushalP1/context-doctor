@@ -22,6 +22,10 @@ const files = readdirSync("dist/test")
 const env = { ...process.env, CONTEXT_DOCTOR_NO_CALIBRATION: "1", HOME: home, USERPROFILE: home, LOCALAPPDATA: join(home, "AppData", "Local") };
 // Our own state falls back to these on a machine without ~/.claude (ledger.ts fallbackStateDir): never the developer's own.
 delete env.XDG_STATE_HOME;
+// spend reads OpenCode's and Cline's data from these: never the developer's own.
+delete env.OPENCODE_DATA_DIR;
+delete env.CLINE_DATA_DIR;
+delete env.XDG_DATA_HOME;
 // GitHub Copilot's home follows COPILOT_HOME wherever HOME is: never the real one.
 delete env.COPILOT_HOME;
 // The transcript cache follows these: never the developer's own (it lands in the throwaway home).

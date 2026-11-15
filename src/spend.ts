@@ -49,6 +49,8 @@ import { estimateProgressSummaries, PROGRESS_ROWS, PROGRESS_SUMMARIES_ENV, type 
 import { listGeminiChats, readGeminiMessages } from "./gemini.js";
 import { cursorClaudeId, cursorUsage, SqliteUnavailableError } from "./cursor.js";
 import { copilotCalls } from "./copilotusage.js";
+import { opencodeCalls } from "./opencode.js";
+import { clineCalls } from "./cline.js";
 import { addModifiers, isUnbilledModel, NO_MODIFIERS, openAIUsage, priceChangedText, requestCost, type Modifiers, type RecordedUsage } from "./pricing.js";
 import { managedSourcesLine, orgRates, orgRatesLine, priceBasis } from "./orgrates.js";
 
@@ -64,9 +66,9 @@ import { withInvocation } from "./invocation.js";
 
 const DAY = 86_400_000;
 
-export type Tool = "claude" | "codex" | "gemini" | "cursor" | "copilot";
-export const TOOLS: Tool[] = ["claude", "codex", "gemini", "cursor", "copilot"];
-export const TOOL_NAME: Record<Tool, string> = { claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI", cursor: "Cursor", copilot: "Copilot CLI" };
+export type Tool = "claude" | "codex" | "gemini" | "cursor" | "copilot" | "opencode" | "cline";
+export const TOOLS: Tool[] = ["claude", "codex", "gemini", "cursor", "copilot", "opencode", "cline"];
+export const TOOL_NAME: Record<Tool, string> = { claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI", cursor: "Cursor", copilot: "Copilot CLI", opencode: "OpenCode", cline: "Cline" };
 
 /** One request (a Cursor reply), priced. */
 export interface SpendItem {
@@ -520,6 +522,27 @@ export function copilotSpend(since: number, until = Infinity, home = homedir()):
 }
 
 // ---------------------------------------------------------------------------
+// OpenCode and Cline
+// ---------------------------------------------------------------------------
+
+/** A call's tokens as recorded usage: input uncached, cache reads and writes apart. */
+const asUsage = (c: { input: number; read: number; write: number; output: number }): RecordedUsage => ({ input_tokens: c.input, cache_read_input_tokens: c.read, cache_creation_input_tokens: c.write, output_tokens: c.output });
+
+/** OpenCode's model calls (opencode.ts), each at its model's list price. Throws SqliteUnavailableError when its database cannot be read here. */
+export function opencodeSpend(since: number, until = Infinity, home = homedir()): SpendItem[] {
+  const { calls, sqlite } = opencodeCalls(since, until, home);
+  // A compaction is a measured request here (its own tokens), not Claude Code's estimate: no `compaction` mark.
+  const items = calls.filter((c) => !isUnbilledModel(c.model)).map((c) => priced({ tool: "opencode", ts: c.ts, project: c.cwd ? projectName(c.cwd) : "opencode", session: c.session, ...(c.model ? { model: c.model } : {}), input: c.input, read: c.read, write: c.write, output: c.output, key: c.id }, asUsage(c)));
+  if (!sqlite) throw Object.assign(new SqliteUnavailableError("reading OpenCode's opencode.db needs SQLite: Node 22.13+ or the sqlite3 command"), { items });
+  return items;
+}
+
+/** Cline's requests (cline.ts), each at its model's list price; one with no model is counted, not priced. */
+export function clineSpend(since: number, until = Infinity, home = homedir()): SpendItem[] {
+  return clineCalls(since, until, home).filter((c) => !isUnbilledModel(c.model)).map((c) => priced({ tool: "cline", ts: c.ts, project: c.cwd ? projectName(c.cwd) : "cline", session: c.session, ...(c.model ? { model: c.model } : {}), input: c.input, read: c.read, write: c.write, output: c.output }, asUsage(c)));
+}
+
+// ---------------------------------------------------------------------------
 // The report
 // ---------------------------------------------------------------------------
 
@@ -726,6 +749,14 @@ export function spendReport(days = 30, opts: SpendOptions = {}): SpendReport {
   } catch (e) {
     if (e instanceof SqliteUnavailableError) skipped.push({ tool: "cursor", reason: "reading Cursor's history needs SQLite: Node 22.13+ or the sqlite3 command" });
   }
+  try {
+    items.push(...opencodeSpend(since, until, home));
+  } catch (e) {
+    // Its JSON files still count; its database needs SQLite.
+    items.push(...((e as { items?: SpendItem[] }).items ?? []));
+    if (e instanceof SqliteUnavailableError) skipped.push({ tool: "opencode", reason: "reading OpenCode's opencode.db needs SQLite: Node 22.13+ or the sqlite3 command" });
+  }
+  items.push(...clineSpend(since, until, home));
   const report = summarizeSpend(items, days, since, until, skipped);
   const progress = opts.progress === false ? undefined : claudeProgressSummaries(since, until, opts.claudePaths, opts.progress);
   return progress ? { ...report, progressSummaries: progress } : report;

@@ -365,6 +365,7 @@ Each release with the measurements behind it. Dollar figures are as measured whe
 ## Shipped on main, not yet released
 
 - **Copilot CLI in `spend` (F6).** Copilot CLI writes a `session.usage_record` event per model call to `~/.copilot/session-state/<session>/events.jsonl` ([ccusage#2069](https://github.com/ccusage/ccusage/issues/2069): 1,142 records and no shutdown in one user's sessions, which ccusage reports as zero). `spend` reads them: input less both cache counts, each call once (a record received twice, a compaction a record names), tokens at list price where the model has one, `auto` counted; the AI credits (`totalNanoAiu`, $0.01 each) and premium requests Copilot counted shown beside. Fixture from the shape GitHub's agent-radar collector parses; the author has no Copilot CLI history.
+- **OpenCode and Cline in `spend` (F6).** OpenCode from its JSON files and its SQLite store (both tables: a migrated message once, a fork's copy of its parent not again, `claude-agent` messages left to Claude Code's transcript); Cline from the editor extension's tasks (five editors), the older CLI's tasks and the CLI's sessions, complete `api_req_started` requests only. Shapes from ccusage's loaders, fixtures for each; the author has neither.
 
 ## Shipped in 0.48.0: a directory-ready plugin, quality on your own plan, prices that change under us, and MCP SDK v2
 

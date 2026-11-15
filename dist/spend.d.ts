@@ -42,7 +42,7 @@
 import { type ProgressOptions } from "./progresssummaries.js";
 import { type Modifiers } from "./pricing.js";
 import { type Extractor } from "./scan.js";
-export type Tool = "claude" | "codex" | "gemini" | "cursor" | "copilot";
+export type Tool = "claude" | "codex" | "gemini" | "cursor" | "copilot" | "opencode" | "cline";
 export declare const TOOLS: Tool[];
 export declare const TOOL_NAME: Record<Tool, string>;
 /** One request (a Cursor reply), priced. */
@@ -160,6 +160,10 @@ export declare function cursorSpend(since: number, until?: number): SpendItem[];
  * its AI credits and premium requests, kept beside the price, not in it.
  */
 export declare function copilotSpend(since: number, until?: number, home?: string): SpendItem[];
+/** OpenCode's model calls (opencode.ts), each at its model's list price. Throws SqliteUnavailableError when its database cannot be read here. */
+export declare function opencodeSpend(since: number, until?: number, home?: string): SpendItem[];
+/** Cline's requests (cline.ts), each at its model's list price; one with no model is counted, not priced. */
+export declare function clineSpend(since: number, until?: number, home?: string): SpendItem[];
 export interface ToolSpend {
     tool: Tool;
     name: string;

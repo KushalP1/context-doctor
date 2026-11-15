@@ -112,6 +112,6 @@ test("copilot: no session-state folder is no Copilot row", async () => {
     await sandbox((home) => {
         const r = spendReport(30, { home, now: NOW, claudePaths: [], progress: false });
         assert.equal(r.tools.find((x) => x.tool === "copilot"), undefined);
-        assert.match(renderSpend(r), /Gemini CLI, Cursor or Copilot CLI on this machine/);
+        assert.match(renderSpend(r), /Gemini CLI, Cursor, Copilot CLI, OpenCode or Cline on this machine/);
     });
 });
