@@ -38,7 +38,8 @@ import { statePath } from "./ledger.js";
 import { forEachLine, listSessions, outputSettler, replyCounter, isClaudeSession } from "./session.js";
 import { subagentFiles } from "./subagents.js";
 import { pick, prescan, rowsOf, slimUsage } from "./scan.js";
-import { isUnbilledModel, NO_MODIFIERS, openAIUsage, requestCost } from "./pricing.js";
+import { costStateRecord, refusalRecord } from "./ccost.js";
+import { addModifiers, extraIterations, isUnbilledModel, NO_MODIFIERS, openAIUsage, requestCost } from "./pricing.js";
 import { realModel } from "./tokens.js";
 import { isCompactionRow, newTrack, slimSummary, trackCompaction } from "./compactcost.js";
 import { PROXY_VERSION } from "./proxy.js";
@@ -364,17 +365,23 @@ export function codexLimitData(since, root = codexSessionsRoot()) {
 /**
  * What the usage fit takes from a Claude Code transcript (subagents' too):
  * every assistant row with usage, in order. A later row of a reply already
- * met keeps only its id and output tokens: it is a repeat, read only for the
- * output a streamed reply settles on its last row. `isSidechain` is kept for
- * `spend`, which tells a subagent inlined in an older transcript from the
- * main thread.
+ * met keeps only its id, its output tokens and its billed iterations: it is
+ * a repeat, read only for what a streamed reply settles on its last row.
+ * `isSidechain` is kept for `spend`, which tells a subagent inlined in an
+ * older transcript from the main thread. A request's `usage.iterations` is
+ * kept only where some bill beyond its top-level usage (extraIterations).
+ * Also Claude Code's own running cost: each `cost-state` row as
+ * costStateRecord keeps it, with the Claude Code version of the replies
+ * before it (ccost.ts compares it with ours).
  */
 export const USAGE_ROWS = {
-    id: "usage.4",
+    id: "usage.5",
     init: () => ({ ids: {} }),
     line(line, row, out, st) {
         const compaction = isCompactionRow(line);
-        if (!compaction && !line.includes('"usage"'))
+        const cost = !compaction && line.startsWith('{"type":"cost-state"');
+        const refusal = !compaction && !cost && line.includes('"model_refusal_fallback"');
+        if (!compaction && !cost && !refusal && !line.includes('"usage"'))
             return;
         let e;
         try {
@@ -382,6 +389,13 @@ export const USAGE_ROWS = {
         }
         catch {
             return;
+        }
+        if (cost || refusal) {
+            const r = cost ? costStateRecord(e, st.v) : refusalRecord(e);
+            if (r)
+                out.push(r);
+            if (cost || r)
+                return;
         }
         // A compaction's boundary (the context it read) and its summary (the output): what its own request is estimated from (compactcost.ts).
         if (compaction && e?.type === "system" && e.subtype === "compact_boundary") {
@@ -395,14 +409,18 @@ export const USAGE_ROWS = {
         const m = e?.message;
         if (e?.type !== "assistant" || !m?.usage)
             return;
+        if (typeof e.version === "string")
+            st.v = e.version.slice(0, 40);
         if (typeof m.id === "string") {
             if (st.ids[m.id]) {
-                out.push({ type: "assistant", message: { id: m.id, usage: pick(m.usage, ["output_tokens"]) } });
+                // Its billed iterations too: a streamed reply may settle those on a later row as well.
+                const its = slimUsage(m.usage, { iterations: true });
+                out.push({ type: "assistant", message: { id: m.id, usage: { ...pick(m.usage, ["output_tokens"]), ...(its?.iterations ? { iterations: its.iterations } : {}) } } });
                 return;
             }
             st.ids[m.id] = 1;
         }
-        out.push(pick({ ...e, isSidechain: e.isSidechain === true || undefined, message: pick({ ...m, usage: slimUsage(m.usage) }, ["id", "model", "usage"]) }, ["type", "uuid", "timestamp", "isSidechain", "message"]));
+        out.push(pick({ ...e, isSidechain: e.isSidechain === true || undefined, message: pick({ ...m, usage: slimUsage(m.usage, { iterations: true }) }, ["id", "model", "usage"]) }, ["type", "uuid", "timestamp", "isSidechain", "message"]));
     },
 };
 /** A compaction's estimated request as a request point (no message id: its key is the boundary's uuid). */
@@ -414,6 +432,37 @@ export function compactionPoint(c) {
         ...(c.uuid ? { uuid: c.uuid } : {}), ...(c.sidechain ? { sidechain: true } : {}), ...(c.cost.estimated ? { estimated: true } : {}), ...(c.cost.changedOn ? { changedOn: c.cost.changedOn } : {}),
     };
 }
+/** A request's iterations billed beyond its top-level usage, each priced at its own model (the request's when it names none) at `ts`. */
+export function iterationPoints(model, u, ts) {
+    return extraIterations(u).map((x) => {
+        const m = realModel(x.model ?? model);
+        const c = requestCost(m, x.usage, ts);
+        return {
+            type: x.type, ...(m ? { model: m } : {}),
+            input: num(x.usage.input_tokens), read: num(x.usage.cache_read_input_tokens), write: num(x.usage.cache_creation_input_tokens), output: num(x.usage.output_tokens),
+            usd: c?.totalUsd ?? 0, promptUsd: c?.promptUsd ?? 0, priced: Boolean(c), modifiers: c ? c.modifiers : { ...NO_MODIFIERS },
+            ...(c?.estimated ? { estimated: true } : {}), ...(c?.changedOn ? { changedOn: c.changedOn } : {}),
+        };
+    });
+}
+/** `p`'s extra iterations set to `extra`, its dollars and modifiers moved by what changed. */
+function setExtra(p, extra) {
+    for (const x of p.extra ?? []) {
+        p.usd -= x.usd;
+        p.promptUsd -= x.promptUsd;
+        addModifiers(p.modifiers, negated(x.modifiers));
+    }
+    if (extra.length)
+        p.extra = extra;
+    else
+        delete p.extra;
+    for (const x of extra) {
+        p.usd += x.usd;
+        p.promptUsd += x.promptUsd;
+        addModifiers(p.modifiers, x.modifiers);
+    }
+}
+const negated = (m) => ({ fastUsd: -m.fastUsd, geoUsd: -m.geoUsd, longUsd: -m.longUsd, webSearchUsd: -m.webSearchUsd, webSearches: -m.webSearches });
 /**
  * The requests of one Claude Code transcript between `since` and `until`,
  * each reply once, its output settled on its last row (billed at the
@@ -444,10 +493,19 @@ export function claudeFileUsage(file, since, until = Infinity, runRows) {
                 p.output += more;
                 if (p.rates) {
                     p.usd += (more * p.rates.outputPerM) / 1e6;
-                    // What the modifiers added grows with the output: priced again whole.
-                    if (p.modifiers.fastUsd || p.modifiers.geoUsd || p.modifiers.longUsd)
-                        p.modifiers = requestCost(p.model, { ...known.u, output_tokens: p.output }, p.ts).modifiers;
+                    // What the modifiers added grows with the output: priced again whole (the iterations' added back).
+                    if (p.modifiers.fastUsd || p.modifiers.geoUsd || p.modifiers.longUsd) {
+                        p.modifiers = { ...requestCost(p.model, { ...known.u, output_tokens: p.output }, p.ts).modifiers };
+                        for (const x of p.extra ?? [])
+                            addModifiers(p.modifiers, x.modifiers);
+                    }
                 }
+            }
+            // Iterations a later row settles on (an advisor's call, once it ran): priced again, replacing the earlier ones.
+            if (known && m.usage.iterations) {
+                const extra = iterationPoints(known.point.model, { ...known.u, iterations: m.usage.iterations }, known.point.ts);
+                if (JSON.stringify(extra) !== JSON.stringify(known.point.extra ?? []))
+                    setExtra(known.point, extra);
             }
             return;
         }
@@ -481,6 +539,10 @@ export function claudeFileUsage(file, since, until = Infinity, runRows) {
             if (c.changedOn)
                 point.changedOn = c.changedOn;
         }
+        // The iterations its top-level usage leaves out, each at its own model (counted even when the request's own model has no price).
+        const extra = iterationPoints(point.model, u, ts);
+        if (extra.length)
+            setExtra(point, extra);
         out.push(point);
         if (typeof m.id === "string")
             byId.set(m.id, { point, u });

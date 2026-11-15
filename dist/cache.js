@@ -10,7 +10,7 @@
  * caching at all.
  */
 import { readFileSync } from "node:fs";
-import { cacheWriteSplit, requestCost } from "./pricing.js";
+import { billedCost, cacheWriteSplit } from "./pricing.js";
 import { replyCounter } from "./session.js";
 import { realModel } from "./tokens.js";
 export function analyzeCacheUsage(transcriptPath) {
@@ -65,8 +65,8 @@ export function analyzeCacheUsage(transcriptPath) {
         cacheWrite1hTokens += cacheWriteSplit(usage).oneHour;
         uncachedTokens += fresh;
         // Each request at its own model's price: a session can switch models.
-        // As billed (requestCost): its tier, fast mode, US-only.
-        const cost = requestCost(model, usage, Date.parse(String(entry.timestamp ?? "")) || undefined);
+        // As billed (requestCost): its tier, fast mode, US-only; and the iterations its top-level usage leaves out (billedCost).
+        const cost = billedCost(model, usage, Date.parse(String(entry.timestamp ?? "")) || undefined);
         const pricing = cost?.rates;
         if (cost && pricing) {
             priced++;

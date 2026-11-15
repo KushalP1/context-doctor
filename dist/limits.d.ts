@@ -31,7 +31,7 @@
  * instead of printing a number.
  */
 import { type Extractor } from "./scan.js";
-import { type ModelPricing, type Modifiers } from "./pricing.js";
+import { type ModelPricing, type Modifiers, type RecordedUsage } from "./pricing.js";
 import { type CompactionRequest } from "./compactcost.js";
 /** Claude Code's two windows, as its status line input names them. */
 export declare const CLAUDE_WINDOWS: readonly ["five_hour", "seven_day"];
@@ -125,13 +125,18 @@ export declare function codexLimitData(since: number, root?: string): {
 /**
  * What the usage fit takes from a Claude Code transcript (subagents' too):
  * every assistant row with usage, in order. A later row of a reply already
- * met keeps only its id and output tokens: it is a repeat, read only for the
- * output a streamed reply settles on its last row. `isSidechain` is kept for
- * `spend`, which tells a subagent inlined in an older transcript from the
- * main thread.
+ * met keeps only its id, its output tokens and its billed iterations: it is
+ * a repeat, read only for what a streamed reply settles on its last row.
+ * `isSidechain` is kept for `spend`, which tells a subagent inlined in an
+ * older transcript from the main thread. A request's `usage.iterations` is
+ * kept only where some bill beyond its top-level usage (extraIterations).
+ * Also Claude Code's own running cost: each `cost-state` row as
+ * costStateRecord keeps it, with the Claude Code version of the replies
+ * before it (ccost.ts compares it with ours).
  */
 export declare const USAGE_ROWS: Extractor<{
     ids: Record<string, 1>;
+    v?: string;
 }>;
 /** A compaction's estimated request as a request point (no message id: its key is the boundary's uuid). */
 export declare function compactionPoint(c: CompactionRequest): ClaudeRequest;
@@ -155,7 +160,32 @@ export interface ClaudeRequest extends UsagePoint {
     changedOn?: string;
     /** A compaction's own request, which no row records usage for: estimated (compactcost.ts). */
     compaction?: boolean;
+    /**
+     * The iterations its top-level usage leaves out (extraIterations: an
+     * advisor's call, an attempt a fallback replaced), each priced at its own
+     * model by requestCost: inside `usd`, `promptUsd` and `modifiers`, not in
+     * the token counts above (those are the top-level usage's).
+     */
+    extra?: IterationPoint[];
 }
+/** One iteration billed beyond its request's top-level usage, priced (requestCost at its own model). */
+export interface IterationPoint {
+    type: string;
+    model?: string;
+    input: number;
+    read: number;
+    write: number;
+    output: number;
+    /** 0 when its model has no price (`priced` false). */
+    usd: number;
+    promptUsd: number;
+    priced: boolean;
+    modifiers: Modifiers;
+    estimated?: boolean;
+    changedOn?: string;
+}
+/** A request's iterations billed beyond its top-level usage, each priced at its own model (the request's when it names none) at `ts`. */
+export declare function iterationPoints(model: string | undefined, u: RecordedUsage, ts: number): IterationPoint[];
 /**
  * The requests of one Claude Code transcript between `since` and `until`,
  * each reply once, its output settled on its last row (billed at the

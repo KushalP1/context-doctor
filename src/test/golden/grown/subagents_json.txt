@@ -1,0 +1,115 @@
+{
+  "days": 30,
+  "sessions": 1,
+  "subagents": [
+    {
+      "id": "a1",
+      "type": "general-purpose",
+      "task": "task 1",
+      "costUsd": 2.5865933,
+      "atSonnetUsd": 2.5865933,
+      "inParentUsd": 12.269320500000001,
+      "steps": 16,
+      "parentContextTokens": 121521,
+      "readTokens": 29859,
+      "returnedTokens": 0,
+      "laterRequests": 0,
+      "avoidedUsd": 0.59718,
+      "netUsd": 9.6827272
+    },
+    {
+      "id": "a2",
+      "type": "general-purpose",
+      "task": "task 2",
+      "costUsd": 1.3147104,
+      "atSonnetUsd": 1.3147104,
+      "inParentUsd": 6.332447500000001,
+      "steps": 12,
+      "parentContextTokens": 121521,
+      "readTokens": 18579,
+      "returnedTokens": 0,
+      "laterRequests": 0,
+      "avoidedUsd": 0.37158,
+      "netUsd": 5.017737100000001
+    }
+  ],
+  "workflows": {
+    "runs": 1,
+    "agents": 2,
+    "costUsd": 4.8985898,
+    "atSonnetUsd": 2.4492949,
+    "byRun": [
+      {
+        "name": "fixture-review",
+        "agents": 2,
+        "costUsd": 4.8985898,
+        "start": 1790599260000
+      }
+    ]
+  },
+  "medians": {
+    "computedAt": 1790856000000,
+    "days": 30,
+    "n": 2,
+    "all": {
+      "n": 2,
+      "median": 2.5865933,
+      "p90": 2.5865933,
+      "model": "claude-sonnet-5",
+      "tok": [
+        577,
+        2056586,
+        1345033,
+        12625,
+        28
+      ]
+    },
+    "byType": {
+      "general-purpose": {
+        "n": 2,
+        "median": 2.5865933,
+        "p90": 2.5865933,
+        "model": "claude-sonnet-5",
+        "tok": [
+          577,
+          2056586,
+          1345033,
+          12625,
+          28
+        ]
+      }
+    },
+    "byTypeModel": {
+      "general-purpose|claude-sonnet-5": {
+        "n": 2,
+        "median": 2.5865933,
+        "p90": 2.5865933,
+        "model": "claude-sonnet-5",
+        "tok": [
+          577,
+          2056586,
+          1345033,
+          12625,
+          28
+        ]
+      }
+    },
+    "byModel": {
+      "claude-sonnet-5": {
+        "n": 2,
+        "median": 2.5865933,
+        "p90": 2.5865933,
+        "model": "claude-sonnet-5",
+        "tok": [
+          577,
+          2056586,
+          1345033,
+          12625,
+          28
+        ]
+      }
+    }
+  }
+}
+
+[exit 0]

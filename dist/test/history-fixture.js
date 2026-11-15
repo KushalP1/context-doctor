@@ -265,4 +265,6 @@ export const GOLDEN_COMMANDS = [
     ["limits", "--json"],
     ["spend"],
     ["spend", "--json"],
+    ["subagents"],
+    ["subagents", "--json"],
 ];

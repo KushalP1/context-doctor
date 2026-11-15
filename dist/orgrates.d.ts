@@ -56,6 +56,13 @@ export declare function readOrgRatesFrom(paths: string[]): OrgRates | undefined;
  * stat of the managed folder and its drop-in folder, once.
  */
 export declare function orgRates(env?: NodeJS.ProcessEnv): OrgRates | undefined;
+/**
+ * `fn` with the organization's rates read once: every request a report
+ * prices asks for them (rateCard), and reading the two variables that move
+ * them is most of that (285 ms of a 1.5 s `subagents` on the author's
+ * machine, about 150k requests). Nothing in a report's run changes them.
+ */
+export declare function withOrgRatesHeld<T>(fn: () => T): T;
 /** Forget what orgRates read (tests that rewrite a managed file in place). */
 export declare function resetOrgRates(): void;
 /** The row that prices `model`: its exact key first, then its Claude model's. */

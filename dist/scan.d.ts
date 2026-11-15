@@ -109,4 +109,6 @@ export declare function pick(o: any, keys: readonly string[]): any;
  * records `speed`, `inference_geo` and `server_tool_use`; kept on each, they
  * would grow every record for nothing.
  */
-export declare const slimUsage: (u: any) => unknown;
+export declare const slimUsage: (u: any, opts?: {
+    iterations?: boolean;
+}) => unknown;

@@ -123,16 +123,17 @@ test("a price that ends on a day, with the clock either side: spend, the budget 
             assert.equal(items[0].changedOn, changed ? "2026-12-01" : undefined);
             const r = summarizeSpend(items, 1, now - DAY, now);
             const text = renderSpend(r);
-            const said = /gpt-5\.6-sol: price changed on 2026-12-01; a newer context-doctor knows the new one/;
+            // Which price ended, and the price used instead: the page names none after it, so the one that ended.
+            const said = /gpt-5\.6-sol's price ended on 2026-12-01 and no later price is published: priced at the one that ended \(\$4 in \/ \$20 out per M\); an estimate; a newer context-doctor may know the price that followed/;
             if (changed) {
                 assert.match(text, /1 request \(\$0\.28\) priced past the day its model's price changed, an estimate:/);
                 assert.match(text, said);
-                assert.match(text, /gpt-5\.6-sol .*estimate: price changed 2026-12-01/);
+                assert.match(text, /gpt-5\.6-sol .*estimate: price ended 2026-12-01/);
                 assert.match(renderSpendShare(r), /priced past the day their price changed, an estimate/);
                 assert.equal(r.tools[0].estimated, undefined, "not a family estimate");
             }
             else {
-                assert.doesNotMatch(text, /price changed/);
+                assert.doesNotMatch(text, /price changed|price ended/);
                 assert.equal(r.priceChanged, undefined);
             }
             // The budget's ledger keeps which requests and says so.

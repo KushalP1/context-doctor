@@ -41,6 +41,7 @@
  */
 import { type ProgressOptions } from "./progresssummaries.js";
 import { type Modifiers } from "./pricing.js";
+import { type SessionGap } from "./ccost.js";
 /**
  * What spend's dollars are: each request as it was billed (its tier, fast mode,
  * US-only, web searches) at list rates, or at the organization's rates.
@@ -94,6 +95,13 @@ export interface SpendItem {
     branch?: string;
     /** Its repository's name (spendplace.ts repoName), set when the report groups by repository or branch. */
     repo?: string;
+    /**
+     * Claude Code: an iteration of a request that its top-level usage leaves
+     * out, billed on top at its own model (pricing.ts extraIterations): its
+     * type, "advisor_message" (the advisor tool's call) or the attempt a
+     * fallback replaced ("message"). Not a request of its own: not in the counts.
+     */
+    iteration?: string;
 }
 /**
  * A project folder's name (its path with "-" for separators, as Claude Code
@@ -261,6 +269,21 @@ export interface SpendReport {
         requests: number;
         usd: number;
     };
+    /** Claude Code: iterations billed beyond their request's top-level usage (the advisor's calls, attempts a fallback replaced), by type: inside `usd`; absent when none. */
+    iterations?: Record<string, {
+        calls: number;
+        usd: number;
+        models: string[];
+    }>;
+    /**
+     * Claude Code's own figure (its `cost-state` records) beside ours, per
+     * session wholly in the window that has one (ccost.ts); absent when none.
+     */
+    claudeCode?: {
+        ccUsd: number;
+        ourUsd: number;
+        sessions: SessionGap[];
+    };
     /**
      * Claude Code's subagent progress summaries, estimated (no transcript records them): NOT in `usd`.
      * `notesUsd` as short notes (served since November 2026), `forkUsd` as the whole context (before).
@@ -317,6 +340,18 @@ export interface SpendOptions {
  * --json died on a string too long), and 1e9 days fell off the calendar.
  */
 export declare const MAX_SPEND_DAYS = 3650;
+/**
+ * One Claude Code session's comparison with Claude Code's own figure (ccost.ts):
+ * its transcript and its subagents', to its last `cost-state`. Undefined when
+ * it has none, or cannot be read.
+ */
+export declare function claudeCodeSession(top: string): SessionGap | undefined;
+/**
+ * A session's requests priced past the day their model's price ended or
+ * changed, said as `spend` says it: which price, and the one used instead.
+ * Undefined when none (or the transcript cannot be read).
+ */
+export declare function sessionPriceEnded(top: string): string | undefined;
 /** Every request of the last `days` days, every tool on this machine, and what could not be read. */
 export declare function collectSpend(days?: number, opts?: SpendOptions): {
     items: SpendItem[];

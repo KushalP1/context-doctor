@@ -79,8 +79,10 @@ import { effectiveEnv, settingsSources, shellSet, underClaudeCode } from "./effe
 import { SettingsError } from "./settingsedit.js";
 import { currentTtl, estimateCacheTtl, renderCacheTtl, setCacheTtl, settingKey, subagentTranscripts, ttlUnsupported, CACHE_TTL_SINCE } from "./cachettl.js";
 import { claudeDir } from "./claudedir.js";
-import { collectSpend, renderSpend, renderSpendShare, spendBasis, spendReport } from "./spend.js";
+import { claudeCodeSession, collectSpend, renderSpend, renderSpendShare, sessionPriceEnded, spendBasis, spendReport } from "./spend.js";
 import { buildExport, defaultDeveloper, exportFileName, mergeExports, readExports, renderExportDone, renderMerge } from "./spendteam.js";
+import { renderSessionComparison } from "./ccost.js";
+import { withOrgRatesHeld } from "./orgrates.js";
 import { clearBudget, parseBudget, periodSpend, promptHookInstalled, readBudget, renderBudgetStatus, writeBudget } from "./budget.js";
 /**
  * The commands that print JSON with --json. Any other command refuses the
@@ -1047,7 +1049,7 @@ async function main() {
         }
         const profile = profileConversation(sessionConversation, args.model ?? parsed.model);
         if (args.json) {
-            console.log(JSON.stringify({ session: { path: parsed.path, title: parsed.title, ...(picked ? { picked: picked.how } : {}), toolTimings: parsed.toolTimings ?? [], subagents: subagentReport(path) }, profile }, null, 2));
+            console.log(JSON.stringify({ session: { path: parsed.path, title: parsed.title, ...(picked ? { picked: picked.how } : {}), toolTimings: parsed.toolTimings ?? [], subagents: subagentReport(path), claudeCode: claudeCodeSession(path) ?? null }, profile }, null, 2));
             // --json is what CI pipes, so the gate must hold here too (as it does for
             // analyze); it used to run only after the text report and never failed.
             applyBudgetGate(checkBudget(loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`)).config.budget, profile).overBudget, args.failOverBudget);
@@ -1092,6 +1094,16 @@ async function main() {
             if (subs) {
                 console.log("");
                 console.log(subs);
+            }
+            // Claude Code's own figure for it (its cost-state), beside ours.
+            const cc = renderSessionComparison(claudeCodeSession(path));
+            // A price that ended is never applied silently: which, and the one used.
+            const ended = sessionPriceEnded(path);
+            if (ended)
+                cc.push(ended);
+            if (cc.length) {
+                console.log("");
+                console.log(cc.join("\n"));
             }
             applyBudgetGate(printBudgetStatus(profile, loadConfig(process.cwd(), (m) => console.error(`context-doctor: ${m}`))), args.failOverBudget);
         }
@@ -1656,10 +1668,11 @@ async function main() {
     }
     if (args.command === "subagents") {
         const reading = progressLine("Reading your sessions' subagents");
-        const report = subagentPayback(args.days ?? 30, undefined, reading.tick);
+        // Every request is priced (rateCard): the organization's rates read once for the run.
+        const report = withOrgRatesHeld(() => subagentPayback(args.days ?? 30, undefined, reading.tick));
         reading.clear();
         // The medians the subagent price (PreToolUse) quotes, refreshed here.
-        const costs = measureSubagentCosts(args.days ?? 30);
+        const costs = withOrgRatesHeld(() => measureSubagentCosts(args.days ?? 30));
         if (costs.n > 0)
             saveSubagentCosts(costs);
         console.log(args.json ? JSON.stringify({ ...report, medians: costs }, null, 2) : [renderPayback(report, args.limit ?? 8), ...renderCostMedians(costs)].join("\n"));

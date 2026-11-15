@@ -276,4 +276,6 @@ export const GOLDEN_COMMANDS: string[][] = [
   ["limits", "--json"],
   ["spend"],
   ["spend", "--json"],
+  ["subagents"],
+  ["subagents", "--json"],
 ];

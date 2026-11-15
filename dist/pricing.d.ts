@@ -48,7 +48,8 @@ export declare const CACHE_WRITE_OPENAI_12H = 2.5;
  * keeps per request (the budget's, a session's price) were priced by the
  * table of the context-doctor that read them: under another table (an
  * upgrade that corrected a price, as 0.46 did Fable 5.2's) they are stale
- * and read again, not carried to the period's end.
+ * and read again, not carried to the period's end. So are those priced by
+ * rules that changed what a request costs (BILLING_RULES).
  */
 export declare function priceTableKey(): string;
 /** A model's list row, as the page lists it today (no tier, mode or date applied). */
@@ -101,6 +102,8 @@ export interface RecordedUsage {
         web_fetch_requests?: unknown;
         code_execution_requests?: unknown;
     } | null;
+    /** The request's inner calls, each with its own tokens (and `model` where it differs): see extraIterations. */
+    iterations?: unknown;
 }
 export interface UsageCost {
     /** Uncached input. */
@@ -231,9 +234,63 @@ export declare function addModifiers(a: Modifiers, b: Readonly<Modifiers>): Modi
 export declare function priceChange(model?: string): {
     on: string;
     then?: ModelPricing;
+    routes?: string;
 } | undefined;
-/** "gemini-4-argon's price changed on 2026-12-01; a newer context-doctor knows the new one": said for each model priced past its row's date. */
+/** "ended" for a row whose price stops with no price published after it (a promotion), "changed" otherwise: what a report's short label says. */
+export declare function priceEndWord(model?: string): "ended" | "changed";
+/**
+ * Said for the models priced past their row's date: which price ended,
+ * when, and the price each request was priced at instead, an estimate
+ * either way (a scheduled price can be called off, a promotion extended).
+ */
 export declare function priceChangedText(models: Array<[model: string, on: string]>): string;
+/**
+ * One iteration of a request's `usage.iterations` that the request's
+ * top-level usage does not count: billed on top of it, at its own model's
+ * rates (`model`: the iteration's, else the request's).
+ */
+export interface ExtraIteration {
+    /** "advisor_message", "message" (an attempt a fallback replaced), "fallback_message", "compaction"... */
+    type: string;
+    model?: string;
+    usage: RecordedUsage;
+}
+/**
+ * The iterations of a request billed beyond its top-level usage. The API
+ * itemizes one request's inner calls in `usage.iterations`, each with its
+ * own tokens (and `model` where it differs), and its top-level usage counts
+ * only some of them:
+ *  - the advisor tool: top-level usage is the sum of the executor's
+ *    iterations ("message"); each `advisor_message` is billed on top, at the
+ *    advisor model's rates (Anthropic, "Advisor tool", Usage and billing);
+ *  - server-side fallbacks: top-level usage is the attempt that produced the
+ *    message, the last; each earlier attempt (the declined model's, its own
+ *    `model`) is billed on top (refusals and fallback: "usage.iterations is
+ *    the per-attempt source of truth"). On the author's machine 34 replies
+ *    carry one: claude-fable-5 declined after reading 294k tokens, and
+ *    claude-opus-4-8 answered.
+ * Which is which is checked on the tokens, never assumed from the types:
+ * the iterations other than the advisor's must add up to the top-level
+ * prompt (input, cache reads and writes), or the last of them must equal
+ * it. A shape that is neither has only its advisor iterations added (never
+ * in the top-level, whatever the rest), so nothing is counted twice.
+ * Empty for the common request, one iteration that is the request itself.
+ */
+export declare function extraIterations(usage: RecordedUsage | undefined | null): ExtraIteration[];
+/**
+ * What a request cost with the iterations its top-level usage leaves out
+ * (extraIterations), each priced by requestCost at its own model and the
+ * request's time: the parts and modifiers added up, `rates` the request's
+ * own. `extra` is what those iterations added; absent when none. Undefined
+ * when the request's own model has no price.
+ */
+export declare function billedCost(model: string | undefined, usage: RecordedUsage | undefined | null, at?: number): (RequestCost & {
+    extra?: {
+        usd: number;
+        iterations: number;
+        unpriced: number;
+    };
+}) | undefined;
 /**
  * OpenAI usage, in any of its shapes, as RecordedUsage: Responses
  * (`input_tokens`, `input_tokens_details.cached_tokens`, `cache_write_tokens`

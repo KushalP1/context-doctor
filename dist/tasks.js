@@ -21,7 +21,7 @@
 import { realModel } from "./tokens.js";
 import { basename } from "node:path";
 import { forEachLine, listSessions, outputSettler, replyCounter, isClaudeSession } from "./session.js";
-import { formatUsd, requestCost } from "./pricing.js";
+import { billedCost, formatUsd } from "./pricing.js";
 /**
  * One session's bill, priced as the prompt cache bills it, from the usage the
  * transcript records. `since` counts only requests and commits from then on,
@@ -97,7 +97,8 @@ export function sessionCost(path, since = 0, counted = { rows: new Set(), commit
         }
         model = realModel(e.message.model) ?? model;
         // Each request at its own model's price, as billed: one session can switch models.
-        const c = requestCost(model, e.message.usage, Number.isFinite(at) ? at : undefined);
+        // With the iterations its top-level usage leaves out (an advisor's call, a declined attempt): billedCost.
+        const c = billedCost(model, e.message.usage, Number.isFinite(at) ? at : undefined);
         if (!c)
             return;
         rates = c.rates;

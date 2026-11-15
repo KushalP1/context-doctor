@@ -233,16 +233,19 @@ const PRICING = [
     [/gemini.*pro/i, rate(1.25, 5, 0.31), FALLBACK],
 ];
 let tableKey;
+/** Bumped when what a request costs changes beyond the table: 2, the iterations its top-level usage leaves out (billedCost). */
+const BILLING_RULES = 2;
 /**
  * A fingerprint of this table and its billing constants. Dollars a ledger
  * keeps per request (the budget's, a session's price) were priced by the
  * table of the context-doctor that read them: under another table (an
  * upgrade that corrected a price, as 0.46 did Fable 5.2's) they are stale
- * and read again, not carried to the period's end.
+ * and read again, not carried to the period's end. So are those priced by
+ * rules that changed what a request costs (BILLING_RULES).
  */
 export function priceTableKey() {
     tableKey ??= createHash("sha1")
-        .update(JSON.stringify([PRICING.map(([re, p, b]) => [re.source, re.flags, p, b ?? null]), CACHE_WRITE_5M, CACHE_WRITE_1H, CACHE_WRITE_OPENAI_30M, CACHE_WRITE_OPENAI_12H, US_ONLY_MULTIPLIER, WEB_SEARCH_USD]))
+        .update(JSON.stringify([PRICING.map(([re, p, b]) => [re.source, re.flags, p, b ?? null]), CACHE_WRITE_5M, CACHE_WRITE_1H, CACHE_WRITE_OPENAI_30M, CACHE_WRITE_OPENAI_12H, US_ONLY_MULTIPLIER, WEB_SEARCH_USD, BILLING_RULES]))
         .digest("hex")
         .slice(0, 12);
     return tableKey;
@@ -459,17 +462,129 @@ export function addModifiers(a, b) {
  */
 export function priceChange(model) {
     const b = row(model)?.[2];
-    return b?.changes ? { on: b.changes, ...(b.then ? { then: b.then } : {}) } : undefined;
+    return b?.changes ? { on: b.changes, ...(b.then ? { then: b.then } : {}), ...(b.routes ? { routes: b.routes } : {}) } : undefined;
 }
-/** "gemini-4-argon's price changed on 2026-12-01; a newer context-doctor knows the new one": said for each model priced past its row's date. */
-export function priceChangedText(models) {
-    const byDay = new Map();
-    for (const [m, on] of models) {
-        const l = byDay.get(on) ?? byDay.set(on, []).get(on);
-        if (!l.includes(m))
-            l.push(m);
+/** "ended" for a row whose price stops with no price published after it (a promotion), "changed" otherwise: what a report's short label says. */
+export function priceEndWord(model) {
+    const c = priceChange(model);
+    return c && !c.then && !c.routes ? "ended" : "changed";
+}
+/** "$4 in / $20 out per M": a price as the notes quote it. */
+const perMText = (p) => `$${+p.inputPerM.toFixed(4)} in / $${+p.outputPerM.toFixed(4)} out per M`;
+/**
+ * What a request priced past its row's date (rateCard's `changedOn`) was
+ * priced at, in words: the price the page said would follow, the model it
+ * is billed as from then, or, when the page named nothing (gpt-5.6-sol's
+ * promotion), the price that ended. Never silent about which.
+ */
+function priceUsedText(model, on) {
+    const b = row(model)?.[2];
+    if (b?.routes && b.changes !== undefined && b.changes < on) {
+        // Billed as another model whose own price changed later: that model's change is the one in force.
+        return `${model} is billed as ${b.routes} from ${b.changes}; ${priceUsedText(b.routes, on)}`;
     }
-    return [...byDay].map(([on, ms]) => `${ms.slice(0, 3).join(", ")}${ms.length > 3 ? " and others" : ""}: price changed on ${on}`).join("; ") + "; a newer context-doctor knows the new one";
+    if (b?.routes)
+        return `${model}'s price ended on ${on}: from then it is billed as ${b.routes}, priced at ${b.routes}'s rates`;
+    if (b?.then)
+        return `${model}'s price changed on ${on}: priced at the price the page said would follow (${perMText(b.then)})`;
+    const was = pricingFor(model);
+    return `${model}'s price ended on ${on} and no later price is published: priced at the one that ended${was ? ` (${perMText(was)})` : ""}`;
+}
+/**
+ * Said for the models priced past their row's date: which price ended,
+ * when, and the price each request was priced at instead, an estimate
+ * either way (a scheduled price can be called off, a promotion extended).
+ */
+export function priceChangedText(models) {
+    const seen = new Map();
+    for (const [m, on] of models)
+        if (!seen.has(`${m}\u0000${on}`))
+            seen.set(`${m}\u0000${on}`, priceUsedText(m, on));
+    const parts = [...seen.values()];
+    const open = [...seen.keys()].some((k) => { const [m] = k.split("\u0000"); const b = row(m)?.[2]; return !b?.then && !b?.routes; });
+    return `${parts.slice(0, 3).join("; ")}${parts.length > 3 ? `; and ${parts.length - 3} more` : ""}; an estimate${open ? "; a newer context-doctor may know the price that followed" : ""}`;
+}
+const promptOf = (u) => count(u?.input_tokens) + count(u?.cache_read_input_tokens) + count(u?.cache_creation_input_tokens);
+/**
+ * The iterations of a request billed beyond its top-level usage. The API
+ * itemizes one request's inner calls in `usage.iterations`, each with its
+ * own tokens (and `model` where it differs), and its top-level usage counts
+ * only some of them:
+ *  - the advisor tool: top-level usage is the sum of the executor's
+ *    iterations ("message"); each `advisor_message` is billed on top, at the
+ *    advisor model's rates (Anthropic, "Advisor tool", Usage and billing);
+ *  - server-side fallbacks: top-level usage is the attempt that produced the
+ *    message, the last; each earlier attempt (the declined model's, its own
+ *    `model`) is billed on top (refusals and fallback: "usage.iterations is
+ *    the per-attempt source of truth"). On the author's machine 34 replies
+ *    carry one: claude-fable-5 declined after reading 294k tokens, and
+ *    claude-opus-4-8 answered.
+ * Which is which is checked on the tokens, never assumed from the types:
+ * the iterations other than the advisor's must add up to the top-level
+ * prompt (input, cache reads and writes), or the last of them must equal
+ * it. A shape that is neither has only its advisor iterations added (never
+ * in the top-level, whatever the rest), so nothing is counted twice.
+ * Empty for the common request, one iteration that is the request itself.
+ */
+export function extraIterations(usage) {
+    const its = usage?.iterations;
+    if (!Array.isArray(its) || its.length < 2)
+        return [];
+    const list = its.filter((t) => !!t && typeof t === "object" && !Array.isArray(t));
+    const extra = (t) => ({
+        type: typeof t.type === "string" ? t.type : "message",
+        ...(typeof t.model === "string" && t.model ? { model: t.model } : {}),
+        usage: {
+            input_tokens: count(t.input_tokens), cache_read_input_tokens: count(t.cache_read_input_tokens), cache_creation_input_tokens: count(t.cache_creation_input_tokens), output_tokens: count(t.output_tokens),
+            ...(t.cache_creation && typeof t.cache_creation === "object" ? { cache_creation: t.cache_creation } : {}),
+            // The request's own modifiers: where it ran (US-only) and its speed hold for every call in it.
+            ...(usage?.inference_geo === "us" ? { inference_geo: "us" } : {}),
+            ...(usage?.speed === "fast" ? { speed: "fast" } : {}),
+        },
+    });
+    const advisor = list.filter((t) => t.type === "advisor_message");
+    const rest = list.filter((t) => t.type !== "advisor_message");
+    const top = promptOf(usage);
+    if (rest.length <= 1 || rest.reduce((n, t) => n + promptOf(t), 0) === top)
+        return advisor.map(extra);
+    if (promptOf(rest[rest.length - 1]) === top)
+        return [...rest.slice(0, -1), ...advisor].map(extra);
+    return advisor.map(extra);
+}
+/**
+ * What a request cost with the iterations its top-level usage leaves out
+ * (extraIterations), each priced by requestCost at its own model and the
+ * request's time: the parts and modifiers added up, `rates` the request's
+ * own. `extra` is what those iterations added; absent when none. Undefined
+ * when the request's own model has no price.
+ */
+export function billedCost(model, usage, at = Date.now()) {
+    const c = requestCost(model, usage, at);
+    const extras = extraIterations(usage);
+    if (!c || !extras.length)
+        return c;
+    const out = { ...c, modifiers: { ...c.modifiers }, extra: { usd: 0, iterations: 0, unpriced: 0 } };
+    for (const x of extras) {
+        const e = requestCost(x.model ?? model, x.usage, at);
+        if (!e) {
+            out.extra.unpriced++;
+            continue;
+        }
+        out.inputUsd += e.inputUsd;
+        out.writeUsd += e.writeUsd;
+        out.readUsd += e.readUsd;
+        out.outputUsd += e.outputUsd;
+        out.promptUsd += e.promptUsd;
+        out.totalUsd += e.totalUsd;
+        addModifiers(out.modifiers, e.modifiers);
+        out.extra.usd += e.totalUsd;
+        out.extra.iterations++;
+        if (e.estimated)
+            out.estimated = true;
+        if (e.changedOn && !out.changedOn)
+            out.changedOn = e.changedOn;
+    }
+    return out;
 }
 /**
  * OpenAI usage, in any of its shapes, as RecordedUsage: Responses

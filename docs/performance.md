@@ -18,7 +18,7 @@ Net effect is strongly negative overhead: the tokens these touchpoints save on e
 
 ## The transcript cache
 
-`fix` (and a bare `context-doctor`, which runs fix's replays), `savings`, `compact-window`, `cache-ttl`, `cache-misses`, `compactions` and `overhead` replay your history. Each used to read and parse every transcript on its own, so `fix` and `savings`, which run up to six of those replays, read 2.7 GB five or six times on the author's machine. Now each transcript is read once per run, each row parsed once for every replay that needs it, and the records each replay takes from it (a request's usage, time and ids, a compaction, a file read, a tool call's name) are kept, one file per transcript and replay, keyed by the transcript's path, size, modification time and inode:
+`fix` (and a bare `context-doctor`, which runs fix's replays), `savings`, `compact-window`, `cache-ttl`, `cache-misses`, `compactions`, `overhead` and `subagents` replay your history. Each used to read and parse every transcript on its own, so `fix` and `savings`, which run up to six of those replays, read 2.7 GB five or six times on the author's machine. Now each transcript is read once per run, each row parsed once for every replay that needs it, and the records each replay takes from it (a request's usage, time and ids, a compaction, a file read, a tool call's name) are kept, one file per transcript and replay, keyed by the transcript's path, size, modification time and inode:
 
 - A transcript that only grew, as Claude Code writes them, is read from where the last run stopped. Autopilot's replay carries the conversation since its last compaction and the clearer's state; that is kept in a file of its own for transcripts written in the last 3 days (20 of them, 62 MB on the author's machine), so a session you are working in is replayed only from where the last run stopped: `savings` with six transcripts grown by 4.8 MB since the last run takes 0.6 s, the same output as a full replay.
 - The figures do not change: golden tests run every report, text and JSON, on a fixture history with no cache, a cold cache, a warm one and after the history grew, against what the code before the cache printed, byte for byte; `scripts/verify-local.sh` does the same with and without the cache on a copy of your real history.
@@ -35,5 +35,6 @@ Net effect is strongly negative overhead: the tokens these touchpoints save on e
 | `overhead` | 9.3 s | 4.9 s | 0.3 s |
 | `cache-ttl` | 7.5 s | 4.3 s | 0.3 s |
 | `limits` | 0.4 s | 0.1 s | 0.1 s |
+| `subagents` (2026-11-15: 1,101 subagent transcripts and their 13 parents in the window; 11 MB of records) | 15.0 s | 20-30 s | 0.26 s |
 
 The first run is mostly autopilot's replay itself (`savings`); `fix` skips it when autopilot is already on.

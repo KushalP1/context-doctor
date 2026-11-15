@@ -33,6 +33,12 @@ export declare function cacheTtlCheck(home?: string, env?: NodeJS.ProcessEnv): C
  * a second doctor cheap. Undefined when nothing ran in the period; ids that
  * are never billed (`<synthetic>`) are not named.
  */
+/**
+ * Our price of Claude Code's sessions against its own figure (ccost.ts):
+ * the sessions of the last `days` that recorded one (`cost-state`), each
+ * from its start to its last record. Undefined when none did.
+ */
+export declare function claudeCodeCostCheck(days?: number, now?: number): Check | undefined;
 export declare function unpricedModelsCheck(days?: number, now?: number, home?: string): Check | undefined;
 /**
  * Devin (Cognition): the Devin CLI, and Devin Desktop (formerly Windsurf).

@@ -24,12 +24,13 @@
  * window for a hard task) and what the parent would have spent on its own tool
  * calls, so "did not pay" means "did not pay in context", not "was a mistake".
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync } from "node:fs";
 import { basename, join } from "node:path";
-import { forEachLine, listSessions, outputSettler, replyCounter, isClaudeSession } from "./session.js";
+import { listSessions, outputSettler, replyCounter, isClaudeSession } from "./session.js";
+import { rowsOf, slimUsage } from "./scan.js";
 import { subagentFiles, workflowRunInfo } from "./subagents.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
-import { cacheWriteSplit, formatUsd, rateCard, ratesAt, requestCost, writeMultiplier, writePerM } from "./pricing.js";
+import { billedCost, cacheWriteSplit, formatUsd, rateCard, ratesAt, requestCost, writeMultiplier, writePerM } from "./pricing.js";
 import { priceBasis } from "./orgrates.js";
 /**
  * The model `fix` offers the subagents (subagentmodel.ts): the id the price
@@ -64,48 +65,223 @@ const cheaper = (a, b) => a.inputPerM < b.inputPerM || (a.inputPerM === b.inputP
  * bills it for less, else as billed.
  */
 function billed(model, u, at) {
-    const own = requestCost(model, u, at);
+    // With the iterations its top-level usage leaves out (billedCost), which a move to Sonnet leaves as they were.
+    const own = billedCost(model, u, at);
     if (!own)
         return undefined;
     const sonnet = requestCost(SUBAGENT_CANDIDATE, u, at);
     const moved = cheaper(sonnet.rates, own.rates);
-    return { usd: own.totalUsd, sonnetUsd: moved ? sonnet.totalUsd : own.totalUsd, rates: own.rates, sonnetRates: moved ? sonnet.rates : own.rates };
+    return { usd: own.totalUsd, sonnetUsd: moved ? sonnet.totalUsd + (own.extra?.usd ?? 0) : own.totalUsd, rates: own.rates, sonnetRates: moved ? sonnet.rates : own.rates };
 }
 /**
- * A subagent's bill (each request as billed, requestCost), steps, startup
- * context, start time, the tool output it read, and the rates its first
- * request billed at.
+ * What `subagents` takes from a subagent's transcript, through the shared
+ * scan (scan.ts), so a second run reads only what was appended: each reply's
+ * id, model, time and usage (every row, for the output a streamed reply
+ * settles on its last: a later row keeps only that), and the tool output
+ * each user row hands it, as tokens. The task is read from the transcript's
+ * head when needed (subagentTask): the cache keeps no message text.
  */
-export function scanSubagent(path) {
-    const tokens = { input: 0, read: 0, write: 0, output: 0 };
-    let costUsd = 0, atSonnetUsd = 0, readTokens = 0, task = "", model, firstRates;
-    let steps = 0, startup = 0, start = Infinity, writes5m = 0, writes1h = 0;
-    // The rates of the last reply, for the output its later rows settle.
-    let last;
-    const sighting = replyCounter();
-    const settle = outputSettler();
-    forEachLine(path, (line) => {
+export const SUBAGENT_ROWS = {
+    id: "subagent.1",
+    init: () => ({ ids: {} }),
+    line(line, row, out, st) {
+        const result = line.includes('"tool_result"');
+        if (!result && !line.includes('"usage"'))
+            return;
         let e;
         try {
-            e = JSON.parse(line);
+            e = row();
         }
         catch {
             return;
         }
         const content = e?.message?.content;
         if (e?.type === "user") {
-            if (!task && typeof content === "string")
-                task = content;
+            let n = 0;
             if (Array.isArray(content))
                 for (const b of content)
                     if (b?.type === "tool_result")
-                        readTokens += blockTokens(b.content);
+                        n += blockTokens(b.content);
+            if (n)
+                out.push(["r", n]);
             return;
         }
         if (e?.type !== "assistant" || !e.message?.usage)
             return;
-        if (typeof e.message.model === "string" && !realModel(e.message.model))
-            return; // "<synthetic>": not a request
+        const m = e.message;
+        const model = typeof m.model === "string" ? m.model : null;
+        if (typeof m.id === "string") {
+            // A later row of a reply already met: read only for the output it settles on.
+            if (st.ids[m.id]) {
+                out.push(["o", m.id, model, tok(m.usage.output_tokens)]);
+                return;
+            }
+            st.ids[m.id] = 1;
+        }
+        const at = Date.parse(String(e.timestamp ?? ""));
+        out.push(["a", typeof m.id === "string" ? m.id : null, model, Number.isFinite(at) ? at : null, packUsage(m.usage)]);
+    },
+};
+const tok = (v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
+/**
+ * A reply's usage as the subagent scans keep it, short (thousands of
+ * transcripts are read back on every run): input, cache reads, cache writes,
+ * of them at 1 hour, output, fast mode / US-only (1 / 2), web searches, and
+ * the iterations billed beyond it (extraIterations), when any.
+ */
+function packUsage(u) {
+    const w = cacheWriteSplit(u);
+    const slim = slimUsage(u, { iterations: true });
+    const packed = [tok(u.input_tokens), tok(u.cache_read_input_tokens), w.fiveMinute + w.oneHour + w.twelveHour, w.oneHour, tok(u.output_tokens), (u.speed === "fast" ? 1 : 0) + (u.inference_geo === "us" ? 2 : 0), tok(u.server_tool_use?.web_search_requests)];
+    if (slim?.iterations)
+        packed.push(slim.iterations);
+    return packed;
+}
+/** packUsage's array as the usage requestCost reads. */
+function unpackUsage(p) {
+    return {
+        input_tokens: p[0], cache_read_input_tokens: p[1], cache_creation_input_tokens: p[2], output_tokens: p[4],
+        cache_creation: { ephemeral_1h_input_tokens: p[3], ephemeral_5m_input_tokens: p[2] - p[3] },
+        ...(p[5] & 1 ? { speed: "fast" } : {}), ...(p[5] & 2 ? { inference_geo: "us" } : {}),
+        ...(p[6] ? { server_tool_use: { web_search_requests: p[6] } } : {}),
+        ...(p[7] ? { iterations: p[7] } : {}),
+    };
+}
+/**
+ * A subagent's task: the first user row with text, read from the
+ * transcript's head (16 KB at a time, at most 1 MB): only for a subagent
+ * whose meta file gives no description.
+ */
+export function subagentTask(path) {
+    let fd;
+    try {
+        fd = openSync(path, "r");
+    }
+    catch {
+        return "";
+    }
+    try {
+        let head = "";
+        for (let pos = 0; pos < 1024 * 1024;) {
+            const buf = Buffer.alloc(16 * 1024);
+            const n = readSync(fd, buf, 0, buf.length, pos);
+            if (n <= 0)
+                break;
+            pos += n;
+            head += buf.subarray(0, n).toString("utf8");
+            const lines = head.split("\n");
+            head = lines.pop();
+            for (const line of lines) {
+                if (!line.includes('"user"'))
+                    continue;
+                try {
+                    const e = JSON.parse(line);
+                    if (e?.type === "user" && typeof e.message?.content === "string")
+                        return e.message.content.replace(/\s+/g, " ").slice(0, 90);
+                }
+                catch { /* not a row */ }
+            }
+        }
+        return "";
+    }
+    catch {
+        return "";
+    }
+    finally {
+        closeSync(fd);
+    }
+}
+/**
+ * What `subagents` takes from a parent transcript, through the shared scan:
+ * its main-thread replies (time, model, prompt size, what changes their
+ * rates, cache writes by lifetime), its compactions, and every row that
+ * mentions one of its subagents (the Agent tool's result for that call, a
+ * background agent's task notification), as tokens and the ids it names:
+ * the calls of the Agent tool it made (kept in the state), and the ids a
+ * notification names (`<task-id>`, `<tool-use-id>`, `agentId:`).
+ */
+export const PARENT_ROWS = {
+    id: "subparent.1",
+    init: () => ({ calls: [] }),
+    line(line, row, out, st) {
+        const isUsage = line.includes('"usage"');
+        const isCompact = line.includes('"compact_boundary"');
+        const named = [...line.matchAll(MENTION)].map((m) => m[1] ?? m[2] ?? m[3] ?? m[4]);
+        // The Agent tool's results, by the call they answer (a set: one transcript makes hundreds of calls).
+        const calls = st.calls.length && line.includes('"tool_use_id"') ? [...line.matchAll(RESULT_OF)].map((m) => m[1]).filter((id) => callSet(st.calls).has(id)) : [];
+        if (!isUsage && !isCompact && !named.length && !calls.length && !line.includes('"name":"Agent"') && !line.includes('"name":"Task"'))
+            return;
+        let e;
+        try {
+            e = row();
+        }
+        catch {
+            return;
+        }
+        const at = Date.parse(String(e?.timestamp ?? ""));
+        if (isCompact && e?.subtype === "compact_boundary" && Number.isFinite(at))
+            out.push(["c", at]);
+        if (e?.type === "assistant") {
+            const m = e.message;
+            for (const b of Array.isArray(m?.content) ? m.content : []) {
+                if (b?.type === "tool_use" && (b.name === "Agent" || b.name === "Task") && typeof b.id === "string" && !st.calls.includes(b.id))
+                    st.calls.push(b.id);
+            }
+            // Its time, prompt, writes by lifetime, fast mode / US-only (1 / 2): what the parent's side is priced from.
+            if (!e.isSidechain && m?.usage) {
+                const u = m.usage, w = cacheWriteSplit(u);
+                out.push(["a", typeof m.id === "string" ? m.id : null, typeof m.model === "string" ? m.model : null, Number.isFinite(at) ? at : null, tok(u.input_tokens) + tok(u.cache_creation_input_tokens) + tok(u.cache_read_input_tokens), w.fiveMinute, w.oneHour, (u.speed === "fast" ? 1 : 0) + (u.inference_geo === "us" ? 2 : 0)]);
+            }
+            return;
+        }
+        const ids = [...new Set([...calls, ...named])];
+        if (!ids.length || !Number.isFinite(at))
+            return;
+        // Background agents report through a task notification; foreground ones through the tool result.
+        const content = e?.message?.content ?? e?.content;
+        const n = blockTokens(Array.isArray(content) ? content.map((b) => (b?.type === "tool_result" ? { text: typeof b.content === "string" ? b.content : JSON.stringify(b.content) } : b)) : content);
+        out.push(["m", at, n, ids]);
+    },
+};
+/**
+ * The ids a row names its subagent by: a task notification's, the Agent
+ * tool's result's, and the hand-back that carries a background agent's final
+ * report (`<agent-message from="<id>">`, its quotes escaped in the row's JSON):
+ * on the author's machine that report, ~3k tokens, is what the parent read,
+ * where the notification is ~400.
+ */
+const MENTION = /<task-id>([\w-]{1,80})<\/task-id>|<tool-use-id>([\w-]{1,80})<\/tool-use-id>|agentId: ([\w-]{1,80})|<agent-message from=\\"([\w-]{1,80})\\"/g;
+/** `calls` as a set, made again only when the list changed (it only grows). */
+let calledSet;
+function callSet(calls) {
+    if (calledSet?.of !== calls || calledSet.n !== calls.length)
+        calledSet = { of: calls, n: calls.length, set: new Set(calls) };
+    return calledSet.set;
+}
+/** A tool result's call. */
+const RESULT_OF = /"tool_use_id":"([\w-]{1,80})"/g;
+/**
+ * A subagent's bill (each request as billed, requestCost), steps, startup
+ * context, start time, the tool output it read, and the rates its first
+ * request billed at. Read through the shared scan (SUBAGENT_ROWS).
+ */
+export function scanSubagent(path) {
+    const tokens = { input: 0, read: 0, write: 0, output: 0 };
+    let costUsd = 0, atSonnetUsd = 0, readTokens = 0, model, firstRates;
+    let steps = 0, startup = 0, start = Infinity, writes5m = 0, writes1h = 0;
+    // The rates of the last reply, for the output its later rows settle.
+    let last;
+    const sighting = replyCounter();
+    const settle = outputSettler();
+    for (const r of rowsOf(path, SUBAGENT_ROWS)) {
+        if (r[0] === "r") {
+            readTokens += r[1];
+            continue;
+        }
+        if (typeof r[2] === "string" && !realModel(r[2]))
+            continue; // "<synthetic>": not a request
+        const repeat = r[0] === "o";
+        const e = { message: { id: r[1] ?? undefined, model: r[2] ?? undefined, usage: repeat ? { output_tokens: r[3] } : unpackUsage(r[4]) } };
         const seen = sighting(e);
         if (seen === "repeat") {
             // A later row of the same reply: only its final output count is new.
@@ -116,15 +292,15 @@ export function scanSubagent(path) {
                 costUsd += (more * last.rates.outputPerM) / 1e6;
                 atSonnetUsd += (more * last.sonnetRates.outputPerM) / 1e6;
             }
-            return;
+            continue;
         }
         if (seen !== "new")
-            return;
+            continue;
         settle(e, true);
         model = realModel(e.message.model) ?? model;
         const u = e.message.usage;
         const n = (k) => (typeof u[k] === "number" && u[k] > 0 ? u[k] : 0);
-        const at = Date.parse(e.timestamp);
+        const at = typeof r[3] === "number" ? r[3] : NaN;
         if (Number.isFinite(at))
             start = Math.min(start, at);
         if (steps === 0)
@@ -140,59 +316,48 @@ export function scanSubagent(path) {
         const b = billed(model, u, Number.isFinite(at) ? at : undefined);
         last = b;
         if (!b)
-            return;
+            continue;
         firstRates ??= b.rates;
         costUsd += b.usd;
         atSonnetUsd += b.sonnetUsd;
-    });
-    return { costUsd, atSonnetUsd, readTokens, task: task.replace(/\s+/g, " ").slice(0, 90), steps, startup, start, model, writeMult: writeMultiplier(writes5m, writes1h), ...(firstRates ? { rates: firstRates } : {}), tokens };
+    }
+    return { costUsd, atSonnetUsd, readTokens, steps, startup, start, model, writeMult: writeMultiplier(writes5m, writes1h), ...(firstRates ? { rates: firstRates } : {}), tokens };
 }
-function scanParent(path, ids) {
+/** A parent transcript as `subagents` weighs its subagents against it, read through the shared scan (PARENT_ROWS). */
+function scanParent(path) {
     const view = { requests: [], prompts: [], models: [], billing: [], compactions: [], writes5m: 0, writes1h: 0, returns: new Map() };
     let lastId;
-    forEachLine(path, (line) => {
-        const hits = [...ids].filter((id) => line.includes(id));
-        const isUsage = line.includes('"usage"');
-        const isCompact = line.includes('"compact_boundary"');
-        if (!hits.length && !isUsage && !isCompact)
-            return;
-        let e;
-        try {
-            e = JSON.parse(line);
+    for (const r of rowsOf(path, PARENT_ROWS)) {
+        if (r[0] === "c") {
+            view.compactions.push(r[1]);
+            continue;
         }
-        catch {
-            return;
-        }
-        const at = Date.parse(e?.timestamp);
-        if (isCompact && e?.subtype === "compact_boundary" && Number.isFinite(at))
-            view.compactions.push(at);
         // Placeholder messages Claude Code writes itself ("<synthetic>") are not API requests.
-        if (e?.type === "assistant" && !e.isSidechain && e.message?.usage && e.message.id !== lastId && realModel(e.message.model)) {
-            lastId = e.message.id;
-            view.model = realModel(e.message.model) ?? view.model;
-            if (Number.isFinite(at)) {
-                const u = e.message.usage;
+        if (r[0] === "a") {
+            const [, id, model, at, prompt, w5m, w1h, flags] = r;
+            if ((id ?? undefined) === lastId || !realModel(model ?? undefined))
+                continue;
+            lastId = id ?? undefined;
+            view.model = realModel(model) ?? view.model;
+            if (typeof at === "number") {
                 view.requests.push(at);
-                view.prompts.push((u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0));
-                view.billing.push({ speed: u.speed, inference_geo: u.inference_geo });
+                view.prompts.push(prompt);
+                view.billing.push({ ...(flags & 1 ? { speed: "fast" } : {}), ...(flags & 2 ? { inference_geo: "us" } : {}) });
                 view.models.push(view.model);
             }
-            const w = cacheWriteSplit(e.message.usage);
-            view.writes5m += w.fiveMinute;
-            view.writes1h += w.oneHour;
-            return;
+            view.writes5m += w5m;
+            view.writes1h += w1h;
+            continue;
         }
-        if (!hits.length || !Number.isFinite(at) || e?.type === "assistant")
-            return;
-        // Background agents report through a task notification; foreground ones through the tool result.
-        const content = e?.message?.content ?? e?.content;
-        const tokens = blockTokens(Array.isArray(content) ? content.map((b) => (b?.type === "tool_result" ? { text: typeof b.content === "string" ? b.content : JSON.stringify(b.content) } : b)) : content);
-        for (const id of hits) {
+        if (r[0] !== "m")
+            continue;
+        const [, at, n, ids] = r;
+        for (const id of ids) {
             const prev = view.returns.get(id);
-            if (!prev || tokens > prev.tokens)
-                view.returns.set(id, { tokens, at });
+            if (!prev || n > prev.tokens)
+                view.returns.set(id, { tokens: n, at });
         }
-    });
+    }
     return view;
 }
 export function subagentPayback(days = 30, paths, onProgress) {
@@ -239,8 +404,7 @@ export function subagentPayback(days = 30, paths, onProgress) {
             catch { /* older Claude Code: no meta */ }
             return { id, file: join(dir, f), meta };
         });
-        const ids = new Set(metas.flatMap((m) => [m.id, m.meta.toolUseId].filter((x) => Boolean(x))));
-        const view = scanParent(parent, ids);
+        const view = scanParent(parent);
         // What the parent pays to write a token to its cache, from its own usage.
         const parentWrite = writeMultiplier(view.writes5m, view.writes1h);
         for (const m of metas) {
@@ -280,7 +444,7 @@ export function subagentPayback(days = 30, paths, onProgress) {
             out.push({
                 id: m.id,
                 type: m.meta.agentType ?? "unknown",
-                task: m.meta.description ?? s.task,
+                task: m.meta.description ?? subagentTask(m.file),
                 costUsd: s.costUsd,
                 atSonnetUsd: s.atSonnetUsd,
                 inParentUsd,

@@ -1,0 +1,16 @@
+DO SUBAGENTS PAY FOR THEMSELVES?
+════════════════════════════════════════════════════════
+Last 30 days: 2 subagents in 1 sessions cost $3.46 at list price.
+The same work done in the parent would have cost ~$16.29: 2 of 2 were cheaper as subagents, net +$12.83.
+
+  by type                     count      cost    paid off   net
+  general-purpose                 2     $3.46        2/2   +$12.83
+
+Counts context only: a subagent can still be worth it for parallel time or a clean window on a hard task.
+Subagents pay most when the parent is already large (every step there re-reads it) and least for short tasks from a small parent.
+
+Workflow agents: 2 in 1 workflow run, $4.90 at list price (each run's work handed off whole, so not weighed against the parent).
+At Sonnet 5.5 (where they ran on a pricier model): ~$2.45, token counts as recorded: an estimate.
+      $4.90    2 agents  fixture-review
+
+[exit 0]
