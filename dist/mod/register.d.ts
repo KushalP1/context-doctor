@@ -71,6 +71,8 @@ interface State {
     kw?: KeepWarm;
     /** A ping in flight: never two at once. */
     pinging: boolean;
+    /** CONTEXT_DOCTOR_KEEP_WARM_PING_MS (the canary's): a ping this often instead of every 55 minutes. */
+    pingEveryMs?: number;
     /** The usage pane: what `mod usage` said last, and when it is asked again. */
     usage?: UsagePaneData;
     usageOpen: boolean;

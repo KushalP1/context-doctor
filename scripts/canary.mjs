@@ -67,10 +67,18 @@ export const PRECOMPACT_HEAD = "context-doctor, from this session's transcript";
 const SESSION_TIMEOUT_MS = 180_000;
 const IDLE_MS = 45_000;
 /** The session's steps, in order; a run that stops early names the one it stopped at. */
-const STEPS = ["the first prompt and its subagent", "the second prompt", "the usage pane (/context-doctor-usage)", "the model switch (set_model)", "/compact", "done"];
+const STEPS = ["the first prompt and its subagent", "the second prompt", "the usage pane (/context-doctor-usage)", "keep-warm armed (/context-doctor-keep-warm 1h $1)", "a keep-warm ping reaching the API", "keep-warm off", "the model switch (set_model)", "/compact", "done"];
 /** The mod's usage command: with no surface to draw the pane on (-p), it answers with the pane's figures as text. */
 export const USAGE_COMMAND = "/context-doctor-usage";
 /** That answer (src/mod/logic.ts usageText), as a result's text. A background subagent's notice ends a turn of its own (2.1.325), so a step waits for this one. */
+/** Keep-warm (F2): armed for an hour and $1, a ping every KEEP_WARM_PING_MS (the mod's canary-only interval), then off. */
+export const KEEP_WARM_ARM = "/context-doctor-keep-warm 1h $1";
+export const KEEP_WARM_PING_MS = 3000;
+/** The ping's own message (src/mod/logic.ts PING_PROMPT), by which the mock knows it. */
+export const PING_HEAD = "context-doctor keep-warm: an automated cache refresh";
+const PING_WAIT_MS = 30_000;
+const keepWarmAnswer = (e) => e?.type === "result" && /Keeping this session's prompt cache warm|Not started|Nothing was started|no \$\.model\.fork/.test(String(e.result ?? ""));
+const keepWarmOff = (e) => e?.type === "result" && /Stopped keeping the cache warm|Nothing to stop/.test(String(e.result ?? ""));
 const usageAnswer = (e) => e?.type === "result" && /context-doctor usage: /.test(String(e.result ?? ""));
 
 // -- The dummy credential --------------------------------------------------------
@@ -131,6 +139,7 @@ export async function startMock() {
   const nonce = randomBytes(8).toString("hex");
   const requests = [];
   const refused = [];
+  const pingUsage = { input_tokens: 60, cache_creation_input_tokens: 0, cache_read_input_tokens: 20000, output_tokens: 2, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } };
   const usage = { input_tokens: 10, cache_creation_input_tokens: 20000, cache_read_input_tokens: 0, output_tokens: 40, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 20000 } };
   const server = createServer((req, res) => {
     let raw = "";
@@ -148,7 +157,8 @@ export async function startMock() {
       if (path.startsWith("/v1/messages/count_tokens")) { res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ input_tokens: 1000 })); }
       const content = scriptedReply(body);
       const stop = content.some((c) => c.type === "tool_use") ? "tool_use" : "end_turn";
-      const msg = { id: `msg_canary_${requests.length}`, type: "message", role: "assistant", model: body?.model ?? "claude-sonnet-5-5", content, stop_reason: stop, stop_sequence: null, usage };
+      const ping = rec.text.includes(PING_HEAD);
+      const msg = { id: `msg_canary_${requests.length}`, type: "message", role: "assistant", model: body?.model ?? "claude-sonnet-5-5", content, stop_reason: stop, stop_sequence: null, usage: ping ? pingUsage : usage };
       const headers = { ...rateLimitHeaders(), "request-id": `req_canary_${requests.length}` };
       if (!body?.stream) { res.writeHead(200, { "content-type": "application/json", ...headers }); return res.end(JSON.stringify(msg)); }
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", ...headers });
@@ -205,6 +215,7 @@ export function claudeEnv({ root, mockUrl, token }) {
     DISABLE_TELEMETRY: "1",
     DISABLE_ERROR_REPORTING: "1",
     CONTEXT_DOCTOR_SESSION_PRICE: PRICE_THRESHOLD,
+    CONTEXT_DOCTOR_KEEP_WARM_PING_MS: String(KEEP_WARM_PING_MS),
     CONTEXT_DOCTOR_NO_CALIBRATION: "1",
   };
   for (const d of [env.CLAUDE_CONFIG_DIR, env.TMPDIR]) mkdirSync(d, { recursive: true });
@@ -289,7 +300,7 @@ export function findClaude() {
  * the subagent's answer (2.1.323 runs it in the background and ends a turn
  * before it is back), the last for the result after the compaction.
  */
-async function runSession({ claude, pluginDir, env, cwd, debugFile, log }) {
+async function runSession({ claude, pluginDir, env, cwd, debugFile, log, mock }) {
   const argv = ["-p", "--plugin-dir", pluginDir, "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-hook-events", "--debug-file", debugFile];
   const child = spawn(claude, argv, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
   const events = [];
@@ -314,10 +325,22 @@ async function runSession({ claude, pluginDir, env, cwd, debugFile, log }) {
         // A subagent started: on to the next step once its answer came back (the mock's CANARY-DONE).
         if (stage === 0 && (!subagent || String(e.result ?? "").includes("CANARY-DONE"))) { stage = 1; user("CANARY-SECOND: one more line."); }
         else if (stage === 1) { stage = 2; user(USAGE_COMMAND); }
-        else if (stage === 2 && usageAnswer(e)) { stage = 3; send({ type: "control_request", request_id: "canary-set-model", request: { subtype: "set_model", model: "claude-haiku-4-5" } }); }
-        else if (stage === 4 && compacted) { stage = 5; child.stdin.end(); }
+        else if (stage === 2 && usageAnswer(e)) { stage = 3; user(KEEP_WARM_ARM); }
+        else if (stage === 3 && keepWarmAnswer(e)) {
+          // Armed (or refused, which the checks name): wait, idle, for a ping to reach the mock, then turn it off.
+          stage = 4;
+          const t0 = Date.now();
+          const poll = setInterval(() => {
+            if (!(mock?.requests ?? []).some((r) => r.text.includes(PING_HEAD)) && Date.now() - t0 < PING_WAIT_MS) return;
+            clearInterval(poll);
+            stage = 5;
+            user("/context-doctor-keep-warm off");
+          }, 500);
+        }
+        else if (stage === 5 && keepWarmOff(e)) { stage = 6; send({ type: "control_request", request_id: "canary-set-model", request: { subtype: "set_model", model: "claude-haiku-4-5" } }); }
+        else if (stage === 7 && compacted) { stage = 8; child.stdin.end(); }
       }
-      if (stage === 3 && e.type === "control_response" && e.response?.request_id === "canary-set-model") { stage = 4; user("/compact"); }
+      if (stage === 6 && e.type === "control_response" && e.response?.request_id === "canary-set-model") { stage = 7; user("/compact"); }
     }
   });
   // A step Claude Code never answers (an older one ignores set_model) must not hold the run to the end: close its input.
@@ -359,7 +382,7 @@ export function evaluate({ run, mock, ledgers, validate, pluginDir }) {
   const sid = init?.session_id;
   const results = ev.filter((e) => e.type === "result");
   check(run.code === 0, "Claude Code exits 0", `exit ${run.code}${run.stderr.trim() ? ": " + run.stderr.trim().split("\n").slice(-3).join(" | ") : ""}`);
-  if (run.steps) check(run.steps.length === STEPS.length - 1, "the session runs every step: a prompt with a subagent, a second prompt, the usage pane, a model switch, /compact", run.steps.length === STEPS.length - 1 ? "" : `stopped at ${STEPS[run.steps.length]}`);
+  if (run.steps) check(run.steps.length === STEPS.length - 1, "the session runs every step: a prompt with a subagent, a second prompt, the usage pane, keep-warm, a model switch, /compact", run.steps.length === STEPS.length - 1 ? "" : `stopped at ${STEPS[run.steps.length]}`);
   check(results.length >= 3 && results.every((r) => !r.is_error), "every turn ends without an error", `${results.length} results${results.filter((r) => r.is_error).map((r) => ": " + (r.result ?? r.subtype)).join("")}`);
   const plugin = init?.plugins?.find((p) => p.name === "context-doctor");
   check(plugin && real(plugin.path) === real(pluginDir), "the plugin loads (init lists context-doctor from --plugin-dir)", plugin ? `${plugin.source} ${plugin.version ?? ""}` : `plugins: ${(init?.plugins ?? []).map((p) => p.name).join(", ") || "none"}`);
@@ -404,6 +427,12 @@ export function evaluate({ run, mock, ledgers, validate, pluginDir }) {
   const want5h = Math.round(WINDOWS["5h"].utilization * 100), want7d = Math.round(WINDOWS["7d"].utilization * 100);
   check(new RegExp(`context-doctor usage: context \\d+% · today \\$\\d+\\.\\d\\d · weekly ${want7d}%`).test(usage) && new RegExp(`\\n5-hour limit: ${want5h}% · resets in `).test(usage) && /\nContext: [\d.]+[kM]? of [\d.]+[kM] tokens/.test(usage),
     "the mod's usage pane loads (/context-doctor-usage answers with its figures under -p)", usage ? usage.split("\n").slice(0, 4).join(" | ").slice(0, 300) : "no answer");
+  // Keep-warm (F2): armed by its command, a ping through $.model.fork reaches the API with the session's prefix (the canary's first prompt), turned off.
+  const armed = String(ev.find(keepWarmAnswer)?.result ?? "");
+  check(/Keeping this session's prompt cache warm/.test(armed), "keep-warm arms on its command (/context-doctor-keep-warm 1h $1)", armed.slice(0, 200) || "no answer");
+  const pings = mock.requests.filter((r) => r.text.includes(PING_HEAD));
+  check(pings.length > 0 && pings.every((r) => r.text.includes(MAIN)), "a keep-warm ping reaches the API through $.model.fork, after the session's own messages", pings.length ? `${pings.length} ping(s)${pings.some((r) => !r.text.includes(MAIN)) ? ", one without the session's messages" : ""}` : "none reached the mock");
+  check(ev.some(keepWarmOff), "keep-warm turns off on its command", "");
   check(validate.code === 0, "claude plugin validate --profile directory --strict passes", validate.code === 0 ? "" : validate.out.trim().split("\n").filter((l) => /✘|error|warning|⚠/i.test(l)).slice(0, 6).join(" | ") || `exit ${validate.code}`);
 
   // Safety: the dummy credential only, and nowhere else.
@@ -438,7 +467,7 @@ export async function canary({ claude, pluginDir = REPO, verbose = false, keep =
     await assertSafe(env, mock, root);
     const validate = validatePlugin(claude, env, pluginDir);
     await assertSafe(env, mock, root);
-    const run = await runSession({ claude, pluginDir, env, cwd, debugFile: join(root, "debug.log"), log });
+    const run = await runSession({ claude, pluginDir, env, cwd, debugFile: join(root, "debug.log"), log, mock });
     const state = env.CLAUDE_CONFIG_DIR;
     const ledgers = {
       limits: readJsonl(join(state, ".context-doctor-limits.jsonl")),

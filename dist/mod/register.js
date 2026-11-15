@@ -40,7 +40,7 @@
  * reads which calls a module makes from its source: `$` is passed only to
  * functions declared at the top of this file.
  */
-import { applyOutcome, band, bar, DEFAULT_THRESHOLDS, fixArgv, KEEP_WARM_COMMAND, keepWarmArmedText, keepWarmRefusal, keepWarmStatusText, keepWarmStep, keepWarmText, MODEL_CHANGE, money, outcome, paneRows, parseKeepWarm, parsePlan, parseUsage, pctText, PING_PROMPT, pingOutcome, ringSvg, RUNNING, thresholdsFrom, usageArgv, usageDue, usageText, usageView, withPresses } from "./logic.js";
+import { applyOutcome, band, bar, DEFAULT_THRESHOLDS, fixArgv, KEEP_WARM_COMMAND, keepWarmTestEvery, keepWarmArmedText, keepWarmRefusal, keepWarmStatusText, keepWarmStep, keepWarmText, MODEL_CHANGE, money, outcome, paneRows, parseKeepWarm, parsePlan, parseUsage, pctText, PING_PROMPT, pingOutcome, ringSvg, RUNNING, thresholdsFrom, usageArgv, usageDue, usageText, usageView, withPresses } from "./logic.js";
 export const COMMAND = "context-doctor-fix";
 export const PANE = "context-doctor-fix";
 export const USAGE_COMMAND = "context-doctor-usage";
@@ -193,7 +193,7 @@ function stopKeepWarm($, why) {
 async function keepWarm($, now) {
     if (S.pinging)
         return;
-    const step = keepWarmStep(S.kw, S.data, now);
+    const step = keepWarmStep(S.kw, S.data, now, S.pingEveryMs);
     if (step.do === "stop")
         return stopKeepWarm($, step.why);
     if (step.do !== "ping" || !S.kw || !S.data)
@@ -350,10 +350,11 @@ export function register(on) {
             S.off = (await $.env.get("CONTEXT_DOCTOR_NO_MOD")) === "1";
             S.always = (await $.env.get("CONTEXT_DOCTOR_MOD_BAND")) === "always";
             S.thresholds = thresholdsFrom(await $.env.get("CONTEXT_DOCTOR_SESSION_PRICE"), await $.env.get("CONTEXT_DOCTOR_NO_SESSION_PRICE"));
+            S.pingEveryMs = keepWarmTestEvery(await $.env.get("CONTEXT_DOCTOR_KEEP_WARM_PING_MS"));
             if (!S.off) {
                 await $.command.register({ name: "context-doctor-fix", description: "context-doctor: the fix plan, with an Apply and an Undo button per lever (nothing applies without a press)" });
                 await $.command.register({ name: "context-doctor-usage", description: "context-doctor: the context ring, your limit windows, tokens and dollars by model (today, 7 and 30 days) and the running subagents" });
-                $.clock.every(TICK_MS, () => void tick($));
+                $.clock.every(Math.min(TICK_MS, S.pingEveryMs ?? TICK_MS), () => void tick($));
                 // Last: an engine that refuses it keeps the rest.
                 await $.command.register({ name: KEEP_WARM_COMMAND, description: "context-doctor: keep the prompt cache warm while you step away, for up to the hours and dollars you give (the pings bill to your plan or key); off stops it", argumentHint: "<2h> [$5] | off" });
             }

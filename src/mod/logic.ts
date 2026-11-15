@@ -370,6 +370,17 @@ export interface KeepWarm {
   stopped?: string;
 }
 
+/**
+ * CONTEXT_DOCTOR_KEEP_WARM_PING_MS: a ping every this many ms (1 s to 5 min)
+ * and the clock ticking at least that often, for the canary alone, which
+ * cannot wait 55 minutes to see a ping reach its mock API. Unset, the real
+ * intervals.
+ */
+export function keepWarmTestEvery(raw: string | undefined): number | undefined {
+  const n = Number(raw);
+  return raw && Number.isFinite(n) && n >= 1000 && n <= 300_000 ? Math.round(n) : undefined;
+}
+
 export const pingEvery = (ttlMs: number): number => (ttlMs >= 60 * MIN ? PING_EVERY_1H_MS : PING_EVERY_5M_MS);
 const everyText = (ttlMs: number): string => (pingEvery(ttlMs) >= 60 * MIN - 5 * MIN ? "55 minutes" : "4.5 minutes");
 
@@ -395,13 +406,13 @@ export type KeepWarmStep = { do: "wait" } | { do: "ping" } | { do: "stop"; why: 
  * closed, the machine asleep) is not pinged, since that ping would write the
  * whole context.
  */
-export function keepWarmStep(kw: KeepWarm | undefined, d: BandData | undefined, now: number): KeepWarmStep {
+export function keepWarmStep(kw: KeepWarm | undefined, d: BandData | undefined, now: number, everyMs?: number): KeepWarmStep {
   if (!kw || kw.stopped) return { do: "wait" };
   if (now >= kw.until) return { do: "stop", why: `its ${duration(kw.until - kw.armedAt)} are up` };
   if (!d || d.lastReplyAt === undefined || d.ttlMs === undefined) return { do: "wait" };
   const last = Math.max(d.lastReplyAt, kw.lastPingAt ?? 0);
   if (now - last >= d.ttlMs) return { do: "stop", why: "the cache expired before a ping could go out (Claude Code closed, or the machine asleep)" };
-  if (now - last < pingEvery(d.ttlMs) - KEEP_WARM_TICK_MS) return { do: "wait" };
+  if (now - last < (everyMs ?? pingEvery(d.ttlMs) - KEEP_WARM_TICK_MS)) return { do: "wait" };
   const est = pingEstimateUsd(d) ?? Infinity;
   if (kw.spentUsd + est > kw.capUsd) return { do: "stop", why: `the next ping (~${money(est)}) would pass its ${money(kw.capUsd)} limit` };
   return { do: "ping" };

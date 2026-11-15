@@ -295,6 +295,16 @@ export function parseKeepWarm(args) {
         return { kind: "error", text: `A dollar limit from $0.01 to $${KEEP_WARM_MAX_CAP_USD}.` };
     return { kind: "arm", hours, capUsd };
 }
+/**
+ * CONTEXT_DOCTOR_KEEP_WARM_PING_MS: a ping every this many ms (1 s to 5 min)
+ * and the clock ticking at least that often, for the canary alone, which
+ * cannot wait 55 minutes to see a ping reach its mock API. Unset, the real
+ * intervals.
+ */
+export function keepWarmTestEvery(raw) {
+    const n = Number(raw);
+    return raw && Number.isFinite(n) && n >= 1000 && n <= 300_000 ? Math.round(n) : undefined;
+}
 export const pingEvery = (ttlMs) => (ttlMs >= 60 * MIN ? PING_EVERY_1H_MS : PING_EVERY_5M_MS);
 const everyText = (ttlMs) => (pingEvery(ttlMs) >= 60 * MIN - 5 * MIN ? "55 minutes" : "4.5 minutes");
 /** What a ping should cost: one read of the context (the band's per-message figure), and a little more for the prompt and reply. */
@@ -318,7 +328,7 @@ export function keepWarmRefusal(d, now) {
  * closed, the machine asleep) is not pinged, since that ping would write the
  * whole context.
  */
-export function keepWarmStep(kw, d, now) {
+export function keepWarmStep(kw, d, now, everyMs) {
     if (!kw || kw.stopped)
         return { do: "wait" };
     if (now >= kw.until)
@@ -328,7 +338,7 @@ export function keepWarmStep(kw, d, now) {
     const last = Math.max(d.lastReplyAt, kw.lastPingAt ?? 0);
     if (now - last >= d.ttlMs)
         return { do: "stop", why: "the cache expired before a ping could go out (Claude Code closed, or the machine asleep)" };
-    if (now - last < pingEvery(d.ttlMs) - KEEP_WARM_TICK_MS)
+    if (now - last < (everyMs ?? pingEvery(d.ttlMs) - KEEP_WARM_TICK_MS))
         return { do: "wait" };
     const est = pingEstimateUsd(d) ?? Infinity;
     if (kw.spentUsd + est > kw.capUsd)

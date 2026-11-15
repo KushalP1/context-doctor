@@ -204,6 +204,13 @@ export interface KeepWarm {
     lastPingAt?: number;
     stopped?: string;
 }
+/**
+ * CONTEXT_DOCTOR_KEEP_WARM_PING_MS: a ping every this many ms (1 s to 5 min)
+ * and the clock ticking at least that often, for the canary alone, which
+ * cannot wait 55 minutes to see a ping reach its mock API. Unset, the real
+ * intervals.
+ */
+export declare function keepWarmTestEvery(raw: string | undefined): number | undefined;
 export declare const pingEvery: (ttlMs: number) => number;
 /** What a ping should cost: one read of the context (the band's per-message figure), and a little more for the prompt and reply. */
 export declare function pingEstimateUsd(d: BandData): number | undefined;
@@ -224,7 +231,7 @@ export type KeepWarmStep = {
  * closed, the machine asleep) is not pinged, since that ping would write the
  * whole context.
  */
-export declare function keepWarmStep(kw: KeepWarm | undefined, d: BandData | undefined, now: number): KeepWarmStep;
+export declare function keepWarmStep(kw: KeepWarm | undefined, d: BandData | undefined, now: number, everyMs?: number): KeepWarmStep;
 /** A ping's usage as `$.model.fork` reports it. */
 export interface PingUsage {
     input_tokens: number;

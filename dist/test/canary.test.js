@@ -135,13 +135,15 @@ function greenRun(c, pluginDir) {
         { type: "result", is_error: false, result: "CANARY-DONE", total_cost_usd: 0.48252 },
         hook("UserPromptSubmit", JSON.stringify({ systemMessage: "context-doctor: this session has cost $0.48 so far" })),
         { type: "result", is_error: false, total_cost_usd: 0.64336 },
+        { type: "result", is_error: false, total_cost_usd: 0.64336, result: "context-doctor: Keeping this session's prompt cache warm for up to 1h 00m or $1.00" },
+        { type: "result", is_error: false, total_cost_usd: 0.64336, result: "context-doctor: Stopped keeping the cache warm (2 pings, ~$0.01)." },
         { type: "result", is_error: false, total_cost_usd: 0.64336, result: "context-doctor: context-doctor usage: context 2% · today $0.80 · weekly 17%\nContext: 20k of 1.0M tokens (2%) · Opus 5.5\n5-hour limit: 42% · resets in 2h 00m\nWeekly limit: 17% · resets in 3 days" },
         hook("PreModelSwitch", JSON.stringify({ systemMessage: "context-doctor: switching to claude-haiku-4-5 re-writes this session's ~20k-token context" })),
         { type: "result", is_error: false, total_cost_usd: 0.72378 },
     ];
     return {
         run: { code: 0, events, stderr: "" },
-        mock: { requests: [{ auth: "dummy", apiKey: "none", text: `${c.SUB}: reply` }, { auth: "dummy", apiKey: "none", text: `${c.PRECOMPACT_HEAD}: the summary must carry` }], refused: [] },
+        mock: { requests: [{ auth: "dummy", apiKey: "none", text: `${c.SUB}: reply` }, { auth: "dummy", apiKey: "none", text: `${c.MAIN}: always keep this canary note … ${c.PING_HEAD} while the person is away` }, { auth: "dummy", apiKey: "none", text: `${c.PRECOMPACT_HEAD}: the summary must carry` }], refused: [] },
         ledgers: {
             limits: [{ app: "claude", w: "five_hour", pct: 42, reset: now + c.WINDOWS["5h"].resetIn }, { app: "claude", w: "seven_day", pct: 17, reset: now + c.WINDOWS["7d"].resetIn }],
             cost: [{ sid, cc: 0.4825, cd: 0.4825, model: "claude-opus-5-5" }],
@@ -178,8 +180,12 @@ test("evaluate: green on a full run; each missing piece turns its check red, and
         red((r) => r.mock.refused.push("CONNECT api.anthropic.com:443"), /Anthropic's hosts/);
         red((r) => (r.run.code = 1), /exits 0/);
         // A session that stopped at a step (an older Claude Code that never answers set_model) names it.
-        assert.deepEqual(red((r) => (r.run.steps = ["the first prompt and its subagent", "the second prompt"]), /runs every step/), ["the session runs every step: a prompt with a subagent, a second prompt, the usage pane, a model switch, /compact"]);
-        assert.deepEqual(failed({ ...greenRun(c, dir), run: { ...greenRun(c, dir).run, steps: ["a", "b", "c", "d", "e"] } }), []);
+        assert.deepEqual(red((r) => (r.run.steps = ["the first prompt and its subagent", "the second prompt"]), /runs every step/), ["the session runs every step: a prompt with a subagent, a second prompt, the usage pane, keep-warm, a model switch, /compact"]);
+        assert.deepEqual(failed({ ...greenRun(c, dir), run: { ...greenRun(c, dir).run, steps: ["a", "b", "c", "d", "e", "f", "g", "h"] } }), []);
+        // Keep-warm: not armed, no ping, a ping without the session's messages.
+        red((r) => (r.run.events = r.run.events.filter((e) => !/Keeping this session/.test(e.result ?? ""))), /keep-warm arms/);
+        red((r) => (r.mock.requests = r.mock.requests.filter((q) => !q.text.includes(c.PING_HEAD))), /ping reaches the API/);
+        red((r) => (r.mock.requests.find((q) => q.text.includes(c.PING_HEAD)).text = c.PING_HEAD), /ping reaches the API/);
         // The usage pane: no answer, or one without the mock's windows.
         red((r) => (r.run.events = r.run.events.filter((e) => !/usage: /.test(e.result ?? ""))), /usage pane loads/);
         red((r) => (r.run.events.find((e) => /usage: /.test(e.result ?? "")).result = "context-doctor usage: context 2% · today $0.80 · weekly 17%\nContext: 20k of 1.0M tokens\nNo limit readings yet"), /usage pane loads/);

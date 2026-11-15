@@ -15,7 +15,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyOutcome, band, bar, duration, fixArgv, KEEP_WARM_COMMAND, keepWarmRefusal, keepWarmStep, mergeLimits, money, outcome, paneRows, parseKeepWarm, parsePlan, parseUsage, passedThreshold, pctText, PING_EVERY_1H_MS, PING_EVERY_5M_MS, PING_PROMPT, pingOutcome, ringSvg, shortModel, thresholdsFrom, tokens, usageDue, usageText, usageView, withPresses } from "../mod/logic.js";
+import { applyOutcome, band, bar, duration, fixArgv, KEEP_WARM_COMMAND, keepWarmRefusal, keepWarmStep, keepWarmTestEvery, mergeLimits, money, outcome, paneRows, parseKeepWarm, parsePlan, parseUsage, passedThreshold, pctText, PING_EVERY_1H_MS, PING_EVERY_5M_MS, PING_PROMPT, pingOutcome, ringSvg, shortModel, thresholdsFrom, tokens, usageDue, usageText, usageView, withPresses } from "../mod/logic.js";
 import { PING_EVERY_1H_MS as REPLAY_1H, PING_EVERY_5M_MS as REPLAY_5M } from "../coldreturns.js";
 import { limitFitsOf, limitWindows, summarizeHistory } from "../usagepane.js";
 import { sessionPriceThresholds } from "../sessionprice.js";
@@ -729,6 +729,14 @@ test("the usage pane with nothing to draw it on (claude -p): the command answers
     await fire(off, "session.start", { cwd: home, surface: "desktop", isInteractive: true });
     assert.deepEqual(off.commands, []);
     assert.match((await fire(off, "command.run", { command: USAGE_COMMAND })).text, /mod is off/);
+});
+test("keep-warm's canary interval: only CONTEXT_DOCTOR_KEEP_WARM_PING_MS from 1 s to 5 min, and then a ping that often", () => {
+    assert.deepEqual(["3000", "1000", "300000", "999", "300001", "x", "", undefined].map(keepWarmTestEvery), [3000, 1000, 300_000, undefined, undefined, undefined, undefined, undefined]);
+    const d = data({ lastReplyAt: T, ttlMs: 60 * MIN, perMessageUsd: 0.1 });
+    const kw = { armedAt: T, until: T + 60 * MIN, capUsd: 1, spentUsd: 0, pings: 0 };
+    assert.deepEqual(keepWarmStep(kw, d, T + 2000, 3000), { do: "wait" });
+    assert.deepEqual(keepWarmStep(kw, d, T + 3000, 3000), { do: "ping" });
+    assert.deepEqual(keepWarmStep(kw, d, T + 3000), { do: "wait" }, "unset: the real 55 minutes");
 });
 // -- The plugin wiring ------------------------------------------------------------------
 test("the plugin names the mod, and the mod imports nothing the mods runtime lacks", () => {
