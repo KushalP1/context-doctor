@@ -16,7 +16,7 @@ import { AutoClearer } from "./autoclear.js";
 import { coldResumeEvents } from "./coldresume.js";
 import { listSessions, isClaudeSession } from "./session.js";
 import { rowsOf } from "./scan.js";
-import { CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, rateCard, ratesAt, requestCost, writeMultiplier } from "./pricing.js";
+import { billedCost, CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, rateCard, ratesAt, writeMultiplier } from "./pricing.js";
 import { priceBasis } from "./orgrates.js";
 import { estimateTokens, formatTokens, realModel } from "./tokens.js";
 import { withInvocation } from "./invocation.js";
@@ -143,7 +143,8 @@ function replayExtractor(id, options, makeClearer, replay) {
                             k: "r", now, cold,
                             bw: fresh + read * 0.1 + ttl.fiveMinute * CACHE_WRITE_5M + ttl.oneHour * CACHE_WRITE_1H,
                             // No time of its own (now is 0 then): priced as of now, as requestCost prices one.
-                            usd: requestCost(pm, u, now || undefined)?.promptUsd ?? 0,
+                            // With the iterations its usage leaves out (billedCost): an advisor's call, a declined attempt.
+                            usd: billedCost(pm, u, now || undefined)?.promptUsd ?? 0,
                             raw: fresh + read + write,
                         };
                         // Only what is set: a record read back from the cache must equal this one.
@@ -197,8 +198,8 @@ function replayExtractor(id, options, makeClearer, replay) {
         load: (v) => ({ ...v, ids: new Set(v.ids), base: loadArm(v.base, options), auto: loadArm(v.auto, options) }),
     };
 }
-const REPLAY = replayExtractor("replay.4", {}, undefined, true);
-const BILL = replayExtractor("bill.4", {}, undefined, false);
+const REPLAY = replayExtractor("replay.5", {}, undefined, true);
+const BILL = replayExtractor("bill.5", {}, undefined, false);
 /** What `estimateSavings` reads from each transcript, with or without autopilot's replay (for `prescan`). */
 export const savingsRows = (replay = true) => (replay ? REPLAY : BILL);
 /**

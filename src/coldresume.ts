@@ -72,7 +72,7 @@ export function isIdleCompactNotice(e: any): boolean {
  * reader meets it as a repeat of that reply and skips it.
  */
 export const REQUEST_ROWS: Extractor<{ ids: Record<string, number>; user: boolean }> = {
-  id: "requests.2",
+  id: "requests.3",
   init: () => ({ ids: {}, user: false }),
   line(raw, row, out, st) {
     let e: any;
@@ -99,7 +99,7 @@ export const REQUEST_ROWS: Extractor<{ ids: Record<string, number>; user: boolea
       if ((st.ids[m.id] ?? 0) & thread) return;
       if (m.usage) st.ids[m.id] = (st.ids[m.id] ?? 0) | thread;
     }
-    out.push(pick({ ...e, message: m && typeof m === "object" && !Array.isArray(m) ? pick({ ...m, usage: slimUsage(m.usage) }, ["id", "model", "usage"]) : m }, ["type", "isSidechain", "uuid", "timestamp", "message"]));
+    out.push(pick({ ...e, message: m && typeof m === "object" && !Array.isArray(m) ? pick({ ...m, usage: slimUsage(m.usage, { iterations: true }) }, ["id", "model", "usage"]) : m }, ["type", "isSidechain", "uuid", "timestamp", "message"]));
   },
 };
 

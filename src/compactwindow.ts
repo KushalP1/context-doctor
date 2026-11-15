@@ -25,7 +25,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { listSessions, replyCounter, isClaudeSession } from "./session.js";
-import { cacheWriteSplit, rateCard, ratesAt, requestCost, writeMultiplier, writePerM, type ModelPricing, type RateCard } from "./pricing.js";
+import { billedCost, cacheWriteSplit, rateCard, ratesAt, requestCost, writeMultiplier, writePerM, type ModelPricing, type RateCard } from "./pricing.js";
 import { priceBasis } from "./orgrates.js";
 import { realModel } from "./tokens.js";
 import { backupOnce } from "./install.js";
@@ -129,7 +129,7 @@ function readRequests(path: string, runRows?: Set<string>): { reqs: Req[]; write
     const w = cacheWriteSplit(u);
     writes5m += w.fiveMinute;
     writes1h += w.oneHour;
-    reqs.push({ at, prompt, ...(card ? { card } : {}), copy: seen === "copy", billedUsd: requestCost(model, u, at)?.promptUsd ?? 0 });
+    reqs.push({ at, prompt, ...(card ? { card } : {}), copy: seen === "copy", billedUsd: billedCost(model, u, at)?.promptUsd ?? 0 });
   });
   return { reqs, writeMult: writeMultiplier(writes5m, writes1h), priced };
 }

@@ -39,7 +39,7 @@ import { join } from "node:path";
 import { listSessions, replyCounter, isClaudeSession } from "./session.js";
 import { REQUEST_ROWS } from "./coldresume.js";
 import { rowsOf } from "./scan.js";
-import { CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, requestCost } from "./pricing.js";
+import { billedCost, CACHE_WRITE_1H, CACHE_WRITE_5M, cacheWriteSplit, requestCost } from "./pricing.js";
 import { priceBasis } from "./orgrates.js";
 import { realModel } from "./tokens.js";
 import { backupOnce } from "./install.js";
@@ -147,7 +147,11 @@ export function replayTtlTranscript(path: string, acc: Acc, since: number, until
       acc.requests++;
       if (!c || !p) acc.unpriced++;
       else {
-        acc.billedUsd += c.promptUsd;
+        // The iterations its usage leaves out (billedCost): billed, and the same in both arms.
+        const extra = (billedCost(model, u, at)?.promptUsd ?? c.promptUsd) - c.promptUsd;
+        acc.billedUsd += c.promptUsd + extra;
+        acc.at5mUsd += extra;
+        acc.at1hUsd += extra;
         acc.writes += W;
         acc.writes1h += split.oneHour;
         const inp = p.inputPerM / 1e6;

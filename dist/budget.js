@@ -178,8 +178,12 @@ export function periodEnd(period, now = Date.now()) {
     s.setDate(s.getDate() + (period === "week" ? 7 : 1));
     return s.getTime();
 }
-/** What a ledger entry counts: 2, each Claude Code compaction's own request too (compactcost.ts). An entry counted otherwise is read again. */
-const COUNTED = 2;
+/**
+ * What a ledger entry counts: 2, each Claude Code compaction's own request
+ * too (compactcost.ts); 3, the iterations a reply's later row settles (`r`'s
+ * fifth figure). An entry counted otherwise is read again.
+ */
+const COUNTED = 3;
 /** Replies remembered per transcript, to tell a later row of one from a new reply. */
 const RECENT_REPLIES = 64;
 function readState() {
@@ -354,7 +358,7 @@ function readFile(tool, file, since, size) {
             continue;
         }
         const i = at.get(m.id) ?? -1;
-        last.set(m.id, [m.id, i, out, (i >= 0 ? reqs[i].rates : requestCost(realModel(m.model), m.usage, Date.parse(String(row.timestamp ?? "")))?.rates)?.outputPerM ?? 0]);
+        last.set(m.id, [m.id, i, out, (i >= 0 ? reqs[i].rates : requestCost(realModel(m.model), m.usage, Date.parse(String(row.timestamp ?? "")))?.rates)?.outputPerM ?? 0, i >= 0 ? (reqs[i].extra ?? []).reduce((n, x) => n + x.usd, 0) : 0]);
         if (last.size > RECENT_REPLIES)
             last.delete(last.keys().next().value);
     }
@@ -461,6 +465,15 @@ function countLines(e, recent, text, since, own) {
                         e.d[known[1]] += ((out - known[2]) * known[3]) / 1e6;
                     known[2] = out;
                 }
+                // And iterations its usage leaves out that it settles on (an advisor's call once it ran): what they add, once.
+                if (u.iterations) {
+                    const extra = billedCost(realModel(m.model), u, Date.parse(String(row.timestamp ?? "")))?.extra?.usd ?? 0;
+                    if (extra > known[4]) {
+                        if (known[1] >= 0)
+                            e.d[known[1]] += extra - known[4];
+                        known[4] = extra;
+                    }
+                }
                 continue;
             }
             const ts = Date.parse(String(row.timestamp ?? ""));
@@ -485,7 +498,7 @@ function countLines(e, recent, text, since, own) {
                 e.d.push(c ? c.totalUsd : 0);
             }
             if (typeof m.id === "string")
-                recent.push([m.id, index, out, c?.rates.outputPerM ?? 0]);
+                recent.push([m.id, index, out, c?.rates.outputPerM ?? 0, c?.extra?.usd ?? 0]);
         }
     }
 }
@@ -493,7 +506,7 @@ function countLines(e, recent, text, since, own) {
 export function wellFormed(e) {
     return Boolean(e) && typeof e === "object" && Array.isArray(e.k) && Array.isArray(e.d) && e.k.length === e.d.length &&
         e.k.every((x) => typeof x === "string") && e.d.every((x) => typeof x === "number" && Number.isFinite(x)) &&
-        (e.a === undefined || typeof e.a === "string") && (e.x === undefined || (Array.isArray(e.x) && e.x.every((y) => Array.isArray(y) && typeof y[0] === "number"))) && (e.y === undefined || (Array.isArray(e.y) && e.y.every((y) => Array.isArray(y) && typeof y[0] === "number"))) && (e.r === undefined || (Array.isArray(e.r) && e.r.every((x) => Array.isArray(x) && x.length === 4))) &&
+        (e.a === undefined || typeof e.a === "string") && (e.x === undefined || (Array.isArray(e.x) && e.x.every((y) => Array.isArray(y) && typeof y[0] === "number"))) && (e.y === undefined || (Array.isArray(e.y) && e.y.every((y) => Array.isArray(y) && typeof y[0] === "number"))) && (e.r === undefined || (Array.isArray(e.r) && e.r.every((x) => Array.isArray(x) && x.length === 5))) &&
         (e.z === undefined || (Array.isArray(e.z) && e.z.every((z) => Array.isArray(z) && typeof z[0] === "number" && typeof z[2] === "string")));
 }
 /**

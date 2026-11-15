@@ -39,16 +39,18 @@ const ROWS = [
 // Opus 5.5: $4 in, $20 out, reads $0.20, 1-hour writes 2x.
 const S1 = tokensForLength(40_000, false, MODEL), S2 = tokensForLength(8_000, false, MODEL);
 const WARM = (420_010 * 0.2 + S1 * 20) / 1e6;
-const COLD = (50_000 * 8 + S2 * 20) / 1e6;
+// After 3 hours on the 1-hour cache: read too, not written again ($0.40 for the context had it been).
+const COLD = (50_000 * 0.2 + S2 * 20) / 1e6;
 const ROWS_USD = ROWS.filter((r) => r.type === "assistant").reduce((n, r) => n + requestCost(MODEL, r.message.usage, Date.parse(r.timestamp)).totalUsd, 0);
 const near = (a, b, what) => assert.ok(Math.abs(a - b) < 1e-9, `${what}: ${a} vs ${b}`);
-test("a compaction's request: the context read from a live cache, or written again past its life; the summary as output", () => {
+test("a compaction's request: the context read from the cache, mid-turn or after hours idle (as Claude Code's cost-state shows it billed); the summary as output", () => {
     const st = newTrack();
     const out = ROWS.map((r) => trackCompaction(st, r)).filter((x) => x !== undefined);
     assert.equal(out.length, 2);
     assert.deepEqual(out.map((c) => [c.uuid, c.warm, c.model]), [["c1", true, MODEL], ["c2", false, MODEL]]);
     near(out[0].cost.totalUsd, WARM, "mid-turn: read");
-    near(out[1].cost.totalUsd, COLD, "after 3 hours on the 1-hour cache: written again");
+    near(out[1].cost.totalUsd, COLD, "after 3 hours on the 1-hour cache: still a read");
+    assert.equal(out[1].usage.cache_creation_input_tokens, 0);
     // No summary row before the next reply: the measured median's output.
     const lone = newTrack();
     const got = [ROWS[0], boundary("c3", T0 + MIN, 420_010), ROWS[3]].map((r) => trackCompaction(lone, r)).filter(Boolean);

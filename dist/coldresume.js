@@ -68,7 +68,7 @@ export function isIdleCompactNotice(e) {
  * reader meets it as a repeat of that reply and skips it.
  */
 export const REQUEST_ROWS = {
-    id: "requests.2",
+    id: "requests.3",
     init: () => ({ ids: {}, user: false }),
     line(raw, row, out, st) {
         let e;
@@ -108,7 +108,7 @@ export const REQUEST_ROWS = {
             if (m.usage)
                 st.ids[m.id] = (st.ids[m.id] ?? 0) | thread;
         }
-        out.push(pick({ ...e, message: m && typeof m === "object" && !Array.isArray(m) ? pick({ ...m, usage: slimUsage(m.usage) }, ["id", "model", "usage"]) : m }, ["type", "isSidechain", "uuid", "timestamp", "message"]));
+        out.push(pick({ ...e, message: m && typeof m === "object" && !Array.isArray(m) ? pick({ ...m, usage: slimUsage(m.usage, { iterations: true }) }, ["id", "model", "usage"]) : m }, ["type", "isSidechain", "uuid", "timestamp", "message"]));
     },
 };
 /** The context at which Claude Code's idle compaction acts, as it reads the environment. */

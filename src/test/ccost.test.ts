@@ -25,6 +25,9 @@ import { periodSpend } from "../budget.js";
 import { sessionTotal } from "../sessionprice.js";
 import { claudeCodeCostCheck } from "../doctor.js";
 import { clearScanMemo, rowsOf } from "../scan.js";
+import { estimateSavings } from "../savings.js";
+import { estimateCompactWindows } from "../compactwindow.js";
+import { estimateCacheTtl } from "../cachettl.js";
 import { withSandboxHome } from "./sandbox.js";
 
 const near = (a: number, b: number, what: string) => assert.ok(Math.abs(a - b) < 1e-9, `${what}: ${a} vs ${b}`);
@@ -249,5 +252,54 @@ test("a session priced past a price's end says which price ended and the one use
     const before = join(dir, "before.jsonl");
     writeFileSync(before, row(Date.UTC(2026, 10, 29), "gpt-5.6-sol") + "\n");
     assert.equal(sessionPriceEnded(before), undefined);
+  });
+});
+
+test("savings and fix's replays bill the advisor's call and the declined attempt too, and no lever moves them", async () => {
+  await inHome((home) => {
+    const dir = join(home, ".claude", "projects", "-work-app");
+    mkdirSync(dir, { recursive: true });
+    // Ten plain requests (savings and the replays count sessions of 10+), then the advisor's and the fallback's.
+    const t0 = NOW - 3 * 3_600_000;
+    const row = (i: number, at: number, model: string, usage: unknown) => JSON.stringify({ type: "assistant", uuid: `r-${i}`, sessionId: SID, timestamp: iso(at), message: { id: `m-${i}`, model, usage } });
+    const plain = (k: number) => ({ input_tokens: 5, cache_read_input_tokens: 20_000 + k * 1000, cache_creation_input_tokens: 1000, cache_creation: { ephemeral_1h_input_tokens: 1000, ephemeral_5m_input_tokens: 0 }, output_tokens: 100 });
+    const lines = [JSON.stringify({ type: "user", uuid: "u-0", sessionId: SID, timestamp: iso(t0), message: { role: "user", content: "go" } })];
+    for (let k = 0; k < 10; k++) lines.push(row(k, t0 + (k + 1) * 60_000, "claude-opus-5-5", plain(k)));
+    lines.push(row(10, t0 + 20 * 60_000, "claude-opus-5-5", ADVISOR_USAGE), row(11, t0 + 21 * 60_000, "claude-opus-4-8", FALLBACK_USAGE));
+    const path = join(dir, "replays.jsonl");
+    writeFileSync(path, lines.join("\n") + "\n");
+    // What savings bills: the main conversation's prompts, each request's extra iterations included.
+    const items = claudeSpend(0, Infinity, [path]);
+    const prompts = items.reduce((n, it) => n + it.inputUsd + it.writeUsd + it.readUsd, 0);
+    const extraPrompt = billedCost("claude-opus-5-5", ADVISOR_USAGE, NOW)!.promptUsd - requestCost("claude-opus-5-5", ADVISOR_USAGE, NOW)!.promptUsd + billedCost("claude-opus-4-8", FALLBACK_USAGE, NOW)!.promptUsd - requestCost("claude-opus-4-8", FALLBACK_USAGE, NOW)!.promptUsd;
+    assert.ok(extraPrompt > 5, "the declined attempt's 275k-token write is in it");
+    near(estimateSavings(7, {}, [path], undefined, false).sessions[0].billedUsd, prompts, "savings");
+    // compact-window: the same baseline, its share saved applied to all of it.
+    near(estimateCompactWindows([200_000], 7, [path]).estimates[0].baselineUsd, prompts, "compact-window");
+    // cache-ttl: billed with them, and the same in both lifetime arms (no lifetime moves them).
+    const ttl = estimateCacheTtl(7, { paths: [path] }).main;
+    near(ttl.billedUsd, prompts, "cache-ttl");
+    assert.ok(ttl.at5mUsd > extraPrompt && ttl.at1hUsd > extraPrompt);
+  });
+});
+
+test("the session price read as it grows: an advisor's call a later row of a streamed reply settles is added once", async () => {
+  await inHome((home) => {
+    const dir = join(home, ".claude", "projects", "-work-app");
+    mkdirSync(dir, { recursive: true });
+    const at = NOW - 3_600_000;
+    const first = { input_tokens: 412, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1, iterations: [{ type: "message", input_tokens: 412, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1 }] };
+    const row = (t: number, usage: unknown) => JSON.stringify({ type: "assistant", uuid: `u-${t}`, sessionId: SID, timestamp: iso(at + t), message: { id: "msg_s", model: "claude-opus-5-5", usage } });
+    const path = join(dir, `${SID}.jsonl`);
+    const settled = { ...ADVISOR_USAGE, input_tokens: 412 + 1348 };
+    // Read once with the first row only, then again after the later rows are appended (the hook's incremental read).
+    writeFileSync(path, row(0, first) + "\n");
+    near(sessionTotal({ sessionId: SID, transcript: path }, NOW).usd, (412 * 4 + 1 * 20) / 1e6, "before the call");
+    near(periodSpend("day", NOW, home).usd, (412 * 4 + 1 * 20) / 1e6, "budget, before the call");
+    writeFileSync(path, [row(0, first), row(5000, settled), row(6000, settled)].join("\n") + "\n");
+    const whole = claudeFileUsage(path, 0)[0].usd;
+    near(whole, (412 * 4 + 531 * 20) / 1e6 + ADVISOR_CALL, "read whole");
+    near(sessionTotal({ sessionId: SID, transcript: path }, NOW).usd, whole, "session price, appended: the call once");
+    near(periodSpend("day", NOW, home).usd, whole, "budget, appended: the call once");
   });
 });

@@ -201,12 +201,19 @@ export function periodEnd(period: Period, now = Date.now()): number {
  * under another table or other rates is read again. `c` is where reading a
  * Claude Code transcript's compactions stopped (compactcost.ts): each
  * compaction's own request is in `k`/`d` too, estimated, keyed by its
- * boundary's uuid.
+ * boundary's uuid. Each of `r` is a recent reply: its id, its index in
+ * k/d, the output counted, its output price, and what its iterations billed
+ * beyond its usage came to (billedCost's `extra`), so a later row that
+ * settles an advisor's call adds it once.
  */
-export interface FileEntry { t: Tool; s: number; m: number; i: number; k: string[]; d: number[]; o?: number; a?: string; r?: Array<[string, number, number, number]>; x?: Array<[number, string]>; y?: Array<[number, string]>; z?: Array<[number, string, string]>; p?: string; c?: CompactTrack }
+export interface FileEntry { t: Tool; s: number; m: number; i: number; k: string[]; d: number[]; o?: number; a?: string; r?: Array<[string, number, number, number, number]>; x?: Array<[number, string]>; y?: Array<[number, string]>; z?: Array<[number, string, string]>; p?: string; c?: CompactTrack }
 
-/** What a ledger entry counts: 2, each Claude Code compaction's own request too (compactcost.ts). An entry counted otherwise is read again. */
-const COUNTED = 2;
+/**
+ * What a ledger entry counts: 2, each Claude Code compaction's own request
+ * too (compactcost.ts); 3, the iterations a reply's later row settles (`r`'s
+ * fifth figure). An entry counted otherwise is read again.
+ */
+const COUNTED = 3;
 
 /** Replies remembered per transcript, to tell a later row of one from a new reply. */
 const RECENT_REPLIES = 64;
@@ -356,7 +363,7 @@ function readFile(tool: Tool, file: string, since: number, size: number): Omit<F
   // across midnight has its first row in yesterday, and its later rows,
   // appended after this read, must still be known as its own (they were
   // counted again as a new request).
-  const last = new Map<string, [string, number, number, number]>();
+  const last = new Map<string, [string, number, number, number, number]>();
   // Where the compactions stand at the end (claudeFileUsage counted those before it): an append goes on from here.
   const track = newTrack();
   for (const row of rowsOf<Record<string, any>>(file, USAGE_ROWS)) {
@@ -367,7 +374,7 @@ function readFile(tool: Tool, file: string, since: number, size: number): Omit<F
     const known = last.get(m.id);
     if (known) { known[2] = Math.max(known[2], out); continue; }
     const i = at.get(m.id) ?? -1;
-    last.set(m.id, [m.id, i, out, (i >= 0 ? reqs[i].rates : requestCost(realModel(m.model), m.usage, Date.parse(String(row.timestamp ?? "")))?.rates)?.outputPerM ?? 0]);
+    last.set(m.id, [m.id, i, out, (i >= 0 ? reqs[i].rates : requestCost(realModel(m.model), m.usage, Date.parse(String(row.timestamp ?? "")))?.rates)?.outputPerM ?? 0, i >= 0 ? (reqs[i].extra ?? []).reduce((n, x) => n + x.usd, 0) : 0]);
     if (last.size > RECENT_REPLIES) last.delete(last.keys().next().value!);
   }
   const r = [...last.values()];
@@ -457,6 +464,14 @@ function countLines(e: FileEntry, recent: NonNullable<FileEntry["r"]>, text: str
           if (known[1] >= 0) e.d[known[1]] += ((out - known[2]) * known[3]) / 1e6;
           known[2] = out;
         }
+        // And iterations its usage leaves out that it settles on (an advisor's call once it ran): what they add, once.
+        if (u.iterations) {
+          const extra = billedCost(realModel(m.model), u, Date.parse(String(row.timestamp ?? "")))?.extra?.usd ?? 0;
+          if (extra > known[4]) {
+            if (known[1] >= 0) e.d[known[1]] += extra - known[4];
+            known[4] = extra;
+          }
+        }
         continue;
       }
       const ts = Date.parse(String(row.timestamp ?? ""));
@@ -477,7 +492,7 @@ function countLines(e: FileEntry, recent: NonNullable<FileEntry["r"]>, text: str
         e.k.push(keyOf(typeof row.uuid === "string" ? row.uuid : undefined));
         e.d.push(c ? c.totalUsd : 0);
       }
-      if (typeof m.id === "string") recent.push([m.id, index, out, c?.rates.outputPerM ?? 0]);
+      if (typeof m.id === "string") recent.push([m.id, index, out, c?.rates.outputPerM ?? 0, c?.extra?.usd ?? 0]);
     }
   }
 }
@@ -486,7 +501,7 @@ function countLines(e: FileEntry, recent: NonNullable<FileEntry["r"]>, text: str
 export function wellFormed(e: FileEntry | undefined): e is FileEntry {
   return Boolean(e) && typeof e === "object" && Array.isArray(e!.k) && Array.isArray(e!.d) && e!.k.length === e!.d.length &&
     e!.k.every((x) => typeof x === "string") && e!.d.every((x) => typeof x === "number" && Number.isFinite(x)) &&
-    (e!.a === undefined || typeof e!.a === "string") && (e!.x === undefined || (Array.isArray(e!.x) && e!.x.every((y) => Array.isArray(y) && typeof y[0] === "number"))) && (e!.y === undefined || (Array.isArray(e!.y) && e!.y.every((y) => Array.isArray(y) && typeof y[0] === "number"))) && (e!.r === undefined || (Array.isArray(e!.r) && e!.r.every((x) => Array.isArray(x) && x.length === 4))) &&
+    (e!.a === undefined || typeof e!.a === "string") && (e!.x === undefined || (Array.isArray(e!.x) && e!.x.every((y) => Array.isArray(y) && typeof y[0] === "number"))) && (e!.y === undefined || (Array.isArray(e!.y) && e!.y.every((y) => Array.isArray(y) && typeof y[0] === "number"))) && (e!.r === undefined || (Array.isArray(e!.r) && e!.r.every((x) => Array.isArray(x) && x.length === 5))) &&
     (e!.z === undefined || (Array.isArray(e!.z) && e!.z.every((z) => Array.isArray(z) && typeof z[0] === "number" && typeof z[2] === "string")));
 }
 

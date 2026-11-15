@@ -22,7 +22,7 @@
  */
 import { join } from "node:path";
 import { listSessions, replyCounter, isClaudeSession } from "./session.js";
-import { cacheWriteSplit, rateCard, ratesAt, requestCost, writeMultiplier, writePerM } from "./pricing.js";
+import { billedCost, cacheWriteSplit, rateCard, ratesAt, writeMultiplier, writePerM } from "./pricing.js";
 import { priceBasis } from "./orgrates.js";
 import { realModel } from "./tokens.js";
 import { backupOnce } from "./install.js";
@@ -89,7 +89,7 @@ function readRequests(path, runRows) {
         const w = cacheWriteSplit(u);
         writes5m += w.fiveMinute;
         writes1h += w.oneHour;
-        reqs.push({ at, prompt, ...(card ? { card } : {}), copy: seen === "copy", billedUsd: requestCost(model, u, at)?.promptUsd ?? 0 });
+        reqs.push({ at, prompt, ...(card ? { card } : {}), copy: seen === "copy", billedUsd: billedCost(model, u, at)?.promptUsd ?? 0 });
     });
     return { reqs, writeMult: writeMultiplier(writes5m, writes1h), priced };
 }

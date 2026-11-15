@@ -35,7 +35,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "n
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pick, rowsOf, slimUsage, type Extractor } from "./scan.js";
-import { pricingFor, rateCard, ratesAt, requestCost, usageCost, WEB_SEARCH_USD, type ModelPricing, type RecordedUsage } from "./pricing.js";
+import { billedCost, pricingFor, rateCard, ratesAt, requestCost, usageCost, WEB_SEARCH_USD, type ModelPricing, type RecordedUsage } from "./pricing.js";
 import { realModel } from "./tokens.js";
 import { claudeDir } from "./claudedir.js";
 import { subagentTranscripts } from "./cachettl.js";
@@ -78,7 +78,7 @@ const READ_ONLY = new Set(["Explore", "Plan"]);
  * last row); the working folder once, to find the project's agent files.
  */
 export const SUBAGENT_ROWS: Extractor<{ out: Record<string, number>; cwd: boolean }> = {
-  id: "subagent-requests.2",
+  id: "subagent-requests.3",
   init: () => ({ out: {}, cwd: false }),
   line(raw, row, out, st) {
     const usage = raw.includes('"usage"');
@@ -103,7 +103,7 @@ export const SUBAGENT_ROWS: Extractor<{ out: Record<string, number>; cwd: boolea
       return;
     }
     if (id) st.out[id] = output;
-    out.push({ t: "r", ...pick(e, ["uuid", "timestamp"]), id, model: m.model, usage: slimUsage(m.usage) });
+    out.push({ t: "r", ...pick(e, ["uuid", "timestamp"]), id, model: m.model, usage: slimUsage(m.usage, { iterations: true }) });
   },
 };
 
@@ -358,8 +358,10 @@ export function replaySubagentModels(opts: SubagentModelOptions): SubagentModelR
       const price = pricingFor(model);
       const u = r.usage as RecordedUsage;
       // Each arm as that model would bill these tokens (requestCost): its tier (Haiku 5.5 over 100k), US-only, web searches.
-      const asBilled = requestCost(model, u, at);
+      const asBilled = billedCost(model, u, at);
       if (!price || !asBilled) { unpriced++; continue; }
+      // The iterations its usage leaves out (an advisor's call, a declined attempt): billed, and unchanged by a move.
+      const extra = asBilled.extra?.usd ?? 0;
       const atCand = requestCost(candidate, u, at)!;
       const atHaiku = requestCost(HAIKU, u, at)!;
       const billed = asBilled.totalUsd;
@@ -368,11 +370,11 @@ export function replaySubagentModels(opts: SubagentModelOptions): SubagentModelR
       t.requests++;
       counted = true;
       t.billedUsd += billed;
-      t.atCandidateUsd += move ? other.totalUsd : billed;
-      t.atHaikuUsd += atHaiku.totalUsd;
+      t.atCandidateUsd += move ? other.totalUsd + (other === asBilled ? 0 : extra) : billed;
+      t.atHaikuUsd += atHaiku.totalUsd + extra;
       if (promptTokens(u) > HAIKU_TIER) t.over100k++;
       if (move) add(movedBy, model, billed);
-      if (how.moves) add(beforeBy, model, atCand.totalUsd);
+      if (how.moves) add(beforeBy, model, atCand.totalUsd + extra);
       if (r.id) priced.set(r.id, { billed: asBilled.rates, other: other.rates, haiku: atHaiku.rates, cand: atCand.rates, model });
     }
     if (counted) t.agents++;

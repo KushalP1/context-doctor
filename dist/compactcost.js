@@ -14,10 +14,16 @@
  * Estimated from what the transcript does record, at the model of the reply
  * before it (rateCard, as every request: the organization's rates, the day's
  * price, its fast mode and US-only):
- *  - the context it read, `preTokens`: at the cache-read rate when the cache
- *    the last reply left was still alive (an automatic compaction mid-turn,
- *    Claude Code's idle compaction before expiry), else written again at the
- *    session's lifetime (a /compact after the cache went cold);
+ *  - the context it read, `preTokens`, at the cache-read rate, however long
+ *    the session sat idle before it. That is how Claude Code's own cost-state
+ *    shows them billed: on the author's machine, 33 compactions fall between
+ *    two of a session's cost-state rows, and in the 24 brackets that hold
+ *    nothing else no row records, Claude Code's figure moved by about the
+ *    cache-read price (a 221k-token Fable 5.1 compaction after 5.4 hours idle:
+ *    $0.44 over our rows, read $0.29, written again $4.66), never by a write.
+ *    Pricing a compaction past the cache's lifetime as written again (as
+ *    before) put one session 10.7% over Claude Code's figure. `warm` still
+ *    says whether the last reply's cache was within its lifetime;
  *  - its output, the summary: the summary row's text, in tokens.
  * Not counted: the request's own instruction (a few hundred tokens) and any
  * thinking it did. The next request's re-write of the new context is in that
@@ -50,9 +56,8 @@ function priced(st, summaryTokens) {
         return undefined;
     const ttl = th.ttl ?? HOUR_MS;
     const warm = th.at !== undefined && p.at - th.at <= ttl;
-    const usage = warm
-        ? { input_tokens: 0, cache_read_input_tokens: p.pre, cache_creation_input_tokens: 0, output_tokens: summaryTokens, ...th.b }
-        : { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: p.pre, cache_creation: ttl >= HOUR_MS ? { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: p.pre } : { ephemeral_5m_input_tokens: p.pre, ephemeral_1h_input_tokens: 0 }, output_tokens: summaryTokens, ...th.b };
+    // Read from the cache either way: what Claude Code's cost-state shows (above).
+    const usage = { input_tokens: 0, cache_read_input_tokens: p.pre, cache_creation_input_tokens: 0, output_tokens: summaryTokens, ...th.b };
     const cost = requestCost(th.m, usage, p.at);
     if (!cost)
         return undefined;

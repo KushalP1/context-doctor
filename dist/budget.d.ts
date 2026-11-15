@@ -79,7 +79,10 @@ export declare function periodEnd(period: Period, now?: number): number;
  * under another table or other rates is read again. `c` is where reading a
  * Claude Code transcript's compactions stopped (compactcost.ts): each
  * compaction's own request is in `k`/`d` too, estimated, keyed by its
- * boundary's uuid.
+ * boundary's uuid. Each of `r` is a recent reply: its id, its index in
+ * k/d, the output counted, its output price, and what its iterations billed
+ * beyond its usage came to (billedCost's `extra`), so a later row that
+ * settles an advisor's call adds it once.
  */
 export interface FileEntry {
     t: Tool;
@@ -90,7 +93,7 @@ export interface FileEntry {
     d: number[];
     o?: number;
     a?: string;
-    r?: Array<[string, number, number, number]>;
+    r?: Array<[string, number, number, number, number]>;
     x?: Array<[number, string]>;
     y?: Array<[number, string]>;
     z?: Array<[number, string, string]>;

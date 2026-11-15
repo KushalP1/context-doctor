@@ -39,7 +39,7 @@
 
 import { listSessions, isClaudeSession, replyCounter } from "./session.js";
 import { pick, rowsOf, slimUsage, type Extractor } from "./scan.js";
-import { cacheWriteSplit, rateCard, ratesAt, requestCost, writeMultiplier, type RecordedUsage } from "./pricing.js";
+import { billedCost, cacheWriteSplit, rateCard, ratesAt, requestCost, writeMultiplier, type RecordedUsage } from "./pricing.js";
 import { isCodeLike, realModel, tokensForLength } from "./tokens.js";
 import { subagentTranscripts } from "./cachettl.js";
 
@@ -101,7 +101,7 @@ function resultText(content: unknown): string | undefined {
 }
 
 export const TOOL_OUTPUT_ROWS: Extractor<{ ids: Record<string, number>; calls: Record<string, string> }> = {
-  id: "tool-output.2",
+  id: "tool-output.3",
   init: () => ({ ids: {}, calls: {} }),
   line(raw, row, out, st) {
     if (!raw.includes('"usage"') && !raw.includes('"tool_use"') && !raw.includes('"tool_result"') && !raw.includes("compact_boundary")) return;
@@ -119,9 +119,9 @@ export const TOOL_OUTPUT_ROWS: Extractor<{ ids: Record<string, number>; calls: R
       // A reply is written one content block a row, each with its usage: one request, at its first row.
       if (m.usage && typeof m.id === "string" && !((st.ids[m.id] ?? 0) & (th + 1))) {
         st.ids[m.id] = (st.ids[m.id] ?? 0) | (th + 1);
-        out.push({ t: "r", th, ...pick(e, ["timestamp", "uuid"]), id: m.id, model: m.model, u: slimUsage(m.usage) });
+        out.push({ t: "r", th, ...pick(e, ["timestamp", "uuid"]), id: m.id, model: m.model, u: slimUsage(m.usage, { iterations: true }) });
       } else if (m.usage && typeof m.id !== "string") {
-        out.push({ t: "r", th, ...pick(e, ["timestamp", "uuid"]), model: m.model, u: slimUsage(m.usage) });
+        out.push({ t: "r", th, ...pick(e, ["timestamp", "uuid"]), model: m.model, u: slimUsage(m.usage, { iterations: true }) });
       }
       if (Array.isArray(m.content)) {
         for (const b of m.content) {
@@ -206,7 +206,7 @@ function timeline(path: string, since: number, until: number, runRows: Set<strin
       writePerM: (price?.inputPerM ?? 0) * writeMult,
       cold: num(u.cache_creation_input_tokens) > COLD_SHARE * prompt,
       counted: !!price && seen === "new" && at >= since && at < until,
-      billedUsd: requestCost(m, u, at)?.promptUsd ?? 0,
+      billedUsd: billedCost(m, u, at)?.promptUsd ?? 0,
       ...(below && price ? { over: card!.over, lower: below.inputPerM / price.inputPerM } : {}),
     });
   }

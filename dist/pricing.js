@@ -233,8 +233,8 @@ const PRICING = [
     [/gemini.*pro/i, rate(1.25, 5, 0.31), FALLBACK],
 ];
 let tableKey;
-/** Bumped when what a request costs changes beyond the table: 2, the iterations its top-level usage leaves out (billedCost). */
-const BILLING_RULES = 2;
+/** Bumped when what a request costs changes beyond the table: 2, the iterations its top-level usage leaves out (billedCost); 3, a compaction's context read from the cache however long the idle (compactcost.ts). */
+const BILLING_RULES = 3;
 /**
  * A fingerprint of this table and its billing constants. Dollars a ledger
  * keeps per request (the budget's, a session's price) were priced by the
