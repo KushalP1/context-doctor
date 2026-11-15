@@ -47,6 +47,7 @@ import { claudeFileUsage, claudeUsageFiles, codexEventKey, codexSessionsRoot, ro
 import { estimateProgressSummaries, PROGRESS_ROWS, PROGRESS_SUMMARIES_ENV } from "./progresssummaries.js";
 import { listGeminiChats, readGeminiMessages } from "./gemini.js";
 import { cursorClaudeId, cursorUsage, SqliteUnavailableError } from "./cursor.js";
+import { copilotCalls } from "./copilotusage.js";
 import { addModifiers, isUnbilledModel, NO_MODIFIERS, openAIUsage, priceChangedText, requestCost } from "./pricing.js";
 import { managedSourcesLine, orgRates, orgRatesLine, priceBasis } from "./orgrates.js";
 /**
@@ -59,8 +60,8 @@ import { pick, prescan, rowsOf } from "./scan.js";
 import { formatTokens } from "./tokens.js";
 import { withInvocation } from "./invocation.js";
 const DAY = 86_400_000;
-export const TOOLS = ["claude", "codex", "gemini", "cursor"];
-export const TOOL_NAME = { claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI", cursor: "Cursor" };
+export const TOOLS = ["claude", "codex", "gemini", "cursor", "copilot"];
+export const TOOL_NAME = { claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI", cursor: "Cursor", copilot: "Copilot CLI" };
 /**
  * A project folder's name (its path with "-" for separators, as Claude Code
  * names its projects/ folders) less the home folder: "-Users-<you>-" on
@@ -500,6 +501,24 @@ export function cursorSpend(since, until = Infinity) {
     }
     return out;
 }
+// ---------------------------------------------------------------------------
+// Copilot CLI
+// ---------------------------------------------------------------------------
+/**
+ * Copilot CLI's model calls (copilotusage.ts), each priced at its model's
+ * list price where the table has one, else counted. What Copilot bills is
+ * its AI credits and premium requests, kept beside the price, not in it.
+ */
+export function copilotSpend(since, until = Infinity, home = homedir()) {
+    return copilotCalls(since, until, home).filter((c) => !isUnbilledModel(c.model)).map((c) => {
+        const it = priced({ tool: "copilot", ts: c.ts, project: c.cwd ?? c.gitRoot ? projectName((c.cwd ?? c.gitRoot)) : "copilot", session: c.session, model: c.model, input: c.input, read: c.read, write: c.write, output: c.output }, { input_tokens: c.input, cache_read_input_tokens: c.read, cache_creation_input_tokens: c.write, output_tokens: c.output });
+        if (c.credits !== undefined)
+            it.credits = c.credits;
+        if (c.premium !== undefined)
+            it.premium = c.premium;
+        return it;
+    });
+}
 /** The local calendar day of `ts`, "YYYY-MM-DD". */
 export function localDay(ts) {
     const d = new Date(ts);
@@ -546,6 +565,10 @@ export function summarizeSpend(items, days, since, until, skipped = []) {
         t.tokens.output += it.output;
         if (it.subagent)
             t.subagentUsd = (t.subagentUsd ?? 0) + it.usd;
+        if (it.credits !== undefined)
+            t.credits = (t.credits ?? 0) + it.credits;
+        if (it.premium !== undefined)
+            t.premium = (t.premium ?? 0) + it.premium;
         if (it.workflow) {
             t.workflowUsd = (t.workflowUsd ?? 0) + it.usd;
             runs.add(it.workflow);
@@ -636,7 +659,7 @@ export function spendReport(days = 30, opts = {}) {
     // A subagent's transcript read once for its usage and its timeline (the progress summaries).
     if (opts.progress !== false)
         prescan([{ paths: claudeUsageFiles(since, opts.claudePaths).filter((f) => f.subagent && !f.run).map((f) => f.file), extractors: [USAGE_ROWS, PROGRESS_ROWS] }]);
-    const items = [...claudeSpend(since, until, opts.claudePaths, opts.onProgress), ...codexSpend(since, until, home), ...geminiSpend(since, until, home)];
+    const items = [...claudeSpend(since, until, opts.claudePaths, opts.onProgress), ...codexSpend(since, until, home), ...geminiSpend(since, until, home), ...copilotSpend(since, until, home)];
     const skipped = [];
     try {
         items.push(...cursorSpend(since, until));
@@ -666,11 +689,13 @@ export function modifiersText(m) {
         m.longUsd > 0 ? `long-prompt tier +${usd(m.longUsd)}` : "",
     ].filter(Boolean).join(", ");
 }
+/** AI credits or premium requests: whole above 100, else to two places. */
+const creditsText = (n) => (n >= 100 ? Math.round(n).toLocaleString("en-US") : String(Math.round(n * 100) / 100));
 /** The full report, kept within 80 columns. `top`: rows per list. */
 export function renderSpend(r, top = 8) {
     const lines = [];
     if (r.requests === 0) {
-        lines.push(`No usage in the last ${r.days} days from Claude Code, Codex, Gemini CLI or Cursor on this machine.`);
+        lines.push(`No usage in the last ${r.days} days from ${TOOLS.map((t) => TOOL_NAME[t]).join(", ").replace(/, ([^,]+)$/, " or $1")} on this machine.`);
         for (const s of r.skipped)
             lines.push(`${TOOL_NAME[s.tool]} not read: ${s.reason}.`);
         return lines.join("\n");
@@ -686,7 +711,7 @@ export function renderSpend(r, top = 8) {
     lines.push("─".repeat(60));
     for (const t of r.tools) {
         const unit = t.tool === "cursor" ? "replies" : "requests";
-        const notes = [t.estimate ? "estimate, no cache split" : t.subagentUsd ? `subagents ${usd(t.subagentUsd)}` : "", t.workflowUsd ? `workflows ${usd(t.workflowUsd)} (${runsText(t.workflowRuns ?? 0)})` : "", t.unpriced ? `${t.unpriced.toLocaleString("en-US")} not priced` : ""].filter(Boolean);
+        const notes = [t.estimate ? "estimate, no cache split" : t.subagentUsd ? `subagents ${usd(t.subagentUsd)}` : "", t.credits !== undefined ? `${creditsText(t.credits)} AI credits` : "", t.workflowUsd ? `workflows ${usd(t.workflowUsd)} (${runsText(t.workflowRuns ?? 0)})` : "", t.unpriced ? `${t.unpriced.toLocaleString("en-US")} not priced` : ""].filter(Boolean);
         const note = notes.length ? `  ${notes.join(", ")}` : "";
         lines.push(`${t.name.padEnd(14)}${`${t.estimate ? "~" : ""}${usd(t.usd)}`.padStart(11)}  ${`${t.requests.toLocaleString("en-US")} ${unit}`.padEnd(16)}${note}`);
     }
@@ -765,6 +790,12 @@ export function renderSpend(r, top = 8) {
     }
     if (r.tools.some((t) => t.estimate))
         notes.push("Cursor records no cache split: its input is priced uncached, an upper bound.");
+    const copilot = r.tools.find((t) => t.tool === "copilot");
+    if (copilot) {
+        // What Copilot itself counts, beside the tokens at list price: its plan bills credits, not tokens.
+        const counted = [copilot.credits !== undefined ? `${creditsText(copilot.credits)} AI credits (${usd(copilot.credits / 100)} at $0.01)` : "", copilot.premium !== undefined ? `${creditsText(copilot.premium)} premium requests` : ""].filter(Boolean);
+        notes.push(`Copilot CLI: its tokens at list price${counted.length ? `; Copilot counted ${counted.join(" and ")}` : ""}.`);
+    }
     for (const s of r.skipped)
         notes.push(`${TOOL_NAME[s.tool]} not read: ${s.reason}.`);
     if (notes.length)

@@ -16,7 +16,7 @@ Feedback and votes: [open an issue](https://github.com/KushalP1/context-doctor/i
 | Cursor agent | native postToolUse, postToolUseFailure and sessionStart hooks (delivered from Cursor 3.17) | MCP tools, cursor profiler, editor extension | Cursor's own models never pass through a local process |
 | Codex (app, IDE, CLI) | every-prompt hook; autopilot on an API key (`openai_base_url`) | MCP tools (read-only, no approval needed), session | autopilot only with an API key |
 | Gemini CLI | every-prompt hook (`BeforeAgent`, with the API's own token counts); autopilot on an API key (`GOOGLE_GEMINI_BASE_URL`) | MCP tools, session, watch, overhead (GEMINI.md and the measured start-of-session cost) | autopilot cannot see Google sign-in traffic |
-| GitHub Copilot (CLI, app, VS Code agent sessions) | session-start hook: the standing rules | MCP tools | no size check: Copilot gives no transcript to the hooks that can add context; its CLI now records usage (F6) |
+| GitHub Copilot (CLI, app, VS Code agent sessions) | session-start hook: the standing rules | MCP tools; `spend` reads the CLI's `session.usage_record` events (tokens at list price, AI credits and premium requests beside) | no size check: Copilot gives no transcript to the hooks that can add context; `spend` reads the CLI's records only, not the Copilot app's or VS Code's |
 | claude.ai, ChatGPT, phone apps | standing preferences (`instructions --copy`, now with the handoff) | analyze an exported chat; ChatGPT developer mode: the MCP tools over `--http`, `save_handoff` (stores nothing there), `pack_context` on uploaded files | nothing runs there; a chat's history cannot be edited, only left for a new chat |
 | Your own API apps (Anthropic, OpenAI, Gemini) | autopilot or the optimizing proxy; `withContextDoctor(client)` without a proxy (Anthropic, OpenAI and Google Gen AI SDKs) | library: profile, optimize, pack | — |
 | CI | `analyze --fail-over-budget`; the GitHub Action (`uses: KushalP1/context-doctor@<tag>`) comments memory-file growth on PRs and gates on a budget | `ci` locally | Not listed in the GitHub Marketplace: it lists only repositories with no workflow files, and the owner chose to keep context-doctor one repository (no separate Marketplace copy) |
@@ -361,6 +361,10 @@ the estimator to noise. Calibration needs a real tokenizer, not this data.
 ## History: what shipped, newest first
 
 Each release with the measurements behind it. Dollar figures are as measured when the release shipped, with the prices and counting of the time; the 0.32 audit fixed both, and the README's headline figures are the re-measured ones.
+
+## Shipped on main, not yet released
+
+- **Copilot CLI in `spend` (F6).** Copilot CLI writes a `session.usage_record` event per model call to `~/.copilot/session-state/<session>/events.jsonl` ([ccusage#2069](https://github.com/ccusage/ccusage/issues/2069): 1,142 records and no shutdown in one user's sessions, which ccusage reports as zero). `spend` reads them: input less both cache counts, each call once (a record received twice, a compaction a record names), tokens at list price where the model has one, `auto` counted; the AI credits (`totalNanoAiu`, $0.01 each) and premium requests Copilot counted shown beside. Fixture from the shape GitHub's agent-radar collector parses; the author has no Copilot CLI history.
 
 ## Shipped in 0.48.0: a directory-ready plugin, quality on your own plan, prices that change under us, and MCP SDK v2
 

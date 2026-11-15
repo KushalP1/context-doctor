@@ -9,7 +9,7 @@ AI agents re-send their whole context on every message: old tool output, pasted 
 ```bash
 npx context-doctor savings     # what your recent sessions cost, and what each fix would have saved
 npx context-doctor fix         # the fixes ranked by dollars; applies only the ones you say yes to
-npx context-doctor spend       # one bill across Claude Code, Codex, Gemini CLI and Cursor
+npx context-doctor spend       # one bill across Claude Code, Codex, Gemini CLI, Cursor and Copilot CLI
 ```
 
 <img src="https://raw.githubusercontent.com/KushalP1/context-doctor/main/assets/savings.svg" alt="npx context-doctor savings: input billed, what /compact at cold resumes, autopilot and an earlier auto-compact window would have saved" width="640">
@@ -35,7 +35,7 @@ Pick where you work. Each takes about a minute and is fully reversible.
 ## What it does
 
 **Measure, in dollars, on your own history** ([profiling](./docs/profiling.md))
-- `spend`: one bill across Claude Code (subagents and workflow agents included), Codex, Gemini CLI and Cursor, by tool, project, model and day, as billed at list rates ([spend and budget](./docs/spend.md)).
+- `spend`: one bill across Claude Code (subagents and workflow agents included), Codex, Gemini CLI, Cursor and Copilot CLI, by tool, project, model and day, as billed at list rates ([spend and budget](./docs/spend.md)).
 - `savings`: what your recent Claude Code sessions cost and what each fix below would have saved, replayed request by request against what you were billed.
 - `overhead`: what every request re-reads before your message (system prompt, tools, MCP servers, CLAUDE.md, rules, memory), each file priced per month.
 - `tasks`, `reads`, `subagents`, `compactions`: cost per commit; files read into session after session; whether each subagent was cheaper than the same steps in the parent; whether sessions work worse after compacting.
@@ -136,7 +136,7 @@ Rules 1-4 end exactly at character 512, the part ChatGPT's guide says must stand
 |---|---|
 | `context-doctor install` / `uninstall` | Wire (or remove) everything it finds: the MCP server for Claude Desktop, Claude Code, Cursor, Codex, Gemini CLI, Google Antigravity and GitHub Copilot; the Agent Skill (Claude Code, Codex, Antigravity); the every-prompt hook (Claude Code, Codex, Gemini CLI's `BeforeAgent`, Cursor's `postToolUse`, `postToolUseFailure` and `sessionStart`); Claude Code's `PreCompact`, `SessionStart`, `PreToolUse` (the subagent price) and, on 2.1.251+, `PreModelSwitch` hooks; Copilot's `sessionStart` (the standing rules). `--statusline` adds the status bar line ([details](./docs/install.md)) |
 | `context-doctor fix [--apply ids\|all] [--share]` / `fix undo` | Every lever ranked by what it would have saved on your last 30 days (compact earlier, the cache lifetime, autopilot, MCP tool search, unused servers, the subagents' model, long Bash output to a file, Codex's auto-compact limit), with what each costs in quality; applies one only on a yes (the subagents' model only when named), `fix undo` reverts exactly what it changed, later runs show what each saved since ([details](./docs/fix.md)) |
-| `context-doctor spend [--days n] [--share]` | One bill across every tool on this machine: Claude Code (main conversation and subagents), Codex, Gemini CLI and Cursor (an estimate: no cache split), by tool, project, model and day, with what drives it ([docs](./docs/spend.md)) |
+| `context-doctor spend [--days n] [--share]` | One bill across every tool on this machine: Claude Code (main conversation and subagents), Codex, Gemini CLI, Cursor (an estimate: no cache split) and Copilot CLI (with the AI credits it counted), by tool, project, model and day, with what drives it ([docs](./docs/spend.md)) |
 | `context-doctor budget [<$>/day\|<$>/week [--block]\|off]` | A spend budget the every-prompt hook applies: a line at 50%, 80% and 100%, and with `--block` prompts over it are held until you raise it or turn it off ([docs](./docs/spend.md#a-budget-the-hook-applies-context-doctor-budget)) |
 | `context-doctor doctor` | Self-check the whole installation — one pasteable ✓/✗ diagnosis with fixes, including which surfaces autopilot can reach and any other program on its port |
 | `context-doctor savings [--days n] [--share [--copy]]` | What your recent Claude Code sessions cost, and what `/compact` at cold resumes, autopilot and an earlier auto-compact window would save, replayed through the shipped code against your actual billed usage. `--share` prints totals only (no project names or paths) to post. A bare `context-doctor` in a terminal shows `fix`'s plan instead, with one question for the fixes that cost nothing in quality |

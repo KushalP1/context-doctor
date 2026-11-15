@@ -48,6 +48,7 @@ import { claudeFileUsage, claudeUsageFiles, codexEventKey, codexSessionsRoot, ro
 import { estimateProgressSummaries, PROGRESS_ROWS, PROGRESS_SUMMARIES_ENV, type ProgressOptions } from "./progresssummaries.js";
 import { listGeminiChats, readGeminiMessages } from "./gemini.js";
 import { cursorClaudeId, cursorUsage, SqliteUnavailableError } from "./cursor.js";
+import { copilotCalls } from "./copilotusage.js";
 import { addModifiers, isUnbilledModel, NO_MODIFIERS, openAIUsage, priceChangedText, requestCost, type Modifiers, type RecordedUsage } from "./pricing.js";
 import { managedSourcesLine, orgRates, orgRatesLine, priceBasis } from "./orgrates.js";
 
@@ -63,9 +64,9 @@ import { withInvocation } from "./invocation.js";
 
 const DAY = 86_400_000;
 
-export type Tool = "claude" | "codex" | "gemini" | "cursor";
-export const TOOLS: Tool[] = ["claude", "codex", "gemini", "cursor"];
-export const TOOL_NAME: Record<Tool, string> = { claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI", cursor: "Cursor" };
+export type Tool = "claude" | "codex" | "gemini" | "cursor" | "copilot";
+export const TOOLS: Tool[] = ["claude", "codex", "gemini", "cursor", "copilot"];
+export const TOOL_NAME: Record<Tool, string> = { claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI", cursor: "Cursor", copilot: "Copilot CLI" };
 
 /** One request (a Cursor reply), priced. */
 export interface SpendItem {
@@ -100,6 +101,10 @@ export interface SpendItem {
   key?: string;
   /** Claude Code: a compaction's own request, which no row records usage for: estimated from the context it read and its summary (compactcost.ts). */
   compaction?: boolean;
+  /** Copilot CLI: the AI credits it used (one is $0.01), as Copilot recorded them; not in `usd`. */
+  credits?: number;
+  /** Copilot CLI: the premium requests it counted (its multiplier); not in `usd`. */
+  premium?: number;
 }
 
 /**
@@ -497,6 +502,24 @@ export function cursorSpend(since: number, until = Infinity): SpendItem[] {
 }
 
 // ---------------------------------------------------------------------------
+// Copilot CLI
+// ---------------------------------------------------------------------------
+
+/**
+ * Copilot CLI's model calls (copilotusage.ts), each priced at its model's
+ * list price where the table has one, else counted. What Copilot bills is
+ * its AI credits and premium requests, kept beside the price, not in it.
+ */
+export function copilotSpend(since: number, until = Infinity, home = homedir()): SpendItem[] {
+  return copilotCalls(since, until, home).filter((c) => !isUnbilledModel(c.model)).map((c) => {
+    const it = priced({ tool: "copilot", ts: c.ts, project: c.cwd ?? c.gitRoot ? projectName((c.cwd ?? c.gitRoot)!) : "copilot", session: c.session, model: c.model, input: c.input, read: c.read, write: c.write, output: c.output }, { input_tokens: c.input, cache_read_input_tokens: c.read, cache_creation_input_tokens: c.write, output_tokens: c.output });
+    if (c.credits !== undefined) it.credits = c.credits;
+    if (c.premium !== undefined) it.premium = c.premium;
+    return it;
+  });
+}
+
+// ---------------------------------------------------------------------------
 // The report
 // ---------------------------------------------------------------------------
 
@@ -513,6 +536,9 @@ export interface ToolSpend {
   workflowRuns?: number;
   /** Cursor: priced without a cache split, an upper bound. */
   estimate?: boolean;
+  /** Copilot CLI: the AI credits and premium requests it recorded, beside `usd` (which is the tokens at list price). */
+  credits?: number;
+  premium?: number;
   /** Requests whose model has no list price, counted but not in `usd`. */
   unpriced: number;
   unpricedTokens: number;
@@ -595,6 +621,8 @@ export function summarizeSpend(items: SpendItem[], days: number, since: number, 
     t.requests++;
     t.tokens.input += it.input; t.tokens.read += it.read; t.tokens.write += it.write; t.tokens.output += it.output;
     if (it.subagent) t.subagentUsd = (t.subagentUsd ?? 0) + it.usd;
+    if (it.credits !== undefined) t.credits = (t.credits ?? 0) + it.credits;
+    if (it.premium !== undefined) t.premium = (t.premium ?? 0) + it.premium;
     if (it.workflow) {
       t.workflowUsd = (t.workflowUsd ?? 0) + it.usd;
       runs.add(it.workflow);
@@ -691,7 +719,7 @@ export function spendReport(days = 30, opts: SpendOptions = {}): SpendReport {
   const home = opts.home ?? homedir();
   // A subagent's transcript read once for its usage and its timeline (the progress summaries).
   if (opts.progress !== false) prescan([{ paths: claudeUsageFiles(since, opts.claudePaths).filter((f) => f.subagent && !f.run).map((f) => f.file), extractors: [USAGE_ROWS, PROGRESS_ROWS] }]);
-  const items: SpendItem[] = [...claudeSpend(since, until, opts.claudePaths, opts.onProgress), ...codexSpend(since, until, home), ...geminiSpend(since, until, home)];
+  const items: SpendItem[] = [...claudeSpend(since, until, opts.claudePaths, opts.onProgress), ...codexSpend(since, until, home), ...geminiSpend(since, until, home), ...copilotSpend(since, until, home)];
   const skipped: SpendReport["skipped"] = [];
   try {
     items.push(...cursorSpend(since, until));
@@ -723,11 +751,14 @@ export function modifiersText(m: Modifiers): string {
   ].filter(Boolean).join(", ");
 }
 
+/** AI credits or premium requests: whole above 100, else to two places. */
+const creditsText = (n: number) => (n >= 100 ? Math.round(n).toLocaleString("en-US") : String(Math.round(n * 100) / 100));
+
 /** The full report, kept within 80 columns. `top`: rows per list. */
 export function renderSpend(r: SpendReport, top = 8): string {
   const lines: string[] = [];
   if (r.requests === 0) {
-    lines.push(`No usage in the last ${r.days} days from Claude Code, Codex, Gemini CLI or Cursor on this machine.`);
+    lines.push(`No usage in the last ${r.days} days from ${TOOLS.map((t) => TOOL_NAME[t]).join(", ").replace(/, ([^,]+)$/, " or $1")} on this machine.`);
     for (const s of r.skipped) lines.push(`${TOOL_NAME[s.tool]} not read: ${s.reason}.`);
     return lines.join("\n");
   }
@@ -740,7 +771,7 @@ export function renderSpend(r: SpendReport, top = 8): string {
   lines.push("─".repeat(60));
   for (const t of r.tools) {
     const unit = t.tool === "cursor" ? "replies" : "requests";
-    const notes = [t.estimate ? "estimate, no cache split" : t.subagentUsd ? `subagents ${usd(t.subagentUsd)}` : "", t.workflowUsd ? `workflows ${usd(t.workflowUsd)} (${runsText(t.workflowRuns ?? 0)})` : "", t.unpriced ? `${t.unpriced.toLocaleString("en-US")} not priced` : ""].filter(Boolean);
+    const notes = [t.estimate ? "estimate, no cache split" : t.subagentUsd ? `subagents ${usd(t.subagentUsd)}` : "", t.credits !== undefined ? `${creditsText(t.credits)} AI credits` : "", t.workflowUsd ? `workflows ${usd(t.workflowUsd)} (${runsText(t.workflowRuns ?? 0)})` : "", t.unpriced ? `${t.unpriced.toLocaleString("en-US")} not priced` : ""].filter(Boolean);
     const note = notes.length ? `  ${notes.join(", ")}` : "";
     lines.push(`${t.name.padEnd(14)}${`${t.estimate ? "~" : ""}${usd(t.usd)}`.padStart(11)}  ${`${t.requests.toLocaleString("en-US")} ${unit}`.padEnd(16)}${note}`);
   }
@@ -809,6 +840,12 @@ export function renderSpend(r: SpendReport, top = 8): string {
     notes.push(`  ${priceChangedText(r.priceChanged.map((c) => [c.model, c.on]))}.`);
   }
   if (r.tools.some((t) => t.estimate)) notes.push("Cursor records no cache split: its input is priced uncached, an upper bound.");
+  const copilot = r.tools.find((t) => t.tool === "copilot");
+  if (copilot) {
+    // What Copilot itself counts, beside the tokens at list price: its plan bills credits, not tokens.
+    const counted = [copilot.credits !== undefined ? `${creditsText(copilot.credits)} AI credits (${usd(copilot.credits / 100)} at $0.01)` : "", copilot.premium !== undefined ? `${creditsText(copilot.premium)} premium requests` : ""].filter(Boolean);
+    notes.push(`Copilot CLI: its tokens at list price${counted.length ? `; Copilot counted ${counted.join(" and ")}` : ""}.`);
+  }
   for (const s of r.skipped) notes.push(`${TOOL_NAME[s.tool]} not read: ${s.reason}.`);
   if (notes.length) lines.push("", ...notes);
   lines.push("", "As an API key is billed; on a subscription the same tokens come out");

@@ -42,7 +42,7 @@
 import { type ProgressOptions } from "./progresssummaries.js";
 import { type Modifiers } from "./pricing.js";
 import { type Extractor } from "./scan.js";
-export type Tool = "claude" | "codex" | "gemini" | "cursor";
+export type Tool = "claude" | "codex" | "gemini" | "cursor" | "copilot";
 export declare const TOOLS: Tool[];
 export declare const TOOL_NAME: Record<Tool, string>;
 /** One request (a Cursor reply), priced. */
@@ -78,6 +78,10 @@ export interface SpendItem {
     key?: string;
     /** Claude Code: a compaction's own request, which no row records usage for: estimated from the context it read and its summary (compactcost.ts). */
     compaction?: boolean;
+    /** Copilot CLI: the AI credits it used (one is $0.01), as Copilot recorded them; not in `usd`. */
+    credits?: number;
+    /** Copilot CLI: the premium requests it counted (its multiplier); not in `usd`. */
+    premium?: number;
 }
 /**
  * A project folder's name (its path with "-" for separators, as Claude Code
@@ -150,6 +154,12 @@ export declare function geminiFileSpend(file: string, since: number, until?: num
 export declare function geminiFiles(since: number, home?: string): string[];
 export declare function geminiSpend(since: number, until?: number, home?: string): SpendItem[];
 export declare function cursorSpend(since: number, until?: number): SpendItem[];
+/**
+ * Copilot CLI's model calls (copilotusage.ts), each priced at its model's
+ * list price where the table has one, else counted. What Copilot bills is
+ * its AI credits and premium requests, kept beside the price, not in it.
+ */
+export declare function copilotSpend(since: number, until?: number, home?: string): SpendItem[];
 export interface ToolSpend {
     tool: Tool;
     name: string;
@@ -168,6 +178,9 @@ export interface ToolSpend {
     workflowRuns?: number;
     /** Cursor: priced without a cache split, an upper bound. */
     estimate?: boolean;
+    /** Copilot CLI: the AI credits and premium requests it recorded, beside `usd` (which is the tokens at list price). */
+    credits?: number;
+    premium?: number;
     /** Requests whose model has no list price, counted but not in `usd`. */
     unpriced: number;
     unpricedTokens: number;
