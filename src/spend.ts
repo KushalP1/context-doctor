@@ -60,7 +60,7 @@ import { managedSourcesLine, orgRates, orgRatesLine, priceBasis } from "./orgrat
  * US-only, web searches) at list rates, or at the organization's rates.
  * "At list prices" was true before those were priced; it no longer is.
  */
-const spendBasis = (): string => (orgRates() ? priceBasis() : "as billed at list rates");
+export const spendBasis = (): string => (orgRates() ? priceBasis() : "as billed at list rates");
 import { pick, prescan, rowsOf, type Extractor } from "./scan.js";
 import { formatTokens } from "./tokens.js";
 import { withInvocation } from "./invocation.js";

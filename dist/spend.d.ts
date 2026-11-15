@@ -41,6 +41,12 @@
  */
 import { type ProgressOptions } from "./progresssummaries.js";
 import { type Modifiers } from "./pricing.js";
+/**
+ * What spend's dollars are: each request as it was billed (its tier, fast mode,
+ * US-only, web searches) at list rates, or at the organization's rates.
+ * "At list prices" was true before those were priced; it no longer is.
+ */
+export declare const spendBasis: () => string;
 import { type Extractor } from "./scan.js";
 export type Tool = "claude" | "codex" | "gemini" | "cursor" | "copilot" | "opencode" | "cline";
 export declare const TOOLS: Tool[];

@@ -11,6 +11,7 @@ context-doctor spend                 # the last 30 days (--days n), 8 rows per l
 context-doctor spend --json          # everything, every day and session
 context-doctor spend --share         # totals only, no paths or project names, to post (--copy)
 context-doctor spend --by repo       # by git repository instead of project; --by branch: by repository and branch
+context-doctor spend --export        # a file of totals for your team; spend merge <folder> adds a team's files up
 ```
 
 ### By repository and branch: `--by repo`, `--by branch`
@@ -72,6 +73,20 @@ It is read only from the managed settings files Claude Code reads (`managed-sett
 Claude Code, Codex and Gemini CLI are read through the shared transcript cache (`~/.cache/context-doctor`, see CONTRIBUTING.md): a second run reads only what was appended since. Cursor is read by key range, only the chats updated in the window, and each chat's replies are kept until the chat changes.
 
 **On the author's machine** (read-only, 2026-11-02, a throwaway cache): last 30 days, **$4,237**: Claude Code $4,237 over 25,090 requests (subagents $1,658, 39%), Codex $0.05; nothing from Cursor in the window. Cache writes are 53% of it, cache reads 36%, output 11%. The first run took 3.7 s, a second 0.3-0.5 s. Over 365 days: $17,262, of which Cursor ~$137 for its 163 replies on a named model, with 968 more on Auto (118M tokens) not priced; 9.1 s cold, 0.56 s warm. The modifiers on that machine (read-only, 2026-11-08, last 140 days): no fast-mode request (every row that records `speed` says "standard"), no US-only one (`inference_geo` "global", "" or "not_available"), no web search (every `server_tool_use` count 0), no OpenAI or Gemini prompt over its tier; 15 Haiku 5.5 requests over 100k tokens, +$0.16. Every other figure is unchanged to the cent ($18,604 over 80,722 requests).
+
+## A team's spend: `spend --export` and `spend merge`
+
+A manager wants one view across people and tools without a vendor dashboard, and nothing here sends anything anywhere. So each person writes a file, puts it where the team already shares files (a drive folder, a repository), and anyone adds the folder up:
+
+```bash
+context-doctor spend --export                      # context-doctor-spend-<you>-<day>.json here; or --export <file>, --export - for stdout
+context-doctor spend --export --as "Priya" --by branch --anonymize --days 30
+context-doctor spend merge ~/Drive/ai-spend        # --json for everything, --limit n rows per list
+```
+
+**What an export holds: totals only.** One row per local day, tool, model and repository (and branch with `--by branch`): requests, tokens (uncached input, cache reads, cache writes, output), dollars at list price, requests on a model with no list price, and Copilot CLI's AI credits and premium requests. No prompt or reply text, no path, no project, session or file name: a repository is its folder's base name (`shop`, see [By repository and branch](#by-repository-and-branch---by-repo---by-branch)); a request whose tool records no folder is `(no folder)` (Gemini CLI keeps its project's name, a folder's base name or Gemini's hash). `--anonymize` replaces each repository and branch name with a hash of it (`repo-1f3a…`, the same name giving the same hash on every machine, so a team's files still line up; a short name can be guessed from its hash by trying names, so it hides names from a casual reader, not from someone who knows your repositories). The developer is a label you choose with `--as`, by default your OS user name. The file is plain JSON: read it before you share it.
+
+**What `merge` prints.** The total, the month of the last day so far and a month-end forecast at the pace of the last 14 days (fewer when the files hold fewer; labelled an estimate), then by developer, by repository (and branch when the files carry branches), by tool and by model. Developers are listed in alphabetical order, not ranked: the per-repository and per-tool views are the ones meant for decisions. A developer's files that cover the same day (an export run twice) count that day once, from the newest file; a developer whose latest file ends before the others' last day is named, as the days after count nothing for them. Files in the folder that are not exports are skipped and named; subfolders are not read. `src/test/spend-team.test.ts` checks that an export holds no prompt text or path and that merging three exports equals their sum, per developer, repository and tool.
 
 ## A budget the hook applies: `context-doctor budget`
 

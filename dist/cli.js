@@ -79,7 +79,8 @@ import { effectiveEnv, settingsSources, shellSet, underClaudeCode } from "./effe
 import { SettingsError } from "./settingsedit.js";
 import { currentTtl, estimateCacheTtl, renderCacheTtl, setCacheTtl, settingKey, subagentTranscripts, ttlUnsupported, CACHE_TTL_SINCE } from "./cachettl.js";
 import { claudeDir } from "./claudedir.js";
-import { renderSpend, renderSpendShare, spendReport } from "./spend.js";
+import { collectSpend, renderSpend, renderSpendShare, spendBasis, spendReport } from "./spend.js";
+import { buildExport, defaultDeveloper, exportFileName, mergeExports, readExports, renderExportDone, renderMerge } from "./spendteam.js";
 import { clearBudget, parseBudget, periodSpend, promptHookInstalled, readBudget, renderBudgetStatus, writeBudget } from "./budget.js";
 /**
  * The commands that print JSON with --json. Any other command refuses the
@@ -169,6 +170,13 @@ Measure:
                                                 and Cline, by project (or --by repository or
                                                 branch), model and day, and what drives it, as
                                                 billed at list rates. --share: totals only, to paste
+  context-doctor spend --export [file] [--as <name>] [--anonymize] [--by branch]
+                                                A file of totals for your team (by day, tool, model,
+                                                repository; no prompt, path or project); --as: your
+                                                name in it (default: your OS user name)
+  context-doctor spend merge <folder>           Add up the exports people put in a shared folder:
+                                                by developer, repository and tool, with a month-end
+                                                forecast
   context-doctor cache-misses [--days n]        Requests that re-wrote the prompt cache while it was
                                                 still warm: priced, by model and context size, with
                                                 the cause where the transcript shows one
@@ -579,6 +587,9 @@ const FLAGS = [
     { names: ["--share"], set: (a) => { a.share = true; } },
     { names: ["--report"], set: (a) => { a.report = true; } },
     { names: ["--by"], value: "text", set: (a, v) => { a.by = v; } },
+    { names: ["--export"], set: (a) => { a.exportSpend = true; } },
+    { names: ["--anonymize"], set: (a) => { a.anonymize = true; } },
+    { names: ["--as"], value: "text", set: (a, v) => { a.as = v; } },
     { names: ["--block"], set: (a) => { a.block = true; } },
     { names: ["--allow-dirty"], set: (a) => { a.allowDirty = true; } },
     { names: ["--statusline"], set: (a) => { a.statusLine = true; } },
@@ -1530,15 +1541,62 @@ async function main() {
         return;
     }
     if (args.command === "spend") {
-        if (args.file !== undefined)
-            usageError(`Usage: context-doctor spend [--days n] [--limit n] [--by project|repo|branch] [--share [--copy]] [--json]; got "${args.file}".`);
+        const spendUsage = "Usage: context-doctor spend [--days n] [--limit n] [--by project|repo|branch] [--share [--copy]] [--json] | spend --export [file] [--as <name>] [--anonymize] [--by branch] | spend merge <folder> [--json]";
+        const extra = (args.positionals ?? []).slice(args.file === "merge" || args.exportSpend ? 2 : 1);
+        if (extra.length)
+            usageError(`${spendUsage}; got "${extra.join(" ")}" too.`);
+        if (args.file === "merge") {
+            const folder = args.positionals?.[1];
+            if (!folder)
+                usageError("Usage: context-doctor spend merge <folder>: the folder your team's spend exports are in.");
+            if (args.exportSpend || args.share || args.by !== undefined || args.anonymize || args.as !== undefined)
+                usageError("spend merge takes a folder, and --json or --limit n.");
+            let found;
+            try {
+                found = readExports(folder);
+            }
+            catch (e) {
+                const code = e.code;
+                console.error(`context-doctor: could not read ${folder}: ${code === "ENOENT" ? "no such folder" : code === "ENOTDIR" ? "not a folder" : e.message}`);
+                process.exit(1);
+            }
+            const merged = mergeExports(found.exports, found.skipped);
+            console.log(args.json ? JSON.stringify(merged, null, 2) : renderMerge(merged, folder, args.limit ?? 8));
+            if (!merged.files)
+                process.exitCode = 1;
+            return;
+        }
+        if (!args.exportSpend && args.file !== undefined)
+            usageError(`${spendUsage}; got "${args.file}".`);
+        if ((args.anonymize || args.as !== undefined) && !args.exportSpend)
+            usageError("--anonymize and --as go with --export: context-doctor spend --export --as <name> --anonymize.");
         if (args.share && args.json)
             usageError("--share and --json do not go together: --share prints a few lines to paste.");
+        if (args.exportSpend && (args.share || args.json))
+            usageError("--export writes a file of totals; it takes no --share or --json (the file is JSON).");
         const by = args.by;
         if (by !== undefined && by !== "project" && by !== "repo" && by !== "branch")
             usageError(`--by takes project, repo or branch; got "${by}".${didYouMean(by, ["project", "repo", "branch"])}`);
         if (by !== undefined && args.share)
             usageError("--by and --share do not go together: --share carries no project, repository or branch.");
+        if (args.exportSpend) {
+            const developer = (args.as ?? defaultDeveloper()).trim();
+            if (!developer || developer.length > 64)
+                usageError("--as takes a name of 1 to 64 characters: what your team calls you in the merged view.");
+            const reading = progressLine("Reading your usage across tools");
+            const c = collectSpend(args.days ?? 30, { onProgress: reading.tick, by: by === "branch" ? "branch" : "repo", progress: false });
+            reading.clear();
+            const e = buildExport(c.items, { developer, days: c.days, since: c.since, until: c.until, basis: spendBasis(), anonymize: args.anonymize, branches: by === "branch" });
+            const file = args.file ?? exportFileName(e);
+            const text = JSON.stringify(e, null, 1) + "\n";
+            if (file === "-") {
+                process.stdout.write(text);
+                return;
+            }
+            writeOut(file, text);
+            console.log(renderExportDone(e, file));
+            return;
+        }
         const reading = progressLine("Reading your usage across tools");
         // The progress summaries' estimate: none after the variable turned them off (fix's record), none at all when set with no record.
         const ps = progressSummariesState({ cwd: process.cwd() });
