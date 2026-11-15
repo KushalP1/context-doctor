@@ -299,6 +299,7 @@ export interface LimitWindow {
     usdPerPct?: number;
     relSe?: number;
     fitFromEarlier?: boolean;
+    stale?: boolean;
 }
 export interface AgentUse {
     id: string;

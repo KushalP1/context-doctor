@@ -425,6 +425,7 @@ export function mergeLimits(ledger, live) {
                 if (Number.isFinite(reset))
                     w.resetsAt = reset;
                 w.resetSince = false;
+                w.stale = false;
             }
         }
         else {
@@ -449,7 +450,9 @@ export function usageView(v) {
         const parts = [];
         if (w.resetsAt !== undefined && w.resetsAt > now)
             parts.push(`resets in ${duration(w.resetsAt - now)}`);
-        if (w.perHour !== undefined && w.perHour > 0) {
+        if (w.stale)
+            parts.push(`read ${duration(now - w.at)} ago, no pace from it`);
+        else if (w.perHour !== undefined && w.perHour > 0) {
             const outIn = w.runsOutAt !== undefined && w.runsOutAt > now ? `, runs out in ${duration(w.runsOutAt - now)}${w.beforeReset ? " (before the reset)" : ""}` : "";
             parts.push(`+${per(w.perHour)} points an hour lately${outIn}`);
         }

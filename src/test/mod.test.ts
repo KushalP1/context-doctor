@@ -621,6 +621,9 @@ test("usage view: Ultra (no 5-hour window), no readings at all, Claude Code's ne
   assert.equal(usageView({ now: T, agents: [] }).agentsNote, "No subagents running.");
   assert.equal(usageView({ now: T, loading: true }).footer, "Measuring your last 30 days…");
   assert.equal(usageView({ now: T, agents: [{ id: "x", type: "general-purpose", status: "running" }], data: usageData({ agents: [] }) }).agents[0].text, "measuring…");
+  const old = usageView({ data: usageData({ limits: [{ ...usageData().limits[1], at: T - 5 * 24 * HOUR, stale: true, perHour: 5 }] }), now: T });
+  assert.equal(old.limits[0].text, "18% · resets in 3 days · read 5 days ago, no pace from it");
+  assert.equal(usageView({ data: usageData({ limits: [{ ...usageData().limits[1], stale: true }] }), live: { at: T, rateLimits: [{ kind: "seven_day", percentUsed: 20 }] }, now: T }).limits[0].text, "20% · resets in 3 days", "a new reading from Claude Code is not stale");
   const reset = usageView({ data: usageData({ limits: [{ ...usageData().limits[0], resetSince: true }] }), now: T });
   assert.equal(reset.limits[0].text, "reset since the last reading (31% then)");
 });

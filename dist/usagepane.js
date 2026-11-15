@@ -179,7 +179,8 @@ export function limitWindows(now, fits, readings) {
         out.push({
             window: w, label: w === "five_hour" ? "5-hour" : "Weekly", pct: s.pct, at: s.at, resetSince: s.resetSince,
             ...(s.resetsAt !== undefined ? { resetsAt: s.resetsAt } : {}),
-            ...(s.recentPerHour !== undefined ? { perHour: round(s.recentPerHour) } : {}),
+            // A reading older than its pace's stretch (limits.ts): no pace from it, its age said instead.
+            ...(s.stale ? { stale: true } : s.recentPerHour !== undefined ? { perHour: round(s.recentPerHour) } : {}),
             ...(s.runsOutAt !== undefined ? { runsOutAt: Math.round(s.runsOutAt), beforeReset: s.beforeReset } : {}),
             ...(fits?.[w] ? { usdPerPct: fits[w].usdPerPct, ...(fits[w].relSe !== undefined ? { relSe: fits[w].relSe } : {}), ...(fits[w].current ? {} : { fitFromEarlier: true }) } : {}),
         });

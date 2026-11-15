@@ -474,7 +474,7 @@ export interface HistoryUse {
   /** Weekly readings and no 5-hour ones: a plan without that window (Ultra). */
   noFiveHour?: boolean;
 }
-export interface LimitWindow { window: string; label: string; pct: number; at: number; resetsAt?: number; resetSince: boolean; perHour?: number; runsOutAt?: number; beforeReset?: boolean; usdPerPct?: number; relSe?: number; fitFromEarlier?: boolean }
+export interface LimitWindow { window: string; label: string; pct: number; at: number; resetsAt?: number; resetSince: boolean; perHour?: number; runsOutAt?: number; beforeReset?: boolean; usdPerPct?: number; relSe?: number; fitFromEarlier?: boolean; stale?: boolean }
 export interface AgentUse { id: string; model?: string; contextTokens?: number; window?: number; usd?: number; requests?: number }
 export interface UsagePaneData { at: number; history?: HistoryUse; historyFrom?: "cache" | "measured"; historyMs?: number; limits: LimitWindow[]; agents: AgentUse[] }
 
@@ -571,6 +571,7 @@ export function mergeLimits(ledger: LimitWindow[], live: LiveUsage | undefined):
         w.at = live!.at;
         if (Number.isFinite(reset)) w.resetsAt = reset;
         w.resetSince = false;
+        w.stale = false;
       }
     } else {
       out.push({ window: r.kind, label: r.kind === "five_hour" ? "5-hour" : "Weekly", pct: r.percentUsed, at: live!.at, resetSince: false, ...(Number.isFinite(reset) ? { resetsAt: reset } : {}) });
@@ -595,7 +596,8 @@ export function usageView(v: UsageViewInput): UsageView {
     if (w.resetSince) return { key: w.window, label: w.label, pct: 0, text: `reset since the last reading (${pctText(w.pct)} then)` };
     const parts: string[] = [];
     if (w.resetsAt !== undefined && w.resetsAt > now) parts.push(`resets in ${duration(w.resetsAt - now)}`);
-    if (w.perHour !== undefined && w.perHour > 0) {
+    if (w.stale) parts.push(`read ${duration(now - w.at)} ago, no pace from it`);
+    else if (w.perHour !== undefined && w.perHour > 0) {
       const outIn = w.runsOutAt !== undefined && w.runsOutAt > now ? `, runs out in ${duration(w.runsOutAt - now)}${w.beforeReset ? " (before the reset)" : ""}` : "";
       parts.push(`+${per(w.perHour)} points an hour lately${outIn}`);
     }
