@@ -84,6 +84,11 @@ export interface SessionTotal {
     estimatedUsd: number;
     /** Bytes read to bring the entries up to date. */
     read: number;
+    /** Each file's own dollars and requests (the main transcript, each subagent's), as counted in `usd`: the usage pane's per-subagent cost. */
+    byFile: Record<string, {
+        usd: number;
+        requests: number;
+    }>;
     /** Keeps the entries, so the next look reads only what was appended. */
     save: () => void;
 }

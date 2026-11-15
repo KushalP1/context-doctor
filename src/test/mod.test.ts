@@ -16,10 +16,12 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyOutcome, band, duration, fixArgv, keepWarmRefusal, keepWarmStep, KEEP_WARM_COMMAND, money, outcome, paneRows, parseKeepWarm, parsePlan, passedThreshold, PING_EVERY_1H_MS, PING_EVERY_5M_MS, PING_PROMPT, pingOutcome, thresholdsFrom, tokens, withPresses, type BandData, type KeepWarm, type PlanJson } from "../mod/logic.js";
+import { applyOutcome, band, bar, duration, fixArgv, KEEP_WARM_COMMAND, keepWarmRefusal, keepWarmStep, mergeLimits, money, outcome, paneRows, parseKeepWarm, parsePlan, parseUsage, passedThreshold, pctText, PING_EVERY_1H_MS, PING_EVERY_5M_MS, PING_PROMPT, pingOutcome, ringSvg, shortModel, thresholdsFrom, tokens, usageDue, usageText, usageView, withPresses, type BandData, type KeepWarm, type PlanJson, type UsagePaneData } from "../mod/logic.js";
 import { PING_EVERY_1H_MS as REPLAY_1H, PING_EVERY_5M_MS as REPLAY_5M } from "../coldreturns.js";
+import { summarizeHistory } from "../usagepane.js";
+import type { SpendItem } from "../spend.js";
 import { sessionPriceThresholds } from "../sessionprice.js";
-import { register, state, COMMAND, PANE } from "../mod/register.js";
+import { register, state, COMMAND, PANE, USAGE_COMMAND, USAGE_PANE } from "../mod/register.js";
 import { costCheck, costGaps, readCostLines, recordModEvent, recordSessionCost, statusLineRateLimits } from "../modmeasure.js";
 import { sandboxEnv } from "./sandbox.js";
 
@@ -248,7 +250,7 @@ interface Stub {
 }
 
 /** A stand-in for the engine: `$` as the declarations describe it, process.run for real in `home`. */
-function engine(home: string, opts: { env?: Record<string, string>; now?: number; cwd?: string; sessionId?: string; noProcess?: boolean; compactRejects?: boolean; fork?: (s: Stub) => any; noFork?: boolean } = {}): Stub {
+function engine(home: string, opts: { env?: Record<string, string>; now?: number; cwd?: string; sessionId?: string; noProcess?: boolean; compactRejects?: boolean; fork?: (s: Stub) => any; noFork?: boolean; agents?: Array<Record<string, string>>; noAgentList?: boolean; isPlaced?: boolean; usage?: Record<string, unknown> } = {}): Stub {
   const s: Stub = { hooks: new Map(), $: undefined, runs: [], compacts: 0, commands: [], opened: [], toasts: [], now: opts.now ?? Date.now(), forks: [] };
   s.$ = {
     plugin: { name: "context-doctor", root },
@@ -269,10 +271,18 @@ function engine(home: string, opts: { env?: Record<string, string>; now?: number
         s.compacts++;
         return { messages: [] };
       },
+      usage: async () => opts.usage ?? { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] },
+    },
+    agent: {
+      list: async () => {
+        if (opts.noAgentList) throw new Error("no such call: agent.list");
+        return opts.agents ?? [];
+      },
     },
     ui: {
-      open: async (p: { id: string }) => { s.opened.push(p.id); return { isPlaced: true }; },
-      resolve: () => ({ Box: "Box", Text: "Text", Button: "Button" }),
+      open: async (p: { id: string }) => { s.opened.push(p.id); return { isPlaced: opts.isPlaced ?? true }; },
+      // The terminal's table has no Svg; the Desktop app's has.
+      resolve: (e: { surface?: string }) => ({ Box: "Box", Text: "Text", Button: "Button", ...(e?.surface === "terminal" ? {} : { Svg: "Svg" }) }),
       invalidate: () => {},
       toast: (t: string) => { s.toasts.push(t); },
     },
@@ -322,7 +332,7 @@ test("after a turn: the readings reach the limits ledger and the cost ledger thr
   const { home, cwd } = sessionHome(80, now);
   const s = engine(home, { cwd, now });
   await fire(s, "session.start", { cwd, surface: "desktop", isInteractive: true }, (e) => ({ cwd: e.cwd }));
-  assert.deepEqual(s.commands, [COMMAND, KEEP_WARM_COMMAND]);
+  assert.deepEqual(s.commands, [COMMAND, USAGE_COMMAND, KEEP_WARM_COMMAND]);
   const reset = new Date(now + 2 * 3600e3).toISOString();
   const echoed = await fire(s, "session.measure", { context: { tokens: 520_010, window: 1_000_000 }, rateLimits: [{ kind: "five_hour", percentUsed: 41.5, resetsAt: reset }, { kind: "seven_day", percentUsed: 12 }], cost: { usd: 9.87 }, changed: ["rateLimits", "cost"] }, (e) => ({ changed: e.changed }));
   assert.deepEqual(echoed, { changed: ["rateLimits", "cost"] }, "the engine's answer passes through");
@@ -552,6 +562,204 @@ test("the pane: a press while another fix holds the lock changes nothing and say
   assert.match(state().last!.lines.join("\n"), /another context-doctor is changing settings/);
   assert.deepEqual(snapshot(a), before);
   assert.ok(button(await render(s, "Pane", "desktop", {}, PANE), "apply:cache-ttl"), "still offered");
+});
+
+// -- The usage pane (F5) ---------------------------------------------------------------
+
+const HOUR = 60 * MIN;
+const usageData = (over: Partial<UsagePaneData> = {}): UsagePaneData => ({
+  at: T,
+  history: {
+    at: T - 2 * MIN,
+    periods: [
+      { key: "today", label: "Today", usd: 42.1, tokens: 3_100_000, requests: 120, models: [{ model: "claude-opus-5-5", usd: 30, tokens: 2_000_000, requests: 80 }, { model: "claude-sonnet-5-5", usd: 12.1, tokens: 1_100_000, requests: 40 }] },
+      { key: "7d", label: "7 days", usd: 841, tokens: 90_000_000, requests: 4000, models: [{ model: "claude-fable-5-2", usd: 841, tokens: 90_000_000, requests: 4000 }] },
+      { key: "30d", label: "30 days", usd: 3490, tokens: 6_400_000_000, requests: 22_000, models: [] },
+    ],
+  },
+  limits: [
+    { window: "five_hour", label: "5-hour", pct: 31, at: T - 10 * MIN, resetsAt: T + 2 * HOUR + 10 * MIN, resetSince: false, perHour: 6.2, runsOutAt: T + 90 * MIN, beforeReset: true, usdPerPct: 1.2 },
+    { window: "seven_day", label: "Weekly", pct: 18, at: T - 10 * MIN, resetsAt: T + 3 * 24 * HOUR, resetSince: false },
+  ],
+  agents: [{ id: "a1", model: "claude-sonnet-5-5", contextTokens: 84_000, window: 200_000, usd: 0.42, requests: 9 }],
+  ...over,
+});
+
+test("usage view: the context ring, both windows with their pace and dollars per 1%, today by model, a running subagent", () => {
+  const v = usageView({ data: usageData(), live: { at: T, context: { tokens: 412_000, window: 1_000_000, percent: 41 }, model: "claude-opus-5-5" }, agents: [{ id: "a1", type: "Explore", description: "Find the auth code", status: "running" }, { id: "a2", type: "Plan", description: "done one", status: "completed" }], now: T });
+  assert.deepEqual(v.context, { pct: 41, text: "412k of 1.0M tokens (41%) · Opus 5.5" });
+  assert.deepEqual(v.limits.map((l) => [l.label, l.text, l.sub]), [
+    ["5-hour", "31% · resets in 2h 10m · +6.2 points an hour lately, runs out in 1h 30m (before the reset)", "≈ $1.20 of list price per 1%, fitted on your readings"],
+    ["Weekly", "18% · resets in 3 days", undefined],
+  ]);
+  assert.equal(v.limitsNote, undefined);
+  assert.deepEqual(v.periods.map((p) => p.text), ["Today $42.10 · 3.1M tokens", "7 days $841 · 90.0M tokens", "30 days $3,490 · 6400.0M tokens"]);
+  assert.deepEqual(v.period!.rows, [{ model: "Opus 5.5", text: "$30.00 · 2.0M tokens · 80 requests" }, { model: "Sonnet 5.5", text: "$12.10 · 1.1M tokens · 40 requests" }]);
+  assert.deepEqual(v.agents, [{ key: "a1", head: "Explore: Find the auth code", text: "Sonnet 5.5 · context 84k of 200k · $0.42 so far" }], "a finished agent is not running");
+  assert.equal(v.glance, "context 41% · today $42.10 · weekly 18% · 1 subagent");
+  assert.equal(v.footer, "Dollars at list price, as context-doctor spend prices them; measured 2 min ago.");
+  assert.match(usageText(v), /^context-doctor usage: context 41% · today \$42\.10 · weekly 18% · 1 subagent\nContext: 412k of 1\.0M tokens/);
+  // The period buttons: another period's rows.
+  assert.deepEqual(usageView({ data: usageData(), now: T, period: "7d" }).period!.rows, [{ model: "Fable 5.2", text: "$841 · 90.0M tokens · 4,000 requests" }]);
+  assert.deepEqual(usageView({ data: usageData(), now: T, period: "30d" }).period!.rows, [{ model: "", text: "Nothing in Claude Code in this period." }]);
+});
+
+test("usage view: Ultra (no 5-hour window), no readings at all, Claude Code's newer reading over the ledger's, no agent list, nothing measured yet", () => {
+  const ultra = usageView({ data: usageData({ limits: [usageData().limits[1]] }), now: T });
+  assert.deepEqual(ultra.limits.map((l) => l.label), ["Weekly"]);
+  assert.equal(ultra.limitsNote, "No 5-hour window on this plan (Ultra has none): the weekly limit only.");
+  assert.match(usageView({ data: usageData({ limits: [] }), now: T }).limitsNote!, /^No limit readings yet: Claude Code reports the windows on a Pro, Max or Ultra sign-in/);
+  // session.measure's windows are newer than the ledger's: they win, and one the ledger lacks is shown from them alone.
+  const live = usageView({ data: usageData({ limits: [usageData().limits[1]] }), live: { at: T, rateLimits: [{ kind: "seven_day", percentUsed: 19.5, resetsAt: new Date(T + 2 * 24 * HOUR).toISOString() }, { kind: "five_hour", percentUsed: 4 }, { kind: "spend_limit", percentUsed: 80 }] }, now: T });
+  assert.deepEqual(live.limits.map((l) => [l.label, l.pct, l.text]), [["5-hour", 4, "4%"], ["Weekly", 19.5, "20% · resets in 2 days"]]);
+  assert.deepEqual(mergeLimits(usageData().limits, { at: T - HOUR, rateLimits: [{ kind: "five_hour", percentUsed: 1 }] }).map((w) => w.pct), [31, 18], "an older live reading leaves the ledger's");
+  const bare = usageView({ now: T });
+  assert.equal(bare.context.text, "Measured after the session's first reply.");
+  assert.equal(bare.agentsNote, "This Claude Code does not list subagents to mods.");
+  assert.equal(bare.glance, "context-doctor usage");
+  assert.equal(usageView({ now: T, agents: [] }).agentsNote, "No subagents running.");
+  assert.equal(usageView({ now: T, loading: true }).footer, "Measuring your last 30 days…");
+  assert.equal(usageView({ now: T, agents: [{ id: "x", type: "general-purpose", status: "running" }], data: usageData({ agents: [] }) }).agents[0].text, "measuring…");
+  const reset = usageView({ data: usageData({ limits: [{ ...usageData().limits[0], resetSince: true }] }), now: T });
+  assert.equal(reset.limits[0].text, "reset since the last reading (31% then)");
+});
+
+test("usage pieces: model names, bars, the ring, when the pane asks again", () => {
+  assert.deepEqual(["claude-opus-5-5", "claude-haiku-4-5-20251001", "claude-fable-5-2", "claude-opus-5", "claude-opus-4-6[1m]", "gpt-5.5", undefined].map(shortModel), ["Opus 5.5", "Haiku 4.5", "Fable 5.2", "Opus 5", "Opus 4.6 (1M)", "gpt-5.5", "unknown model"]);
+  assert.equal(bar(50, 10), "█████░░░░░");
+  assert.equal(bar(130, 8), "████████");
+  assert.equal(bar(NaN, 4), "░░░░");
+  assert.deepEqual([pctText(0.4), pctText(41.4), pctText(100)], ["0.4%", "41%", "100%"]);
+  const svg = ringSvg(41);
+  assert.match(svg, /^<svg [^>]*viewBox="0 0 64 64">.*stroke-dasharray="66\.98 163\.36".*>41%<\/text><\/svg>$/);
+  assert.match(ringSvg(97), /#d64545/);
+  assert.ok(!/<script|on[a-z]+=/i.test(svg));
+  // Never twice at once, never while closed; the history every 5 minutes; the subagents every 30 s while one runs or after a turn.
+  const base = { open: true, loading: false, lastAt: T, historyAt: T, agentsRunning: 0 };
+  assert.equal(usageDue({ ...base, open: false }, T + HOUR), false);
+  assert.equal(usageDue({ ...base, loading: true }, T + HOUR), false);
+  assert.deepEqual(usageDue({ ...base, lastAt: undefined }, T), { history: true });
+  assert.deepEqual(usageDue(base, T + 5 * MIN), { history: true });
+  assert.equal(usageDue(base, T + 4 * MIN), false, "nothing moved");
+  assert.equal(usageDue({ ...base, agentsRunning: 1 }, T + 20_000), false);
+  assert.deepEqual(usageDue({ ...base, agentsRunning: 1 }, T + 30_000), { history: false });
+  assert.deepEqual(usageDue({ ...base, measuredAt: T + 1 }, T + 40_000), { history: false });
+  assert.equal(parseUsage("{}"), undefined);
+  assert.equal(parseUsage("x"), undefined);
+});
+
+test("usage history: today, 7 and 30 days by model, the six largest and the rest as one row", () => {
+  const now = new Date(2026, 10, 15, 15, 0).getTime();
+  const item = (daysAgo: number, model: string, usd: number) => ({ tool: "claude", ts: now - daysAgo * 864e5, project: "p", session: "s", model, input: 10, read: 1000, write: 100, output: 5, usd, inputUsd: 0, writeUsd: 0, readUsd: 0, outputUsd: 0, priced: model !== "mystery" }) as SpendItem;
+  const items = [item(0.1, "claude-opus-5-5", 3), item(0.2, "claude-sonnet-5-5", 1), item(3, "claude-opus-5-5", 10), item(20, "claude-fable-5-2", 100), item(40, "claude-opus-5-5", 1000), item(25, "mystery", 0),
+    ...["a", "b", "c", "d", "e"].map((m, i) => item(10, `claude-${m}-1`, 1 - i * 0.1))];
+  const h = summarizeHistory(items, now);
+  assert.deepEqual(h.periods.map((p) => [p.label, p.usd, p.requests]), [["Today", 4, 2], ["7 days", 14, 3], ["30 days", 118, 10]]);
+  assert.equal(h.periods[0].tokens, 2 * 1115);
+  const month = h.periods[2].models;
+  assert.equal(month.length, 7);
+  assert.deepEqual(month.slice(0, 3).map((m) => [m.model, m.usd]), [["claude-fable-5-2", 100], ["claude-opus-5-5", 13], ["claude-sonnet-5-5", 1]]);
+  assert.deepEqual([month[6].model, month[6].usd, month[6].requests], ["3 other models", 1.3, 3]);
+  assert.equal(h.unpriced, 1);
+  assert.equal(usageView({ data: { at: now, history: h, limits: [], agents: [] }, now, period: "30d" }).period!.rows[6].model, "3 other models");
+});
+
+/** A home with a session's main transcript (today and 3 days ago), a running subagent's, and a weekly-only limits ledger (Ultra). */
+function usageHome(now = Date.now()): { home: string; cwd: string } {
+  const { home, cwd } = sessionHome(30, now);
+  const proj = join(home, ".claude", "projects", cwd.replace(/[^A-Za-z0-9]/g, "-"));
+  const row = (i: number, ts: number, model: string, ctx: number) => JSON.stringify({ type: "assistant", uuid: `x${i}`, timestamp: new Date(ts).toISOString(), message: { id: `mx${i}`, model, content: [], usage: { input_tokens: 10, cache_read_input_tokens: ctx - 1010, cache_creation_input_tokens: 1000, output_tokens: 100, cache_creation: { ephemeral_5m_input_tokens: 1000, ephemeral_1h_input_tokens: 0 } } } });
+  writeFileSync(join(proj, "old.jsonl"), [row(1, now - 3 * 864e5, "claude-fable-5-2", 300_000), row(2, now - 3 * 864e5 + MIN, "claude-fable-5-2", 310_000)].join("\n") + "\n");
+  const sub = join(proj, "sess-1", "subagents");
+  mkdirSync(sub, { recursive: true });
+  writeFileSync(join(sub, "agent-a1.jsonl"), [JSON.stringify({ type: "user", agentId: "a1", isSidechain: true, message: { role: "user", content: "find it" } }), row(3, now - 2 * MIN, "claude-sonnet-5-5", 40_000), row(4, now - MIN, "claude-sonnet-5-5", 84_000)].join("\n") + "\n");
+  writeFileSync(join(home, ".claude", ".context-doctor-limits.jsonl"), [JSON.stringify({ ts: now - 2 * HOUR, app: "claude", w: "seven_day", pct: 12, reset: Math.round((now + 3 * 864e5) / 1000) }), JSON.stringify({ ts: now - 20 * MIN, app: "claude", w: "seven_day", pct: 18, reset: Math.round((now + 3 * 864e5) / 1000) })].join("\n") + "\n");
+  return { home, cwd };
+}
+
+const settle = async () => { for (let i = 0; i < 400 && state().usageLoading; i++) await new Promise((r) => setTimeout(r, 25)); };
+
+test("the usage pane, from a fixture home: opened by its command, drawn on the desktop (a ring) and the terminal (a bar), as a widget, with no work on a draw", { timeout: 60_000 }, async () => {
+  const now = Date.now();
+  const { home, cwd } = usageHome(now);
+  const s = engine(home, { cwd, now, agents: [{ id: "a1", type: "Explore", description: "Find the auth code", status: "running" }, { id: "a0", type: "Plan", description: "finished", status: "completed" }] });
+  await fire(s, "session.start", { cwd, surface: "desktop", isInteractive: true });
+  assert.deepEqual(s.commands, [COMMAND, USAGE_COMMAND, KEEP_WARM_COMMAND]);
+  await fire(s, "session.measure", { context: { tokens: 520_010, window: 1_000_000, percent: 52 }, rateLimits: [{ kind: "seven_day", percentUsed: 18.4, resetsAt: new Date(now + 3 * 864e5).toISOString() }], cost: { usd: 3 }, changed: ["context"] }, () => ({ changed: ["context"] }));
+  const answer = await fire(s, "command.run", { command: USAGE_COMMAND });
+  assert.equal(answer.text, "Opened context-doctor's usage pane.");
+  assert.deepEqual(s.opened, [USAGE_PANE]);
+  await settle();
+  assert.ok(state().usage, state().usageError);
+  assert.deepEqual(s.runs[s.runs.length - 1].slice(1), [cli, "mod", "usage"]);
+  assert.equal(state().usage!.historyFrom, "measured");
+
+  // Drawing only reads: no process, and well inside a hook's 10-second budget.
+  const runs = s.runs.length;
+  const t0 = performance.now();
+  const desk = await render(s, "Pane", "desktop", { bodyColumns: 80, placement: "dock" }, USAGE_PANE);
+  const drawMs = performance.now() - t0;
+  assert.equal(s.runs.length, runs, "a draw runs nothing");
+  assert.ok(drawMs < 50, `drawn in ${drawMs.toFixed(1)} ms`);
+  const words = texts(desk).join("\n");
+  const ring = find(desk, (n) => n.type === "Svg");
+  assert.ok(ring, "the Desktop app gets the ring");
+  assert.match(ring!.props!.source, /stroke-dasharray/);
+  assert.equal(ring!.props!.alt, "Context 52% used");
+  assert.match(words, /520k of 1\.0M tokens \(52%\) · Opus 5\.5/);
+  assert.match(words, /Weekly\n█{2,}░+\n18% · resets in (2|3) days/);
+  assert.match(words, /No 5-hour window on this plan \(Ultra has none\)/);
+  assert.match(words, /Subagents running \(1\)\nExplore: Find the auth code\n {2}Sonnet 5\.5 · context 84k of (200k|1\.0M) · \$0\.\d\d so far/);
+  assert.ok(button(desk, "period:today") && button(desk, "period:7d") && button(desk, "period:30d"));
+  assert.match(button(desk, "period:today")!.props!.label, /^Today \$\d+\.\d\d · [\d.]+[kM] tokens$/);
+  assert.equal(button(desk, "period:today")!.props!.variant, "primary");
+  assert.match(words, /Opus 5\.5\n\$\d+\.\d\d · [\d.]+[kM] tokens · 3 requests/);
+  // The week holds the 3-day-old session too; its button shows that period's rows.
+  await button(desk, "period:7d")!.props!.onPress({});
+  const week = await render(s, "Pane", "desktop", { bodyColumns: 80 }, USAGE_PANE);
+  assert.match(texts(week).join("\n"), /Fable 5\.2\n\$\d+\.\d\d · [\d.]+[kM] tokens · 2 requests/);
+  assert.equal(button(week, "period:7d")!.props!.variant, "primary");
+
+  const term = await render(s, "Pane", "terminal", { bodyColumns: 70 }, USAGE_PANE);
+  assert.equal(find(term, (n) => n.type === "Svg"), undefined, "the terminal has no Svg");
+  // Bars sized to the pane: 70 columns leave 26 cells, held to 24.
+  assert.ok(texts(term).filter((t) => /^[█░]+$/.test(t)).every((t) => t.length === 24), texts(term).join("|"));
+  assert.match(texts(term).join("\n"), /520k of 1\.0M tokens/);
+  const widget = await render(s, "Pane", "desktop", { placement: "widget" }, USAGE_PANE);
+  assert.match(texts(widget).join(""), /^context 52% · today \$\d+\.\d\d · weekly 18% · 1 subagent$/);
+
+  // Refresh measures again; a second look within 5 minutes reads the CLI's cache.
+  await button(desk, "usage-refresh")!.props!.onPress({});
+  await settle();
+  assert.equal(state().usage!.historyFrom, "measured");
+  const cached = spawnSync(process.execPath, [cli, "mod", "usage"], { input: JSON.stringify({ sessionId: "sess-1", cwd }), encoding: "utf8", env: sandboxEnv(home) });
+  assert.equal(JSON.parse(cached.stdout).historyFrom, "cache");
+
+  // Closed: the timer asks nothing more.
+  await fire(s, "ui.close", { id: USAGE_PANE, origin: { kind: "person" } }, () => ({}));
+  assert.equal(state().usageOpen, false);
+});
+
+test("the usage pane with nothing to draw it on (claude -p): the command answers with the same figures as text; an engine with no agent list says so; off registers nothing", { timeout: 60_000 }, async () => {
+  const now = Date.now();
+  const { home, cwd } = usageHome(now);
+  const s = engine(home, { cwd, now, isPlaced: false, noAgentList: true, usage: { startedAt: now, context: { tokens: 90_000, window: 200_000, percent: 45 }, rateLimits: [] } });
+  await fire(s, "session.start", { cwd, surface: null, isInteractive: false });
+  const answer = await fire(s, "command.run", { command: USAGE_COMMAND });
+  assert.match(answer.text, /^context-doctor usage: context 45% · today \$\d+\.\d\d · weekly 18%\nContext: 90k of 200k tokens \(45%\)/m);
+  assert.match(answer.text, /\nWeekly limit: 18% · resets in/);
+  assert.match(answer.text, /\nClaude Code: Today \$\d+\.\d\d · [\d.]+[kM] tokens · 7 days/);
+  assert.match(answer.text, /\nThis Claude Code does not list subagents to mods\./);
+  assert.equal(state().usageOpen, false, "no pane to keep up to date");
+
+  const bare = engine(home, { cwd, now, noProcess: true, isPlaced: false });
+  await fire(bare, "session.start", { cwd, surface: null, isInteractive: false });
+  assert.match((await fire(bare, "command.run", { command: USAGE_COMMAND })).text, /context-doctor could not run: spawn node ENOENT\. It needs Node\.js on the PATH/);
+
+  const off = engine(home, { env: { CONTEXT_DOCTOR_NO_MOD: "1" } });
+  await fire(off, "session.start", { cwd: home, surface: "desktop", isInteractive: true });
+  assert.deepEqual(off.commands, []);
+  assert.match((await fire(off, "command.run", { command: USAGE_COMMAND })).text, /mod is off/);
 });
 
 // -- The plugin wiring ------------------------------------------------------------------

@@ -140,6 +140,7 @@ function greenRun(c: any, pluginDir: string) {
     { type: "result", is_error: false, result: "CANARY-DONE", total_cost_usd: 0.48252 },
     hook("UserPromptSubmit", JSON.stringify({ systemMessage: "context-doctor: this session has cost $0.48 so far" })),
     { type: "result", is_error: false, total_cost_usd: 0.64336 },
+    { type: "result", is_error: false, total_cost_usd: 0.64336, result: "context-doctor: context-doctor usage: context 2% · today $0.80 · weekly 17%\nContext: 20k of 1.0M tokens (2%) · Opus 5.5\n5-hour limit: 42% · resets in 2h 00m\nWeekly limit: 17% · resets in 3 days" },
     hook("PreModelSwitch", JSON.stringify({ systemMessage: "context-doctor: switching to claude-haiku-4-5 re-writes this session's ~20k-token context" })),
     { type: "result", is_error: false, total_cost_usd: 0.72378 },
   ];
@@ -182,8 +183,11 @@ test("evaluate: green on a full run; each missing piece turns its check red, and
     red((r) => r.mock.refused.push("CONNECT api.anthropic.com:443"), /Anthropic's hosts/);
     red((r) => (r.run.code = 1), /exits 0/);
     // A session that stopped at a step (an older Claude Code that never answers set_model) names it.
-    assert.deepEqual(red((r) => ((r.run as any).steps = ["the first prompt and its subagent", "the second prompt"]), /runs every step/), ["the session runs every step: a prompt with a subagent, a second prompt, a model switch, /compact"]);
-    assert.deepEqual(failed({ ...greenRun(c, dir), run: { ...greenRun(c, dir).run, steps: ["a", "b", "c", "d"] } }), []);
+    assert.deepEqual(red((r) => ((r.run as any).steps = ["the first prompt and its subagent", "the second prompt"]), /runs every step/), ["the session runs every step: a prompt with a subagent, a second prompt, the usage pane, a model switch, /compact"]);
+    assert.deepEqual(failed({ ...greenRun(c, dir), run: { ...greenRun(c, dir).run, steps: ["a", "b", "c", "d", "e"] } }), []);
+    // The usage pane: no answer, or one without the mock's windows.
+    red((r) => (r.run.events = r.run.events.filter((e: any) => !/usage: /.test(e.result ?? ""))), /usage pane loads/);
+    red((r) => (r.run.events.find((e: any) => /usage: /.test(e.result ?? "")).result = "context-doctor usage: context 2% · today $0.80 · weekly 17%\nContext: 20k of 1.0M tokens\nNo limit readings yet"), /usage pane loads/);
     // Another host is named but not a failure (the mock refused it); a price gap is a warning.
     const r = greenRun(c, dir);
     r.mock.refused.push("CONNECT example.com:443");

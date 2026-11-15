@@ -202,10 +202,12 @@ export function sessionTotal(input, now = Date.now()) {
     // Each reply once: a fork's copy shares its key with the reply it copied.
     const seen = new Set();
     let usd = 0, subagentUsd = 0, workflowUsd = 0, unpriced = 0, estimatedUsd = 0;
+    const byFile = {};
     for (const [file, whose] of files) {
         const e = kept[file];
         if (!e)
             continue;
+        const mine = (byFile[file] = { usd: 0, requests: 0 });
         const x = new Set((e.x ?? []).map(([i]) => i)), y = new Set((e.y ?? []).map(([i]) => i));
         e.k.forEach((key, i) => {
             if (key) {
@@ -214,6 +216,8 @@ export function sessionTotal(input, now = Date.now()) {
                 seen.add(key);
             }
             usd += e.d[i];
+            mine.usd += e.d[i];
+            mine.requests++;
             if (whose === "sub")
                 subagentUsd += e.d[i];
             if (whose === "workflow")
@@ -240,7 +244,7 @@ export function sessionTotal(input, now = Date.now()) {
         }
         catch { /* read again next time */ }
     };
-    return { app, usd, subagentUsd, workflowUsd, unpriced, estimatedUsd, read, save };
+    return { app, usd, subagentUsd, workflowUsd, unpriced, estimatedUsd, read, byFile, save };
 }
 /** Keeps a look's entries once it read enough to be worth it, as the threshold check does. */
 export function saveIfWorthIt(t) {

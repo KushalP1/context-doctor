@@ -17,6 +17,10 @@
 //    writes the limits ledger (the 5-hour and weekly windows the mock's
 //    anthropic-ratelimit-unified-* headers said) and the session-cost ledger
 //    (Claude Code's cost of the session beside context-doctor's own price);
+//  - the mod's usage pane loads: `/context-doctor-usage`, with no surface to
+//    draw it on under -p, answers with the pane's figures as text (the
+//    context, the two windows the mock reported, today's dollars from the
+//    session's own transcript);
 //  - `claude plugin validate --profile directory --strict` passes;
 //  - every request the mock got carried the dummy credential, and nothing
 //    tried to reach another host (HTTPS_PROXY points at the mock, which
@@ -63,7 +67,11 @@ export const PRECOMPACT_HEAD = "context-doctor, from this session's transcript";
 const SESSION_TIMEOUT_MS = 180_000;
 const IDLE_MS = 45_000;
 /** The session's steps, in order; a run that stops early names the one it stopped at. */
-const STEPS = ["the first prompt and its subagent", "the second prompt", "the model switch (set_model)", "/compact", "done"];
+const STEPS = ["the first prompt and its subagent", "the second prompt", "the usage pane (/context-doctor-usage)", "the model switch (set_model)", "/compact", "done"];
+/** The mod's usage command: with no surface to draw the pane on (-p), it answers with the pane's figures as text. */
+export const USAGE_COMMAND = "/context-doctor-usage";
+/** That answer (src/mod/logic.ts usageText), as a result's text. A background subagent's notice ends a turn of its own (2.1.325), so a step waits for this one. */
+const usageAnswer = (e) => e?.type === "result" && /context-doctor usage: /.test(String(e.result ?? ""));
 
 // -- The dummy credential --------------------------------------------------------
 
@@ -305,10 +313,11 @@ async function runSession({ claude, pluginDir, env, cwd, debugFile, log }) {
       if (e.type === "result") {
         // A subagent started: on to the next step once its answer came back (the mock's CANARY-DONE).
         if (stage === 0 && (!subagent || String(e.result ?? "").includes("CANARY-DONE"))) { stage = 1; user("CANARY-SECOND: one more line."); }
-        else if (stage === 1) { stage = 2; send({ type: "control_request", request_id: "canary-set-model", request: { subtype: "set_model", model: "claude-haiku-4-5" } }); }
-        else if (stage === 3 && compacted) { stage = 4; child.stdin.end(); }
+        else if (stage === 1) { stage = 2; user(USAGE_COMMAND); }
+        else if (stage === 2 && usageAnswer(e)) { stage = 3; send({ type: "control_request", request_id: "canary-set-model", request: { subtype: "set_model", model: "claude-haiku-4-5" } }); }
+        else if (stage === 4 && compacted) { stage = 5; child.stdin.end(); }
       }
-      if (stage === 2 && e.type === "control_response" && e.response?.request_id === "canary-set-model") { stage = 3; user("/compact"); }
+      if (stage === 3 && e.type === "control_response" && e.response?.request_id === "canary-set-model") { stage = 4; user("/compact"); }
     }
   });
   // A step Claude Code never answers (an older one ignores set_model) must not hold the run to the end: close its input.
@@ -350,7 +359,7 @@ export function evaluate({ run, mock, ledgers, validate, pluginDir }) {
   const sid = init?.session_id;
   const results = ev.filter((e) => e.type === "result");
   check(run.code === 0, "Claude Code exits 0", `exit ${run.code}${run.stderr.trim() ? ": " + run.stderr.trim().split("\n").slice(-3).join(" | ") : ""}`);
-  if (run.steps) check(run.steps.length === STEPS.length - 1, "the session runs every step: a prompt with a subagent, a second prompt, a model switch, /compact", run.steps.length === STEPS.length - 1 ? "" : `stopped at ${STEPS[run.steps.length]}`);
+  if (run.steps) check(run.steps.length === STEPS.length - 1, "the session runs every step: a prompt with a subagent, a second prompt, the usage pane, a model switch, /compact", run.steps.length === STEPS.length - 1 ? "" : `stopped at ${STEPS[run.steps.length]}`);
   check(results.length >= 3 && results.every((r) => !r.is_error), "every turn ends without an error", `${results.length} results${results.filter((r) => r.is_error).map((r) => ": " + (r.result ?? r.subtype)).join("")}`);
   const plugin = init?.plugins?.find((p) => p.name === "context-doctor");
   check(plugin && real(plugin.path) === real(pluginDir), "the plugin loads (init lists context-doctor from --plugin-dir)", plugin ? `${plugin.source} ${plugin.version ?? ""}` : `plugins: ${(init?.plugins ?? []).map((p) => p.name).join(", ") || "none"}`);
@@ -390,6 +399,11 @@ export function evaluate({ run, mock, ledgers, validate, pluginDir }) {
   const priced = costs.find((l) => typeof l.cd === "number" && l.cd > 0);
   check(priced, "beside it, context-doctor's own price of the session", priced ? `$${priced.cd}` : "no cd");
   if (priced) check(Math.abs(priced.cd - priced.cc) <= 0.02 * priced.cc, "context-doctor's price within 2% of Claude Code's", `$${priced.cd} against $${priced.cc} (${priced.model ?? "?"})`, true);
+  // The usage pane (F5): its command's answer under -p, from the same figures the pane draws.
+  const usage = String(ev.find(usageAnswer)?.result ?? "");
+  const want5h = Math.round(WINDOWS["5h"].utilization * 100), want7d = Math.round(WINDOWS["7d"].utilization * 100);
+  check(new RegExp(`context-doctor usage: context \\d+% · today \\$\\d+\\.\\d\\d · weekly ${want7d}%`).test(usage) && new RegExp(`\\n5-hour limit: ${want5h}% · resets in `).test(usage) && /\nContext: [\d.]+[kM]? of [\d.]+[kM] tokens/.test(usage),
+    "the mod's usage pane loads (/context-doctor-usage answers with its figures under -p)", usage ? usage.split("\n").slice(0, 4).join(" | ").slice(0, 300) : "no answer");
   check(validate.code === 0, "claude plugin validate --profile directory --strict passes", validate.code === 0 ? "" : validate.out.trim().split("\n").filter((l) => /✘|error|warning|⚠/i.test(l)).slice(0, 6).join(" | ") || `exit ${validate.code}`);
 
   // Safety: the dummy credential only, and nowhere else.

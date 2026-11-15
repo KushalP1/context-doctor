@@ -292,8 +292,9 @@ async function readStdin() {
 }
 /**
  * The CLI side: `mod measure` keeps the reading and prints the band's
- * figures; `mod event` records a press (`{ sessionId, ev, tokens }`). Both
- * print JSON and exit 0 whatever happens, as the status line does.
+ * figures; `mod event` records a press (`{ sessionId, ev, tokens }`); `mod
+ * usage` prints the usage pane's figures (usagepane.ts). Each prints JSON
+ * and exits 0 whatever happens, as the status line does.
  */
 export async function runMod(sub) {
     let out = {};
@@ -301,6 +302,8 @@ export async function runMod(sub) {
         const input = JSON.parse((await readStdin()) || "{}");
         if (sub === "measure")
             out = modMeasure(input);
+        else if (sub === "usage")
+            out = (await import("./usagepane.js")).usagePane(input);
         else
             out = { ok: recordModEvent(String(input?.sessionId ?? ""), String(input?.ev ?? ""), num(input?.tokens)) };
     }

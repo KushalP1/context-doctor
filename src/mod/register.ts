@@ -25,6 +25,12 @@
  *    idle (4.5 on a 5-minute cache), until the hours or the dollars run out,
  *    a ping finds the cache cold, the session ends, or Stop. Never armed but
  *    by that command, never again by itself; the band shows it while it runs.
+ *  - `/context-doctor-usage` opens the usage view the Desktop app dropped:
+ *    the context ring and the limit windows from Claude Code's own figures,
+ *    tokens and dollars by model for today, 7 and 30 days, and the running
+ *    subagents with their model, context and cost so far. Drawing only reads
+ *    what the mod holds; `context-doctor mod usage` refreshes it on the
+ *    timer, only while the pane is open (usageDue).
  *
  * Nothing happens without a press or a command: no auto-compaction, no auto-apply, no ping. The
  * mod writes no file itself; the CLI writes ours. Off: CONTEXT_DOCTOR_NO_MOD=1.
@@ -35,7 +41,7 @@
  * functions declared at the top of this file.
  */
 
-import { applyOutcome, band, DEFAULT_THRESHOLDS, fixArgv, keepWarmArmedText, keepWarmRefusal, keepWarmStatusText, keepWarmStep, keepWarmText, KEEP_WARM_COMMAND, MODEL_CHANGE, money, outcome, paneRows, parseKeepWarm, parsePlan, PING_PROMPT, pingOutcome, thresholdsFrom, withPresses, type BandData, type KeepWarm, type PlanJson } from "./logic.js";
+import { applyOutcome, band, bar, DEFAULT_THRESHOLDS, fixArgv, KEEP_WARM_COMMAND, keepWarmArmedText, keepWarmRefusal, keepWarmStatusText, keepWarmStep, keepWarmText, MODEL_CHANGE, money, outcome, paneRows, parseKeepWarm, parsePlan, parseUsage, pctText, PING_PROMPT, pingOutcome, ringSvg, RUNNING, thresholdsFrom, usageArgv, usageDue, usageText, usageView, withPresses, type AgentLike, type BandData, type KeepWarm, type LiveUsage, type PeriodUse, type PlanJson, type UsagePaneData } from "./logic.js";
 import type { Element, Engine, MeasureEvent, On, RenderEvent } from "./api.js";
 
 /** JSX's factory: a global of the mods runtime (`h(type, props, ...children)`). */
@@ -43,11 +49,15 @@ declare const h: (type: unknown, props: Record<string, unknown> | null, ...child
 
 export const COMMAND = "context-doctor-fix";
 export const PANE = "context-doctor-fix";
+export const USAGE_COMMAND = "context-doctor-usage";
+export const USAGE_PANE = "context-doctor-usage";
 /** How often the band checks whether its text changed (a countdown in minutes). */
 const TICK_MS = 30_000;
 /** `fix` measures 30 days of history: give it time. */
 const FIX_TIMEOUT_MS = 10 * 60_000;
 const MEASURE_TIMEOUT_MS = 30_000;
+/** `mod usage` measures 30 days the first time (~3 s cold on 22,000 requests); later runs read its 5-minute cache. */
+const USAGE_TIMEOUT_MS = 2 * 60_000;
 
 /** The mod's state for this load (a reload starts it over; the next turn measures again). */
 interface State {
@@ -70,9 +80,22 @@ interface State {
   kw?: KeepWarm;
   /** A ping in flight: never two at once. */
   pinging: boolean;
+  /** The usage pane: what `mod usage` said last, and when it is asked again. */
+  usage?: UsagePaneData;
+  usageOpen: boolean;
+  usageLoading: boolean;
+  usageError?: string;
+  usageLastAt?: number;
+  /** Claude Code's own figures from the last `session.measure`: the context ring and the windows. */
+  live?: LiveUsage;
+  /** `$.agent.list()`'s rows; undefined on a Claude Code without it. */
+  agents?: AgentLike[];
+  period: PeriodUse["key"];
+  /** What the pane last said, so the timer redraws only when its words change. */
+  usageDrawn: string;
 }
 
-const fresh = (): State => ({ off: false, always: false, thresholds: DEFAULT_THRESHOLDS, hidden: new Set(), drawn: "", compacting: false, loading: false, presses: new Map(), pinging: false });
+const fresh = (): State => ({ off: false, always: false, thresholds: DEFAULT_THRESHOLDS, hidden: new Set(), drawn: "", compacting: false, loading: false, presses: new Map(), pinging: false, usageOpen: false, usageLoading: false, period: "today", usageDrawn: "" });
 let S: State = fresh();
 
 /** For tests: the state the hooks share. */
@@ -100,6 +123,7 @@ async function measure($: Engine, e: MeasureEvent): Promise<void> {
     const cwd = await $.session.cwd();
     let model: string | undefined;
     try { model = await $.session.model(); } catch { /* measured without it */ }
+    if (S.live) S.live.model = model;
     const run = await $.process.run(["node", cliOf($), "mod", "measure"], { stdin: JSON.stringify({ sessionId, cwd, model, rateLimits: e.rateLimits, cost: e.cost, context: e.context }), timeoutMs: MEASURE_TIMEOUT_MS });
     const got = JSON.parse(run.stdout || "{}");
     S.data = got && typeof got.at === "number" ? (got as BandData) : fallback;
@@ -254,6 +278,76 @@ async function keepWarmCommand($: Engine, args: string | undefined): Promise<{ t
   return { text: keepWarmArmedText(S.kw, S.data!) };
 }
 
+function refreshUsage($: Engine): void {
+  void loadUsage($, true, true);
+}
+
+function choosePeriod($: Engine, key: PeriodUse["key"]): void {
+  S.period = key;
+  $.ui.invalidate("ui.render");
+}
+
+/** The subagents Claude Code is running: one call, no file read. */
+async function listAgents($: Engine): Promise<void> {
+  try {
+    const all = await $.agent.list();
+    S.agents = Array.isArray(all) ? all.map((a) => ({ id: a.id, type: a.type, description: a.description, status: a.status, ...(a.name ? { name: a.name } : {}) })) : undefined;
+  } catch {
+    S.agents = undefined;
+  }
+}
+
+const runningIds = (): string[] => (S.agents ?? []).filter((a) => !a.status || RUNNING.has(a.status)).map((a) => a.id);
+
+/** `mod usage`: the history (from its 5-minute cache, or measured), the limits ledger, the running subagents. Off the draw, never two at once. */
+async function loadUsage($: Engine, history: boolean, again = false): Promise<void> {
+  if (S.usageLoading) return;
+  S.usageLoading = true;
+  S.usageError = undefined;
+  if (S.usageOpen) $.ui.invalidate("ui.render");
+  try {
+    await listAgents($);
+    const sessionId = await $.session.id();
+    const cwd = await $.session.cwd();
+    const run = await $.process.run(usageArgv("node", cliOf($)), { stdin: JSON.stringify({ sessionId, cwd, agents: runningIds(), history, fresh: again }), timeoutMs: USAGE_TIMEOUT_MS });
+    const got = parseUsage(run.stdout);
+    if (got) S.usage = { ...got, history: got.history ?? S.usage?.history };
+    else S.usageError = `context-doctor mod usage did not answer (exit ${run.exitCode}): ${(run.stderr || run.stdout).trim().split("\n").slice(-1)[0] ?? ""}`;
+  } catch (err) {
+    S.usageError = `context-doctor could not run: ${err instanceof Error ? err.message : String(err)}. It needs Node.js on the PATH Claude Code starts with.`;
+  }
+  S.usageLastAt = await $.clock.now();
+  S.usageLoading = false;
+  if (S.usageOpen) $.ui.invalidate("ui.render");
+}
+
+/** Claude Code's figures at the moment the pane opens, before any turn measured them. */
+async function liveNow($: Engine): Promise<void> {
+  if (S.live) return;
+  try {
+    const u = await $.session.usage();
+    S.live = { at: await $.clock.now(), context: u.context, rateLimits: u.rateLimits };
+    try { S.live.model = await $.session.model(); } catch { /* without it */ }
+  } catch { /* the next turn measures */ }
+}
+
+function viewAt(now: number) {
+  return usageView({ data: S.usage, live: S.live, agents: S.agents, period: S.period, loading: S.usageLoading, error: S.usageError, now });
+}
+
+/** While the pane is open: the subagents (one call), `mod usage` when it is due, and a redraw only when the words change. */
+async function usageTick($: Engine, now: number): Promise<void> {
+  if (!S.usageOpen) return;
+  await listAgents($);
+  const due = usageDue({ open: S.usageOpen, loading: S.usageLoading, lastAt: S.usageLastAt, historyAt: S.usage?.history?.at, measuredAt: S.live?.at, agentsRunning: runningIds().length }, now);
+  if (due) void loadUsage($, due.history);
+  const k = JSON.stringify(viewAt(now));
+  if (k !== S.usageDrawn) {
+    S.usageDrawn = k;
+    $.ui.invalidate("ui.render");
+  }
+}
+
 /** The countdown is in minutes: redraw only when the band's words change. */
 async function tick($: Engine): Promise<void> {
   const now = await $.clock.now();
@@ -263,6 +357,7 @@ async function tick($: Engine): Promise<void> {
     S.drawn = k;
     $.ui.invalidate("ui.render");
   }
+  await usageTick($, now);
 }
 
 export function register(on: On): void {
@@ -275,6 +370,7 @@ export function register(on: On): void {
       S.thresholds = thresholdsFrom(await $.env.get("CONTEXT_DOCTOR_SESSION_PRICE"), await $.env.get("CONTEXT_DOCTOR_NO_SESSION_PRICE"));
       if (!S.off) {
         await $.command.register({ name: "context-doctor-fix", description: "context-doctor: the fix plan, with an Apply and an Undo button per lever (nothing applies without a press)" });
+        await $.command.register({ name: "context-doctor-usage", description: "context-doctor: the context ring, your limit windows, tokens and dollars by model (today, 7 and 30 days) and the running subagents" });
         $.clock.every(TICK_MS, () => void tick($));
         // Last: an engine that refuses it keeps the rest.
         await $.command.register({ name: KEEP_WARM_COMMAND, description: "context-doctor: keep the prompt cache warm while you step away, for up to the hours and dollars you give (the pings bill to your plan or key); off stops it", argumentHint: "<2h> [$5] | off" });
@@ -288,6 +384,8 @@ export function register(on: On): void {
   on("session.measure", async ($, e, next) => {
     const r = await next(e);
     if (S.off) return r;
+    // The usage pane's ring and windows: Claude Code's own figures, kept as they came.
+    S.live = { at: await $.clock.now(), context: e.context, rateLimits: e.rateLimits, ...(S.live?.model ? { model: S.live.model } : {}) };
     await measure($, e);
     $.ui.invalidate("ui.render");
     return r;
@@ -300,6 +398,10 @@ export function register(on: On): void {
     // The yes was for that conversation: a ping now would keep the new one's cache warm unasked.
     try { stopKeepWarm($, "the session ended"); } catch { /* ending anyway */ }
     S.data = undefined;
+    // The next session's ring and subagents are its own; the history (every session's) stays.
+    S.live = undefined;
+    if (S.agents) S.agents = [];
+    if (S.usage) S.usage = { ...S.usage, agents: [] };
     try { $.ui.invalidate("ui.render"); } catch { /* ending anyway */ }
     return next(e);
   });
@@ -330,6 +432,76 @@ export function register(on: On): void {
         hideButton,
       ),
     );
+  });
+
+  on("command.run", { command: "context-doctor-usage" }, async ($) => {
+    if (S.off) return { text: "context-doctor's mod is off (CONTEXT_DOCTOR_NO_MOD=1)." };
+    S.usageOpen = true;
+    await liveNow($);
+    const { isPlaced } = await $.ui.open({ id: USAGE_PANE, title: "context-doctor usage" });
+    if (isPlaced) {
+      void loadUsage($, true);
+      return { text: "Opened context-doctor's usage pane." };
+    }
+    // Nothing draws the pane here (`claude -p`, a headless host): the same figures, as text.
+    S.usageOpen = false;
+    await loadUsage($, true);
+    return { text: usageText(viewAt(await $.clock.now())) };
+  });
+
+  // An engine that does not know the event (the pane's timer then stops at the next session) keeps the rest of the mod.
+  try {
+    on("ui.close", async ($, e, next) => {
+      if (e.id === USAGE_PANE) S.usageOpen = false;
+      return next(e);
+    });
+  } catch { /* no ui.close here */ }
+
+  on("ui.render", { component: "Pane", requestId: USAGE_PANE }, async ($, e: RenderEvent) => {
+    // Drawn with nothing held (after a reload): one look now; the timer keeps it from there.
+    if (!S.usageOpen) S.usageOpen = true;
+    if (!S.usage && !S.usageLoading && !S.usageError) void loadUsage($, true);
+    const v = viewAt(await $.clock.now());
+    const { Box, Text, Button, Svg } = $.ui.resolve(e);
+    if (e.props.placement === "widget") return h(Box, { flexDirection: "column" }, h(Text, null, v.glance));
+    const cols = typeof e.props.bodyColumns === "number" ? e.props.bodyColumns : 60;
+    const barWidth = Math.max(8, Math.min(24, cols - 44));
+    const ring = e.surface !== "terminal" ? Svg : undefined;
+    const head = (t: string) => h(Text, { bold: true }, t);
+    const dim = (t: string) => h(Text, { dimColor: true }, t);
+    const body: Element[] = [];
+
+    body.push(head("Context"));
+    if (v.context.pct !== undefined) {
+      body.push(h(Box, { flexDirection: "row", columnGap: 1, alignItems: "center" },
+        ring ? h(ring, { source: ringSvg(v.context.pct), alt: `Context ${pctText(v.context.pct)} used`, width: 64, height: 64 }) : h(Text, null, bar(v.context.pct, barWidth)),
+        h(Text, null, v.context.text)));
+    } else body.push(dim(v.context.text));
+
+    body.push(h(Box, { marginTop: 1 }, head("Limits")));
+    for (const l of v.limits) {
+      body.push(h(Box, { key: `limit:${l.key}`, flexDirection: "column" },
+        h(Box, { flexDirection: "row", columnGap: 1 }, h(Box, { width: 8 }, h(Text, null, l.label)), h(Text, null, bar(l.pct, barWidth)), h(Text, null, l.text)),
+        ...(l.sub ? [dim(l.sub)] : [])));
+    }
+    if (v.limitsNote) body.push(dim(v.limitsNote));
+
+    body.push(h(Box, { marginTop: 1 }, head("Claude Code: tokens and dollars by model")));
+    if (v.periods.length) {
+      body.push(h(Box, { flexDirection: "row", flexWrap: "wrap", columnGap: 1 },
+        ...v.periods.map((p) => h(Button, { key: `period:${p.key}`, label: p.text, ...(v.period?.key === p.key ? { variant: "primary" } : {}), onPress: () => choosePeriod($, p.key as PeriodUse["key"]) }))));
+      for (const r of v.period?.rows ?? []) body.push(h(Box, { flexDirection: "row", columnGap: 1 }, h(Box, { width: 14 }, h(Text, null, r.model)), dim(r.text)));
+    }
+    if (v.historyNote) body.push(dim(v.historyNote));
+
+    body.push(h(Box, { marginTop: 1 }, head(`Subagents running${v.agents.length ? ` (${v.agents.length})` : ""}`)));
+    for (const a of v.agents) body.push(h(Box, { key: `agent:${a.key}`, flexDirection: "column" }, h(Text, null, a.head), dim(`  ${a.text}`)));
+    if (v.agentsNote) body.push(dim(v.agentsNote));
+
+    body.push(h(Box, { flexDirection: "row", columnGap: 1, marginTop: 1, flexWrap: "wrap" },
+      h(Button, { key: "usage-refresh", label: S.usageLoading ? "Measuring…" : "Refresh", onPress: () => refreshUsage($) }),
+      ...(v.footer ? [dim(v.footer)] : [])));
+    return h(Box, { flexDirection: "column" }, ...body);
   });
 
   on("command.run", { command: "context-doctor-fix" }, async ($) => {

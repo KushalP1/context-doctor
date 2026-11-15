@@ -289,9 +289,10 @@ Internal (Claude Code and MCP clients run these for you):
   context-doctor statusline                     Claude Code status bar line: live context size, cache
                                                 share, cost (wired by \`install --statusline\`; reads
                                                 the status JSON on stdin)
-  context-doctor mod measure|event              Run by the plugin's mod after each turn (Desktop, VS Code,
+  context-doctor mod measure|event|usage        Run by the plugin's mod after each turn (Desktop, VS Code,
                                                 terminal): limit readings, Claude Code's cost beside
-                                                ours, the band's figures (JSON on stdin and stdout)
+                                                ours, the band's and the usage pane's figures (JSON on
+                                                stdin and stdout)
   context-doctor mcp [--http]                   The MCP server (same as context-doctor-mcp), for clients
                                                 that launch \`npx -y context-doctor mcp\`
 
@@ -986,7 +987,7 @@ async function main(): Promise<void> {
   }
 
   if (args.command === "mod") {
-    if (args.file !== "measure" && args.file !== "event") usageError(`Usage: context-doctor mod measure|event (the plugin's mod runs these, with JSON on stdin); got "${args.file ?? ""}".`);
+    if (args.file !== "measure" && args.file !== "event" && args.file !== "usage") usageError(`Usage: context-doctor mod measure|event|usage (the plugin's mod runs these, with JSON on stdin); got "${args.file ?? ""}".`);
     if (process.stdin.isTTY) {
       console.log("context-doctor mod is run by the plugin's mod in Claude Code with JSON on stdin; there is nothing for it to do in a terminal.");
       return;

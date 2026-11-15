@@ -182,6 +182,8 @@ export interface SessionTotal {
   estimatedUsd: number;
   /** Bytes read to bring the entries up to date. */
   read: number;
+  /** Each file's own dollars and requests (the main transcript, each subagent's), as counted in `usd`: the usage pane's per-subagent cost. */
+  byFile: Record<string, { usd: number; requests: number }>;
   /** Keeps the entries, so the next look reads only what was appended. */
   save: () => void;
 }
@@ -231,13 +233,17 @@ export function sessionTotal(input: Pick<SessionPriceInput, "sessionId" | "trans
   // Each reply once: a fork's copy shares its key with the reply it copied.
   const seen = new Set<string>();
   let usd = 0, subagentUsd = 0, workflowUsd = 0, unpriced = 0, estimatedUsd = 0;
+  const byFile: SessionTotal["byFile"] = {};
   for (const [file, whose] of files) {
     const e = kept[file];
     if (!e) continue;
+    const mine = (byFile[file] = { usd: 0, requests: 0 });
     const x = new Set((e.x ?? []).map(([i]) => i)), y = new Set((e.y ?? []).map(([i]) => i));
     e.k.forEach((key, i) => {
       if (key) { if (seen.has(key)) return; seen.add(key); }
       usd += e.d[i];
+      mine.usd += e.d[i];
+      mine.requests++;
       if (whose === "sub") subagentUsd += e.d[i];
       if (whose === "workflow") workflowUsd += e.d[i];
       if (x.has(i)) unpriced++;
@@ -256,7 +262,7 @@ export function sessionTotal(input: Pick<SessionPriceInput, "sessionId" | "trans
     }
     try { writeWhole(ledgerFile(b), { v: LEDGER_VERSION, f: out }); } catch { /* read again next time */ }
   };
-  return { app, usd, subagentUsd, workflowUsd, unpriced, estimatedUsd, read, save };
+  return { app, usd, subagentUsd, workflowUsd, unpriced, estimatedUsd, read, byFile, save };
 }
 
 /** Keeps a look's entries once it read enough to be worth it, as the threshold check does. */

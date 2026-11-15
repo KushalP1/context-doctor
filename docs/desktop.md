@@ -2,7 +2,7 @@
 
 [← README](../README.md) · [status line](./editor-and-statusline.md) · [fix](./fix.md)
 
-Claude Code's status line never runs in the Desktop app's Code tab or in the VS Code extension, so there the [status line](./editor-and-statusline.md#context-health-in-claude-codes-status-bar)'s cache clock never showed, and the limit ledger `context-doctor limits` reads stayed empty. The Claude Code plugin now carries a **mod**: code that Claude Code runs inside the session (in the terminal from 2.1.287, the Desktop app from 2.1.286, the VS Code extension from 2.1.299). It does three things.
+Claude Code's status line never runs in the Desktop app's Code tab or in the VS Code extension, so there the [status line](./editor-and-statusline.md#context-health-in-claude-codes-status-bar)'s cache clock never showed, and the limit ledger `context-doctor limits` reads stayed empty. The Claude Code plugin now carries a **mod**: code that Claude Code runs inside the session (in the terminal from 2.1.287, the Desktop app from 2.1.286, the VS Code extension from 2.1.299). It does five things.
 
 **Getting it.** `context-doctor install` gives it to you: when every Claude Code on the machine is 2.1.286 or later (the Desktop app's bundled one counts), install enables the plugin in `~/.claude/settings.json` instead of wiring its own hooks, skill and MCP server ([what install writes](./install.md#claude-code-the-plugin-or-installs-own-wiring)). Claude Code fetches it in the background at its next start and loads it from the session after (`/reload-plugins` loads it at once). Or add it yourself: `/plugin marketplace add KushalP1/context-doctor`, then `/plugin install context-doctor@context-doctor`. `context-doctor doctor` says whether it is loaded and when the mod last measured:
 
@@ -37,6 +37,38 @@ The button calls Claude Code's own compaction (`/compact`), between turns only: 
 
 **`/context-doctor-keep-warm 2h [$5]`: the cache kept warm while you step away.** Back after the cache expired, your next message writes the whole context again: on the author's 30 days 183 such returns cost $864 above cache-read price. Typed before you leave, this command keeps the cache alive: whenever the session has been idle for a tick under 55 minutes (4.5 on a 5-minute cache), it sends one ping through Claude Code's `$.model.fork`, which repeats the main conversation's last request with a one-line message after it. The context is read from the cache (which refreshes it), the fork's own message is never cached, and nothing is written to the transcript, so the conversation does not change. A ping costs one read of the context (~$0.10 for 520k tokens on Opus 5.5) plus a few output tokens; the band above the prompt shows how long it has left and what it has spent, with **Stop**. It stops for good when the hours (at most 8) or the dollar limit (default $2, at most $20) run out, when a ping finds the cache cold (it read nothing and wrote the context: the ping is counted, the next is not sent), when the cache lapsed before a ping could go out (Claude Code closed, or the machine asleep: a ping then would write the whole context), at `/clear` or a resume, at `/context-doctor-keep-warm off`, or with **Stop**. It never starts by itself or again after it stops: each absence takes the command. With no arguments it says what a ping would cost here and starts nothing. The yes, each ping and the stop go in the cost ledger. `context-doctor cache-misses` shows what it would have saved on your own history, by time away; on the author's, keeping warm for up to 2 hours nets $188 a month and past 8 hours a cold return costs less than the pings. The pings bill to your plan or API key: on a subscription they use your usage limit, as the re-writes they replace do. It needs a Claude Code whose mods API has `$.model.fork`; without it the command says so and starts nothing.
 
+**`/context-doctor-usage`: the usage view the Desktop app dropped.** The app's update removed its usage and stats view ([#102264](https://github.com/anthropics/claude-code/issues/102264), [#102098](https://github.com/anthropics/claude-code/issues/102098), [#102130](https://github.com/anthropics/claude-code/issues/102130)) and its context ring ([#102094](https://github.com/anthropics/claude-code/issues/102094)), and 2.1.323 removed `subagentStatusLine` ([#109446](https://github.com/anthropics/claude-code/issues/109446)). The command opens a pane with them; for example:
+
+```
+Context
+ (ring 41%)  412k of 1.0M tokens (41%) · Opus 5.5
+
+Limits
+5-hour   ███████░░░░░░░░░░░░░░░░░ 31% · resets in 2h 10m · +6.2 points an hour lately, runs out in 1h 30m (before the reset)
+         ≈ $1.20 of list price per 1%, fitted on your readings
+Weekly   ████░░░░░░░░░░░░░░░░░░░░ 18% · resets in 3 days
+
+Claude Code: tokens and dollars by model
+[ Today $42.10 · 3.1M tokens ]  [ 7 days $841 · 90.0M tokens ]  [ 30 days $3,490 · 640.0M tokens ]
+Opus 5.5       $30.00 · 2.0M tokens · 80 requests
+Sonnet 5.5     $12.10 · 1.1M tokens · 40 requests
+
+Subagents running (2)
+Explore: Find the auth code
+  Sonnet 5.5 · context 84k of 1.0M · $0.42 so far
+general-purpose: Review the diff
+  Opus 5.5 · context 120k of 1.0M · $1.10 so far
+
+[ Refresh ]  Dollars at list price, as context-doctor spend prices them; measured 2 min ago.
+```
+
+- **The context ring** is Claude Code's own figure (what `/context` and the status line count: the last reply's input, cache reads and writes against the model's window), handed to the mod after each turn. The Desktop app and VS Code draw it as a ring, amber past 80% and red past 95%; the terminal as a bar.
+- **The limit windows** are your plan's 5-hour and weekly windows, as Claude Code last reported them, with the pace and when the window runs out at that pace from the readings the mod keeps ([limits](./profiling.md#your-plans-limits-context-doctor-limits)). A plan with no 5-hour window (Ultra) shows the weekly one alone and says so. The dollars per 1% appear only when the fit of your readings is good enough to quote; until then the line is left out. Off a subscription (an API key) there are no windows, and the pane says why.
+- **Tokens and dollars by model** for today (since local midnight), the last 7 and the last 30 days, from the same requests [`spend`](./spend.md) reads, at list price; a button picks the period the by-model rows are for. Claude Code only: `spend` has Codex, Gemini CLI and Cursor.
+- **Running subagents**, each with its type and task, its model, its context on its last request, and what it has cost so far (its transcript, priced as the session's price is). A finished one leaves the list.
+
+Drawing the pane does no work: it shows what the mod holds. The figures come from `context-doctor mod usage`, which the mod runs when the pane opens, then on its 30-second timer only while the pane is open, and only when something is due: the 30-day history at most every 5 minutes (kept in `~/.cache/context-doctor/usage-pane.json`, so two sessions' panes share it), the subagents and the limit windows every 30 seconds while a subagent runs or after a turn. On the author's 22,000 requests over 30 days a refresh took 0.2-0.5 s with the history from that file and 0.8-1.3 s with the history measured again from `spend`'s transcript cache; a first run with no cache at all reads every transcript (2.7 s on an idle machine, 15 s on a busy one). A draw takes 0.2-0.4 ms (eight subagents, seven models). **Refresh** measures the history again at once. In the Desktop app's minimized pane (a widget) it is one line: `context 41% · today $42.10 · weekly 18% · 2 subagents`. Where nothing can draw a pane (`claude -p`, a headless host), the command answers with the same figures as text. Listing subagents needs Claude Code 2.1.325's `$.agent.list()`; on an older one the pane says it cannot list them and shows the rest.
+
 Nothing happens without a press or a command: the mod never compacts, never applies a fix and never pings by itself. It writes no file of its own; the CLI it runs writes context-doctor's usual files. It needs `node` on the PATH Claude Code starts with, as the plugin's other hooks do; without it, the band falls back to Claude Code's own cost figure, at the thresholds `CONTEXT_DOCTOR_SESSION_PRICE` sets (none with `CONTEXT_DOCTOR_NO_SESSION_PRICE=1`), and the pane says why it has no plan.
 
 ## Turning it off
@@ -49,4 +81,4 @@ An older Claude Code (before 2.1.286) does not run mods; with one on the machine
 
 ## Checked every week on the newest Claude Code
 
-A canary ([`scripts/canary.mjs`](../scripts/canary.mjs)) runs the plugin in a real Claude Code with no person and no network: `claude -p --plugin-dir` against a local mock of Anthropic's API, in a throwaway home with a made-up credential. It checks that the plugin loads, its hooks run (the every-prompt hook, the subagent and model-switch prices, the compaction instructions), that the mod's `session.measure` fires and writes the limits and cost ledgers above, and that `claude plugin validate --profile directory --strict` passes. It runs weekly on npm's newest Claude Code and in the release checks, and goes red on each planted fault (a broken hooks file, a mod that throws on load, a renamed event, a hook that fails or prints invalid JSON). The band and its buttons are drawn by the app, which a headless session does not show; the mods test harness checks those. Details in [CONTRIBUTING](../CONTRIBUTING.md#checks-beyond-npm-test).
+A canary ([`scripts/canary.mjs`](../scripts/canary.mjs)) runs the plugin in a real Claude Code with no person and no network: `claude -p --plugin-dir` against a local mock of Anthropic's API, in a throwaway home with a made-up credential. It checks that the plugin loads, its hooks run (the every-prompt hook, the subagent and model-switch prices, the compaction instructions), that the mod's `session.measure` fires and writes the limits and cost ledgers above, that `/context-doctor-usage` answers with the pane's figures (the mock's two windows, the session's own dollars), and that `claude plugin validate --profile directory --strict` passes. It runs weekly on npm's newest Claude Code and in the release checks, and goes red on each planted fault (a broken hooks file, a mod that throws on load, a renamed event, a hook that fails or prints invalid JSON). The band, the panes and their buttons are drawn by the app, which a headless session does not show; the mods test harness checks those (the usage pane on the desktop, the terminal and as a widget, from a fixture home). Details in [CONTRIBUTING](../CONTRIBUTING.md#checks-beyond-npm-test).

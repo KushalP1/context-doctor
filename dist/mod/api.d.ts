@@ -8,7 +8,10 @@
  * `$.command.register`, `$.clock.{now,every}`, `$.env.get`, `$.plugin.root`,
  * `$.model.fork` (from the GitHub copy of the declarations, 2026-11-15),
  * and the events `session.start`, `session.measure`, `session.end`,
- * `command.run`, `ui.render`. A subset, structurally compatible: no runtime code.
+ * `command.run`, `ui.render`; from 2.1.325's, for the usage pane,
+ * `$.agent.list`, `$.session.usage`, the `Svg` element, a pane's `placement`
+ * and `bodyColumns`, and `ui.close`. A subset, structurally compatible: no
+ * runtime code.
  */
 export type Surface = "terminal" | "desktop" | "vscode" | "mobile";
 export interface RateLimit {
@@ -46,6 +49,7 @@ export interface RenderEvent {
         bodyColumns?: number;
         title?: string;
         isFocused?: boolean;
+        placement?: "dock" | "inline" | "widget" | string;
     };
 }
 /** What `$.model.fork` resolves to: the reply and its usage, or why there is none (`nothing-to-fork`, `api-error`, `empty-reply`, `aborted`). */
@@ -69,6 +73,25 @@ export type ForkResult = {
         cache_creation_input_tokens: number;
     };
 };
+/** One agent loop as `$.agent.list()` answers it (the fields the usage pane reads). */
+export interface AgentInfo {
+    id: string;
+    type: string;
+    description: string;
+    status: string;
+    name?: string;
+    parentId?: string;
+    teammateId?: string;
+}
+/** `$.session.usage()`: Claude Code's own figures, as `session.measure` pushes them. */
+export interface SessionUsage {
+    startedAt: number;
+    context: MeasureEvent["context"];
+    rateLimits: RateLimit[];
+    cost?: {
+        usd: number;
+    };
+}
 export interface Engine {
     plugin: {
         name: string;
@@ -91,6 +114,11 @@ export interface Engine {
         }) => Promise<{
             skip?: string;
         }>;
+        usage: () => Promise<SessionUsage>;
+    };
+    /** 2.1.325 has it; the usage pane says so where an older engine has not. */
+    agent: {
+        list: () => Promise<AgentInfo[]>;
     };
     ui: {
         open: (pane: {
@@ -100,7 +128,9 @@ export interface Engine {
             isPlaced: boolean;
         }>;
         /** The engine's is generic per surface (each has its own table); the mod passes the render event it got. */
-        resolve: (e: any) => Record<"Box" | "Text" | "Button", Ctor>;
+        resolve: (e: any) => Record<"Box" | "Text" | "Button", Ctor> & {
+            Svg?: Ctor;
+        };
         invalidate: (event: "ui.render") => void;
         toast: (text: string, options?: {
             timeoutMs?: number;
@@ -166,4 +196,10 @@ export interface On {
         component: string;
         requestId?: string;
     }, hook: Hook<RenderEvent, Element>): unknown;
+    (event: "ui.close", hook: Hook<{
+        id: string;
+        origin: {
+            kind: string;
+        };
+    }, unknown>): unknown;
 }

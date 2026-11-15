@@ -116,7 +116,8 @@ export declare function costCheck(days?: number, now?: number, path?: string): {
 export declare function modMeasure(input: ModMeasureInput, now?: number, env?: NodeJS.ProcessEnv): Partial<BandData> & Pick<BandData, "at" | "coldMinTokens" | "thresholds">;
 /**
  * The CLI side: `mod measure` keeps the reading and prints the band's
- * figures; `mod event` records a press (`{ sessionId, ev, tokens }`). Both
- * print JSON and exit 0 whatever happens, as the status line does.
+ * figures; `mod event` records a press (`{ sessionId, ev, tokens }`); `mod
+ * usage` prints the usage pane's figures (usagepane.ts). Each prints JSON
+ * and exits 0 whatever happens, as the status line does.
  */
-export declare function runMod(sub: "measure" | "event"): Promise<void>;
+export declare function runMod(sub: "measure" | "event" | "usage"): Promise<void>;

@@ -249,3 +249,165 @@ export declare function keepWarmText(kw: KeepWarm, now: number): string;
 export declare function keepWarmArmedText(kw: KeepWarm, d: BandData): string;
 /** The command with no arguments: the price of a yes, or how the one in force stands. Arms nothing. */
 export declare function keepWarmStatusText(kw: KeepWarm | undefined, d: BandData | undefined, now: number): string;
+/** `mod usage`'s answer (usagepane.ts prints exactly this shape). */
+export interface ModelUse {
+    model: string;
+    usd: number;
+    tokens: number;
+    requests: number;
+}
+export interface PeriodUse {
+    key: "today" | "7d" | "30d";
+    label: string;
+    usd: number;
+    tokens: number;
+    requests: number;
+    models: ModelUse[];
+}
+export interface HistoryUse {
+    at: number;
+    periods: PeriodUse[];
+    unpriced?: number;
+    usdPerPct?: Partial<Record<string, number>>;
+}
+export interface LimitWindow {
+    window: string;
+    label: string;
+    pct: number;
+    at: number;
+    resetsAt?: number;
+    resetSince: boolean;
+    perHour?: number;
+    runsOutAt?: number;
+    beforeReset?: boolean;
+    usdPerPct?: number;
+}
+export interface AgentUse {
+    id: string;
+    model?: string;
+    contextTokens?: number;
+    window?: number;
+    usd?: number;
+    requests?: number;
+}
+export interface UsagePaneData {
+    at: number;
+    history?: HistoryUse;
+    historyFrom?: "cache" | "measured";
+    historyMs?: number;
+    limits: LimitWindow[];
+    agents: AgentUse[];
+}
+/** What Claude Code said last (`session.measure`, or `$.session.usage()` when the pane opened). */
+export interface LiveUsage {
+    at: number;
+    context?: {
+        tokens?: number;
+        window: number;
+        percent?: number;
+    };
+    rateLimits?: RateLimitLike[];
+    model?: string;
+}
+export interface RateLimitLike {
+    kind: string;
+    percentUsed: number;
+    resetsAt?: string;
+}
+/** A subagent as `$.agent.list()` names it (the fields the pane reads). */
+export interface AgentLike {
+    id: string;
+    type?: string;
+    description?: string;
+    status?: string;
+    name?: string;
+}
+/** The agent statuses that count as running: started and not settled. */
+export declare const RUNNING: Set<string>;
+/** "claude-opus-5-5" → "Opus 5.5", "claude-haiku-4-5-20251001" → "Haiku 4.5"; anything else as it is. */
+export declare function shortModel(id: string | undefined): string;
+/** A bar of `width` cells, filled to `pct`: "██████░░░░". */
+export declare function bar(pct: number, width?: number): string;
+/** "41%", "0.4%", "100%". */
+export declare function pctText(pct: number): string;
+/** The context ring, for the surfaces that draw `Svg`: a circle filled to `pct`, the percent in its middle. */
+export declare function ringSvg(pct: number, size?: number): string;
+export interface UsageView {
+    /** The context ring: its percent and its words. */
+    context: {
+        pct?: number;
+        text: string;
+    };
+    limits: Array<{
+        key: string;
+        label: string;
+        pct: number;
+        text: string;
+        sub?: string;
+    }>;
+    limitsNote?: string;
+    /** One line per period: "Today $42.10 · 3.1M tokens". */
+    periods: Array<{
+        key: string;
+        text: string;
+    }>;
+    /** The chosen period, by model. */
+    period?: {
+        key: string;
+        label: string;
+        rows: Array<{
+            model: string;
+            text: string;
+        }>;
+    };
+    historyNote?: string;
+    agents: Array<{
+        key: string;
+        head: string;
+        text: string;
+    }>;
+    agentsNote?: string;
+    /** For a minimized pane (the Desktop app's widget): one line. */
+    glance: string;
+    footer: string;
+}
+export interface UsageViewInput {
+    data?: UsagePaneData;
+    live?: LiveUsage;
+    /** `$.agent.list()`'s rows; undefined when this Claude Code has no such call. */
+    agents?: AgentLike[];
+    /** Which period the by-model rows are for. */
+    period?: PeriodUse["key"];
+    loading?: boolean;
+    error?: string;
+    now: number;
+}
+/** The limit windows to show: the ledger's, each overlaid by Claude Code's own newer reading; a window only Claude Code has, from it alone. */
+export declare function mergeLimits(ledger: LimitWindow[], live: LiveUsage | undefined): LimitWindow[];
+/** Everything the usage pane says, as words; register.ts lays it out. */
+export declare function usageView(v: UsageViewInput): UsageView;
+/** The pane as lines of text: the command's answer where no surface draws the pane (`claude -p`, a headless host). */
+export declare function usageText(view: UsageView): string;
+/** How often the pane asks `mod usage` again: the history (cached by the CLI for as long) and the subagents while any runs. */
+export declare const USAGE_HISTORY_EVERY_MS: number;
+export declare const USAGE_AGENTS_EVERY_MS = 30000;
+/**
+ * Whether the pane asks `mod usage` now, and for what. Never while closed or
+ * while a run is in flight; the history at most every 5 minutes; the
+ * subagents and the limits every 30 s while a subagent runs or after a turn
+ * moved them. Nothing on a draw: drawing only reads.
+ */
+export declare function usageDue(s: {
+    open: boolean;
+    loading: boolean;
+    lastAt?: number;
+    historyAt?: number;
+    measuredAt?: number;
+    agentsRunning: number;
+}, now: number): false | {
+    history: boolean;
+};
+/** The command the pane runs: the CLI's own. */
+export declare function usageArgv(node: string, cli: string): string[];
+/** Parse `mod usage`'s output; undefined when it is not one. */
+export declare function parseUsage(stdout: string): UsagePaneData | undefined;

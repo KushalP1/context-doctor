@@ -25,6 +25,12 @@
  *    idle (4.5 on a 5-minute cache), until the hours or the dollars run out,
  *    a ping finds the cache cold, the session ends, or Stop. Never armed but
  *    by that command, never again by itself; the band shows it while it runs.
+ *  - `/context-doctor-usage` opens the usage view the Desktop app dropped:
+ *    the context ring and the limit windows from Claude Code's own figures,
+ *    tokens and dollars by model for today, 7 and 30 days, and the running
+ *    subagents with their model, context and cost so far. Drawing only reads
+ *    what the mod holds; `context-doctor mod usage` refreshes it on the
+ *    timer, only while the pane is open (usageDue).
  *
  * Nothing happens without a press or a command: no auto-compaction, no auto-apply, no ping. The
  * mod writes no file itself; the CLI writes ours. Off: CONTEXT_DOCTOR_NO_MOD=1.
@@ -34,10 +40,12 @@
  * reads which calls a module makes from its source: `$` is passed only to
  * functions declared at the top of this file.
  */
-import { type BandData, type KeepWarm, type PlanJson } from "./logic.js";
+import { type AgentLike, type BandData, type KeepWarm, type LiveUsage, type PeriodUse, type PlanJson, type UsagePaneData } from "./logic.js";
 import type { On } from "./api.js";
 export declare const COMMAND = "context-doctor-fix";
 export declare const PANE = "context-doctor-fix";
+export declare const USAGE_COMMAND = "context-doctor-usage";
+export declare const USAGE_PANE = "context-doctor-usage";
 /** The mod's state for this load (a reload starts it over; the next turn measures again). */
 interface State {
     off: boolean;
@@ -63,6 +71,19 @@ interface State {
     kw?: KeepWarm;
     /** A ping in flight: never two at once. */
     pinging: boolean;
+    /** The usage pane: what `mod usage` said last, and when it is asked again. */
+    usage?: UsagePaneData;
+    usageOpen: boolean;
+    usageLoading: boolean;
+    usageError?: string;
+    usageLastAt?: number;
+    /** Claude Code's own figures from the last `session.measure`: the context ring and the windows. */
+    live?: LiveUsage;
+    /** `$.agent.list()`'s rows; undefined on a Claude Code without it. */
+    agents?: AgentLike[];
+    period: PeriodUse["key"];
+    /** What the pane last said, so the timer redraws only when its words change. */
+    usageDrawn: string;
 }
 /** For tests: the state the hooks share. */
 export declare const state: () => State;

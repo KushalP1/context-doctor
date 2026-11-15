@@ -450,3 +450,238 @@ export function keepWarmStatusText(kw: KeepWarm | undefined, d: BandData | undef
   const each = d?.tokens !== undefined && est !== undefined ? `Here a ping reads ~${tokens(d.tokens)} tokens, ~${money(est)} at list price, every ${everyText(d.ttlMs ?? 60 * MIN)} while you are away. ` : "";
   return `${last}${each}To keep the cache warm while you step away: /${KEEP_WARM_COMMAND} 2h (at most ${KEEP_WARM_MAX_HOURS}h), with a dollar limit such as $5 (default ${money(KEEP_WARM_DEFAULT_CAP_USD)}). context-doctor cache-misses shows what it would have saved on your history.`;
 }
+
+// -- The usage pane ----------------------------------------------------------------
+//
+// What the Desktop app's usage view showed before it was removed (claude-code
+// #102264, #102094's context ring) and the per-subagent status 2.1.323 took out
+// (#109446): drawn from Claude Code's own context and limit figures, which
+// `session.measure` hands the mod, and from `context-doctor mod usage`'s JSON
+// (usagepane.ts) for what only the history holds. Everything here is a plain
+// function of that state: drawing does no work of its own.
+
+/** `mod usage`'s answer (usagepane.ts prints exactly this shape). */
+export interface ModelUse { model: string; usd: number; tokens: number; requests: number }
+export interface PeriodUse { key: "today" | "7d" | "30d"; label: string; usd: number; tokens: number; requests: number; models: ModelUse[] }
+export interface HistoryUse { at: number; periods: PeriodUse[]; unpriced?: number; usdPerPct?: Partial<Record<string, number>> }
+export interface LimitWindow { window: string; label: string; pct: number; at: number; resetsAt?: number; resetSince: boolean; perHour?: number; runsOutAt?: number; beforeReset?: boolean; usdPerPct?: number }
+export interface AgentUse { id: string; model?: string; contextTokens?: number; window?: number; usd?: number; requests?: number }
+export interface UsagePaneData { at: number; history?: HistoryUse; historyFrom?: "cache" | "measured"; historyMs?: number; limits: LimitWindow[]; agents: AgentUse[] }
+
+/** What Claude Code said last (`session.measure`, or `$.session.usage()` when the pane opened). */
+export interface LiveUsage {
+  at: number;
+  context?: { tokens?: number; window: number; percent?: number };
+  rateLimits?: RateLimitLike[];
+  model?: string;
+}
+export interface RateLimitLike { kind: string; percentUsed: number; resetsAt?: string }
+
+/** A subagent as `$.agent.list()` names it (the fields the pane reads). */
+export interface AgentLike { id: string; type?: string; description?: string; status?: string; name?: string }
+
+/** The agent statuses that count as running: started and not settled. */
+export const RUNNING = new Set(["pending", "running", "waiting"]);
+
+/** "claude-opus-5-5" → "Opus 5.5", "claude-haiku-4-5-20251001" → "Haiku 4.5"; anything else as it is. */
+export function shortModel(id: string | undefined): string {
+  if (!id) return "unknown model";
+  const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(\[1m\])?$/.exec(id);
+  if (!m) return id;
+  return `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] !== undefined ? `.${m[3]}` : ""}${m[4] ? " (1M)" : ""}`;
+}
+
+/** A bar of `width` cells, filled to `pct`: "██████░░░░". */
+export function bar(pct: number, width = 16): string {
+  const w = Math.max(4, Math.min(40, Math.round(width)));
+  const p = Math.max(0, Math.min(100, Number.isFinite(pct) ? pct : 0));
+  const full = Math.round((p / 100) * w);
+  return "█".repeat(full) + "░".repeat(w - full);
+}
+
+/** "41%", "0.4%", "100%". */
+export function pctText(pct: number): string {
+  if (!Number.isFinite(pct)) return "?%";
+  return pct > 0 && pct < 1 ? `${pct.toFixed(1)}%` : `${Math.round(pct)}%`;
+}
+
+/** The context ring, for the surfaces that draw `Svg`: a circle filled to `pct`, the percent in its middle. */
+export function ringSvg(pct: number, size = 64): string {
+  const p = Math.max(0, Math.min(100, Number.isFinite(pct) ? pct : 0));
+  const r = 26, c = 2 * Math.PI * r;
+  const dash = ((p / 100) * c).toFixed(2);
+  // Near the window's end Claude Code compacts soon: amber past 80%, red past 95%.
+  const color = p >= 95 ? "#d64545" : p >= 80 ? "#d99a1e" : "#4a7bd0";
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 64 64">`
+    + `<circle cx="32" cy="32" r="${r}" fill="none" stroke="#8884" stroke-width="7"/>`
+    + `<circle cx="32" cy="32" r="${r}" fill="none" stroke="${color}" stroke-width="7" stroke-linecap="round" stroke-dasharray="${dash} ${c.toFixed(2)}" transform="rotate(-90 32 32)"/>`
+    + `<text x="32" y="37" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" fill="currentColor">${pctText(p)}</text>`
+    + `</svg>`;
+}
+
+export interface UsageView {
+  /** The context ring: its percent and its words. */
+  context: { pct?: number; text: string };
+  limits: Array<{ key: string; label: string; pct: number; text: string; sub?: string }>;
+  limitsNote?: string;
+  /** One line per period: "Today $42.10 · 3.1M tokens". */
+  periods: Array<{ key: string; text: string }>;
+  /** The chosen period, by model. */
+  period?: { key: string; label: string; rows: Array<{ model: string; text: string }> };
+  historyNote?: string;
+  agents: Array<{ key: string; head: string; text: string }>;
+  agentsNote?: string;
+  /** For a minimized pane (the Desktop app's widget): one line. */
+  glance: string;
+  footer: string;
+}
+
+export interface UsageViewInput {
+  data?: UsagePaneData;
+  live?: LiveUsage;
+  /** `$.agent.list()`'s rows; undefined when this Claude Code has no such call. */
+  agents?: AgentLike[];
+  /** Which period the by-model rows are for. */
+  period?: PeriodUse["key"];
+  loading?: boolean;
+  error?: string;
+  now: number;
+}
+
+/** The limit windows to show: the ledger's, each overlaid by Claude Code's own newer reading; a window only Claude Code has, from it alone. */
+export function mergeLimits(ledger: LimitWindow[], live: LiveUsage | undefined): LimitWindow[] {
+  const out = ledger.map((w) => ({ ...w }));
+  for (const r of live?.rateLimits ?? []) {
+    if ((r.kind !== "five_hour" && r.kind !== "seven_day") || typeof r.percentUsed !== "number" || !Number.isFinite(r.percentUsed)) continue;
+    const reset = typeof r.resetsAt === "string" ? Date.parse(r.resetsAt) : NaN;
+    const w = out.find((x) => x.window === r.kind);
+    if (w) {
+      if (live!.at >= w.at) {
+        w.pct = r.percentUsed;
+        w.at = live!.at;
+        if (Number.isFinite(reset)) w.resetsAt = reset;
+        w.resetSince = false;
+      }
+    } else {
+      out.push({ window: r.kind, label: r.kind === "five_hour" ? "5-hour" : "Weekly", pct: r.percentUsed, at: live!.at, resetSince: false, ...(Number.isFinite(reset) ? { resetsAt: reset } : {}) });
+    }
+  }
+  return out.sort((a, b) => (a.window === "five_hour" ? 0 : 1) - (b.window === "five_hour" ? 0 : 1));
+}
+
+const per = (n: number) => (n >= 10 ? Math.round(n).toString() : n.toFixed(1));
+
+/** Everything the usage pane says, as words; register.ts lays it out. */
+export function usageView(v: UsageViewInput): UsageView {
+  const { data, live, now } = v;
+  // The context ring: Claude Code's own figure.
+  const ctx = live?.context;
+  const pct = ctx?.tokens !== undefined && ctx.window > 0 ? (ctx.percent ?? (ctx.tokens / ctx.window) * 100) : undefined;
+  const context = pct !== undefined
+    ? { pct, text: `${tokens(ctx!.tokens!)} of ${tokens(ctx!.window)} tokens (${pctText(pct)})${live?.model ? ` · ${shortModel(live.model)}` : ""}` }
+    : { text: "Measured after the session's first reply." };
+
+  const limits = mergeLimits(data?.limits ?? [], live).map((w) => {
+    if (w.resetSince) return { key: w.window, label: w.label, pct: 0, text: `reset since the last reading (${pctText(w.pct)} then)` };
+    const parts: string[] = [];
+    if (w.resetsAt !== undefined && w.resetsAt > now) parts.push(`resets in ${duration(w.resetsAt - now)}`);
+    if (w.perHour !== undefined && w.perHour > 0) {
+      const outIn = w.runsOutAt !== undefined && w.runsOutAt > now ? `, runs out in ${duration(w.runsOutAt - now)}${w.beforeReset ? " (before the reset)" : ""}` : "";
+      parts.push(`+${per(w.perHour)} points an hour lately${outIn}`);
+    }
+    const sub = w.usdPerPct !== undefined ? `≈ ${money(w.usdPerPct)} of list price per 1%, fitted on your readings` : undefined;
+    return { key: w.window, label: w.label, pct: w.pct, text: `${pctText(w.pct)}${parts.length ? ` · ${parts.join(" · ")}` : ""}`, ...(sub ? { sub } : {}) };
+  });
+  const limitsNote = limits.length
+    ? limits.some((l) => l.key === "five_hour") ? undefined : "No 5-hour window on this plan (Ultra has none): the weekly limit only."
+    : data || live ? "No limit readings yet: Claude Code reports the windows on a Pro, Max or Ultra sign-in, after the first reply." : undefined;
+
+  const hist = data?.history;
+  const periods = (hist?.periods ?? []).map((p) => ({ key: p.key, text: `${p.label} ${money(p.usd)} · ${tokens(p.tokens)} tokens` }));
+  const chosen = hist?.periods.find((p) => p.key === (v.period ?? "today")) ?? hist?.periods[0];
+  const period = chosen
+    ? {
+        key: chosen.key,
+        label: chosen.label,
+        rows: chosen.models.length
+          ? chosen.models.map((m) => ({ model: /^\d+ other models?$/.test(m.model) ? m.model : shortModel(m.model), text: `${money(m.usd)} · ${tokens(m.tokens)} tokens · ${m.requests.toLocaleString("en-US")} request${m.requests === 1 ? "" : "s"}` }))
+          : [{ model: "", text: "Nothing in Claude Code in this period." }],
+      }
+    : undefined;
+  const historyNote = hist?.unpriced ? `${hist.unpriced} request${hist.unpriced === 1 ? "" : "s"} on a model with no list price, counted at $0.` : undefined;
+
+  const running = v.agents?.filter((a) => !a.status || RUNNING.has(a.status));
+  const byId = new Map((data?.agents ?? []).map((a) => [a.id, a] as const));
+  const agents = (running ?? []).map((a) => {
+    const u = byId.get(a.id);
+    const bits: string[] = [];
+    if (u?.model) bits.push(shortModel(u.model));
+    if (u?.contextTokens !== undefined) bits.push(`context ${tokens(u.contextTokens)}${u.window ? ` of ${tokens(u.window)}` : ""}`);
+    if (u?.usd !== undefined) bits.push(`${money(u.usd)} so far`);
+    if (!u) bits.push("measuring…");
+    else if (!bits.length) bits.push("no request yet");
+    const what = (a.description ?? a.name ?? "").trim();
+    return { key: a.id, head: `${a.type ?? "agent"}${what ? `: ${what.length > 60 ? what.slice(0, 59) + "…" : what}` : ""}${a.status && a.status !== "running" ? ` (${a.status})` : ""}`, text: bits.join(" · ") };
+  });
+  const agentsNote = v.agents === undefined ? "This Claude Code does not list subagents to mods." : agents.length ? undefined : "No subagents running.";
+
+  const today = hist?.periods.find((p) => p.key === "today");
+  const week = limits.find((l) => l.key === "seven_day");
+  const glance = [pct !== undefined ? `context ${pctText(pct)}` : "", today ? `today ${money(today.usd)}` : "", week ? `weekly ${pctText(week.pct)}` : "", agents.length ? `${agents.length} subagent${agents.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ") || "context-doctor usage";
+
+  const footer = v.error
+    ? v.error
+    : v.loading && !hist
+      ? "Measuring your last 30 days…"
+      : hist
+        ? `Dollars at list price, as context-doctor spend prices them; measured ${now - hist.at < MIN ? "just now" : `${duration(now - hist.at)} ago`}${v.loading ? ", measuring again…" : ""}.`
+        : "";
+  return { context, limits, ...(limitsNote ? { limitsNote } : {}), periods, ...(period ? { period } : {}), ...(historyNote ? { historyNote } : {}), agents, ...(agentsNote ? { agentsNote } : {}), glance, footer };
+}
+
+/** The pane as lines of text: the command's answer where no surface draws the pane (`claude -p`, a headless host). */
+export function usageText(view: UsageView): string {
+  const lines = [`context-doctor usage: ${view.glance}`, `Context: ${view.context.text}`];
+  for (const l of view.limits) lines.push(`${l.label} limit: ${l.text}${l.sub ? ` (${l.sub})` : ""}`);
+  if (view.limitsNote) lines.push(view.limitsNote);
+  if (view.periods.length) lines.push(`Claude Code: ${view.periods.map((p) => p.text).join(" · ")}`);
+  for (const r of view.period?.rows ?? []) lines.push(`  ${view.period!.label}, ${r.model ? `${r.model}: ` : ""}${r.text}`);
+  for (const a of view.agents) lines.push(`Subagent ${a.head}: ${a.text}`);
+  if (view.agentsNote) lines.push(view.agentsNote);
+  if (view.footer) lines.push(view.footer);
+  return lines.join("\n");
+}
+
+/** How often the pane asks `mod usage` again: the history (cached by the CLI for as long) and the subagents while any runs. */
+export const USAGE_HISTORY_EVERY_MS = 5 * MIN;
+export const USAGE_AGENTS_EVERY_MS = 30_000;
+
+/**
+ * Whether the pane asks `mod usage` now, and for what. Never while closed or
+ * while a run is in flight; the history at most every 5 minutes; the
+ * subagents and the limits every 30 s while a subagent runs or after a turn
+ * moved them. Nothing on a draw: drawing only reads.
+ */
+export function usageDue(s: { open: boolean; loading: boolean; lastAt?: number; historyAt?: number; measuredAt?: number; agentsRunning: number }, now: number): false | { history: boolean } {
+  if (!s.open || s.loading) return false;
+  if (s.lastAt === undefined || s.historyAt === undefined || now - s.historyAt >= USAGE_HISTORY_EVERY_MS) return { history: true };
+  if (now - s.lastAt < USAGE_AGENTS_EVERY_MS) return false;
+  if (s.agentsRunning > 0 || (s.measuredAt !== undefined && s.measuredAt > s.lastAt)) return { history: false };
+  return false;
+}
+
+/** The command the pane runs: the CLI's own. */
+export function usageArgv(node: string, cli: string): string[] {
+  return [node, cli, "mod", "usage"];
+}
+
+/** Parse `mod usage`'s output; undefined when it is not one. */
+export function parseUsage(stdout: string): UsagePaneData | undefined {
+  try {
+    const j = JSON.parse(stdout);
+    if (!j || typeof j !== "object" || typeof j.at !== "number" || !Array.isArray(j.limits) || !Array.isArray(j.agents)) return undefined;
+    return j as UsagePaneData;
+  } catch {
+    return undefined;
+  }
+}
