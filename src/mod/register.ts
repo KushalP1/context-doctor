@@ -19,8 +19,14 @@
  *  - `/context-doctor-fix` opens a pane with `fix`'s plan and an Apply / Undo
  *    button per lever. Each press runs the CLI's own `fix --apply <id>` /
  *    `fix undo <id>`: the same lock, backup and record as in a terminal.
+ *  - `/context-doctor-keep-warm 2h [$5]` keeps the prompt cache warm while
+ *    the person is away: `$.model.fork` (a cache read of the main thread's
+ *    last request, nothing in the transcript) a tick before every 55 minutes
+ *    idle (4.5 on a 5-minute cache), until the hours or the dollars run out,
+ *    a ping finds the cache cold, the session ends, or Stop. Never armed but
+ *    by that command, never again by itself; the band shows it while it runs.
  *
- * Nothing happens without a press: no auto-compaction, no auto-apply. The
+ * Nothing happens without a press or a command: no auto-compaction, no auto-apply, no ping. The
  * mod writes no file itself; the CLI writes ours. Off: CONTEXT_DOCTOR_NO_MOD=1.
  *
  * The mods runtime has no Node, so this file imports only ./logic.js (no
@@ -29,7 +35,7 @@
  * functions declared at the top of this file.
  */
 
-import { applyOutcome, band, DEFAULT_THRESHOLDS, fixArgv, MODEL_CHANGE, outcome, paneRows, parsePlan, thresholdsFrom, withPresses, type BandData, type PlanJson } from "./logic.js";
+import { applyOutcome, band, DEFAULT_THRESHOLDS, fixArgv, keepWarmArmedText, keepWarmRefusal, keepWarmStatusText, keepWarmStep, keepWarmText, KEEP_WARM_COMMAND, MODEL_CHANGE, money, outcome, paneRows, parseKeepWarm, parsePlan, PING_PROMPT, pingOutcome, thresholdsFrom, withPresses, type BandData, type KeepWarm, type PlanJson } from "./logic.js";
 import type { Element, Engine, MeasureEvent, On, RenderEvent } from "./api.js";
 
 /** JSX's factory: a global of the mods runtime (`h(type, props, ...children)`). */
@@ -60,9 +66,13 @@ interface State {
   busy?: string;
   last?: { id: string; ok: boolean; lines: string[] };
   presses: Map<string, "applied" | "undone">;
+  /** The one keep-warm yes in force (or the last, stopped): never armed but by the command. */
+  kw?: KeepWarm;
+  /** A ping in flight: never two at once. */
+  pinging: boolean;
 }
 
-const fresh = (): State => ({ off: false, always: false, thresholds: DEFAULT_THRESHOLDS, hidden: new Set(), drawn: "", compacting: false, loading: false, presses: new Map() });
+const fresh = (): State => ({ off: false, always: false, thresholds: DEFAULT_THRESHOLDS, hidden: new Set(), drawn: "", compacting: false, loading: false, presses: new Map(), pinging: false });
 let S: State = fresh();
 
 /** For tests: the state the hooks share. */
@@ -173,10 +183,82 @@ function refresh($: Engine): void {
   if (!S.loading) void loadPlan($);
 }
 
+/** A line in the session-cost ledger (the CLI writes it): keep-warm's yes, each ping, its stop. */
+async function note($: Engine, ev: string, tokens?: number): Promise<void> {
+  try {
+    const sessionId = await $.session.id();
+    await $.process.run(["node", cliOf($), "mod", "event"], { stdin: JSON.stringify({ sessionId, ev, tokens }), timeoutMs: MEASURE_TIMEOUT_MS });
+  } catch { /* the record is a nicety */ }
+}
+
+/** Stop for good: this yes is spent. A new one takes the command again. */
+function stopKeepWarm($: Engine, why: string): void {
+  const kw = S.kw;
+  if (!kw || kw.stopped) return;
+  kw.stopped = why;
+  $.ui.toast(`context-doctor: stopped keeping the cache warm: ${why} (${kw.pings} ping${kw.pings === 1 ? "" : "s"}, ~${money(kw.spentUsd)}).`);
+  $.ui.invalidate("ui.render");
+  void note($, "keep-warm-off");
+}
+
+/** One ping when one is due: `$.model.fork`, checked to have read the cache, priced against the limit. */
+async function keepWarm($: Engine, now: number): Promise<void> {
+  if (S.pinging) return;
+  const step = keepWarmStep(S.kw, S.data, now);
+  if (step.do === "stop") return stopKeepWarm($, step.why);
+  if (step.do !== "ping" || !S.kw || !S.data) return;
+  if (!$.model?.fork) return stopKeepWarm($, "this Claude Code has no $.model.fork");
+  S.pinging = true;
+  const kw = S.kw, d = S.data;
+  try {
+    const r = await $.model.fork({ prompt: PING_PROMPT });
+    if (kw.stopped) return;
+    const u = r.usage;
+    const cost = u ? pingOutcome(u, d) : undefined;
+    if (cost) kw.spentUsd += cost.usd;
+    if (!r.isAnswered && r.reason === "nothing-to-fork") return stopKeepWarm($, "Claude Code holds no request to repeat (restarted, or /clear)");
+    if (!r.isAnswered && !u) return stopKeepWarm($, `the ping failed (${r.reason}${r.status ? ` ${r.status}` : ""})`);
+    kw.pings++;
+    kw.lastPingAt = now;
+    void note($, "keep-warm-ping", u?.cache_read_input_tokens);
+    // A ping that wrote the context found it gone: the next would too.
+    if (cost && !cost.warm) return stopKeepWarm($, `a ping found the cache cold (read ${u!.cache_read_input_tokens}, wrote ${u!.cache_creation_input_tokens} tokens)`);
+    if (kw.spentUsd >= kw.capUsd) return stopKeepWarm($, `it reached its ${money(kw.capUsd)} limit`);
+    $.ui.invalidate("ui.render");
+  } catch (err) {
+    stopKeepWarm($, `the ping could not be sent: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    S.pinging = false;
+  }
+}
+
+/** The command: a status with no arguments, `off`, or the yes (hours and a dollar limit). */
+async function keepWarmCommand($: Engine, args: string | undefined): Promise<{ text: string }> {
+  const req = parseKeepWarm(args);
+  const now = await $.clock.now();
+  if (req.kind === "error") return { text: `${req.text} Nothing was started.` };
+  if (req.kind === "status") return { text: keepWarmStatusText(S.kw, S.data, now) };
+  if (req.kind === "off") {
+    if (!S.kw || S.kw.stopped) return { text: "Nothing to stop: the cache is not being kept warm." };
+    stopKeepWarm($, "you stopped it");
+    return { text: `Stopped keeping the cache warm (${S.kw.pings} ping${S.kw.pings === 1 ? "" : "s"}, ~${money(S.kw.spentUsd)}).` };
+  }
+  if (!$.model?.fork) return { text: "This Claude Code has no $.model.fork, which keeping warm needs. Nothing was started." };
+  const refusal = keepWarmRefusal(S.data, now);
+  if (refusal) return { text: `Not started: ${refusal}` };
+  // A new yes replaces one in force, with what it spent counted from zero.
+  if (S.kw && !S.kw.stopped) S.kw.stopped = "replaced by a new one";
+  S.kw = { armedAt: now, until: now + req.hours * 3_600_000, capUsd: req.capUsd, spentUsd: 0, pings: 0 };
+  void note($, "keep-warm-on", S.data!.tokens);
+  $.ui.invalidate("ui.render");
+  return { text: keepWarmArmedText(S.kw, S.data!) };
+}
+
 /** The countdown is in minutes: redraw only when the band's words change. */
 async function tick($: Engine): Promise<void> {
   const now = await $.clock.now();
-  const k = bandKey(now, "desktop") + bandKey(now, "terminal");
+  await keepWarm($, now);
+  const k = bandKey(now, "desktop") + bandKey(now, "terminal") + (S.kw && !S.kw.stopped ? keepWarmText(S.kw, now) : "");
   if (k !== S.drawn) {
     S.drawn = k;
     $.ui.invalidate("ui.render");
@@ -194,6 +276,8 @@ export function register(on: On): void {
       if (!S.off) {
         await $.command.register({ name: "context-doctor-fix", description: "context-doctor: the fix plan, with an Apply and an Undo button per lever (nothing applies without a press)" });
         $.clock.every(TICK_MS, () => void tick($));
+        // Last: an engine that refuses it keeps the rest.
+        await $.command.register({ name: KEEP_WARM_COMMAND, description: "context-doctor: keep the prompt cache warm while you step away, for up to the hours and dollars you give (the pings bill to your plan or key); off stops it", argumentHint: "<2h> [$5] | off" });
       }
     } catch {
       /* an engine without one of these: the mod stays quiet */
@@ -213,6 +297,8 @@ export function register(on: On): void {
   // session.start for it: the band's figures were the old session's, and its Compact first button
   // would compact the new one on them. Nothing is shown until the next turn measures the new one.
   on("session.end", async ($, e, next) => {
+    // The yes was for that conversation: a ping now would keep the new one's cache warm unasked.
+    try { stopKeepWarm($, "the session ended"); } catch { /* ending anyway */ }
     S.data = undefined;
     try { $.ui.invalidate("ui.render"); } catch { /* ending anyway */ }
     return next(e);
@@ -220,7 +306,13 @@ export function register(on: On): void {
 
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
     if (S.off || e.props.hasSurvey) return next(e);
-    const b = band(S.data, await $.clock.now(), e.surface, { hidden: S.hidden, always: S.always });
+    const now = await $.clock.now();
+    // Keeping warm spends money: while it runs, the band says so, with Stop, wherever it can draw.
+    if (S.kw && !S.kw.stopped && e.surface !== "mobile") {
+      const { Box, Text, Button } = $.ui.resolve(e);
+      return h(Box, { flexDirection: "row", flexWrap: "wrap", columnGap: 1 }, h(Text, { dimColor: true }, keepWarmText(S.kw, now)), h(Button, { key: "cd-keep-warm-stop", label: "Stop", onPress: () => stopKeepWarm($, "you stopped it") }));
+    }
+    const b = band(S.data, now, e.surface, { hidden: S.hidden, always: S.always });
     // A compaction only runs between turns: no button while one runs.
     if (b.kind === "none" || (b.kind === "cold" && e.props.isWorking)) return next(e);
     const { Box, Text, Button } = $.ui.resolve(e);
@@ -245,6 +337,11 @@ export function register(on: On): void {
     await $.ui.open({ id: PANE, title: "context-doctor fix" });
     if (!S.plan && !S.loading) void loadPlan($);
     return { text: "Opened context-doctor's fix plan. Nothing is applied until you press Apply." };
+  });
+
+  on("command.run", { command: KEEP_WARM_COMMAND }, async ($, e) => {
+    if (S.off) return { text: "context-doctor's mod is off (CONTEXT_DOCTOR_NO_MOD=1)." };
+    return keepWarmCommand($, e.args);
   });
 
   on("ui.render", { component: "Pane", requestId: PANE }, async ($, e: RenderEvent) => {

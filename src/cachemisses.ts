@@ -41,6 +41,7 @@ import { formatTokens, isCodeLike, realModel, tokensForLength } from "./tokens.j
 import { CACHE_WRITE_1H, CACHE_WRITE_5M, requestCost } from "./pricing.js";
 import { compareVersions } from "./modelswitch.js";
 import { diagnosedMisses, missLogPath, type DiagnosedMisses } from "./missledger.js";
+import { coldReturns, renderColdReturns, type ColdReturnReport } from "./coldreturns.js";
 
 /** Dollars as a person reads them: "$1,925", "$12.26", "$0". */
 function money(n: number): string {
@@ -146,6 +147,8 @@ export interface CacheMissReport {
     loops: Array<{ path: string; rewrites: number; medianGapSeconds: number; ttlSeconds: number; extraUsd: number }>;
     largest: LateRewrite[];
   };
+  /** Returns after the cache expired, replayed as billed, compacted and kept warm (coldreturns.ts). */
+  coldReturns: ColdReturnReport;
 }
 
 /** One Claude Code version's requests (the `version` every transcript line carries). */
@@ -559,6 +562,7 @@ export function cacheMisses(days = 30, paths?: string[], onProgress?: (done: num
     ...versionReport(versions),
     diagnosed: diagnosedMisses(since, missLog),
     late: lateReport(late),
+    coldReturns: coldReturns(days, targets),
   };
 }
 
@@ -832,6 +836,8 @@ export function renderCacheMisses(r: CacheMissReport, limitLines?: string[]): st
     const late = renderLate(r.late);
     if (late.length) out.push("", ...late);
     if (r.diagnosed.misses > 0) out.push("", ...renderDiagnosed(r.diagnosed));
+    const cold = renderColdReturns(r.coldReturns);
+    if (cold.length) out.push("", ...cold);
     return out.join("\n");
   }
   const share = r.cacheWriteUsd > 0 ? ` (${Math.round((r.extraUsd / r.cacheWriteUsd) * 100)}% of your ${money(r.cacheWriteUsd)} of cache writes)` : "";
@@ -904,5 +910,7 @@ export function renderCacheMisses(r: CacheMissReport, limitLines?: string[]): st
     "its own cache. On Claude Code 2.1.251+, `context-doctor install` (or the plugin)",
     "shows that price before a /model switch."
   );
+  const cold = renderColdReturns(r.coldReturns);
+  if (cold.length) out.push("", ...cold);
   return out.join("\n");
 }

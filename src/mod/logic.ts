@@ -309,3 +309,144 @@ export function outcome(stdout: string, stderr: string, exitCode: number): { ok:
   const err = stderr.split("\n").map((l) => l.trim()).filter(Boolean);
   return { ok: exitCode === 0, lines: [...lines, ...(exitCode === 0 ? [] : err.slice(-3))].slice(0, 8) };
 }
+
+// -- Keeping the cache warm while away -------------------------------------------------
+
+/**
+ * `/context-doctor-keep-warm <hours> [$cap]`: while the person is away, a
+ * cache read of the session's whole context every 55 minutes (4.5 on a
+ * 5-minute cache), through Claude Code's `$.model.fork`: the main thread's
+ * last request again with one short message after it, the reply kept out of
+ * the transcript, so the return reads the context instead of writing it
+ * again. Only on that command (the yes), capped in hours and dollars, never
+ * armed by itself or again after it stops.
+ *
+ * On the author's 30 days (2026-11-15) a 2-hour cap would have sent 918
+ * pings ($87) and kept 56 of 183 cold returns warm ($275 of re-writes): $188
+ * net. `cache-misses` prices it on your own history.
+ */
+export const KEEP_WARM_COMMAND = "context-doctor-keep-warm";
+export const KEEP_WARM_MAX_HOURS = 8;
+export const KEEP_WARM_DEFAULT_CAP_USD = 2;
+export const KEEP_WARM_MAX_CAP_USD = 20;
+/** A ping every this long keeps a 1-hour cache warm, and a 5-minute one (coldreturns.ts prices the same). */
+export const PING_EVERY_1H_MS = 55 * MIN;
+export const PING_EVERY_5M_MS = 270_000;
+/** The band's clock ticks this often: a ping goes out within one tick before its time, never after it. */
+export const KEEP_WARM_TICK_MS = 30_000;
+/** Asks for haste in the prompt, not with `effort`: a level other than the session's could write the whole context again. */
+export const PING_PROMPT = "context-doctor keep-warm: an automated cache refresh while the person is away, not a request. Reply with the single word ok, straight away, with no tools and without thinking it over.";
+
+export type KeepWarmRequest = { kind: "off" } | { kind: "status" } | { kind: "arm"; hours: number; capUsd: number } | { kind: "error"; text: string };
+
+/** The command's arguments: `2h`, `90m`, `2h $5`, `off`. None is a question, not a yes. */
+export function parseKeepWarm(args: string | undefined): KeepWarmRequest {
+  const words = (args ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return { kind: "status" };
+  if (words.length === 1 && /^(off|stop)$/.test(words[0])) return { kind: "off" };
+  let hours: number | undefined, capUsd: number | undefined;
+  for (const w of words) {
+    const h = /^(\d+(?:\.\d+)?)h$/.exec(w), m = /^(\d+)(?:m|min)$/.exec(w), usd = /^\$(\d+(?:\.\d+)?)$/.exec(w);
+    if (h && hours === undefined) hours = Number(h[1]);
+    else if (m && hours === undefined) hours = Number(m[1]) / 60;
+    else if (usd && capUsd === undefined) capUsd = Number(usd[1]);
+    else return { kind: "error", text: `"${w}" is not a duration (2h, 90m) or a dollar limit ($5).` };
+  }
+  if (hours === undefined) return { kind: "error", text: `Say for how long: 2h, 90m (at most ${KEEP_WARM_MAX_HOURS}h).` };
+  if (!(hours > 0) || hours > KEEP_WARM_MAX_HOURS) return { kind: "error", text: `At most ${KEEP_WARM_MAX_HOURS}h: past that, a cold return costs less than the pings.` };
+  capUsd ??= KEEP_WARM_DEFAULT_CAP_USD;
+  if (!(capUsd > 0) || capUsd > KEEP_WARM_MAX_CAP_USD) return { kind: "error", text: `A dollar limit from $0.01 to $${KEEP_WARM_MAX_CAP_USD}.` };
+  return { kind: "arm", hours, capUsd };
+}
+
+/** One yes: its limits, what it has spent, and why it stopped. */
+export interface KeepWarm {
+  armedAt: number;
+  until: number;
+  capUsd: number;
+  spentUsd: number;
+  pings: number;
+  lastPingAt?: number;
+  stopped?: string;
+}
+
+export const pingEvery = (ttlMs: number): number => (ttlMs >= 60 * MIN ? PING_EVERY_1H_MS : PING_EVERY_5M_MS);
+const everyText = (ttlMs: number): string => (pingEvery(ttlMs) >= 60 * MIN - 5 * MIN ? "55 minutes" : "4.5 minutes");
+
+/** What a ping should cost: one read of the context (the band's per-message figure), and a little more for the prompt and reply. */
+export function pingEstimateUsd(d: BandData): number | undefined {
+  return d.perMessageUsd !== undefined ? d.perMessageUsd * 1.05 : undefined;
+}
+
+/** Why keeping warm cannot start now, or undefined when it can. */
+export function keepWarmRefusal(d: BandData | undefined, now: number): string | undefined {
+  if (!d || d.tokens === undefined || d.lastReplyAt === undefined || d.ttlMs === undefined) return "nothing measured in this session yet: send a message first, then run it as you leave.";
+  if (now - d.lastReplyAt >= d.ttlMs) return `the cache already expired (idle ${duration(now - d.lastReplyAt)}): a ping now would write the whole context again. Run it before you step away.`;
+  if (pingEstimateUsd(d) === undefined) return "this session's model has no known price, so the dollar limit could not be kept.";
+  return undefined;
+}
+
+export type KeepWarmStep = { do: "wait" } | { do: "ping" } | { do: "stop"; why: string };
+
+/**
+ * What the timer does at `now`: wait, ping, or stop for good. A ping is due
+ * a tick before its interval is up after the last request or ping, so it
+ * lands inside the cache's life; a cache that lapsed anyway (Claude Code
+ * closed, the machine asleep) is not pinged, since that ping would write the
+ * whole context.
+ */
+export function keepWarmStep(kw: KeepWarm | undefined, d: BandData | undefined, now: number): KeepWarmStep {
+  if (!kw || kw.stopped) return { do: "wait" };
+  if (now >= kw.until) return { do: "stop", why: `its ${duration(kw.until - kw.armedAt)} are up` };
+  if (!d || d.lastReplyAt === undefined || d.ttlMs === undefined) return { do: "wait" };
+  const last = Math.max(d.lastReplyAt, kw.lastPingAt ?? 0);
+  if (now - last >= d.ttlMs) return { do: "stop", why: "the cache expired before a ping could go out (Claude Code closed, or the machine asleep)" };
+  if (now - last < pingEvery(d.ttlMs) - KEEP_WARM_TICK_MS) return { do: "wait" };
+  const est = pingEstimateUsd(d) ?? Infinity;
+  if (kw.spentUsd + est > kw.capUsd) return { do: "stop", why: `the next ping (~${money(est)}) would pass its ${money(kw.capUsd)} limit` };
+  return { do: "ping" };
+}
+
+/** A ping's usage as `$.model.fork` reports it. */
+export interface PingUsage { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }
+
+/**
+ * What a ping read and cost. Warm: it read the context and wrote little
+ * (the fork's own tail is never cached). Priced from the band's figures: a
+ * read at the per-message rate, a write at the session's re-write rate,
+ * uncached input at that over the TTL's multiple (2x for 1 hour, 1.25x for
+ * 5 minutes), output at 5x input (every current Claude model). An estimate.
+ */
+export function pingOutcome(u: PingUsage, d: BandData): { warm: boolean; usd: number } {
+  const t = d.tokens && d.tokens > 0 ? d.tokens : 1;
+  const read = (d.perMessageUsd ?? 0) / t, write = (d.rewriteUsd ?? 0) / t;
+  const input = write / ((d.ttlMs ?? 0) >= 60 * MIN ? 2 : 1.25);
+  const n = (x: unknown) => (typeof x === "number" && Number.isFinite(x) && x > 0 ? x : 0);
+  const usd = n(u.cache_read_input_tokens) * read + n(u.cache_creation_input_tokens) * write + n(u.input_tokens) * input + n(u.output_tokens) * input * 5;
+  return { warm: n(u.cache_read_input_tokens) > 0 && n(u.cache_creation_input_tokens) < 0.1 * n(u.cache_read_input_tokens), usd };
+}
+
+/** The band while keeping warm: for how long more, what it has spent, against its limit. */
+export function keepWarmText(kw: KeepWarm, now: number): string {
+  return `context-doctor: keeping the cache warm for ${duration(Math.max(0, kw.until - now))} more: ${kw.pings} ping${kw.pings === 1 ? "" : "s"}, ~${money(kw.spentUsd)} of ${money(kw.capUsd)}`;
+}
+
+/** What the command says when it arms. */
+export function keepWarmArmedText(kw: KeepWarm, d: BandData): string {
+  const est = pingEstimateUsd(d);
+  return [
+    `Keeping this session's prompt cache warm for up to ${duration(kw.until - kw.armedAt)} or ${money(kw.capUsd)}, whichever comes first:`,
+    `a cache read of the ~${tokens(d.tokens ?? 0)}-token context every ${everyText(d.ttlMs ?? 60 * MIN)} while you are away${est !== undefined ? ` (~${money(est)} each at list price)` : ""},`,
+    "so your next message reads the context instead of writing it again. The pings bill to your plan or key (on a subscription they use your limit).",
+    `It stops at either limit, at /clear, or with /${KEEP_WARM_COMMAND} off, and never starts again by itself.`,
+  ].join(" ");
+}
+
+/** The command with no arguments: the price of a yes, or how the one in force stands. Arms nothing. */
+export function keepWarmStatusText(kw: KeepWarm | undefined, d: BandData | undefined, now: number): string {
+  if (kw && !kw.stopped) return `${keepWarmText(kw, now).replace(/^context-doctor: /, "")}. /${KEEP_WARM_COMMAND} off stops it.`;
+  const last = kw?.stopped ? `Last time it stopped: ${kw.stopped} (${kw.pings} ping${kw.pings === 1 ? "" : "s"}, ~${money(kw.spentUsd)}). ` : "";
+  const est = d ? pingEstimateUsd(d) : undefined;
+  const each = d?.tokens !== undefined && est !== undefined ? `Here a ping reads ~${tokens(d.tokens)} tokens, ~${money(est)} at list price, every ${everyText(d.ttlMs ?? 60 * MIN)} while you are away. ` : "";
+  return `${last}${each}To keep the cache warm while you step away: /${KEEP_WARM_COMMAND} 2h (at most ${KEEP_WARM_MAX_HOURS}h), with a dollar limit such as $5 (default ${money(KEEP_WARM_DEFAULT_CAP_USD)}). context-doctor cache-misses shows what it would have saved on your history.`;
+}

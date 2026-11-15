@@ -36,6 +36,7 @@
  */
 import { type Extractor } from "./scan.js";
 import { type DiagnosedMisses } from "./missledger.js";
+import { type ColdReturnReport } from "./coldreturns.js";
 export type MissCause = "model switch" | "context edited" | "after an API error" | "over 20 new blocks" | "nothing visible";
 export interface CacheMiss {
     path: string;
@@ -124,6 +125,8 @@ export interface CacheMissReport {
         }>;
         largest: LateRewrite[];
     };
+    /** Returns after the cache expired, replayed as billed, compacted and kept warm (coldreturns.ts). */
+    coldReturns: ColdReturnReport;
 }
 /** One Claude Code version's requests (the `version` every transcript line carries). */
 export interface VersionStats {

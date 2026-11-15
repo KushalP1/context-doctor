@@ -79,6 +79,17 @@ export declare function autoCompactsAt(model: string | undefined, home?: string,
 export declare const COLD_IDLE_MS: number;
 /** Margin past a cache's lifetime before a return counts as cold. */
 export declare const COLD_MARGIN_MS: number;
+/**
+ * How long the cache entry a reply left behind lives: one hour when the reply
+ * wrote the 1-hour cache, five minutes when it wrote only the 5-minute one,
+ * and otherwise whatever the last write before it used (a read refreshes an
+ * entry at its own lifetime). Claude Code's main thread wrote the 1-hour cache
+ * until 2.1.295, which often writes the 5-minute one (in the author's last 3
+ * days, 1,307 main-thread replies wrote only 5-minute entries): a gate fixed
+ * at 65 minutes missed every return between 10 and 65 minutes to those
+ * sessions, cold as they were. Undefined when nothing says.
+ */
+export declare function writtenTtlMs(u: any): number | undefined;
 /** Below this, a rebuilt cache is cheap and compaction is not worth the interruption. */
 export declare const COLD_MIN_TOKENS = 150000;
 /** What a compacted session restarts from: system prompt and tools plus the summary. */

@@ -40,6 +40,7 @@ import { formatTokens, isCodeLike, realModel, tokensForLength } from "./tokens.j
 import { CACHE_WRITE_1H, CACHE_WRITE_5M, requestCost } from "./pricing.js";
 import { compareVersions } from "./modelswitch.js";
 import { diagnosedMisses, missLogPath } from "./missledger.js";
+import { coldReturns, renderColdReturns } from "./coldreturns.js";
 /** Dollars as a person reads them: "$1,925", "$12.26", "$0". */
 function money(n) {
     if (!(n > 0))
@@ -417,6 +418,7 @@ export function cacheMisses(days = 30, paths, onProgress, missLog = missLogPath(
         ...versionReport(versions),
         diagnosed: diagnosedMisses(since, missLog),
         late: lateReport(late),
+        coldReturns: coldReturns(days, targets),
     };
 }
 /**
@@ -665,6 +667,9 @@ export function renderCacheMisses(r, limitLines) {
             out.push("", ...late);
         if (r.diagnosed.misses > 0)
             out.push("", ...renderDiagnosed(r.diagnosed));
+        const cold = renderColdReturns(r.coldReturns);
+        if (cold.length)
+            out.push("", ...cold);
         return out.join("\n");
     }
     const share = r.cacheWriteUsd > 0 ? ` (${Math.round((r.extraUsd / r.cacheWriteUsd) * 100)}% of your ${money(r.cacheWriteUsd)} of cache writes)` : "";
@@ -721,5 +726,8 @@ export function renderCacheMisses(r, limitLines) {
         }
     }
     out.push("", "A miss: within the cache lifetime of both requests (5 min, or 1 h when written at", "the 1-hour TTL), no compaction between, previous context over 20k, and the request", "wrote over 60% of that context again. Model switches always miss: each model has", "its own cache. On Claude Code 2.1.251+, `context-doctor install` (or the plugin)", "shows that price before a /model switch.");
+    const cold = renderColdReturns(r.coldReturns);
+    if (cold.length)
+        out.push("", ...cold);
     return out.join("\n");
 }

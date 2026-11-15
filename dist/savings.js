@@ -353,7 +353,7 @@ export function estimateSavings(days = 30, options = {}, paths, onProgress, repl
 }
 const tokens = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : formatTokens(n));
 const usd = (n) => (n >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
-export function renderSavings(r, autopilotOn = false, cw, missLines, limitLines, lensLines) {
+export function renderSavings(r, autopilotOn = false, cw, missLines, limitLines, lensLines, keepWarm) {
     const lines = [];
     if (r.sessions.length === 0) {
         lines.push(`No Claude Code sessions with 10+ requests in the last ${r.days} days to replay.`);
@@ -375,6 +375,11 @@ export function renderSavings(r, autopilotOn = false, cw, missLines, limitLines,
     lines.push("   expired. Running /compact then, net of the compaction itself, would");
     lines.push("   have saved this. The every-prompt hook points these moments out, in");
     lines.push("   every Claude Code surface, the desktop app included.");
+    if (keepWarm && keepWarm.netUsd >= 1) {
+        // Not a third column to add up: it replaces the re-write compaction cannot avoid.
+        lines.push(`   Or keep the cache warm while away, up to ${keepWarm.hours} h: ${usd(keepWarm.netUsd)} net of`);
+        lines.push(`   ${usd(keepWarm.pingUsd)} in pings (/context-doctor-keep-warm; each gap: cache-misses).`);
+    }
     lines.push("");
     if (allDesktop) {
         lines.push(`2. Autopilot                      ${"n/a".padStart(9)}`);

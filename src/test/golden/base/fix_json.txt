@@ -50,7 +50,14 @@
       "state": "available"
     }
   ],
-  "since": []
+  "since": [],
+  "keepWarm": {
+    "hours": 4,
+    "netUsd": 38.8734506,
+    "pingUsd": 22.447930499999995,
+    "keptWarm": 36,
+    "returns": 36
+  }
 }
 
 [exit 0]

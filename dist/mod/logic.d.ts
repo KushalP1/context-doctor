@@ -156,3 +156,96 @@ export declare function outcome(stdout: string, stderr: string, exitCode: number
     ok: boolean;
     lines: string[];
 };
+/**
+ * `/context-doctor-keep-warm <hours> [$cap]`: while the person is away, a
+ * cache read of the session's whole context every 55 minutes (4.5 on a
+ * 5-minute cache), through Claude Code's `$.model.fork`: the main thread's
+ * last request again with one short message after it, the reply kept out of
+ * the transcript, so the return reads the context instead of writing it
+ * again. Only on that command (the yes), capped in hours and dollars, never
+ * armed by itself or again after it stops.
+ *
+ * On the author's 30 days (2026-11-15) a 2-hour cap would have sent 918
+ * pings ($87) and kept 56 of 183 cold returns warm ($275 of re-writes): $188
+ * net. `cache-misses` prices it on your own history.
+ */
+export declare const KEEP_WARM_COMMAND = "context-doctor-keep-warm";
+export declare const KEEP_WARM_MAX_HOURS = 8;
+export declare const KEEP_WARM_DEFAULT_CAP_USD = 2;
+export declare const KEEP_WARM_MAX_CAP_USD = 20;
+/** A ping every this long keeps a 1-hour cache warm, and a 5-minute one (coldreturns.ts prices the same). */
+export declare const PING_EVERY_1H_MS: number;
+export declare const PING_EVERY_5M_MS = 270000;
+/** The band's clock ticks this often: a ping goes out within one tick before its time, never after it. */
+export declare const KEEP_WARM_TICK_MS = 30000;
+/** Asks for haste in the prompt, not with `effort`: a level other than the session's could write the whole context again. */
+export declare const PING_PROMPT = "context-doctor keep-warm: an automated cache refresh while the person is away, not a request. Reply with the single word ok, straight away, with no tools and without thinking it over.";
+export type KeepWarmRequest = {
+    kind: "off";
+} | {
+    kind: "status";
+} | {
+    kind: "arm";
+    hours: number;
+    capUsd: number;
+} | {
+    kind: "error";
+    text: string;
+};
+/** The command's arguments: `2h`, `90m`, `2h $5`, `off`. None is a question, not a yes. */
+export declare function parseKeepWarm(args: string | undefined): KeepWarmRequest;
+/** One yes: its limits, what it has spent, and why it stopped. */
+export interface KeepWarm {
+    armedAt: number;
+    until: number;
+    capUsd: number;
+    spentUsd: number;
+    pings: number;
+    lastPingAt?: number;
+    stopped?: string;
+}
+export declare const pingEvery: (ttlMs: number) => number;
+/** What a ping should cost: one read of the context (the band's per-message figure), and a little more for the prompt and reply. */
+export declare function pingEstimateUsd(d: BandData): number | undefined;
+/** Why keeping warm cannot start now, or undefined when it can. */
+export declare function keepWarmRefusal(d: BandData | undefined, now: number): string | undefined;
+export type KeepWarmStep = {
+    do: "wait";
+} | {
+    do: "ping";
+} | {
+    do: "stop";
+    why: string;
+};
+/**
+ * What the timer does at `now`: wait, ping, or stop for good. A ping is due
+ * a tick before its interval is up after the last request or ping, so it
+ * lands inside the cache's life; a cache that lapsed anyway (Claude Code
+ * closed, the machine asleep) is not pinged, since that ping would write the
+ * whole context.
+ */
+export declare function keepWarmStep(kw: KeepWarm | undefined, d: BandData | undefined, now: number): KeepWarmStep;
+/** A ping's usage as `$.model.fork` reports it. */
+export interface PingUsage {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens: number;
+    cache_creation_input_tokens: number;
+}
+/**
+ * What a ping read and cost. Warm: it read the context and wrote little
+ * (the fork's own tail is never cached). Priced from the band's figures: a
+ * read at the per-message rate, a write at the session's re-write rate,
+ * uncached input at that over the TTL's multiple (2x for 1 hour, 1.25x for
+ * 5 minutes), output at 5x input (every current Claude model). An estimate.
+ */
+export declare function pingOutcome(u: PingUsage, d: BandData): {
+    warm: boolean;
+    usd: number;
+};
+/** The band while keeping warm: for how long more, what it has spent, against its limit. */
+export declare function keepWarmText(kw: KeepWarm, now: number): string;
+/** What the command says when it arms. */
+export declare function keepWarmArmedText(kw: KeepWarm, d: BandData): string;
+/** The command with no arguments: the price of a yes, or how the one in force stands. Arms nothing. */
+export declare function keepWarmStatusText(kw: KeepWarm | undefined, d: BandData | undefined, now: number): string;

@@ -906,7 +906,7 @@ export function overlaps(fixes) {
     const priced = new Set(fixes.filter((f) => f.savedUsd !== undefined).map((f) => f.id));
     return OVERLAPS.filter(([a, b]) => priced.has(a) && priced.has(b)).map(([a, b, why]) => `${a} and ${b}: ${why}.`);
 }
-export function renderFixPlan(days, billedUsd, fixes, since, command = (s) => `context-doctor ${s}`, coldResume, recordProblem, codexBilledUsd = 0) {
+export function renderFixPlan(days, billedUsd, fixes, since, command = (s) => `context-doctor ${s}`, coldResume, recordProblem, codexBilledUsd = 0, keepWarm) {
     const out = [];
     if (recordProblem)
         out.push(`⚠ ${recordProblem}`);
@@ -961,13 +961,21 @@ export function renderFixPlan(days, billedUsd, fixes, since, command = (s) => `c
     const elsewhere = fixes.filter((f) => f.state === "not-here");
     for (const f of elsewhere)
         out.push(`  - ${LABEL[f.id]}: ${f.note}`);
-    if (coldResume && coldResume.netUsd >= MIN_USD) {
+    const compactAdvice = coldResume !== undefined && coldResume.netUsd >= MIN_USD;
+    const warmAdvice = keepWarm !== undefined && keepWarm.netUsd >= MIN_USD;
+    if (compactAdvice || warmAdvice) {
         out.push("");
         out.push("Advice you act on");
+    }
+    if (compactAdvice) {
         out.push(`  /compact when you come back to a big session after the cache expired: ${money(coldResume.netUsd)} over ${coldResume.returns} returns.`);
         out.push(coldResume.hooked
             ? "  The every-prompt hook offers it at those moments; say yes when it does."
             : `  Nothing points those moments out yet: ${command("install")} (or the Claude Code plugin) adds the hook that does.`);
+    }
+    if (warmAdvice) {
+        out.push(`  Keep the cache warm while you step away, up to ${keepWarm.hours} h: ${money(keepWarm.netUsd)} net of ${money(keepWarm.pingUsd)} in pings (${keepWarm.keptWarm} of ${keepWarm.returns} cold returns kept warm).`);
+        out.push(`  /context-doctor-keep-warm ${keepWarm.hours}h in Claude Code with the plugin, each time you leave; on a subscription the pings use your limit too. By gap: ${command("cache-misses")}`);
     }
     out.push("");
     if (avail.length) {

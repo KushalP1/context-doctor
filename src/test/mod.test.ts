@@ -16,7 +16,8 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyOutcome, band, duration, fixArgv, money, outcome, paneRows, parsePlan, passedThreshold, thresholdsFrom, tokens, withPresses, type BandData, type PlanJson } from "../mod/logic.js";
+import { applyOutcome, band, duration, fixArgv, keepWarmRefusal, keepWarmStep, KEEP_WARM_COMMAND, money, outcome, paneRows, parseKeepWarm, parsePlan, passedThreshold, PING_EVERY_1H_MS, PING_EVERY_5M_MS, PING_PROMPT, pingOutcome, thresholdsFrom, tokens, withPresses, type BandData, type KeepWarm, type PlanJson } from "../mod/logic.js";
+import { PING_EVERY_1H_MS as REPLAY_1H, PING_EVERY_5M_MS as REPLAY_5M } from "../coldreturns.js";
 import { sessionPriceThresholds } from "../sessionprice.js";
 import { register, state, COMMAND, PANE } from "../mod/register.js";
 import { costCheck, costGaps, readCostLines, recordModEvent, recordSessionCost, statusLineRateLimits } from "../modmeasure.js";
@@ -240,11 +241,15 @@ interface Stub {
   opened: string[];
   toasts: string[];
   now: number;
+  /** The band's clock, as $.clock.every was given it. */
+  tick?: () => void;
+  /** Each $.model.fork prompt, in order. */
+  forks: string[];
 }
 
 /** A stand-in for the engine: `$` as the declarations describe it, process.run for real in `home`. */
-function engine(home: string, opts: { env?: Record<string, string>; now?: number; cwd?: string; sessionId?: string; noProcess?: boolean; compactRejects?: boolean } = {}): Stub {
-  const s: Stub = { hooks: new Map(), $: undefined, runs: [], compacts: 0, commands: [], opened: [], toasts: [], now: opts.now ?? Date.now() };
+function engine(home: string, opts: { env?: Record<string, string>; now?: number; cwd?: string; sessionId?: string; noProcess?: boolean; compactRejects?: boolean; fork?: (s: Stub) => any; noFork?: boolean } = {}): Stub {
+  const s: Stub = { hooks: new Map(), $: undefined, runs: [], compacts: 0, commands: [], opened: [], toasts: [], now: opts.now ?? Date.now(), forks: [] };
   s.$ = {
     plugin: { name: "context-doctor", root },
     process: {
@@ -272,8 +277,17 @@ function engine(home: string, opts: { env?: Record<string, string>; now?: number
       toast: (t: string) => { s.toasts.push(t); },
     },
     command: { register: async (c: { name: string }) => { s.commands.push(c.name); return { command: c.name }; } },
-    clock: { now: async () => s.now, every: () => ({ cancel() {} }) },
+    clock: { now: async () => s.now, every: (_ms: number, fn: () => void) => { s.tick = fn; return { cancel() {} }; } },
     env: { get: async (n: string) => opts.env?.[n] },
+    ...(opts.noFork ? {} : {
+      model: {
+        fork: async (r: { prompt: string }) => {
+          s.forks.push(r.prompt);
+          // A warm ping by default: the context read, the fork's own tail uncached.
+          return opts.fork?.(s) ?? { isAnswered: true, text: "ok", usage: { input_tokens: 40, output_tokens: 3, cache_read_input_tokens: 520_000, cache_creation_input_tokens: 0 } };
+        },
+      },
+    }),
   };
   register(((event: string, a: any, b?: any) => {
     const list = s.hooks.get(event) ?? [];
@@ -308,7 +322,7 @@ test("after a turn: the readings reach the limits ledger and the cost ledger thr
   const { home, cwd } = sessionHome(80, now);
   const s = engine(home, { cwd, now });
   await fire(s, "session.start", { cwd, surface: "desktop", isInteractive: true }, (e) => ({ cwd: e.cwd }));
-  assert.deepEqual(s.commands, [COMMAND]);
+  assert.deepEqual(s.commands, [COMMAND, KEEP_WARM_COMMAND]);
   const reset = new Date(now + 2 * 3600e3).toISOString();
   const echoed = await fire(s, "session.measure", { context: { tokens: 520_010, window: 1_000_000 }, rateLimits: [{ kind: "five_hour", percentUsed: 41.5, resetsAt: reset }, { kind: "seven_day", percentUsed: 12 }], cost: { usd: 9.87 }, changed: ["rateLimits", "cost"] }, (e) => ({ changed: e.changed }));
   assert.deepEqual(echoed, { changed: ["rateLimits", "cost"] }, "the engine's answer passes through");
@@ -553,4 +567,156 @@ test("the plugin names the mod, and the mod imports nothing the mods runtime lac
     assert.ok(!/\bimport\(/.test(src), `${f}: a module holding import() does not load`);
     assert.ok(!/\brequire\(/.test(src), f);
   }
+});
+
+// -- Keeping the cache warm ------------------------------------------------------------
+
+test("keep-warm: the command's words; nothing but hours (and a dollar limit) is a yes", () => {
+  assert.deepEqual(parseKeepWarm(""), { kind: "status" });
+  assert.deepEqual(parseKeepWarm(undefined), { kind: "status" });
+  assert.deepEqual(parseKeepWarm("off"), { kind: "off" });
+  assert.deepEqual(parseKeepWarm("2h"), { kind: "arm", hours: 2, capUsd: 2 });
+  assert.deepEqual(parseKeepWarm("90m $5"), { kind: "arm", hours: 1.5, capUsd: 5 });
+  assert.deepEqual(parseKeepWarm("$5 1.5h"), { kind: "arm", hours: 1.5, capUsd: 5 });
+  for (const bad of ["9h", "0h", "2h $50", "yes", "$5", "2h 3h", "forever"]) assert.equal(parseKeepWarm(bad).kind, "error", bad);
+  // The replay prices pings at the intervals the mod sends them.
+  assert.equal(PING_EVERY_1H_MS, REPLAY_1H);
+  assert.equal(PING_EVERY_5M_MS, REPLAY_5M);
+});
+
+test("keep-warm: a ping a tick before 55 minutes idle, counted from the last request or ping; stops at the hours, the dollars, a lapsed cache", () => {
+  const d = data({ lastReplyAt: T, ttlMs: 60 * MIN, perMessageUsd: 0.1 });
+  const kw = (over: Partial<KeepWarm> = {}): KeepWarm => ({ armedAt: T + MIN, until: T + MIN + 2 * 60 * MIN, capUsd: 2, spentUsd: 0, pings: 0, ...over });
+  assert.deepEqual(keepWarmStep(undefined, d, T + 55 * MIN), { do: "wait" }, "never without a yes");
+  assert.deepEqual(keepWarmStep(kw(), d, T + 50 * MIN), { do: "wait" });
+  assert.deepEqual(keepWarmStep(kw(), d, T + 54.5 * MIN), { do: "ping" });
+  assert.deepEqual(keepWarmStep(kw({ lastPingAt: T + 54.5 * MIN }), d, T + 60 * MIN), { do: "wait" }, "the ping refreshed it");
+  assert.deepEqual(keepWarmStep(kw({ lastPingAt: T + 54.5 * MIN }), d, T + 109 * MIN), { do: "ping" });
+  // A turn since: counted from its reply.
+  assert.deepEqual(keepWarmStep(kw({ lastPingAt: T + 54.5 * MIN }), { ...d, lastReplyAt: T + 70 * MIN }, T + 109 * MIN), { do: "wait" });
+  assert.equal(keepWarmStep(kw(), d, T + 121 * MIN).do, "stop", "its hours are up");
+  assert.match((keepWarmStep(kw(), d, T + 121 * MIN) as { why: string }).why, /its 2h 00m are up/);
+  const cap = keepWarmStep(kw({ spentUsd: 1.95 }), d, T + 54.5 * MIN) as { do: string; why: string };
+  assert.equal(cap.do, "stop");
+  assert.match(cap.why, /would pass its \$2\.00 limit/);
+  // The machine slept through the ping: a ping now would write the whole context, so none.
+  assert.match((keepWarmStep(kw(), d, T + 61 * MIN) as { why: string }).why, /expired before a ping could go out/);
+  // A 5-minute cache: every 4.5 minutes.
+  const five = { ...d, ttlMs: 5 * MIN };
+  assert.deepEqual(keepWarmStep(kw(), five, T + 3.5 * MIN), { do: "wait" });
+  assert.deepEqual(keepWarmStep(kw(), five, T + 4 * MIN), { do: "ping" });
+  assert.equal(keepWarmStep(kw({ stopped: "you stopped it" }), d, T + 54.5 * MIN).do, "wait", "a stopped yes never pings again");
+  // Refused: nothing measured, a cache already cold, no price.
+  assert.match(keepWarmRefusal(undefined, T)!, /nothing measured/);
+  assert.match(keepWarmRefusal(d, T + 70 * MIN)!, /already expired/);
+  assert.match(keepWarmRefusal({ ...d, perMessageUsd: undefined }, T)!, /no known price/);
+  assert.equal(keepWarmRefusal(d, T + 10 * MIN), undefined);
+  // A warm ping read the context; one that wrote it found it gone.
+  assert.equal(pingOutcome({ input_tokens: 40, output_tokens: 3, cache_read_input_tokens: 520_000, cache_creation_input_tokens: 0 }, d).warm, true);
+  assert.equal(pingOutcome({ input_tokens: 40, output_tokens: 3, cache_read_input_tokens: 0, cache_creation_input_tokens: 520_000 }, d).warm, false);
+  // Priced from the band's figures: 520k at $0.10 a read; 40 input at half the $5.20/520k write rate; output at 5x that.
+  const usd = pingOutcome({ input_tokens: 40, output_tokens: 3, cache_read_input_tokens: 520_000, cache_creation_input_tokens: 0 }, d).usd;
+  assert.ok(Math.abs(usd - (0.1 + 40 * 5e-6 + 3 * 25e-6)) < 1e-9, `${usd}`);
+});
+
+/** Run the band's clock once, and let what it started finish. */
+async function tickOnce(s: Stub, at: number): Promise<void> {
+  s.now = at;
+  s.tick!();
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+}
+
+test("keep-warm: only the command with hours starts it; it pings through $.model.fork, shows in the band with Stop, and stops for good", async () => {
+  const now = Date.now();
+  const { home, cwd } = sessionHome(10, now);
+  const s = engine(home, { cwd, now });
+  await fire(s, "session.start", { cwd, surface: "desktop", isInteractive: true }, (e) => ({ cwd: e.cwd }));
+  await fire(s, "session.measure", { context: { tokens: 520_010, window: 1_000_000 }, rateLimits: [], cost: { usd: 9.87 }, changed: ["cost"] });
+  const replyAt = state().data!.lastReplyAt!;
+  // Measured, but not asked: the clock runs past 55 minutes and nothing is sent.
+  await tickOnce(s, replyAt + 55 * MIN);
+  assert.equal(s.forks.length, 0);
+  s.now = now;
+  const status = await fire(s, "command.run", { command: KEEP_WARM_COMMAND, args: "" });
+  assert.match(status.text, /a ping reads ~520k tokens, ~\$0\.\d\d at list price, every 55 minutes/);
+  assert.equal(state().kw, undefined, "a question is not a yes");
+  const armed = await fire(s, "command.run", { command: KEEP_WARM_COMMAND, args: "2h $1" });
+  assert.match(armed.text, /^Keeping this session's prompt cache warm for up to 2h 00m or \$1\.00, whichever comes first/);
+  assert.match(armed.text, /never starts again by itself/);
+  // The band says it is spending, with Stop.
+  const tree = await render(s, "AbovePrompt", "desktop", {});
+  assert.match(texts(tree)[0], /^context-doctor: keeping the cache warm for 2h 00m more: 0 pings, ~\$0\.00 of \$1\.00/);
+  assert.ok(button(tree, "cd-keep-warm-stop"));
+  await tickOnce(s, replyAt + 30 * MIN);
+  assert.equal(s.forks.length, 0, "warm for another half hour: nothing to do");
+  await tickOnce(s, replyAt + 54.6 * MIN);
+  assert.deepEqual(s.forks, [PING_PROMPT]);
+  assert.equal(state().kw!.pings, 1);
+  assert.ok(state().kw!.spentUsd > 0);
+  await tickOnce(s, replyAt + 60 * MIN);
+  assert.equal(s.forks.length, 1, "the ping refreshed the cache");
+  await tickOnce(s, replyAt + 109.2 * MIN);
+  assert.equal(s.forks.length, 2);
+  // The hours run out: stopped, said, and never again.
+  await tickOnce(s, now + 2 * 60 * MIN + MIN);
+  assert.match(state().kw!.stopped!, /are up/);
+  assert.match(s.toasts.at(-1)!, /^context-doctor: stopped keeping the cache warm: its 2h 00m are up \(2 pings, ~\$0\.\d\d\)\.$/);
+  await tickOnce(s, now + 3 * 60 * MIN);
+  assert.equal(s.forks.length, 2);
+  assert.notEqual(texts(await render(s, "AbovePrompt", "desktop", {}))[0]?.startsWith("context-doctor: keeping"), true);
+  // The ledger has the yes, each ping and the stop.
+  const evs = readCostLines(0, join(home, ".claude", ".context-doctor-session-cost.jsonl")).map((l) => l.ev).filter(Boolean);
+  assert.deepEqual(evs, ["keep-warm-on", "keep-warm-ping", "keep-warm-ping", "keep-warm-off"]);
+});
+
+test("keep-warm: a ping that finds the cache cold, the dollar limit, Stop, a session's end and a Claude Code without fork each stop it", async () => {
+  const now = Date.now();
+  const { home, cwd } = sessionHome(10, now);
+  const cold = engine(home, { cwd, now, fork: () => ({ isAnswered: true, text: "ok", usage: { input_tokens: 40, output_tokens: 3, cache_read_input_tokens: 0, cache_creation_input_tokens: 520_000 } }) });
+  await fire(cold, "session.start", { cwd, surface: "desktop", isInteractive: true });
+  await fire(cold, "session.measure", { context: { tokens: 520_010, window: 1_000_000 }, rateLimits: [], changed: [] });
+  const replyAt = state().data!.lastReplyAt!;
+  await fire(cold, "command.run", { command: KEEP_WARM_COMMAND, args: "4h" });
+  await tickOnce(cold, replyAt + 54.6 * MIN);
+  assert.match(state().kw!.stopped!, /found the cache cold \(read 0, wrote 520000 tokens\)/);
+  await tickOnce(cold, replyAt + 109.2 * MIN);
+  assert.equal(cold.forks.length, 1);
+
+  // A dollar limit under one ping: refused at its time, nothing sent.
+  const poor = engine(home, { cwd, now });
+  await fire(poor, "session.start", { cwd, surface: "desktop", isInteractive: true });
+  await fire(poor, "session.measure", { context: { tokens: 520_010, window: 1_000_000 }, rateLimits: [], changed: [] });
+  await fire(poor, "command.run", { command: KEEP_WARM_COMMAND, args: "2h $0.01" });
+  await tickOnce(poor, replyAt + 54.6 * MIN);
+  assert.equal(poor.forks.length, 0);
+  assert.match(state().kw!.stopped!, /would pass its \$0\.01 limit/);
+
+  // Stop in the band; off; the end of the session.
+  const s = engine(home, { cwd, now });
+  await fire(s, "session.start", { cwd, surface: "desktop", isInteractive: true });
+  await fire(s, "session.measure", { context: { tokens: 520_010, window: 1_000_000 }, rateLimits: [], changed: [] });
+  await fire(s, "command.run", { command: KEEP_WARM_COMMAND, args: "2h" });
+  button(await render(s, "AbovePrompt", "desktop", {}), "cd-keep-warm-stop")!.props!.onPress();
+  assert.equal(state().kw!.stopped, "you stopped it");
+  await tickOnce(s, replyAt + 54.6 * MIN);
+  assert.equal(s.forks.length, 0);
+  s.now = now;
+  await fire(s, "command.run", { command: KEEP_WARM_COMMAND, args: "2h" });
+  assert.match((await fire(s, "command.run", { command: KEEP_WARM_COMMAND, args: "off" })).text, /^Stopped keeping the cache warm \(0 pings/);
+  await fire(s, "command.run", { command: KEEP_WARM_COMMAND, args: "2h" });
+  await fire(s, "session.end", { reason: "clear", sessionId: "sess-1" }, (e) => ({ sessionId: e.sessionId }));
+  assert.equal(state().kw!.stopped, "the session ended");
+
+  // Refused: a cache already cold, and an engine with no fork.
+  const late = sessionHome(70, now);
+  const l = engine(late.home, { cwd: late.cwd, now });
+  await fire(l, "session.start", { cwd: late.cwd, surface: "desktop", isInteractive: true });
+  await fire(l, "session.measure", { context: { tokens: 520_010, window: 1_000_000 }, rateLimits: [], changed: [] });
+  assert.match((await fire(l, "command.run", { command: KEEP_WARM_COMMAND, args: "2h" })).text, /^Not started: the cache already expired/);
+  assert.equal(state().kw, undefined);
+  const old = engine(home, { cwd, now, noFork: true });
+  await fire(old, "session.start", { cwd, surface: "desktop", isInteractive: true });
+  await fire(old, "session.measure", { context: { tokens: 520_010, window: 1_000_000 }, rateLimits: [], changed: [] });
+  assert.match((await fire(old, "command.run", { command: KEEP_WARM_COMMAND, args: "2h" })).text, /no \$\.model\.fork/);
+  assert.equal(state().kw, undefined);
 });

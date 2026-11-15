@@ -8,6 +8,8 @@ Input you were billed for              $127   from your transcripts' usage
    expired. Running /compact then, net of the compaction itself, would
    have saved this. The every-prompt hook points these moments out, in
    every Claude Code surface, the desktop app included.
+   Or keep the cache warm while away, up to 4 h: $38.87 net of
+   $22.45 in pings (/context-doctor-keep-warm; each gap: cache-misses).
 
 2. Autopilot                          $3.64 (3%)
    Stale tool output cleared only when the cache is cold, so it never

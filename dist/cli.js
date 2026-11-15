@@ -30,6 +30,7 @@ import { autopilotOff, autopilotOn, autopilotPauseResult, autopilotPaths, autopi
 import { estimateSavings, renderSavings, renderShare, savingsRows } from "./savings.js";
 import { prescan } from "./scan.js";
 import { REQUEST_ROWS } from "./coldresume.js";
+import { coldReturns } from "./coldreturns.js";
 import { replaySubagentModels, shares, SUBAGENT_MODEL_ENV, SUBAGENT_MODEL_FORCE_ENV, SUBAGENT_ROWS } from "./subagentmodel.js";
 import { BASH_OUTPUT_ENV, BASH_OUTPUT_KEY, replayToolOutput, TOOL_OUTPUT_ROWS } from "./tooloutput.js";
 import { CODEX_COMPACT_ROWS, codexRollouts, currentCodexCompact, replayCodexCompact } from "./codexcompact.js";
@@ -463,6 +464,9 @@ async function measureFixInputs(days) {
     // Codex's auto-compact limit: its rollouts replayed at earlier limits; a limit the user set is theirs.
     const codexCompact = replayCodexCompact({ days });
     const cxSet = currentCodexCompact();
+    // Keeping the cache warm while away: the cap that nets most on the cold returns replayed.
+    const cold = coldReturns(days, claudeTranscripts(days));
+    const keepWarm = cold.best ? { hours: cold.best.hours, netUsd: cold.best.netUsd, pingUsd: cold.best.pingUsd, keptWarm: cold.best.keptWarm, returns: cold.returns } : undefined;
     const ts = effectiveEnv("ENABLE_TOOL_SEARCH", sources);
     const toolSearchOff = ts && /^(false|0|no|off)$/i.test(ts.value.trim()) ? ts.value : undefined;
     const servers = claudeMcpConfigs(cwd).filter((c) => !/context-doctor/i.test(c.name));
@@ -517,6 +521,7 @@ async function measureFixInputs(days) {
             // The installs a setting is too new for are named on its fix.
             claudeCodeInstalls: claudeCodeInstallsFromEnv(),
             coldResume: { netUsd: Math.max(0, report.coldResumeNetUsd), returns: report.coldResumes, hooked: claudePluginEnabled() || /context-doctor|cli\.js"?\s+hook/.test(JSON.stringify(userSettings.hooks?.UserPromptSubmit ?? [])) },
+            ...(keepWarm ? { keepWarm } : {}),
         },
     };
 }
@@ -1160,7 +1165,8 @@ async function main() {
         ], report.days);
         if (args.json) {
             const { largest: _largest, ...missSummary } = misses;
-            console.log(JSON.stringify({ ...report, cacheMisses: missSummary, limitFit: limitFit ?? null, outputAndPolling: lens }, null, 2));
+            const { largest: _coldLargest, ...coldSummary } = misses.coldReturns;
+            console.log(JSON.stringify({ ...report, cacheMisses: { ...missSummary, coldReturns: coldSummary }, limitFit: limitFit ?? null, outputAndPolling: lens }, null, 2));
         }
         else if (args.share) {
             const text = renderShare(report);
@@ -1169,7 +1175,7 @@ async function main() {
                 console.log(copyToClipboard(text) ? "\n(copied to the clipboard)" : "\n(no clipboard tool found; copy the lines above)");
         }
         else {
-            console.log(renderSavings(report, on, cwLine, cacheMissesSignificant(misses) ? cacheMissesLine(misses) : undefined, limitLines, renderLens(lens)));
+            console.log(renderSavings(report, on, cwLine, cacheMissesSignificant(misses) ? cacheMissesLine(misses) : undefined, limitLines, renderLens(lens), misses.coldReturns.best));
             console.log(`\nNext: ${selfCommand("fix")} ranks every fix by what it saves you and applies only the ones you say yes to (${selfCommand("fix undo")} reverts them).`);
         }
         return;
@@ -1407,7 +1413,7 @@ async function main() {
             chosen = ids;
         }
         if (!args.json)
-            console.log(renderFixPlan(inputs.days, inputs.billedUsd, fixes, since, selfCommand, inputs.coldResume, inputs.recordProblem, inputs.codexCompact?.billedUsd));
+            console.log(renderFixPlan(inputs.days, inputs.billedUsd, fixes, since, selfCommand, inputs.coldResume, inputs.recordProblem, inputs.codexCompact?.billedUsd, inputs.keepWarm));
         if (args.apply === undefined && !args.json && process.stdin.isTTY && process.stdout.isTTY && available.length && !inputs.recordProblem) {
             const rl = (await import("node:readline/promises")).createInterface({ input: process.stdin, output: process.stdout });
             console.log("");
@@ -1424,7 +1430,7 @@ async function main() {
             process.exitCode = 1;
         if (args.json) {
             // qualityFree is the bare screen's grouping, not part of fix's JSON.
-            console.log(JSON.stringify({ days: inputs.days, billedUsd: inputs.billedUsd, ...(inputs.codexCompact ? { codexBilledUsd: inputs.codexCompact.billedUsd } : {}), fixes: fixes.map(({ qualityFree: _q, ...f }) => f), since, ...(args.apply !== undefined ? { applied: results } : {}), ...(inputs.recordProblem ? { recordProblem: inputs.recordProblem } : {}) }, null, 2));
+            console.log(JSON.stringify({ days: inputs.days, billedUsd: inputs.billedUsd, ...(inputs.codexCompact ? { codexBilledUsd: inputs.codexCompact.billedUsd } : {}), fixes: fixes.map(({ qualityFree: _q, ...f }) => f), since, ...(inputs.keepWarm ? { keepWarm: inputs.keepWarm } : {}), ...(args.apply !== undefined ? { applied: results } : {}), ...(inputs.recordProblem ? { recordProblem: inputs.recordProblem } : {}) }, null, 2));
             if (args.apply !== undefined && chosen.length === 0)
                 console.error("--apply: no fix available to apply.");
             return;

@@ -19,8 +19,14 @@
  *  - `/context-doctor-fix` opens a pane with `fix`'s plan and an Apply / Undo
  *    button per lever. Each press runs the CLI's own `fix --apply <id>` /
  *    `fix undo <id>`: the same lock, backup and record as in a terminal.
+ *  - `/context-doctor-keep-warm 2h [$5]` keeps the prompt cache warm while
+ *    the person is away: `$.model.fork` (a cache read of the main thread's
+ *    last request, nothing in the transcript) a tick before every 55 minutes
+ *    idle (4.5 on a 5-minute cache), until the hours or the dollars run out,
+ *    a ping finds the cache cold, the session ends, or Stop. Never armed but
+ *    by that command, never again by itself; the band shows it while it runs.
  *
- * Nothing happens without a press: no auto-compaction, no auto-apply. The
+ * Nothing happens without a press or a command: no auto-compaction, no auto-apply, no ping. The
  * mod writes no file itself; the CLI writes ours. Off: CONTEXT_DOCTOR_NO_MOD=1.
  *
  * The mods runtime has no Node, so this file imports only ./logic.js (no
@@ -28,7 +34,7 @@
  * reads which calls a module makes from its source: `$` is passed only to
  * functions declared at the top of this file.
  */
-import { type BandData, type PlanJson } from "./logic.js";
+import { type BandData, type KeepWarm, type PlanJson } from "./logic.js";
 import type { On } from "./api.js";
 export declare const COMMAND = "context-doctor-fix";
 export declare const PANE = "context-doctor-fix";
@@ -53,6 +59,10 @@ interface State {
         lines: string[];
     };
     presses: Map<string, "applied" | "undone">;
+    /** The one keep-warm yes in force (or the last, stopped): never armed but by the command. */
+    kw?: KeepWarm;
+    /** A ping in flight: never two at once. */
+    pinging: boolean;
 }
 /** For tests: the state the hooks share. */
 export declare const state: () => State;

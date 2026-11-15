@@ -6,6 +6,7 @@
  * declarations Claude Code 2.1.321 writes (`claude-code.d.ts`): `$.process.run`,
  * `$.session.{id,model,compact}`, `$.ui.{open,resolve,invalidate,toast}`,
  * `$.command.register`, `$.clock.{now,every}`, `$.env.get`, `$.plugin.root`,
+ * `$.model.fork` (from the GitHub copy of the declarations, 2026-11-15),
  * and the events `session.start`, `session.measure`, `session.end`,
  * `command.run`, `ui.render`. A subset, structurally compatible: no runtime code.
  */

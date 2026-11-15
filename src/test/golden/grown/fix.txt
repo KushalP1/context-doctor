@@ -27,6 +27,8 @@ Last 30 days of your Claude Code sessions, $136 of input at list prices
 Advice you act on
   /compact when you come back to a big session after the cache expired: $8.54 over 13 returns.
   Nothing points those moments out yet: context-doctor install (or the Claude Code plugin) adds the hook that does.
+  Keep the cache warm while you step away, up to 4 h: $41.24 net of $22.44 in pings (38 of 38 cold returns kept warm).
+  /context-doctor-keep-warm 4h in Claude Code with the plugin, each time you leave; on a subscription the pings use your limit too. By gap: context-doctor cache-misses
 
 Apply: context-doctor fix in a terminal asks about each one; or context-doctor fix --apply compact-window,autopilot,subagent-model,prune
 Undo everything fix applied: context-doctor fix undo. Dollars at list price; on a subscription the same tokens come out of your usage limit.

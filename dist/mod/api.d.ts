@@ -6,6 +6,7 @@
  * declarations Claude Code 2.1.321 writes (`claude-code.d.ts`): `$.process.run`,
  * `$.session.{id,model,compact}`, `$.ui.{open,resolve,invalidate,toast}`,
  * `$.command.register`, `$.clock.{now,every}`, `$.env.get`, `$.plugin.root`,
+ * `$.model.fork` (from the GitHub copy of the declarations, 2026-11-15),
  * and the events `session.start`, `session.measure`, `session.end`,
  * `command.run`, `ui.render`. A subset, structurally compatible: no runtime code.
  */
@@ -47,6 +48,27 @@ export interface RenderEvent {
         isFocused?: boolean;
     };
 }
+/** What `$.model.fork` resolves to: the reply and its usage, or why there is none (`nothing-to-fork`, `api-error`, `empty-reply`, `aborted`). */
+export type ForkResult = {
+    isAnswered: true;
+    text: string;
+    usage: {
+        input_tokens: number;
+        output_tokens: number;
+        cache_read_input_tokens: number;
+        cache_creation_input_tokens: number;
+    };
+} | {
+    isAnswered: false;
+    reason: string;
+    status?: number;
+    usage?: {
+        input_tokens: number;
+        output_tokens: number;
+        cache_read_input_tokens: number;
+        cache_creation_input_tokens: number;
+    };
+};
 export interface Engine {
     plugin: {
         name: string;
@@ -88,7 +110,19 @@ export interface Engine {
         register: (spec: {
             name: string;
             description: string;
+            argumentHint?: string;
         }) => Promise<unknown>;
+    };
+    /**
+     * `$.model.fork` (claude-code.d.ts, mods/types on GitHub, read 2026-11-15):
+     * the main thread's last request again (its model, system prompt, tools,
+     * messages) with `prompt` after it, tools denied, its own tail never
+     * cached, nothing written to the transcript. Absent on an engine without it.
+     */
+    model?: {
+        fork: (request: {
+            prompt: string;
+        }) => Promise<ForkResult>;
     };
     clock: {
         now: () => Promise<number>;

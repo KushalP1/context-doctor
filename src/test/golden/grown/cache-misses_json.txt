@@ -407,6 +407,266 @@
         "cold": 6
       }
     ]
+  },
+  "coldReturns": {
+    "days": 30,
+    "returns": 38,
+    "billedUsd": 69.7640435,
+    "rewriteUsd": 63.67224649999999,
+    "over300kUsd": 37.261834449999995,
+    "byGap": [
+      {
+        "bucket": "<1h",
+        "returns": 9,
+        "asItWentUsd": 10.0211745,
+        "rewriteUsd": 8.8260942,
+        "compactedUsd": 10.321878700000001,
+        "keptWarmUsd": 2.416525100000001,
+        "pings": 19,
+        "cheapest": "kept warm"
+      },
+      {
+        "bucket": "1-2h",
+        "returns": 20,
+        "asItWentUsd": 31.727529,
+        "rewriteUsd": 28.71146335,
+        "compactedUsd": 29.3210929,
+        "keptWarmUsd": 11.1403998,
+        "pings": 104,
+        "cheapest": "kept warm"
+      },
+      {
+        "bucket": "2-4h",
+        "returns": 9,
+        "asItWentUsd": 28.015340000000005,
+        "rewriteUsd": 26.134688950000005,
+        "compactedUsd": 21.583494849999997,
+        "keptWarmUsd": 3.376940200000001,
+        "pings": 27,
+        "cheapest": "kept warm"
+      }
+    ],
+    "total": {
+      "bucket": "all",
+      "returns": 38,
+      "asItWentUsd": 69.7640435,
+      "rewriteUsd": 63.67224649999999,
+      "compactedUsd": 61.22646644999998,
+      "keptWarmUsd": 16.933865100000006,
+      "pings": 150,
+      "cheapest": "kept warm"
+    },
+    "policies": [
+      {
+        "hours": 1,
+        "pings": 168,
+        "pingUsd": 12.812537750000002,
+        "keptWarm": 29,
+        "avoidedUsd": 37.53755755,
+        "netUsd": 24.7250198
+      },
+      {
+        "hours": 2,
+        "pings": 210,
+        "pingUsd": 16.124246750000005,
+        "keptWarm": 29,
+        "avoidedUsd": 37.53755755,
+        "netUsd": 21.413310799999998
+      },
+      {
+        "hours": 4,
+        "pings": 287,
+        "pingUsd": 22.435083299999995,
+        "keptWarm": 38,
+        "avoidedUsd": 63.67224649999999,
+        "netUsd": 41.2371632
+      },
+      {
+        "hours": 8,
+        "pings": 421,
+        "pingUsd": 33.873048700000005,
+        "keptWarm": 38,
+        "avoidedUsd": 63.67224649999999,
+        "netUsd": 29.799197799999988
+      }
+    ],
+    "best": {
+      "hours": 4,
+      "pings": 287,
+      "pingUsd": 22.435083299999995,
+      "keptWarm": 38,
+      "avoidedUsd": 63.67224649999999,
+      "netUsd": 41.2371632
+    },
+    "readded": [],
+    "largest": [
+      {
+        "path": "~/.claude/projects/-work-app/s4.jsonl",
+        "at": 1790633785416,
+        "gapMs": 10803000,
+        "ttlMs": 3600000,
+        "model": "claude-fable-5-1",
+        "contextTokens": 439472,
+        "tokens": 447903,
+        "writeTokens": 447897,
+        "billedUsd": 8.965300000000001,
+        "rewriteUsd": 8.679572,
+        "keptWarmUsd": 0.6312320000000007,
+        "pings": 3,
+        "pingUsd": 0.115168,
+        "sameModel": true,
+        "compactedUsd": 10.37727575
+      },
+      {
+        "path": "~/.claude/projects/-work-app/s4.jsonl",
+        "at": 1790618589649,
+        "gapMs": 10803000,
+        "ttlMs": 3600000,
+        "model": "claude-fable-5-1",
+        "contextTokens": 328037,
+        "tokens": 344969,
+        "writeTokens": 344946,
+        "billedUsd": 6.9309,
+        "rewriteUsd": 6.47873075,
+        "keptWarmUsd": 0.7140969999999999,
+        "pings": 3,
+        "pingUsd": 0.08730925,
+        "sameModel": true,
+        "compactedUsd": 7.7921965
+      },
+      {
+        "path": "~/.claude/projects/-work-app/s4.jsonl",
+        "at": 1790605337396,
+        "gapMs": 3664844,
+        "ttlMs": 3600000,
+        "model": "claude-fable-5-1",
+        "contextTokens": 213883,
+        "tokens": 233791,
+        "writeTokens": 233782,
+        "billedUsd": 4.7120299999999995,
+        "rewriteUsd": 4.224189249999999,
+        "keptWarmUsd": 0.5466115000000001,
+        "pings": 1,
+        "pingUsd": 0.05877075,
+        "sameModel": true
+      },
+      {
+        "path": "~/.claude/projects/-work-app/s1.jsonl",
+        "at": 1789152191406,
+        "gapMs": 3679443,
+        "ttlMs": 3600000,
+        "model": "claude-opus-5-5",
+        "contextTokens": 393097,
+        "tokens": 407892,
+        "writeTokens": 407875,
+        "billedUsd": 3.2705480000000002,
+        "rewriteUsd": 3.0661566,
+        "keptWarmUsd": 0.28513080000000046,
+        "pings": 1,
+        "pingUsd": 0.0807394,
+        "sameModel": true
+      },
+      {
+        "path": "~/.claude/projects/-work-app/live.jsonl",
+        "at": 1790801586791,
+        "gapMs": 10803000,
+        "ttlMs": 3600000,
+        "model": "claude-opus-5-5",
+        "contextTokens": 350653,
+        "tokens": 360448,
+        "writeTokens": 360420,
+        "billedUsd": 2.8981320000000004,
+        "rewriteUsd": 2.7350934,
+        "keptWarmUsd": 0.37979040000000064,
+        "pings": 3,
+        "pingUsd": 0.07225060000000001,
+        "sameModel": true,
+        "compactedUsd": -2.061663200000001
+      },
+      {
+        "path": "~/.claude/projects/-work-app/s3.jsonl",
+        "at": 1790355242148,
+        "gapMs": 10803000,
+        "ttlMs": 3600000,
+        "model": "claude-opus-5-5",
+        "contextTokens": 317646,
+        "tokens": 329700,
+        "writeTokens": 329676,
+        "billedUsd": 2.645624,
+        "rewriteUsd": 2.4776388000000007,
+        "keptWarmUsd": 0.3649327999999995,
+        "pings": 3,
+        "pingUsd": 0.0656492,
+        "sameModel": true,
+        "compactedUsd": 3.231564
+      },
+      {
+        "path": "~/.claude/projects/-work-app/s1.jsonl",
+        "at": 1789148256186,
+        "gapMs": 3692901,
+        "ttlMs": 3600000,
+        "model": "claude-opus-5-5",
+        "contextTokens": 307250,
+        "tokens": 325215,
+        "writeTokens": 325188,
+        "billedUsd": 2.6133119999999996,
+        "rewriteUsd": 2.39655,
+        "keptWarmUsd": 0.2803319999999997,
+        "pings": 1,
+        "pingUsd": 0.06357,
+        "sameModel": true
+      },
+      {
+        "path": "~/.claude/projects/-work-app/s1.jsonl",
+        "at": 1789144401405,
+        "gapMs": 10803000,
+        "ttlMs": 3600000,
+        "model": "claude-opus-5-5",
+        "contextTokens": 250937,
+        "tokens": 267877,
+        "writeTokens": 267851,
+        "billedUsd": 2.146712,
+        "rewriteUsd": 1.9573086,
+        "keptWarmUsd": 0.3463256,
+        "pings": 3,
+        "pingUsd": 0.052307400000000004,
+        "sameModel": true,
+        "compactedUsd": -1.3806493999999994
+      },
+      {
+        "path": "~/.claude/projects/-work-app/s3.jsonl",
+        "at": 1790343964424,
+        "gapMs": 3688586,
+        "ttlMs": 3600000,
+        "model": "claude-opus-5-5",
+        "contextTokens": 246387,
+        "tokens": 249872,
+        "writeTokens": 249861,
+        "billedUsd": 2.0121919999999998,
+        "rewriteUsd": 1.9218186,
+        "keptWarmUsd": 0.14177079999999984,
+        "pings": 1,
+        "pingUsd": 0.0513974,
+        "sameModel": true
+      },
+      {
+        "path": "~/.claude/projects/-work-app/s2.jsonl",
+        "at": 1789834564563,
+        "gapMs": 3668443,
+        "ttlMs": 300000,
+        "model": "claude-opus-5-5",
+        "contextTokens": 361181,
+        "tokens": 372761,
+        "writeTokens": 372757,
+        "billedUsd": 1.876381,
+        "rewriteUsd": 1.7336688000000002,
+        "keptWarmUsd": 1.1093427999999999,
+        "pings": 13,
+        "pingUsd": 0.0743562,
+        "sameModel": true,
+        "compactedUsd": 2.2048288
+      }
+    ]
   }
 }
 

@@ -109,7 +109,8 @@ The submission belongs to the organization it is made from: the first to submit 
 | MCP server (stdio, `node dist/mcp.bundle.js`) | `profile_context`, `optimize_context`, `pack_context`, `context_best_practices` (read-only), `save_handoff` (writes one handoff on request, after a consent form where the client shows forms), `recall` (read-only) |
 | Mod: `session.measure` + `$.process.run` | Runs `node dist/cli.js mod measure` with Claude Code's rate-limit windows and session cost, so the limits and cost ledgers are kept where the status line never runs |
 | Mod: `ui.render` (`AbovePrompt`, `Pane`), `$.ui.*`, `$.clock.*` | The band above the prompt and the `/context-doctor-fix` pane; a 30 s tick for the cache countdown |
-| Mod: `command.run`, `$.command.register` | `/context-doctor-fix` |
+| Mod: `command.run`, `$.command.register` | `/context-doctor-fix`, `/context-doctor-keep-warm` |
+| Mod: `$.model.fork` on a command | `/context-doctor-keep-warm <hours> [$limit]`: one cache read of the session's last request every 55 idle minutes, only after that command, until its hours or dollars run out; never by itself |
 | Mod: `$.process.run` on a press | `node dist/cli.js fix --apply <id>` / `fix undo <id>`: the CLI's own locked, backed-up, undoable change |
 | Mod: `$.session.compact` on a press | **Compact first**, between turns only, never by itself |
 | Mod: `$.session.id/model/cwd`, `$.env.get` | Which session to measure; its four `CONTEXT_DOCTOR_*` switches |

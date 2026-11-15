@@ -123,6 +123,8 @@ export interface FixInputs {
   subagentModelSet?: { value: string; where: string };
   /** The /compact offer at cold returns: advice, not a setting; `hooked` when the every-prompt hook (or the plugin) is there to make it. */
   coldResume?: { netUsd: number; returns: number; hooked: boolean };
+  /** Keeping the cache warm while away, at the cap that nets most on this history (coldreturns.ts): a per-session command of the plugin's mod, not a setting. */
+  keepWarm?: { hours: number; netUsd: number; pingUsd: number; keptWarm: number; returns: number };
   /** Every Bash and MCP result replayed at lower caps (tooloutput.ts). */
   toolOutput?: ToolOutputReplay;
   /** bashOutputMaxChars in the user's settings.json, or BASH_MAX_OUTPUT_LENGTH as the user set it (the setting would replace it): never overwritten. */
@@ -961,7 +963,7 @@ export function overlaps(fixes: Fix[]): string[] {
   return OVERLAPS.filter(([a, b]) => priced.has(a) && priced.has(b)).map(([a, b, why]) => `${a} and ${b}: ${why}.`);
 }
 
-export function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], since: SinceResult[], command = (s: string) => `context-doctor ${s}`, coldResume?: FixInputs["coldResume"], recordProblem?: string, codexBilledUsd = 0): string {
+export function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], since: SinceResult[], command = (s: string) => `context-doctor ${s}`, coldResume?: FixInputs["coldResume"], recordProblem?: string, codexBilledUsd = 0, keepWarm?: FixInputs["keepWarm"]): string {
   const out: string[] = [];
   if (recordProblem) out.push(`⚠ ${recordProblem}`);
   out.push("context-doctor fix: what to change, ranked by what it saves you");
@@ -1006,13 +1008,21 @@ export function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], sin
   }
   const elsewhere = fixes.filter((f) => f.state === "not-here");
   for (const f of elsewhere) out.push(`  - ${LABEL[f.id]}: ${f.note}`);
-  if (coldResume && coldResume.netUsd >= MIN_USD) {
+  const compactAdvice = coldResume !== undefined && coldResume.netUsd >= MIN_USD;
+  const warmAdvice = keepWarm !== undefined && keepWarm.netUsd >= MIN_USD;
+  if (compactAdvice || warmAdvice) {
     out.push("");
     out.push("Advice you act on");
+  }
+  if (compactAdvice) {
     out.push(`  /compact when you come back to a big session after the cache expired: ${money(coldResume.netUsd)} over ${coldResume.returns} returns.`);
     out.push(coldResume.hooked
       ? "  The every-prompt hook offers it at those moments; say yes when it does."
       : `  Nothing points those moments out yet: ${command("install")} (or the Claude Code plugin) adds the hook that does.`);
+  }
+  if (warmAdvice) {
+    out.push(`  Keep the cache warm while you step away, up to ${keepWarm.hours} h: ${money(keepWarm.netUsd)} net of ${money(keepWarm.pingUsd)} in pings (${keepWarm.keptWarm} of ${keepWarm.returns} cold returns kept warm).`);
+    out.push(`  /context-doctor-keep-warm ${keepWarm.hours}h in Claude Code with the plugin, each time you leave; on a subscription the pings use your limit too. By gap: ${command("cache-misses")}`);
   }
   out.push("");
   if (avail.length) {

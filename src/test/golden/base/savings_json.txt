@@ -412,6 +412,98 @@
           "cold": 6
         }
       ]
+    },
+    "coldReturns": {
+      "days": 30,
+      "returns": 36,
+      "billedUsd": 67.0750395,
+      "rewriteUsd": 61.32138109999999,
+      "over300kUsd": 37.261834449999995,
+      "byGap": [
+        {
+          "bucket": "<1h",
+          "returns": 9,
+          "asItWentUsd": 10.0211745,
+          "rewriteUsd": 8.8260942,
+          "compactedUsd": 10.321878700000001,
+          "keptWarmUsd": 2.416525100000001,
+          "pings": 19,
+          "cheapest": "kept warm"
+        },
+        {
+          "bucket": "1-2h",
+          "returns": 19,
+          "asItWentUsd": 30.242725000000004,
+          "rewriteUsd": 27.37297555,
+          "compactedUsd": 27.8362889,
+          "keptWarmUsd": 10.957643400000002,
+          "pings": 103,
+          "cheapest": "kept warm"
+        },
+        {
+          "bucket": "2-4h",
+          "returns": 8,
+          "asItWentUsd": 26.811140000000005,
+          "rewriteUsd": 25.122311350000004,
+          "compactedUsd": 25.86809005,
+          "keptWarmUsd": 3.100882600000001,
+          "pings": 24,
+          "cheapest": "kept warm"
+        }
+      ],
+      "total": {
+        "bucket": "all",
+        "returns": 36,
+        "asItWentUsd": 67.0750395,
+        "rewriteUsd": 61.32138109999999,
+        "compactedUsd": 64.02625764999999,
+        "keptWarmUsd": 16.475051100000005,
+        "pings": 146,
+        "cheapest": "kept warm"
+      },
+      "policies": [
+        {
+          "hours": 1,
+          "pings": 165,
+          "pingUsd": 12.753768150000003,
+          "keptWarm": 28,
+          "avoidedUsd": 36.19906975000001,
+          "netUsd": 23.445301600000004
+        },
+        {
+          "hours": 2,
+          "pings": 206,
+          "pingUsd": 16.079989950000005,
+          "keptWarm": 28,
+          "avoidedUsd": 36.19906975000001,
+          "netUsd": 20.1190798
+        },
+        {
+          "hours": 4,
+          "pings": 282,
+          "pingUsd": 22.447930499999995,
+          "keptWarm": 36,
+          "avoidedUsd": 61.32138109999999,
+          "netUsd": 38.8734506
+        },
+        {
+          "hours": 8,
+          "pings": 416,
+          "pingUsd": 34.056260699999996,
+          "keptWarm": 36,
+          "avoidedUsd": 61.32138109999999,
+          "netUsd": 27.265120399999994
+        }
+      ],
+      "best": {
+        "hours": 4,
+        "pings": 282,
+        "pingUsd": 22.447930499999995,
+        "keptWarm": 36,
+        "avoidedUsd": 61.32138109999999,
+        "netUsd": 38.8734506
+      },
+      "readded": []
     }
   },
   "limitFit": null,

@@ -52,4 +52,36 @@ wrote over 60% of that context again. Model switches always miss: each model has
 its own cache. On Claude Code 2.1.251+, `context-doctor install` (or the plugin)
 shows that price before a /model switch.
 
+COLD RETURNS: BACK AFTER THE CACHE EXPIRED
+────────────────────────────────────────────────────────────
+38 returns to a conversation after its cache expired wrote the
+context again: $69.76 billed, $63.67 of it above cache-read price
+($37.26 on contexts over 300k).
+
+Each return three ways, by how long you were away:
+  away   returns  as it went  compacted  kept warm  cheapest
+  <1h          9      $10.02     $10.32      $2.42  kept warm
+  1-2h        20      $31.73     $29.32     $11.14  kept warm
+  2-4h         9      $28.02     $21.58      $3.38  kept warm
+  all         38      $69.76     $61.23     $16.93  kept warm
+As it went: the returns as billed. Compacted: /compact right after the
+return, net of the compaction, with what it saves on the requests after it
+until the next return (offered over 150k tokens). Kept warm: a cache read of
+the whole context every 55 min while away (4.5 min on a 5-minute cache) and
+~100 output tokens each, so the return reads it instead of writing it.
+Each alone; the replay knows the gap, which a timer does not.
+
+Keeping warm without knowing when you come back, for up to:
+  1 h     168 pings   $12.81, 29 returns kept warm   $37.54, net $24.73
+  2 h     210 pings   $16.12, 29 returns kept warm   $37.54, net $21.41
+  4 h     287 pings   $22.44, 38 returns kept warm   $63.67, net $41.24
+  8 h     421 pings   $33.87, 38 returns kept warm   $63.67, net $29.80
+Pings count every pause past 55 minutes (4.5 on a 5-minute cache), the
+returns after the cap (cold anyway) and the sessions never returned to.
+Kept warm up to 4 h would have saved $41.24 net. In Claude Code with the
+plugin, type /context-doctor-keep-warm 4h before you step away: it pings only
+after that, stops at the cap or its dollar limit, and never arms itself.
+On a subscription the pings come out of your usage limit, as the re-writes
+they replace do.
+
 [exit 0]

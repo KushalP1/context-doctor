@@ -128,6 +128,14 @@ export interface FixInputs {
         returns: number;
         hooked: boolean;
     };
+    /** Keeping the cache warm while away, at the cap that nets most on this history (coldreturns.ts): a per-session command of the plugin's mod, not a setting. */
+    keepWarm?: {
+        hours: number;
+        netUsd: number;
+        pingUsd: number;
+        keptWarm: number;
+        returns: number;
+    };
     /** Every Bash and MCP result replayed at lower caps (tooloutput.ts). */
     toolOutput?: ToolOutputReplay;
     /** bashOutputMaxChars in the user's settings.json, or BASH_MAX_OUTPUT_LENGTH as the user set it (the setting would replace it): never overwritten. */
@@ -290,7 +298,7 @@ export declare function savedSince(records: FixRecord[], opts?: {
 }): SinceResult[];
 /** The overlap lines for the priced fixes in a plan, "a and b: why;" each. */
 export declare function overlaps(fixes: Fix[]): string[];
-export declare function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], since: SinceResult[], command?: (s: string) => string, coldResume?: FixInputs["coldResume"], recordProblem?: string, codexBilledUsd?: number): string;
+export declare function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], since: SinceResult[], command?: (s: string) => string, coldResume?: FixInputs["coldResume"], recordProblem?: string, codexBilledUsd?: number, keepWarm?: FixInputs["keepWarm"]): string;
 export declare function renderFixShare(days: number, billedUsd: number, fixes: Fix[], codexBilledUsd?: number): string;
 export declare function parseFixIds(raw: string, fixes: Fix[]): {
     ids: FixId[];

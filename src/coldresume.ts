@@ -148,7 +148,7 @@ const FIVE_MIN_MS = 5 * 60_000;
  * at 65 minutes missed every return between 10 and 65 minutes to those
  * sessions, cold as they were. Undefined when nothing says.
  */
-function writtenTtlMs(u: any): number | undefined {
+export function writtenTtlMs(u: any): number | undefined {
   // Only an explicit split says: cacheWriteSplit books unsplit writes as
   // 5-minute for pricing, which would make every old transcript look short-lived.
   const split = u?.cache_creation;

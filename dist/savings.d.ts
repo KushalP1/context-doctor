@@ -90,7 +90,11 @@ export interface CompactWindowLine {
     nowPerWeek: number;
     isCurrent: boolean;
 }
-export declare function renderSavings(r: SavingsReport, autopilotOn?: boolean, cw?: CompactWindowLine, missLines?: string[], limitLines?: string[], lensLines?: string[]): string;
+export declare function renderSavings(r: SavingsReport, autopilotOn?: boolean, cw?: CompactWindowLine, missLines?: string[], limitLines?: string[], lensLines?: string[], keepWarm?: {
+    hours: number;
+    netUsd: number;
+    pingUsd: number;
+}): string;
 /**
  * `savings --share`: a few lines people can paste or screenshot. Totals only:
  * no project names, paths or session ids, so sharing it leaks nothing.
