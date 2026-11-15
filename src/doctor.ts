@@ -33,6 +33,8 @@ import { codexDir } from "./codexdir.js";
 import { periodSpend, readBudget } from "./budget.js";
 import { sessionPriceThresholds } from "./sessionprice.js";
 import { claudeSpend, codexSpend } from "./spend.js";
+import { claudeUsageFiles } from "./limits.js";
+import { compareSessions, comparisonCheck } from "./ccost.js";
 import { hasKnownPrice, isUnbilledModel, priceChangedText } from "./pricing.js";
 import { managedSourcesLine, orgRatesLine } from "./orgrates.js";
 
@@ -364,6 +366,18 @@ export function cacheTtlCheck(home = homedir(), env: NodeJS.ProcessEnv = process
  * a second doctor cheap. Undefined when nothing ran in the period; ids that
  * are never billed (`<synthetic>`) are not named.
  */
+/**
+ * Our price of Claude Code's sessions against its own figure (ccost.ts):
+ * the sessions of the last `days` that recorded one (`cost-state`), each
+ * from its start to its last record. Undefined when none did.
+ */
+export function claudeCodeCostCheck(days = 30, now = Date.now()): Check | undefined {
+  const since = now - days * 86_400_000;
+  const items = claudeSpend(since, now);
+  const tops = [...new Set(claudeUsageFiles(since).filter((f) => !f.subagent).map((f) => f.top))];
+  return comparisonCheck(compareSessions(tops, items, since, now), days);
+}
+
 export function unpricedModelsCheck(days = 30, now = Date.now(), home = homedir()): Check | undefined {
   const label = "Model prices";
   const since = now - days * 86_400_000;
@@ -806,12 +820,12 @@ export async function runDoctor(): Promise<void> {
     }
   }
 
-  // The plugin's mod: our session price against Claude Code's own cost, where it measured any.
+  // Our price against Claude Code's own cost: its cost-state records in the transcripts, else what the plugin's mod measured.
   try {
-    const c = costCheck();
+    const c = claudeCodeCostCheck() ?? costCheck();
     if (c) checks.push(c);
   } catch {
-    /* an unreadable ledger is no finding */
+    /* an unreadable transcript or ledger is no finding */
   }
 
   // Skill

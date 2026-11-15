@@ -129,9 +129,28 @@ let cache: { env: string; rates: OrgRates | undefined } | undefined;
  * stat of the managed folder and its drop-in folder, once.
  */
 export function orgRates(env: NodeJS.ProcessEnv = process.env): OrgRates | undefined {
+  if (held && env === process.env) return held.rates;
   const k = `${env.CONTEXT_DOCTOR_NO_MANAGED_SETTINGS ?? ""}\u0000${env.CLAUDE_CODE_MANAGED_SETTINGS_PATH ?? ""}`;
   if (cache?.env !== k) cache = { env: k, rates: readOrgRates(env) };
   return cache.rates;
+}
+
+let held: { rates: OrgRates | undefined } | undefined;
+
+/**
+ * `fn` with the organization's rates read once: every request a report
+ * prices asks for them (rateCard), and reading the two variables that move
+ * them is most of that (285 ms of a 1.5 s `subagents` on the author's
+ * machine, about 150k requests). Nothing in a report's run changes them.
+ */
+export function withOrgRatesHeld<T>(fn: () => T): T {
+  const was = held;
+  held = { rates: orgRates() };
+  try {
+    return fn();
+  } finally {
+    held = was;
+  }
 }
 
 /** Forget what orgRates read (tests that rewrite a managed file in place). */

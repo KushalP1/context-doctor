@@ -17,7 +17,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { formatTokens } from "./tokens.js";
-import { formatUsd, requestCost, type ModelPricing } from "./pricing.js";
+import { billedCost, formatUsd, type ModelPricing } from "./pricing.js";
 import { orgRatesLine } from "./orgrates.js";
 import { forEachLine, outputSettler, replyCounter } from "./session.js";
 import { realModel } from "./tokens.js";
@@ -174,8 +174,8 @@ function summarize(path: string): SubagentSummary {
       s.cacheReadTokens += read;
       s.outputTokens += out;
       // Subagents write at the 5-minute TTL (1.25x), the main thread mostly
-      // at 1 hour (2x); the usage records which. As billed: requestCost.
-      const c = requestCost(s.model, u, Number.isFinite(at) ? at : undefined);
+      // at 1 hour (2x); the usage records which. As billed, with the iterations its top-level usage leaves out: billedCost.
+      const c = billedCost(s.model, u, Number.isFinite(at) ? at : undefined);
       rates = c?.rates;
       if (c) cost += c.totalUsd;
       else priced = false;

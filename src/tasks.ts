@@ -22,7 +22,7 @@
 import { realModel } from "./tokens.js";
 import { basename } from "node:path";
 import { forEachLine, listSessions, outputSettler, replyCounter, isClaudeSession } from "./session.js";
-import { formatUsd, requestCost, type ModelPricing } from "./pricing.js";
+import { billedCost, formatUsd, type ModelPricing } from "./pricing.js";
 
 export interface SessionCost {
   path: string;
@@ -119,7 +119,8 @@ export function sessionCost(path: string, since = 0, counted: Counted = { rows: 
     if (Number.isFinite(at)) { start = Math.min(start, at); end = Math.max(end, at); }
     model = realModel(e.message.model) ?? model;
     // Each request at its own model's price, as billed: one session can switch models.
-    const c = requestCost(model, e.message.usage, Number.isFinite(at) ? at : undefined);
+    // With the iterations its top-level usage leaves out (an advisor's call, a declined attempt): billedCost.
+    const c = billedCost(model, e.message.usage, Number.isFinite(at) ? at : undefined);
     if (!c) return;
     rates = c.rates;
     usd += c.totalUsd;

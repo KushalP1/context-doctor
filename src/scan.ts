@@ -44,6 +44,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { PROXY_VERSION } from "./proxy.js";
+import { extraIterations } from "./pricing.js";
 
 /** Bumped when the entry layout below changes. */
 const SCHEMA = 1;
@@ -476,12 +477,18 @@ const USAGE_KEYS = ["input_tokens", "cache_creation_input_tokens", "cache_read_i
  * records `speed`, `inference_geo` and `server_tool_use`; kept on each, they
  * would grow every record for nothing.
  */
-export const slimUsage = (u: any): unknown => {
+export const slimUsage = (u: any, opts: { iterations?: boolean } = {}): unknown => {
   const out = pick(u, USAGE_KEYS);
   if (!out || typeof out !== "object" || Array.isArray(out)) return out;
   if (u.speed === "fast") out.speed = "fast";
   if (u.inference_geo === "us") out.inference_geo = "us";
   const searches = u.server_tool_use?.web_search_requests;
   if (typeof searches === "number" && searches > 0) out.server_tool_use = { web_search_requests: searches };
+  // The request's iterations, only where some bill beyond its top-level usage (an advisor's, a
+  // declined attempt's: extraIterations); every request has one, the request itself, kept for nothing.
+  if (opts.iterations && extraIterations(u).length) out.iterations = (u.iterations as unknown[]).map((t) => pick(t, ITERATION_KEYS));
   return out;
 };
+
+/** What an iteration is priced from (extraIterations). */
+const ITERATION_KEYS = ["type", "model", "input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens", "cache_creation"] as const;

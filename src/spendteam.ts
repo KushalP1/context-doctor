@@ -96,7 +96,7 @@ export function buildExport(items: SpendItem[], o: { developer: string; days: nu
     const day = localDay(it.ts);
     const k = [day, it.tool, model, repo, branch ?? ""].join("\u0000");
     const r = rows.get(k) ?? rows.set(k, { day, tool: it.tool, model, repo, ...(branch ? { branch } : {}), requests: 0, usd: 0, unpriced: 0, tokens: { input: 0, read: 0, write: 0, output: 0 } }).get(k)!;
-    r.requests++;
+    if (!it.iteration) r.requests++; // an iteration a request's usage left out is billed, not a request of its own
     r.usd += it.usd;
     if (!it.priced) r.unpriced++;
     r.tokens.input += it.input; r.tokens.read += it.read; r.tokens.write += it.write; r.tokens.output += it.output;

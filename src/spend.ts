@@ -52,8 +52,9 @@ import { copilotCalls } from "./copilotusage.js";
 import { CLAUDE_PLACE_ROWS, placeAt, repoName } from "./spendplace.js";
 import { opencodeCalls } from "./opencode.js";
 import { clineCalls } from "./cline.js";
-import { addModifiers, isUnbilledModel, NO_MODIFIERS, openAIUsage, priceChangedText, requestCost, type Modifiers, type RecordedUsage } from "./pricing.js";
+import { addModifiers, isUnbilledModel, NO_MODIFIERS, openAIUsage, priceChangedText, priceEndWord, requestCost, type Modifiers, type RecordedUsage } from "./pricing.js";
 import { managedSourcesLine, orgRates, orgRatesLine, priceBasis } from "./orgrates.js";
+import { compareSessions, renderComparison, type SessionGap } from "./ccost.js";
 
 /**
  * What spend's dollars are: each request as it was billed (its tier, fast mode,
@@ -114,6 +115,13 @@ export interface SpendItem {
   branch?: string;
   /** Its repository's name (spendplace.ts repoName), set when the report groups by repository or branch. */
   repo?: string;
+  /**
+   * Claude Code: an iteration of a request that its top-level usage leaves
+   * out, billed on top at its own model (pricing.ts extraIterations): its
+   * type, "advisor_message" (the advisor tool's call) or the attempt a
+   * fallback replaced ("message"). Not a request of its own: not in the counts.
+   */
+  iteration?: string;
 }
 
 /**
@@ -146,6 +154,12 @@ function label(item: SpendItem, c: { estimated?: boolean; changedOn?: string; mo
   if (c.changedOn) item.changedOn = c.changedOn;
   if (anyModifier(c.modifiers)) item.modifiers = c.modifiers;
   return item;
+}
+
+/** `a` less `b`, part by part. */
+function minus(a: Modifiers, b: Readonly<Modifiers>): Modifiers {
+  a.fastUsd -= b.fastUsd; a.geoUsd -= b.geoUsd; a.longUsd -= b.longUsd; a.webSearchUsd -= b.webSearchUsd; a.webSearches -= b.webSearches;
+  return a;
 }
 
 /** `priceAs`: the id to price it by, when the model's own name is not one the table knows (Cursor's names for Claude). */
@@ -182,14 +196,17 @@ export function claudeSpend(since: number, until = Infinity, tops?: string[], on
     if (place) try { places = rowsOf(f.file, CLAUDE_PLACE_ROWS); } catch { /* none */ }
     for (const r of reqs) {
       const price = r.rates;
+      // The iterations its top-level usage leaves out are items of their own, each on its own model: the request's item is the rest.
+      const extra = r.extra ?? [];
+      const own = { usd: r.usd - extra.reduce((n, x) => n + x.usd, 0), promptUsd: r.promptUsd - extra.reduce((n, x) => n + x.promptUsd, 0), webSearchUsd: r.modifiers.webSearchUsd - extra.reduce((n, x) => n + x.modifiers.webSearchUsd, 0) };
       // claudeFileUsage priced it (requestCost: writes by TTL, its modifiers); the split is what the drivers show.
       const inputUsd = price ? (r.input * price.inputPerM) / 1e6 : 0;
       const readUsd = price ? (r.read * price.cacheReadPerM) / 1e6 : 0;
       const item: SpendItem = {
         tool: "claude", ts: r.ts, project, session, input: r.input, read: r.read, write: r.write, output: r.output,
-        usd: r.usd, inputUsd, readUsd, writeUsd: Math.max(0, r.promptUsd - inputUsd - readUsd), outputUsd: Math.max(0, r.usd - r.promptUsd - r.modifiers.webSearchUsd), priced: Boolean(price),
+        usd: own.usd, inputUsd, readUsd, writeUsd: Math.max(0, own.promptUsd - inputUsd - readUsd), outputUsd: Math.max(0, own.usd - own.promptUsd - own.webSearchUsd), priced: Boolean(price),
       };
-      label(item, r);
+      label(item, { estimated: r.estimated, changedOn: r.changedOn, modifiers: extra.reduce((m, x) => minus(m, x.modifiers), { ...r.modifiers }) });
       if (r.compaction) item.compaction = true;
       if (r.model) item.model = r.model;
       if (f.run) item.workflow = `${session}/${f.run}`;
@@ -201,6 +218,22 @@ export function claudeSpend(since: number, until = Infinity, tops?: string[], on
         if (at.branch) item.branch = at.branch;
       }
       out.push(item);
+      for (const [j, x] of extra.entries()) {
+        const xi: SpendItem = {
+          tool: "claude", ts: r.ts, project, session, input: x.input, read: x.read, write: x.write, output: x.output,
+          usd: x.usd, inputUsd: 0, readUsd: 0, writeUsd: 0, outputUsd: 0, priced: x.priced, iteration: x.type,
+        };
+        const c = x.priced ? requestCost(x.model, { input_tokens: x.input, cache_read_input_tokens: x.read, cache_creation_input_tokens: x.write, output_tokens: x.output }, r.ts) : undefined;
+        if (c) { xi.inputUsd = c.inputUsd; xi.readUsd = c.readUsd; xi.outputUsd = c.outputUsd; xi.writeUsd = Math.max(0, x.promptUsd - c.inputUsd - c.readUsd); }
+        label(xi, x);
+        if (x.model) xi.model = x.model;
+        if (item.workflow) xi.workflow = item.workflow;
+        else if (item.subagent) xi.subagent = true;
+        if (item.cwd) xi.cwd = item.cwd;
+        if (item.branch) xi.branch = item.branch;
+        if (r.uuid) xi.key = `${r.uuid}#${j + 1}`;
+        out.push(xi);
+      }
     }
   }
   onProgress?.(files.length, files.length);
@@ -615,6 +648,13 @@ export interface SpendReport {
   priceChanged?: Array<{ model: string; on: string; requests: number; usd: number }>;
   /** Claude Code's compactions, each one's own request estimated (no row records its usage): inside `usd`; absent when none. */
   compactions?: { requests: number; usd: number };
+  /** Claude Code: iterations billed beyond their request's top-level usage (the advisor's calls, attempts a fallback replaced), by type: inside `usd`; absent when none. */
+  iterations?: Record<string, { calls: number; usd: number; models: string[] }>;
+  /**
+   * Claude Code's own figure (its `cost-state` records) beside ours, per
+   * session wholly in the window that has one (ccost.ts); absent when none.
+   */
+  claudeCode?: { ccUsd: number; ourUsd: number; sessions: SessionGap[] };
   /**
    * Claude Code's subagent progress summaries, estimated (no transcript records them): NOT in `usd`.
    * `notesUsd` as short notes (served since November 2026), `forkUsd` as the whole context (before).
@@ -636,7 +676,7 @@ export function localDay(ts: number): string {
 function add(map: Map<string, SpendRow>, key: string, it: SpendItem): void {
   const r = map.get(key) ?? map.set(key, { usd: 0, requests: 0, byTool: {} }).get(key)!;
   r.usd += it.usd;
-  r.requests++;
+  if (!it.iteration) r.requests++;
   r.byTool[it.tool] = (r.byTool[it.tool] ?? 0) + it.usd;
 }
 
@@ -656,8 +696,15 @@ export function summarizeSpend(items: SpendItem[], days: number, since: number, 
   const mods: Modifiers = { ...NO_MODIFIERS };
   const changed = new Map<string, NonNullable<SpendReport["priceChanged"]>[number]>();
   const compactions = { requests: 0, usd: 0 };
+  const iterations: NonNullable<SpendReport["iterations"]> = {};
   for (const it of items) {
     if (it.compaction) { compactions.requests++; compactions.usd += it.usd; }
+    if (it.iteration) {
+      const x = (iterations[it.iteration] ??= { calls: 0, usd: 0, models: [] });
+      x.calls++;
+      x.usd += it.usd;
+      if (it.model && !x.models.includes(it.model)) x.models.push(it.model);
+    }
     if (it.modifiers) addModifiers(mods, it.modifiers);
     if (it.changedOn) {
       const k = `${it.model}\u0000${it.changedOn}`;
@@ -667,7 +714,7 @@ export function summarizeSpend(items: SpendItem[], days: number, since: number, 
     }
     const t = tools.get(it.tool) ?? tools.set(it.tool, { tool: it.tool, name: TOOL_NAME[it.tool], usd: 0, requests: 0, tokens: { input: 0, read: 0, write: 0, output: 0 }, unpriced: 0, unpricedTokens: 0, unpricedModels: [], ...(it.tool === "cursor" ? { estimate: true } : {}), ...(it.tool === "claude" ? { subagentUsd: 0 } : {}) }).get(it.tool)!;
     t.usd += it.usd;
-    t.requests++;
+    if (!it.iteration) t.requests++;
     t.tokens.input += it.input; t.tokens.read += it.read; t.tokens.write += it.write; t.tokens.output += it.output;
     if (it.subagent) t.subagentUsd = (t.subagentUsd ?? 0) + it.usd;
     if (it.credits !== undefined) t.credits = (t.credits ?? 0) + it.credits;
@@ -702,7 +749,7 @@ export function summarizeSpend(items: SpendItem[], days: number, since: number, 
     const sk = `${it.tool}\u0000${it.session}`;
     const s = sessions.get(sk) ?? sessions.set(sk, { tool: it.tool, project: it.project, session: it.session, usd: 0, requests: 0, first: it.ts, last: it.ts }).get(sk)!;
     s.usd += it.usd;
-    s.requests++;
+    if (!it.iteration) s.requests++;
     s.first = Math.min(s.first, it.ts);
     s.last = Math.max(s.last, it.ts);
     if (it.model) {
@@ -724,7 +771,7 @@ export function summarizeSpend(items: SpendItem[], days: number, since: number, 
   return {
     days, since, until,
     usd: items.reduce((n, it) => n + it.usd, 0),
-    requests: items.length,
+    requests: items.filter((it) => !it.iteration).length,
     tools: TOOLS.filter((t) => tools.has(t)).map((t) => tools.get(t)!).sort(byUsd),
     projects: [...projects].map(([project, r]) => ({ project, ...r })).sort(byUsd),
     ...(byPlace ? {
@@ -737,6 +784,7 @@ export function summarizeSpend(items: SpendItem[], days: number, since: number, 
     ...(anyModifier(mods) ? { modifiers: mods } : {}),
     ...(changed.size ? { priceChanged: [...changed.values()].sort((a, b) => b.usd - a.usd) } : {}),
     ...(compactions.requests ? { compactions } : {}),
+    ...(Object.keys(iterations).length ? { iterations } : {}),
     sessions: [...sessions.values()].sort(byUsd),
     skipped,
   };
@@ -771,6 +819,35 @@ function claudeProgressSummaries(since: number, until: number, tops: string[] | 
  * --json died on a string too long), and 1e9 days fell off the calendar.
  */
 export const MAX_SPEND_DAYS = 3650;
+
+/**
+ * One Claude Code session's comparison with Claude Code's own figure (ccost.ts):
+ * its transcript and its subagents', to its last `cost-state`. Undefined when
+ * it has none, or cannot be read.
+ */
+export function claudeCodeSession(top: string): SessionGap | undefined {
+  try {
+    return compareSessions([top], claudeSpend(0, Infinity, [top]))[0];
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A session's requests priced past the day their model's price ended or
+ * changed, said as `spend` says it: which price, and the one used instead.
+ * Undefined when none (or the transcript cannot be read).
+ */
+export function sessionPriceEnded(top: string): string | undefined {
+  try {
+    const items = claudeSpend(0, Infinity, [top]).filter((it) => it.changedOn);
+    if (!items.length) return undefined;
+    const n = items.length;
+    return `${n.toLocaleString("en-US")} ${n === 1 ? "request" : "requests"} (${usd(items.reduce((s, it) => s + it.usd, 0))}) priced past the day ${n === 1 ? "its" : "their"} model's price ended or changed: ${priceChangedText(items.map((it) => [it.model ?? "unknown", it.changedOn!]))}.`;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Every request of the last `days` days, every tool on this machine, and what could not be read. */
 export function collectSpend(days = 30, opts: SpendOptions = {}): { items: SpendItem[]; days: number; since: number; until: number; skipped: SpendReport["skipped"] } {
@@ -811,6 +888,10 @@ export function spendReport(days = 30, opts: SpendOptions = {}): SpendReport {
   const { items, since, until, skipped, days: d } = collectSpend(days, opts);
   days = d;
   const report = summarizeSpend(items, days, since, until, skipped);
+  // Claude Code's own figure beside ours, on the sessions wholly in the window that recorded one.
+  const tops = [...new Set(claudeUsageFiles(since, opts.claudePaths).filter((f) => !f.subagent).map((f) => f.top))];
+  const gaps = compareSessions(tops, items, since, until);
+  if (gaps.length) report.claudeCode = { ccUsd: gaps.reduce((n, g) => n + g.ccUsd, 0), ourUsd: gaps.reduce((n, g) => n + g.ourUsd, 0), sessions: gaps };
   const progress = opts.progress === false ? undefined : claudeProgressSummaries(since, until, opts.claudePaths, opts.progress);
   return progress ? { ...report, progressSummaries: progress } : report;
 }
@@ -818,6 +899,9 @@ export function spendReport(days = 30, opts: SpendOptions = {}): SpendReport {
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
+
+/** What an iteration type is, in the report's words. */
+const ITERATION_NAME: Record<string, [string, string]> = { advisor_message: ["advisor call", "advisor calls"], message: ["attempt a fallback model replaced", "attempts a fallback model replaced"], fallback_message: ["fallback attempt replaced again", "fallback attempts replaced again"], compaction: ["server-side compaction", "server-side compactions"] };
 
 export const usd = (n: number) => (n >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : n > 0 && n < 0.005 ? "<$0.01" : `$${n.toFixed(2)}`);
 const share = (part: number, whole: number) => (whole > 0 ? `${Math.round((part / whole) * 100)}%` : "");
@@ -876,7 +960,7 @@ export function renderSpend(r: SpendReport, top = 8): string {
   const estimatedModels = new Set(r.tools.flatMap((t) => t.estimated?.models ?? []));
   // One priced past the day its price changed, likewise.
   const changedOn = new Map((r.priceChanged ?? []).map((c) => [c.model, c.on]));
-  list("By model", r.models.slice(0, top).map((m) => ({ name: m.model, usd: m.usd, ...(m.usd === 0 && unpricedModels.has(m.model) ? { tail: `not priced, ${m.requests.toLocaleString("en-US")} ${m.requests === 1 ? "request" : "requests"}` } : estimatedModels.has(m.model) ? { tail: "estimate: its family's price" } : changedOn.has(m.model) ? { tail: `estimate: price changed ${changedOn.get(m.model)}` } : {}) })), r.models.length - top);
+  list("By model", r.models.slice(0, top).map((m) => ({ name: m.model, usd: m.usd, ...(m.usd === 0 && unpricedModels.has(m.model) ? { tail: `not priced, ${m.requests.toLocaleString("en-US")} ${m.requests === 1 ? "request" : "requests"}` } : estimatedModels.has(m.model) ? { tail: "estimate: its family's price" } : changedOn.has(m.model) ? { tail: `estimate: price ${priceEndWord(m.model)} ${changedOn.get(m.model)}` } : {}) })), r.models.length - top);
 
   // The last two weeks of the window, a bar each, scaled to the busiest.
   const recent = r.daily.slice(-14);
@@ -892,6 +976,8 @@ export function renderSpend(r: SpendReport, top = 8): string {
   if (r.modifiers) lines.push(`  Of it, billed above list rates: ${modifiersText(r.modifiers)}`);
   // A compaction's own request is in no row's usage: estimated from the context it read and the summary it wrote.
   if (r.compactions) lines.push(`  Of it, ${r.compactions.requests.toLocaleString("en-US")} Claude Code ${r.compactions.requests === 1 ? "compaction's own request" : "compactions' own requests"} ${usd(r.compactions.usd)}, an estimate (no row records their usage)`);
+  // Calls inside a request that its usage totals leave out: the advisor's, an attempt a fallback replaced.
+  for (const [type, x] of Object.entries(r.iterations ?? {})) lines.push(`  Of it, ${x.calls.toLocaleString("en-US")} ${ITERATION_NAME[type]?.[x.calls === 1 ? 0 : 1] ?? `"${type}" iterations`} ${usd(x.usd)} (${x.models.slice(0, 2).join(", ")}), beyond their requests' usage totals`);
   const claude = r.tools.find((t) => t.tool === "claude");
   if (claude?.subagentUsd) lines.push(`  Claude Code subagents ${usd(claude.subagentUsd)} (${share(claude.subagentUsd, r.usd)}): context-doctor subagents says which paid off`);
   // Side requests no transcript records: a range, outside the total.
@@ -934,6 +1020,7 @@ export function renderSpend(r: SpendReport, top = 8): string {
   }
   for (const s of r.skipped) notes.push(`${TOOL_NAME[s.tool]} not read: ${s.reason}.`);
   if (notes.length) lines.push("", ...notes);
+  if (r.claudeCode) lines.push("", ...renderComparison(r.claudeCode.sessions));
   lines.push("", "As an API key is billed; on a subscription the same tokens come out");
   lines.push("of your plan's limits instead. Share yours: context-doctor spend --share");
   return withInvocation(lines.map((l) => l.trimEnd()).join("\n"));

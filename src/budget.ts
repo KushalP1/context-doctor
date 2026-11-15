@@ -33,7 +33,7 @@ import { claudeCodePresent, claudeDir } from "./claudedir.js";
 import { claudeFileUsage, codexSessionsRoot, rolloutFiles, SUBAGENT_LOOKBACK_MS, USAGE_ROWS } from "./limits.js";
 import { subagentFiles } from "./subagents.js";
 import { codexFileSpend, codexFiles, geminiFileSpend, geminiFiles, TOOL_NAME, type Tool } from "./spend.js";
-import { isUnbilledModel, priceChangedText, priceTableKey, requestCost, type RecordedUsage } from "./pricing.js";
+import { billedCost, isUnbilledModel, priceChangedText, priceTableKey, requestCost, type RecordedUsage } from "./pricing.js";
 import { orgRates, orgRatesLine } from "./orgrates.js";
 import { anchorOf, rowsOf } from "./scan.js";
 import { realModel } from "./tokens.js";
@@ -462,7 +462,8 @@ function countLines(e: FileEntry, recent: NonNullable<FileEntry["r"]>, text: str
       const ts = Date.parse(String(row.timestamp ?? ""));
       const tokens = [u.input_tokens, u.cache_read_input_tokens, u.cache_creation_input_tokens].reduce((t: number, v) => t + (Number(v) > 0 ? Number(v) : 0), 0);
       const model = realModel(m.model);
-      const c = requestCost(model, u, ts);
+      // As billed: with the iterations its top-level usage leaves out (an advisor's, a declined attempt's).
+      const c = billedCost(model, u, ts);
       let index = -1;
       // A reply on <synthetic> was made by Claude Code itself, never billed: not a request at all.
       // A row of another session (`own`): a copy of its history, its spend, not this session's.

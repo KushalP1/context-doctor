@@ -18,7 +18,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pricingFor, priceChange, priceChangedText, promptTokens, rateCard, ratesAt, requestCost, usageCost, type RecordedUsage } from "../pricing.js";
+import { pricingFor, priceChange, priceChangedText, priceEndWord, promptTokens, rateCard, ratesAt, requestCost, usageCost, type RecordedUsage } from "../pricing.js";
 
 const near = (a: number, b: number, what = "") => assert.ok(Math.abs(a - b) < 1e-12, `${what}: ${a} vs ${b}`);
 const AT = Date.UTC(2026, 10, 8, 12);
@@ -200,7 +200,22 @@ test("prices that end on a day: the row before it, past it the page's next price
     assert.equal(priceChange(m), undefined, m);
     assert.equal(requestCost(m, u, Date.UTC(2030, 0, 1))!.estimated, undefined, m);
   }
-  assert.equal(priceChangedText([["gemini-4-argon", "2026-12-01"], ["gpt-5.6-sol", "2026-12-01"], ["gemini-3.8-flash", "2027-01-01"]]), "gemini-4-argon, gpt-5.6-sol: price changed on 2026-12-01; gemini-3.8-flash: price changed on 2027-01-01; a newer context-doctor knows the new one");
+  // Each says which price ended and the price its requests were priced at instead, never silently.
+  assert.equal(
+    priceChangedText([["gemini-4-argon", "2026-12-01"], ["gpt-5.6-sol", "2026-12-01"], ["gemini-3.8-flash", "2027-01-01"]]),
+    "gemini-4-argon's price changed on 2026-12-01: priced at the price the page said would follow ($4 in / $20 out per M); " +
+      "gpt-5.6-sol's price ended on 2026-12-01 and no later price is published: priced at the one that ended ($4 in / $20 out per M); " +
+      "gemini-3.8-flash's price changed on 2027-01-01: priced at the price the page said would follow ($1.5 in / $7.5 out per M); " +
+      "an estimate; a newer context-doctor may know the price that followed",
+  );
+  // Routed: billed as the other model, and once that model's own price changes, that change is the one said.
+  assert.equal(priceChangedText([["gemini-2.5-pro", "2026-12-01"]]), "gemini-2.5-pro's price ended on 2026-12-01: from then it is billed as gemini-3.8-flash, priced at gemini-3.8-flash's rates; an estimate");
+  assert.equal(
+    priceChangedText([["gemini-2.5-pro", "2027-01-01"]]),
+    "gemini-2.5-pro is billed as gemini-3.8-flash from 2026-12-01; gemini-3.8-flash's price changed on 2027-01-01: priced at the price the page said would follow ($1.5 in / $7.5 out per M); an estimate",
+  );
+  assert.equal(priceEndWord("gpt-5.6-sol"), "ended");
+  assert.equal(priceEndWord("gemini-4-argon"), "changed");
 });
 
 test("a family fallback is an estimate; its US-only still applies (an unknown Claude version is a new one)", () => {
