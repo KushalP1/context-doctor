@@ -154,7 +154,7 @@ Measure:
                                                 tool errors and your corrections, before vs after
   context-doctor limits [--days n] [--report [--copy]]
                                                 Your plan's limits in their own unit: the weekly and
-                                                5-hour windows (Claude Pro, Max and Ultra, which has
+                                                5-hour windows (Claude Pro, Max and Ultra; Ultra has
                                                 no 5-hour window; recorded by the plugin's mod, the
                                                 status line or the proxy) and Codex's, the pace, when
                                                 each runs out, $ and tokens per 1% of each weekly

@@ -136,7 +136,7 @@ test("without --yes: the plan, who pays (a plan's limits, not dollars), and noth
   assert.equal(res.code, 0, res.err);
   assert.match(res.out, /2 tasks x 2 models \(claude-sonnet-5-5, claude-opus-5-5\) x 1 = 4 runs/);
   assert.match(res.out, /Claude Code 2\.1\.325/);
-  assert.match(res.out, /signed in to claude\.ai \(max plan\): this draws on your plan's usage limits \(the 5-hour and weekly windows\), not dollars/);
+  assert.match(res.out, /signed in to claude\.ai \(max plan\): this draws on your plan's usage limits \(the weekly window, and the 5-hour one on plans that have it\), not dollars/);
   assert.match(res.out, /At API list prices the runs come to ~\$/);
   assert.match(res.out, /no fitted limit readings/);
   assert.match(res.out, /Nothing was run\. Run again with --yes/);

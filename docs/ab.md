@@ -83,7 +83,7 @@ context-doctor ab --via claude-code --model claude-sonnet-5-5 --compare claude-o
 
 **Who pays.** Before anything runs, `ab` asks Claude Code itself (`claude --version`, `claude --help`, `claude auth status --json`; nothing is sent to a model) and says so:
 
-- signed in to claude.ai: the runs draw on your plan's usage limits (the 5-hour and weekly windows), not dollars. The estimate is printed at API list prices, and, when `context-doctor limits` has fitted your readings, as a share of your weekly limit or of a 5-hour window. There is no `--budget` by default: the plan's limit is the cap;
+- signed in to claude.ai: the runs draw on your plan's usage limits (the weekly window, and the 5-hour one on plans that have it: Ultra has none), not dollars. The estimate is printed at API list prices, and, when `context-doctor limits` has fitted your readings, as a share of your weekly limit or of a 5-hour window. There is no `--budget` by default: the plan's limit is the cap;
 - on an API key (`ANTHROPIC_API_KEY` set, or a console sign-in): it bills that key in dollars, and `--budget` defaults to the upper estimate plus 25%, as on the Messages API;
 - not signed in, a `claude` that cannot be run (`CONTEXT_DOCTOR_CLAUDE_BIN` points at another one), or a Claude Code whose `--help` lacks a flag below: refused, nothing run.
 
