@@ -679,7 +679,10 @@ export function windowStatus(readings, now = Date.now()) {
         if (last.ts - start >= 10 * MIN)
             status.averagePerHour = Math.max(0, (last.pct / (last.ts - start)) * HOUR);
     }
-    if (status.recentPerHour && status.recentPerHour > 0 && last.pct < 100) {
+    // A reading older than the pace's own stretch says nothing about now: no run-out time from it (it could already be past).
+    if (now - last.ts > lookback)
+        status.stale = true;
+    if (!status.stale && status.recentPerHour && status.recentPerHour > 0 && last.pct < 100) {
         status.runsOutAt = last.ts + ((100 - last.pct) / status.recentPerHour) * HOUR;
         status.beforeReset = last.resetsAt === undefined || status.runsOutAt < last.resetsAt;
     }
@@ -1457,7 +1460,9 @@ export function renderLimits(r) {
         }
         if (s.resetsAt)
             out.push(`  Resets ${clock(s.resetsAt, r.now)} (in ${hm(s.resetsAt - r.now)}).`);
-        if (s.recentPerHour === undefined)
+        if (s.stale)
+            out.push(`  The newest reading is ${hm(age)} old: no pace or run-out time from it until a new one comes in.`);
+        else if (s.recentPerHour === undefined)
             out.push("  Pace: not enough recent readings.");
         else if (s.recentPerHour === 0)
             out.push("  Pace: no rise over the recent readings.");

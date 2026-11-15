@@ -204,6 +204,8 @@ export interface WindowStatus {
     resetsAt?: number;
     /** True when the newest reading's window has reset since (its % is stale). */
     resetSince: boolean;
+    /** True when the newest reading is older than the stretch the pace is read over (an hour for a 5-hour window, a day otherwise): its pace is no forecast. */
+    stale?: boolean;
     /** Points per hour over the recent stretch (the last hour of a 5-hour window, the last day otherwise). */
     recentPerHour?: number;
     /** Points per hour since the window began, when its length is known. */

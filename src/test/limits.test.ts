@@ -269,3 +269,22 @@ test("limits: no readings at all says how to start recording; the report reads C
   assert.equal(report.windows.length, 1);
   assert.equal(claudeLimitFit(report), undefined, "no Claude readings: nothing to quote savings in");
 });
+
+test("a reading days old is said to be stale, with its age, and no run-out time is projected from it (it could already be past)", () => {
+  // A weekly window rising 5 points an hour, last read 5 days before now, resetting in a day.
+  const reset = T0 + 6 * 86_400_000;
+  const r = (min: number, pct: number): LimitReading => ({ ts: T0 + min * MIN, app: "claude", window: "seven_day", pct, resetsAt: reset, windowMs: 7 * 86_400_000 });
+  const readings = [r(0, 40), r(30, 42.5), r(60, 45)];
+  const now = T0 + HOUR + 5 * 86_400_000;
+  const s = windowStatus(readings, now)!;
+  assert.equal(s.stale, true);
+  assert.equal(s.runsOutAt, undefined);
+  assert.equal(s.beforeReset, undefined);
+  const text = renderLimits({ days: 30, now, claudeLog: "/x", claudeReadings: 3, codexReadings: 0, windows: [s], fits: [], resets: [], changes: [], claudeWindows: ["seven_day"], claudeSources: {} });
+  assert.match(text, /The newest reading is 5 days old: no pace or run-out time from it/);
+  assert.ok(!/runs out/.test(text), text);
+  // The same readings read within the day still forecast.
+  const fresh = windowStatus(readings, T0 + 2 * HOUR)!;
+  assert.equal(fresh.stale, undefined);
+  assert.ok(fresh.runsOutAt! > T0 + 2 * HOUR && fresh.beforeReset);
+});

@@ -621,6 +621,8 @@ export interface WindowStatus {
   resetsAt?: number;
   /** True when the newest reading's window has reset since (its % is stale). */
   resetSince: boolean;
+  /** True when the newest reading is older than the stretch the pace is read over (an hour for a 5-hour window, a day otherwise): its pace is no forecast. */
+  stale?: boolean;
   /** Points per hour over the recent stretch (the last hour of a 5-hour window, the last day otherwise). */
   recentPerHour?: number;
   /** Points per hour since the window began, when its length is known. */
@@ -706,7 +708,9 @@ export function windowStatus(readings: LimitReading[], now = Date.now()): Window
     const start = last.resetsAt - last.windowMs;
     if (last.ts - start >= 10 * MIN) status.averagePerHour = Math.max(0, (last.pct / (last.ts - start)) * HOUR);
   }
-  if (status.recentPerHour && status.recentPerHour > 0 && last.pct < 100) {
+  // A reading older than the pace's own stretch says nothing about now: no run-out time from it (it could already be past).
+  if (now - last.ts > lookback) status.stale = true;
+  if (!status.stale && status.recentPerHour && status.recentPerHour > 0 && last.pct < 100) {
     status.runsOutAt = last.ts + ((100 - last.pct) / status.recentPerHour) * HOUR;
     status.beforeReset = last.resetsAt === undefined || status.runsOutAt < last.resetsAt;
   }
@@ -1626,7 +1630,8 @@ export function renderLimits(r: LimitsReport): string {
       continue;
     }
     if (s.resetsAt) out.push(`  Resets ${clock(s.resetsAt, r.now)} (in ${hm(s.resetsAt - r.now)}).`);
-    if (s.recentPerHour === undefined) out.push("  Pace: not enough recent readings.");
+    if (s.stale) out.push(`  The newest reading is ${hm(age)} old: no pace or run-out time from it until a new one comes in.`);
+    else if (s.recentPerHour === undefined) out.push("  Pace: not enough recent readings.");
     else if (s.recentPerHour === 0) out.push("  Pace: no rise over the recent readings.");
     else {
       const avg = s.averagePerHour !== undefined ? `; ${pts(s.averagePerHour)} a hour on average this window` : "";

@@ -13,7 +13,8 @@
       "at": 1790791200000,
       "resetsAt": 1790870400000,
       "resetSince": false,
-      "readings": 38
+      "readings": 38,
+      "stale": true
     }
   ],
   "fits": [
