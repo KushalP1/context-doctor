@@ -47,7 +47,8 @@ export interface ModMeasureInput {
 /**
  * The mod's windows in the status line's shape, `{ five_hour: { used_percentage,
  * resets_at } }`, resets in epoch seconds: the one shape recordLimits reads.
- * A gateway's `spend_limit` has no place in the ledger and is left out.
+ * A gateway's `spend_limit` has no place in the ledger and is left out; a
+ * plan with no 5-hour window (Ultra) sends only `seven_day`, and only that is kept.
  */
 export declare function statusLineRateLimits(list: unknown): Record<string, {
     used_percentage: number;

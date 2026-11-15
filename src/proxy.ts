@@ -84,6 +84,13 @@ export interface ProxyOptions extends OptimizeOptions {
    * than taking the proxy (and every agent behind it) down.
    */
   maxBodyBytes?: number;
+  /**
+   * Where the plan's rate-limit readings from Anthropic's replies go (the
+   * `anthropic-ratelimit-unified-5h-*` / `-7d-*` headers a claude.ai sign-in
+   * gets): the limits ledger `context-doctor limits` reads, by default.
+   * CONTEXT_DOCTOR_NO_LIMITS_LOG=1 keeps none.
+   */
+  limitsLogPath?: string;
 }
 
 /** Default request body cap: far above any real request (a 1M-token context is ~4 MB of JSON, images aside). */
@@ -665,6 +672,18 @@ export function startProxy(opts: ProxyOptions = {}): http.Server {
         } else {
           upstream = new Response(text, { status: upstream.status, statusText: upstream.statusText, headers: upstream.headers });
         }
+      }
+
+      // The plan's windows, as Claude Code reads them from the same headers:
+      // into the limits ledger, after the reply is on its way (recordLimits
+      // writes only a change, at most once a minute, and never throws).
+      if (upstreamBase === (opts.anthropicUpstream ?? "https://api.anthropic.com") && process.env.CONTEXT_DOCTOR_NO_LIMITS_LOG !== "1" && (upstream.headers.has("anthropic-ratelimit-unified-7d-utilization") || upstream.headers.has("anthropic-ratelimit-unified-5h-utilization"))) {
+        const got = upstream.headers;
+        // Loaded on first use: limits.ts reads transcripts and imports this module's version.
+        void import("./limits.js").then((m) => {
+          const rl = m.rateLimitsFromHeaders((n) => got.get(n));
+          if (rl) m.recordLimits(rl, Date.now(), opts.limitsLogPath, "proxy");
+        }).catch(() => undefined);
       }
 
       console.error(

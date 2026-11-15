@@ -277,7 +277,7 @@ function claudeRouteChecks(layers: Array<Record<string, any>>, plugin: boolean, 
         };
   let mod: Check;
   const act = modActivity();
-  const limits = act.limits ? `; limits ledger written ${ago(act.limits, now)}` : "; no limit reading yet (Claude Code hands them over on Pro and Max plans)";
+  const limits = act.limits ? `; limits ledger written ${ago(act.limits, now)}` : "; no limit reading yet (Claude Code hands them over on Pro, Max and Ultra plans)";
   if (process.env.CONTEXT_DOCTOR_NO_MOD === "1") {
     mod = { label: "Mod", status: "skip", detail: "off: CONTEXT_DOCTOR_NO_MOD=1" };
   } else if (act.cost && now - act.cost < MOD_FRESH_MS) {

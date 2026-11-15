@@ -72,6 +72,13 @@ export interface ProxyOptions extends OptimizeOptions {
      * than taking the proxy (and every agent behind it) down.
      */
     maxBodyBytes?: number;
+    /**
+     * Where the plan's rate-limit readings from Anthropic's replies go (the
+     * `anthropic-ratelimit-unified-5h-*` / `-7d-*` headers a claude.ai sign-in
+     * gets): the limits ledger `context-doctor limits` reads, by default.
+     * CONTEXT_DOCTOR_NO_LIMITS_LOG=1 keeps none.
+     */
+    limitsLogPath?: string;
 }
 /** Default request body cap: far above any real request (a 1M-token context is ~4 MB of JSON, images aside). */
 export declare const DEFAULT_MAX_BODY_BYTES: number;

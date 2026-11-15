@@ -1,16 +1,21 @@
 /**
  * `context-doctor limits`: your plan's usage limits, in their own unit.
  *
- * Subscriptions are billed in % of a 5-hour and a weekly window (Claude
- * Pro/Max), or in credits per token (Codex since April 2026), and neither
- * vendor shows where the percentage went. Two local sources say:
+ * Subscriptions are billed in % of a weekly window and, on most plans, a
+ * 5-hour one (Claude Pro, Max and Ultra; since 2026-10-30 Max 5x is called
+ * Max and Max 20x Ultra, and Ultra has no 5-hour window), or in credits per
+ * token (Codex since April 2026), and neither vendor shows where the
+ * percentage went. Local sources say:
  *
  *  - Claude Code hands its status line command `rate_limits.five_hour` and
  *    `.seven_day`, each `{used_percentage, resets_at}` (documented at
  *    code.claude.com/docs/en/statusline; built in 2.1.308 as
  *    Math.round(utilization*1000)/10, so 0.1% steps; present only for
- *    Pro/Max subscribers, after the first reply). `context-doctor statusline`
- *    appends each new reading to a small local log (recordLimits).
+ *    subscribers, after the first reply; `five_hour` absent on Ultra), and
+ *    the same windows to the plugin's mod (`session.measure`). The status
+ *    line, the mod and the proxy (from the API's
+ *    `anthropic-ratelimit-unified-5h-*` / `-7d-*` headers) append each new
+ *    reading to a small local log (recordLimits).
  *  - Codex records `rate_limits.primary` / `.secondary`
  *    `{used_percent, window_minutes, resets_at}` on every token_count event of
  *    its rollouts (~/.codex/sessions), next to that request's usage, in
@@ -30,6 +35,8 @@ import { type ModelPricing, type Modifiers } from "./pricing.js";
 import { type CompactionRequest } from "./compactcost.js";
 /** Claude Code's two windows, as its status line input names them. */
 export declare const CLAUDE_WINDOWS: readonly ["five_hour", "seven_day"];
+/** What wrote a Claude reading: the status line, the plugin's mod, or the proxy. */
+export type LimitSource = "statusline" | "mod" | "proxy";
 /** One reading of one window: how much of it was used at `ts`. */
 export interface LimitReading {
     /** When it was read, ms. */
@@ -45,6 +52,8 @@ export interface LimitReading {
     windowMs?: number;
     /** Codex's plan ("plus", "team", "free"...). */
     plan?: string;
+    /** What recorded it (Claude readings written from 0.49 on; older lines have none). */
+    source?: LimitSource;
 }
 /** One request's usage, from a transcript on this machine. */
 export interface UsagePoint {
@@ -58,6 +67,9 @@ export interface UsagePoint {
     output: number;
     /** At API list price; 0 when the model has no price on file. */
     usd: number;
+    /** Claude Code's entrypoint ("cli", "claude-desktop", "sdk-cli"...) and version, from the transcript's rows. */
+    entrypoint?: string;
+    version?: string;
 }
 /** Beside the hook state and the ledger: ~/.claude/.context-doctor-limits.jsonl. */
 export declare function limitsLogPath(): string;
@@ -65,12 +77,25 @@ export declare function limitsLogPath(): string;
  * Append what changed in Claude Code's `rate_limits` to the log: a window
  * whose % or reset time moved since its last line, or that has not been
  * written for 15 minutes. Nothing when there are no limits (an API key,
- * Bedrock, Vertex). Never throws: the status line must stay silent. Returns
- * the lines written.
+ * Bedrock, Vertex). A window that is not there (Ultra's 5-hour one) is
+ * simply not written. Never throws: the status line must stay silent.
+ * Returns the lines written.
  */
-export declare function recordLimits(rateLimits: unknown, now?: number, path?: string): number;
+export declare function recordLimits(rateLimits: unknown, now?: number, path?: string, source?: LimitSource): number;
 /** Every Claude reading in the log since `since`. */
 export declare function readClaudeReadings(since?: number, path?: string): LimitReading[];
+/**
+ * The windows an Anthropic response's `anthropic-ratelimit-unified-5h-*` and
+ * `-7d-*` headers carry (a claude.ai sign-in, or a gateway), in the status
+ * line's shape for recordLimits: utilization is a fraction, the reset epoch
+ * seconds. Claude Code reads the same headers into its status line and its
+ * mods (Math.round(utilization*1000)/10). Undefined when there are none; a
+ * response with only the weekly pair (Ultra) gives only the weekly window.
+ */
+export declare function rateLimitsFromHeaders(get: (name: string) => string | null | undefined): Record<string, {
+    used_percentage: number;
+    resets_at?: number;
+}> | undefined;
 export declare function codexSessionsRoot(home?: string): string;
 /** Codex rollouts under `root` (YYYY/MM/DD folders, or flat) written since `since`. */
 export declare function rolloutFiles(root: string, since: number): string[];
@@ -154,8 +179,19 @@ export declare function claudeUsageFiles(since: number, tops?: string[]): Array<
 /** How long before a period a session may have been last written and still have subagents running into it. */
 export declare const SUBAGENT_LOOKBACK_MS: number;
 /**
+ * Which Claude Code wrote a transcript, and when that changed: every row
+ * carries `entrypoint` ("cli", "claude-desktop", "sdk-cli" for `claude -p`,
+ * "claude-vscode"...) and `version`; a record is kept only where either
+ * changes (a session resumed after an update), so a file has one or two.
+ */
+export declare const HOST_ROWS: Extractor<{
+    ep?: string;
+    v?: string;
+}>;
+/**
  * Every Claude Code request between `since` and `until`, main threads and
- * subagents alike (both draw on the same limits), each reply once.
+ * subagents alike (both draw on the same limits), each reply once, with
+ * the entrypoint and Claude Code version it was made from.
  */
 export declare function claudeUsage(since: number, until?: number, paths?: string[]): UsagePoint[];
 export interface WindowStatus {
@@ -265,6 +301,103 @@ export interface LimitFit {
     why?: string;
 }
 export declare function fitWindow(readings: LimitReading[], usage: UsagePoint[], stretchMs?: number): LimitFit | undefined;
+/**
+ * One fit over every reading assumes a percent of the limit always costs the
+ * same. It does not: people measured 1% of the week falling from ~$30 to ~$4
+ * of API-equivalent use within a week (claude-code#108272), and `claude -p`
+ * draining ~1.8x more per token than the terminal (#97074). So each weekly
+ * window (one reset to the next) gets its own figure, and the report says
+ * when the figure moved, by how much, and on what date.
+ */
+/** What one entrypoint or model used inside a window's stretches. */
+export interface UsageShare {
+    key: string;
+    usd: number;
+    tokens: number;
+    requests: number;
+    /** Its part of the window's API-equivalent dollars, 0-1. */
+    share: number;
+    /** Dollars per 1% for this key alone, when the stretches tell the keys apart (one column per key); with its relative standard error. */
+    usdPerPct?: number;
+    relSe?: number;
+}
+/** One weekly window, reset to reset. */
+export interface ResetWindow {
+    window: string;
+    label: string;
+    app: "claude" | "codex";
+    /** When it began (its reset less its length) and when it resets, ms. */
+    start: number;
+    resetsAt: number;
+    /** Still running at the report's time. */
+    current: boolean;
+    readings: number;
+    firstReading: number;
+    lastReading: number;
+    /** The highest % read in it. */
+    pctUsed: number;
+    /** Points risen in stretches with usage on this machine, and in stretches with none (used elsewhere: claude.ai, another computer). */
+    pctMatched: number;
+    pctElsewhere: number;
+    stretches: number;
+    /** Requests, API-equivalent dollars (requestCost, at list price) and tokens of every kind in those stretches. */
+    requests: number;
+    usd: number;
+    tokens: number;
+    /** Dollars and tokens per 1% of the limit (ratio of the sums), and the ratio's relative standard error across stretches. */
+    usdPerPct?: number;
+    tokensPerPct?: number;
+    relSe?: number;
+    /** Why there is no figure, when there is none. */
+    why?: string;
+    byEntrypoint: UsageShare[];
+    byModel: UsageShare[];
+    /** Claude Code versions its requests were made with, oldest first. */
+    versions: string[];
+}
+/** A move in what 1% costs. */
+export interface SlopeChange {
+    window: string;
+    label: string;
+    /** "reset": between two windows, dated at the later one's start; "within": inside one window, dated at the stretch where it moved. */
+    kind: "reset" | "within";
+    at: number;
+    /** For "reset", the earlier window's reset (equal to `at` unless a window is missing between them). */
+    prevEnd?: number;
+    usdPerPctBefore: number;
+    usdPerPctAfter: number;
+    tokensPerPctBefore?: number;
+    tokensPerPctAfter?: number;
+    /** after / before: under 1 when 1% buys less (the limit drains faster per dollar). */
+    factor: number;
+    /** How many standard errors the move is (on the log scale). */
+    sigma: number;
+    versionsBefore: string[];
+    versionsAfter: string[];
+}
+/**
+ * Each reset window of one weekly window's readings: % used, dollars and
+ * tokens per 1% (over the stretches with usage here; rises with none are
+ * counted apart), the split by entrypoint and by model, and the Claude Code
+ * versions. `usage` in time order.
+ */
+export declare function resetWindowsOf(readings: LimitReading[], usage: UsagePoint[], opts?: {
+    now?: number;
+    stretchMs?: number;
+}): ResetWindow[];
+/**
+ * A model id as a report may carry it: a model's name, never a cloud
+ * resource (a Bedrock ARN holds an account number) or anything path-shaped.
+ */
+export declare function reportModel(model: string | undefined): string;
+/**
+ * Where what 1% costs moved: between consecutive windows that each have a
+ * figure (dated at the reset), and inside a window at the one split of its
+ * stretches that separates two rates best (dated at that stretch). Reported
+ * from a 1.5x move either way, beyond 3 standard errors between windows and
+ * 4 inside one (the split is searched for).
+ */
+export declare function slopeChanges(windows: ResetWindow[], usage?: UsagePoint[], readings?: LimitReading[], stretchMs?: number): SlopeChange[];
 export interface LimitsReport {
     days: number;
     now: number;
@@ -274,6 +407,14 @@ export interface LimitsReport {
     codexReadings: number;
     windows: WindowStatus[];
     fits: LimitFit[];
+    /** Each weekly window, reset to reset: % used, dollars and tokens per 1%, by entrypoint and model (resetWindowsOf). */
+    resets: ResetWindow[];
+    /** Where what 1% costs moved (slopeChanges). */
+    changes: SlopeChange[];
+    /** The Claude windows the readings hold: ["seven_day"] alone on a plan with no 5-hour window (Ultra). */
+    claudeWindows: string[];
+    /** How many Claude readings each recorder wrote ("statusline", "mod", "proxy"; "earlier" for lines from before 0.49). */
+    claudeSources: Record<string, number>;
 }
 export interface LimitsOptions {
     now?: number;
@@ -285,6 +426,26 @@ export interface LimitsOptions {
     claudeOnly?: boolean;
 }
 export declare function limitsReport(days?: number, opts?: LimitsOptions): LimitsReport;
+/** What a usage view needs of the limits: each window now, each weekly window reset to reset, and the moves between them. */
+export interface LimitsByReset {
+    now: number;
+    /** Each window's current %, pace and reset (a Claude 5-hour one only on plans that have it). */
+    windows: WindowStatus[];
+    resets: ResetWindow[];
+    changes: SlopeChange[];
+    /** True when there are Claude weekly readings and no 5-hour ones (Ultra). */
+    noFiveHour: boolean;
+    /** Readings in the period, Claude and Codex: 0 means nothing is recording them (see howToRecord). */
+    readings: number;
+}
+/**
+ * The per-reset view of the limits, for a pane or a script: every window's
+ * current state, every weekly window with its dollars and tokens per 1%
+ * (by entrypoint and model where the readings allow) and every move in that
+ * figure, dated. Reads the limits ledger, Codex's rollouts and the
+ * transcripts over the readings' span; never writes.
+ */
+export declare function limitsByReset(days?: number, opts?: LimitsOptions): LimitsByReset;
 /** The Claude fit to quote savings in: the weekly window first (savings are weekly), then the 5-hour one. */
 export declare function claudeLimitFit(r: LimitsReport): LimitFit | undefined;
 /**
@@ -301,4 +462,19 @@ export declare function inLimit(fit: LimitFit, usd: number, days: number): strin
  * carry). Kept within 60 columns, as `savings` is.
  */
 export declare function limitSavingsLines(fit: LimitFit | undefined, items: Array<[label: string, usd: number]>, days: number): string[];
+/**
+ * The one line that says how to start recording Claude readings: the
+ * plugin's mod (after each turn, in the Desktop app, the terminal and VS
+ * Code), or the autopilot proxy (from the API's rate-limit headers).
+ */
+export declare const HOW_TO_RECORD = "To record them: `context-doctor install` (the plugin's mod writes them after each turn, Claude Code 2.1.286+; `install --statusline` on older ones), or `context-doctor autopilot on` (its proxy reads them from the API's replies).";
 export declare function renderLimits(r: LimitsReport): string;
+/**
+ * `limits --report`: a block to paste into a GitHub issue. Per weekly
+ * window: % used, dollars and tokens per 1%, the split by entrypoint and
+ * model, Claude Code's versions, and every move in what 1% buys, dated. It
+ * carries figures, dates, model and entrypoint names and version numbers
+ * only: no prompt, no path, no session or account id (reportModel masks a
+ * model id that is a cloud resource).
+ */
+export declare function renderLimitsReport(r: LimitsReport): string;

@@ -15,7 +15,7 @@
  * (`prompt_cache.last_miss_cause`) goes to
  * ~/.claude/.context-doctor-misses.jsonl for `cache-misses`. And the limit
  * ledger: when Claude Code passes `rate_limits`
- * (Pro and Max), each new 5-hour and weekly reading is appended to
+ * (Pro, Max and Ultra; Ultra has no 5-hour window), each new reading is appended to
  * ~/.claude/.context-doctor-limits.jsonl for `context-doctor limits`.
  *
  * With a spend budget set (`context-doctor budget`), the session's cost gives
@@ -40,7 +40,7 @@ import { budgetStatus } from "./budget.js";
 interface StatusInput {
   session_id?: string;
   transcript_path?: string;
-  /** Pro/Max (or a gateway's spend limit), after the first reply: each window's used_percentage and resets_at. */
+  /** Pro, Max and Ultra (or a gateway's spend limit), after the first reply: each window's used_percentage and resets_at (no five_hour on Ultra). */
   rate_limits?: unknown;
   model?: { id?: string; display_name?: string };
   cost?: { total_cost_usd?: number };
@@ -232,7 +232,7 @@ export async function runStatusLine(): Promise<void> {
     if (line) console.log(line);
     // After the line is out: the limit readings `context-doctor limits` fits
     // (only when Claude Code sends them; a few bytes, only on a change).
-    if (process.env.CONTEXT_DOCTOR_NO_LIMITS_LOG !== "1") recordLimits(input?.rate_limits);
+    if (process.env.CONTEXT_DOCTOR_NO_LIMITS_LOG !== "1") recordLimits(input?.rate_limits, undefined, undefined, "statusline");
     // And Claude Code's diagnosis of a new cache miss, for `cache-misses`
     // (2.1.260+; one short line per miss, nothing on other refreshes).
     if (process.env.CONTEXT_DOCTOR_NO_MISS_LOG !== "1") recordMiss(input?.prompt_cache, input?.session_id, input?.model?.id);

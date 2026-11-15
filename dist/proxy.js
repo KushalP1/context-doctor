@@ -566,6 +566,18 @@ export function startProxy(opts = {}) {
                     upstream = new Response(text, { status: upstream.status, statusText: upstream.statusText, headers: upstream.headers });
                 }
             }
+            // The plan's windows, as Claude Code reads them from the same headers:
+            // into the limits ledger, after the reply is on its way (recordLimits
+            // writes only a change, at most once a minute, and never throws).
+            if (upstreamBase === (opts.anthropicUpstream ?? "https://api.anthropic.com") && process.env.CONTEXT_DOCTOR_NO_LIMITS_LOG !== "1" && (upstream.headers.has("anthropic-ratelimit-unified-7d-utilization") || upstream.headers.has("anthropic-ratelimit-unified-5h-utilization"))) {
+                const got = upstream.headers;
+                // Loaded on first use: limits.ts reads transcripts and imports this module's version.
+                void import("./limits.js").then((m) => {
+                    const rl = m.rateLimitsFromHeaders((n) => got.get(n));
+                    if (rl)
+                        m.recordLimits(rl, Date.now(), opts.limitsLogPath, "proxy");
+                }).catch(() => undefined);
+            }
             console.error(`[context-doctor] ${req.method} ${logUrl(url)} → ${upstream.status} in ${Date.now() - upstreamStart}ms | ${note}` +
                 (stats.tokensSaved > 0 ? ` | session total: ${formatTokens(stats.tokensSaved)} tokens ≈ ${formatUsd(stats.estUsdSaved)} saved` : ""));
             res.statusCode = upstream.status;

@@ -64,7 +64,7 @@ import { cacheMisses, cacheMissesLine, cacheMissesSignificant, renderCacheMisses
 import { renderPayback, subagentPayback, SUBAGENT_CANDIDATE } from "./subagentpay.js";
 import { compactionQuality, renderCompactionQuality, QUALITY_ROWS } from "./compactquality.js";
 import { isHandoffId, listHandoffs, readHandoff, renderHandoffList, stripControls } from "./handoff.js";
-import { claudeLimitFit, limitSavingsLines, limitsReport, renderLimits } from "./limits.js";
+import { claudeLimitFit, limitSavingsLines, limitsReport, renderLimits, renderLimitsReport } from "./limits.js";
 import { currentTranscript, findSession, recall, renderRecall } from "./recall.js";
 import { measureSubagentCosts, renderCostMedians, saveSubagentCosts } from "./fanout.js";
 import { applyPrune, canonical, installedSkills, planPrune, renderPrune, undoPrune } from "./prune.js";
@@ -152,11 +152,14 @@ Measure:
                                                 cost, and whether a CLAUDE.md summary or pack pays
   context-doctor compactions [--days n]         Do sessions work worse right after compacting? Re-reads,
                                                 tool errors and your corrections, before vs after
-  context-doctor limits [--days n]              Your plan's limits in their own unit: the 5-hour and
-                                                weekly windows (Claude Pro/Max, via the status line)
-                                                and Codex's, the pace, when each runs out, and what
-                                                1M tokens of each kind cost in %, fitted on your own
-                                                readings with the fit's error
+  context-doctor limits [--days n] [--report [--copy]]
+                                                Your plan's limits in their own unit: the weekly and
+                                                5-hour windows (Claude Pro, Max and Ultra, which has
+                                                no 5-hour window; recorded by the plugin's mod, the
+                                                status line or the proxy) and Codex's, the pace, when
+                                                each runs out, $ and tokens per 1% of each weekly
+                                                window, by entrypoint and model, and when that moved.
+                                                --report: a block to paste into a bug report
   context-doctor spend [--days n] [--share [--copy]]
                                                 One bill across every tool here: Claude Code (with
                                                 its subagents), Codex, Gemini CLI and Cursor (an
@@ -563,6 +566,7 @@ const FLAGS = [
     { names: ["--dry-run"], set: (a) => { a.dryRun = true; } },
     { names: ["--copy"], set: (a) => { a.copy = true; } },
     { names: ["--share"], set: (a) => { a.share = true; } },
+    { names: ["--report"], set: (a) => { a.report = true; } },
     { names: ["--block"], set: (a) => { a.block = true; } },
     { names: ["--allow-dirty"], set: (a) => { a.allowDirty = true; } },
     { names: ["--statusline"], set: (a) => { a.statusLine = true; } },
@@ -1497,9 +1501,18 @@ async function main() {
         return;
     }
     if (args.command === "limits") {
+        if (args.report && args.json)
+            usageError("--report and --json do not go together: --report prints a block to paste.");
         const reading = progressLine("Reading your limits and usage");
         const report = limitsReport(args.days ?? 30);
         reading.clear();
+        if (args.report) {
+            const text = renderLimitsReport(report);
+            console.log(text);
+            if (args.copy)
+                console.log(copyToClipboard(text) ? "\n(copied to the clipboard)" : "\n(no clipboard tool found; copy the lines above)");
+            return;
+        }
         console.log(args.json ? JSON.stringify(report, null, 2) : renderLimits(report));
         return;
     }

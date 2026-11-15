@@ -138,7 +138,7 @@ export function inspectClaudeCode(bin = claudeBin()) {
 }
 function whoPays(info) {
     if (onPlan(info))
-        return `signed in to claude.ai${info.subscriptionType ? ` (${info.subscriptionType} plan)` : ""}: this draws on your plan's usage limits (the 5-hour and weekly windows), not dollars`;
+        return `signed in to claude.ai${info.subscriptionType ? ` (${info.subscriptionType} plan)` : ""}: this draws on your plan's usage limits (the weekly window, and the 5-hour one on plans that have it), not dollars`;
     if (info.authMethod === "api_key")
         return `on an API key (${info.apiKeySource ?? "API key"}): this bills that key, in dollars`;
     return `signed in as ${info.authMethod ?? "unknown"}: billed as your Claude Code is set up`;

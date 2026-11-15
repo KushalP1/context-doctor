@@ -127,7 +127,7 @@ test("pace and forecast: the recent rate, and whether it runs out before the res
     assert.equal(slow.beforeReset, false);
     const reset = windowStatus([r(0, 10, T0 + 30 * MIN)], T0 + HOUR);
     assert.equal(reset.resetSince, true);
-    assert.match(renderLimits({ days: 30, now: T0 + 61 * MIN, claudeLog: "/x", claudeReadings: 3, codexReadings: 0, windows: [fast], fits: [] }), /runs out .* before the reset/);
+    assert.match(renderLimits({ days: 30, now: T0 + 61 * MIN, claudeLog: "/x", claudeReadings: 3, codexReadings: 0, windows: [fast], fits: [], resets: [], changes: [], claudeWindows: [], claudeSources: {} }), /runs out .* before the reset/);
 });
 /** Readings and usage from known weights: the fit must find them. */
 function synthetic(weights, segments, noise = 0, priceOf = (x) => x[0] * 4 + x[1] * 0.4 + x[2] * 5 + x[3] * 20) {
@@ -166,7 +166,7 @@ test("the fit recovers known weights per token type, and list price when the lim
     const lines = limitSavingsLines(fit, [["2. Autopilot", 100], ["nothing", 0]], 28);
     assert.equal(lines.length, 3, "a heading of two lines and the one lever with a saving");
     assert.ok(lines.every((l) => l.length <= 64), lines.join("\n"));
-    assert.match(renderLimits({ days: 30, now: T0, claudeLog: "/x", claudeReadings: readings.length, codexReadings: 0, windows: [windowStatus(readings, T0 + HOUR)], fits: [fit] }), /Good enough to show savings/);
+    assert.match(renderLimits({ days: 30, now: T0, claudeLog: "/x", claudeReadings: readings.length, codexReadings: 0, windows: [windowStatus(readings, T0 + HOUR)], fits: [fit], resets: [], changes: [], claudeWindows: [], claudeSources: {} }), /Good enough to show savings/);
 });
 test("thin or unexplained data is never quoted", () => {
     const { readings, usage } = synthetic([1, 0.1, 1.25, 5], 4);
@@ -175,7 +175,7 @@ test("thin or unexplained data is never quoted", () => {
     assert.match(thin.why, /stretch/);
     assert.equal(inLimit(thin, 100, 30), undefined);
     assert.deepEqual(limitSavingsLines(thin, [["x", 100]], 30), []);
-    assert.match(renderLimits({ days: 30, now: T0, claudeLog: "/x", claudeReadings: 5, codexReadings: 0, windows: [], fits: [thin] }), /No limit readings yet|Too thin to quote/);
+    assert.match(renderLimits({ days: 30, now: T0, claudeLog: "/x", claudeReadings: 5, codexReadings: 0, windows: [], fits: [thin], resets: [], changes: [], claudeWindows: [], claudeSources: {} }), /No limit readings yet|Too thin to quote/);
     // Rises that track nothing recorded here: the rate cannot be pinned down.
     const random = synthetic([1, 0.1, 1.25, 5], 30);
     let seed = 11;

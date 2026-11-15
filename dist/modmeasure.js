@@ -37,7 +37,8 @@ import { rateCard, ratesAt } from "./pricing.js";
 /**
  * The mod's windows in the status line's shape, `{ five_hour: { used_percentage,
  * resets_at } }`, resets in epoch seconds: the one shape recordLimits reads.
- * A gateway's `spend_limit` has no place in the ledger and is left out.
+ * A gateway's `spend_limit` has no place in the ledger and is left out; a
+ * plan with no 5-hour window (Ultra) sends only `seven_day`, and only that is kept.
  */
 export function statusLineRateLimits(list) {
     if (!Array.isArray(list))
@@ -237,7 +238,7 @@ export function modMeasure(input, now = Date.now(), env = process.env) {
     const out = { at: now, coldMinTokens: COLD_MIN_TOKENS, thresholds: sessionPriceThresholds(env) };
     try {
         if (env.CONTEXT_DOCTOR_NO_LIMITS_LOG !== "1")
-            recordLimits(statusLineRateLimits(input?.rateLimits), now);
+            recordLimits(statusLineRateLimits(input?.rateLimits), now, undefined, "mod");
     }
     catch { /* the rest still runs */ }
     const ccUsd = num(input?.cost?.usd);

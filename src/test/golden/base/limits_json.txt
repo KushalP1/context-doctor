@@ -49,7 +49,15 @@
       "slopeRelSe": null,
       "why": "5 stretches of readings with usage beside them; 8 make a fit worth quoting"
     }
-  ]
+  ],
+  "resets": [],
+  "changes": [],
+  "claudeWindows": [
+    "five_hour"
+  ],
+  "claudeSources": {
+    "earlier": 40
+  }
 }
 
 [exit 0]

@@ -15,7 +15,7 @@
  * (`prompt_cache.last_miss_cause`) goes to
  * ~/.claude/.context-doctor-misses.jsonl for `cache-misses`. And the limit
  * ledger: when Claude Code passes `rate_limits`
- * (Pro and Max), each new 5-hour and weekly reading is appended to
+ * (Pro, Max and Ultra; Ultra has no 5-hour window), each new reading is appended to
  * ~/.claude/.context-doctor-limits.jsonl for `context-doctor limits`.
  *
  * With a spend budget set (`context-doctor budget`), the session's cost gives
@@ -33,7 +33,7 @@ import { type RecordedUsage } from "./pricing.js";
 interface StatusInput {
     session_id?: string;
     transcript_path?: string;
-    /** Pro/Max (or a gateway's spend limit), after the first reply: each window's used_percentage and resets_at. */
+    /** Pro, Max and Ultra (or a gateway's spend limit), after the first reply: each window's used_percentage and resets_at (no five_hour on Ultra). */
     rate_limits?: unknown;
     model?: {
         id?: string;

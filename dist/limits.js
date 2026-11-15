@@ -1,16 +1,21 @@
 /**
  * `context-doctor limits`: your plan's usage limits, in their own unit.
  *
- * Subscriptions are billed in % of a 5-hour and a weekly window (Claude
- * Pro/Max), or in credits per token (Codex since April 2026), and neither
- * vendor shows where the percentage went. Two local sources say:
+ * Subscriptions are billed in % of a weekly window and, on most plans, a
+ * 5-hour one (Claude Pro, Max and Ultra; since 2026-10-30 Max 5x is called
+ * Max and Max 20x Ultra, and Ultra has no 5-hour window), or in credits per
+ * token (Codex since April 2026), and neither vendor shows where the
+ * percentage went. Local sources say:
  *
  *  - Claude Code hands its status line command `rate_limits.five_hour` and
  *    `.seven_day`, each `{used_percentage, resets_at}` (documented at
  *    code.claude.com/docs/en/statusline; built in 2.1.308 as
  *    Math.round(utilization*1000)/10, so 0.1% steps; present only for
- *    Pro/Max subscribers, after the first reply). `context-doctor statusline`
- *    appends each new reading to a small local log (recordLimits).
+ *    subscribers, after the first reply; `five_hour` absent on Ultra), and
+ *    the same windows to the plugin's mod (`session.measure`). The status
+ *    line, the mod and the proxy (from the API's
+ *    `anthropic-ratelimit-unified-5h-*` / `-7d-*` headers) append each new
+ *    reading to a small local log (recordLimits).
  *  - Codex records `rate_limits.primary` / `.secondary`
  *    `{used_percent, window_minutes, resets_at}` on every token_count event of
  *    its rollouts (~/.codex/sessions), next to that request's usage, in
@@ -32,15 +37,17 @@ import { codexDir } from "./codexdir.js";
 import { statePath } from "./ledger.js";
 import { forEachLine, listSessions, outputSettler, replyCounter, isClaudeSession } from "./session.js";
 import { subagentFiles } from "./subagents.js";
-import { pick, rowsOf, slimUsage } from "./scan.js";
+import { pick, prescan, rowsOf, slimUsage } from "./scan.js";
 import { isUnbilledModel, NO_MODIFIERS, openAIUsage, requestCost } from "./pricing.js";
 import { realModel } from "./tokens.js";
 import { isCompactionRow, newTrack, slimSummary, trackCompaction } from "./compactcost.js";
+import { PROXY_VERSION } from "./proxy.js";
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
 /** Claude Code's two windows, as its status line input names them. */
 export const CLAUDE_WINDOWS = ["five_hour", "seven_day"];
+const SOURCES = ["statusline", "mod", "proxy"];
 // ---------------------------------------------------------------------------
 // The Claude readings log, written by the status line
 // ---------------------------------------------------------------------------
@@ -91,16 +98,18 @@ function parseLogLine(line) {
         return undefined;
     if (typeof pct !== "number" || !Number.isFinite(pct) || pct < 0 || pct > 1000)
         return undefined;
-    return { ts, app: "claude", w, pct, reset: typeof reset === "number" && Number.isFinite(reset) && reset > 0 ? reset : undefined };
+    const src = e.src;
+    return { ts, app: "claude", w, pct, reset: typeof reset === "number" && Number.isFinite(reset) && reset > 0 ? reset : undefined, ...(typeof src === "string" && SOURCES.includes(src) ? { src: src } : {}) };
 }
 /**
  * Append what changed in Claude Code's `rate_limits` to the log: a window
  * whose % or reset time moved since its last line, or that has not been
  * written for 15 minutes. Nothing when there are no limits (an API key,
- * Bedrock, Vertex). Never throws: the status line must stay silent. Returns
- * the lines written.
+ * Bedrock, Vertex). A window that is not there (Ultra's 5-hour one) is
+ * simply not written. Never throws: the status line must stay silent.
+ * Returns the lines written.
  */
-export function recordLimits(rateLimits, now = Date.now(), path = limitsLogPath()) {
+export function recordLimits(rateLimits, now = Date.now(), path = limitsLogPath(), source) {
     if (!rateLimits || typeof rateLimits !== "object")
         return 0;
     const fresh = [];
@@ -110,7 +119,7 @@ export function recordLimits(rateLimits, now = Date.now(), path = limitsLogPath(
         if (typeof pct !== "number" || !Number.isFinite(pct) || pct < 0 || pct > 1000)
             continue;
         const reset = typeof r.resets_at === "number" && Number.isFinite(r.resets_at) && r.resets_at > 0 ? Math.round(r.resets_at) : undefined;
-        fresh.push({ ts: now, app: "claude", w, pct: Math.round(pct * 10) / 10, ...(reset ? { reset } : {}) });
+        fresh.push({ ts: now, app: "claude", w, pct: Math.round(pct * 10) / 10, ...(reset ? { reset } : {}), ...(source ? { src: source } : {}) });
     }
     if (!fresh.length)
         return 0;
@@ -169,9 +178,31 @@ export function readClaudeReadings(since = 0, path = limitsLogPath()) {
         const l = parseLogLine(line);
         if (!l || l.ts < since)
             continue;
-        out.push({ ts: l.ts, app: "claude", window: l.w, pct: l.pct, resetsAt: l.reset ? l.reset * 1000 : undefined, windowMs: l.w === "five_hour" ? 5 * HOUR : 7 * DAY });
+        out.push({ ts: l.ts, app: "claude", window: l.w, pct: l.pct, resetsAt: l.reset ? l.reset * 1000 : undefined, windowMs: l.w === "five_hour" ? 5 * HOUR : 7 * DAY, ...(l.src ? { source: l.src } : {}) });
     }
     return out.sort((a, b) => a.ts - b.ts);
+}
+/**
+ * The windows an Anthropic response's `anthropic-ratelimit-unified-5h-*` and
+ * `-7d-*` headers carry (a claude.ai sign-in, or a gateway), in the status
+ * line's shape for recordLimits: utilization is a fraction, the reset epoch
+ * seconds. Claude Code reads the same headers into its status line and its
+ * mods (Math.round(utilization*1000)/10). Undefined when there are none; a
+ * response with only the weekly pair (Ultra) gives only the weekly window.
+ */
+export function rateLimitsFromHeaders(get) {
+    const out = {};
+    for (const [h, w] of [["5h", "five_hour"], ["7d", "seven_day"]]) {
+        const raw = get(`anthropic-ratelimit-unified-${h}-utilization`);
+        if (raw === null || raw === undefined || raw === "")
+            continue;
+        const u = Number(raw);
+        if (!Number.isFinite(u) || u < 0 || u > 10)
+            continue;
+        const reset = Number(get(`anthropic-ratelimit-unified-${h}-reset`));
+        out[w] = { used_percentage: Math.round(u * 1000) / 10, ...(Number.isFinite(reset) && reset > 0 ? { resets_at: Math.round(reset) } : {}) };
+    }
+    return Object.keys(out).length ? out : undefined;
 }
 // ---------------------------------------------------------------------------
 // Codex: readings and usage, both from its rollouts
@@ -477,16 +508,88 @@ export function claudeUsageFiles(since, tops) {
 }
 /** How long before a period a session may have been last written and still have subagents running into it. */
 export const SUBAGENT_LOOKBACK_MS = 2 * 86_400_000;
+/** A Claude Code entrypoint or version as a report may show it: a short token, never free text. */
+const ENTRYPOINT = /^[a-z][\w.-]{0,39}$/i;
+const VERSION = /^\d{1,4}\.\d{1,4}\.\d{1,6}(?:[-+][\w.]{1,20})?$/;
+/**
+ * Which Claude Code wrote a transcript, and when that changed: every row
+ * carries `entrypoint` ("cli", "claude-desktop", "sdk-cli" for `claude -p`,
+ * "claude-vscode"...) and `version`; a record is kept only where either
+ * changes (a session resumed after an update), so a file has one or two.
+ */
+export const HOST_ROWS = {
+    id: "host.1",
+    init: () => ({}),
+    line(line, row, out, st) {
+        if (!line.includes('"entrypoint"') && !line.includes('"version"'))
+            return;
+        let e;
+        try {
+            e = row();
+        }
+        catch {
+            return;
+        }
+        const ep = typeof e?.entrypoint === "string" && ENTRYPOINT.test(e.entrypoint) ? e.entrypoint : undefined;
+        const v = typeof e?.version === "string" && VERSION.test(e.version) ? e.version : undefined;
+        if ((!ep || ep === st.ep) && (!v || v === st.v))
+            return;
+        if (ep)
+            st.ep = ep;
+        if (v)
+            st.v = v;
+        const ts = Date.parse(String(e.timestamp ?? ""));
+        out.push({ ts: Number.isFinite(ts) ? ts : 0, ...(st.ep ? { ep: st.ep } : {}), ...(st.v ? { v: st.v } : {}) });
+    },
+};
+/** Each request's entrypoint and version: the transcript's own as of the request, else (a subagent's file with none) its session's. */
+function stampHost(points, hosts, fallback) {
+    let h = 0;
+    for (const p of points) {
+        while (h + 1 < hosts.length && hosts[h + 1].ts <= p.ts)
+            h++;
+        const at = hosts[h] ?? fallback;
+        if (!at)
+            continue;
+        if (at.ep)
+            p.entrypoint = at.ep;
+        if (at.v)
+            p.version = at.v;
+    }
+}
 /**
  * Every Claude Code request between `since` and `until`, main threads and
- * subagents alike (both draw on the same limits), each reply once.
+ * subagents alike (both draw on the same limits), each reply once, with
+ * the entrypoint and Claude Code version it was made from.
  */
 export function claudeUsage(since, until = Infinity, paths) {
     const out = [];
     const runRows = new Set();
-    for (const { file } of claudeUsageFiles(since, paths)) {
+    const files = claudeUsageFiles(since, paths);
+    // One read of each transcript for both extractors.
+    prescan([{ paths: files.map((f) => f.file), extractors: [USAGE_ROWS, HOST_ROWS] }]);
+    const topHost = new Map();
+    for (const { file, top, subagent } of files) {
         try {
-            out.push(...claudeFileUsage(file, since, until, runRows));
+            const points = claudeFileUsage(file, since, until, runRows);
+            let hosts = [];
+            try {
+                hosts = rowsOf(file, HOST_ROWS);
+            }
+            catch { /* no host: the points go unstamped */ }
+            if (!subagent && hosts.length)
+                topHost.set(top, hosts[0]);
+            // A subagent's file with no host of its own takes its session's (read here when the session itself is outside the period).
+            if (subagent && !hosts.length && !topHost.has(top)) {
+                try {
+                    topHost.set(top, rowsOf(top, HOST_ROWS)[0]);
+                }
+                catch {
+                    topHost.set(top, undefined);
+                }
+            }
+            stampHost(points, hosts, topHost.get(top));
+            out.push(...points);
         }
         catch {
             /* skip an unreadable transcript */
@@ -855,6 +958,320 @@ export function fitWindow(readings, usage, stretchMs) {
         fit.usable = true;
     return fit;
 }
+/** A window's figure is quoted from this many stretches and this many points matched by usage here. */
+const MIN_RESET_STRETCHES = 3;
+const MIN_RESET_PCT = 1;
+/** Above this relative error the figure is too loose to compare. */
+const MAX_RESET_REL_SE = 0.25;
+/** A move is reported from 1.5x either way, and only beyond this many standard errors (more inside a window, where the split is searched for). */
+const MIN_FACTOR = 1.5;
+const RESET_SIGMA = 3;
+const WITHIN_SIGMA = 4;
+/** Each side of a split inside a window holds at least this many stretches. */
+const MIN_SIDE = 4;
+/** A key with under this share of a window's dollars is pooled into "other". */
+const MIN_KEY_SHARE = 0.05;
+/** A key's own figure is quoted under this relative error. */
+const MAX_KEY_REL_SE = 0.3;
+/** Windows this long or longer are fitted per reset (Claude's weekly; Codex's weekly and monthly). */
+const PER_RESET_MIN_MS = 7 * DAY - HOUR;
+/** Ratio of sums, sum(u) / sum(d), and its relative standard error (the ratio estimator's, across stretches). */
+function ratio(u, d) {
+    const n = u.length;
+    const su = u.reduce((a, v) => a + v, 0), sd = d.reduce((a, v) => a + v, 0);
+    if (!(sd > 0) || !(su > 0))
+        return undefined;
+    const r = su / sd;
+    if (n < 2)
+        return { r, relSe: Infinity };
+    const dbar = sd / n;
+    const s2 = u.reduce((a, v, i) => a + (v - r * d[i]) ** 2, 0) / (n - 1);
+    return { r, relSe: Math.sqrt(s2 / n) / dbar / r };
+}
+/** Least squares through the origin with each coefficient's standard error; undefined when singular or with too few rows. */
+function olsSe(rows, y) {
+    const n = rows.length, k = rows[0]?.length ?? 0;
+    if (!k || n <= k + 1)
+        return undefined;
+    // [XᵀX | I], inverted in place by Gauss-Jordan.
+    const a = Array.from({ length: k }, (_, p) => [...Array.from({ length: k }, (_, q) => rows.reduce((s, r) => s + r[p] * r[q], 0)), ...Array.from({ length: k }, (_, q) => (p === q ? 1 : 0))]);
+    for (let c = 0; c < k; c++) {
+        let piv = c;
+        for (let r = c + 1; r < k; r++)
+            if (Math.abs(a[r][c]) > Math.abs(a[piv][c]))
+                piv = r;
+        if (Math.abs(a[piv][c]) < 1e-12 * Math.max(1e-300, ...a.map((row) => Math.abs(row[c]))))
+            return undefined;
+        [a[c], a[piv]] = [a[piv], a[c]];
+        const d = a[c][c];
+        for (let q = 0; q < 2 * k; q++)
+            a[c][q] /= d;
+        for (let r = 0; r < k; r++) {
+            if (r === c)
+                continue;
+            const f = a[r][c];
+            for (let q = 0; q < 2 * k; q++)
+                a[r][q] -= f * a[c][q];
+        }
+    }
+    const inv = a.map((row) => row.slice(k));
+    const xty = Array.from({ length: k }, (_, p) => rows.reduce((s, r, i) => s + r[p] * y[i], 0));
+    const coef = inv.map((row) => row.reduce((s, v, q) => s + v * xty[q], 0));
+    const sse = rows.reduce((s, r, i) => s + (y[i] - r.reduce((t, v, j) => t + v * coef[j], 0)) ** 2, 0);
+    const s2 = sse / (n - k);
+    return { coef, se: inv.map((row, j) => Math.sqrt(Math.max(0, s2 * row[j]))) };
+}
+const tokensOf = (p) => p.input + p.read + p.write + p.output;
+/**
+ * Shares by `keyOf` over the stretches, and, with two keys or more and
+ * enough stretches, each key's own dollars per 1%: the rise in each stretch
+ * fitted on each key's dollars in it. A key's figure is kept only when it is
+ * known to ±30%; a single key's figure is the window's own.
+ */
+function splitBy(segments, inSeg, keyOf, whole) {
+    const totals = new Map();
+    let all = 0;
+    for (const pts of inSeg)
+        for (const p of pts) {
+            const k = keyOf(p);
+            const t = totals.get(k) ?? totals.set(k, { key: k, usd: 0, tokens: 0, requests: 0, share: 0 }).get(k);
+            t.usd += p.usd;
+            t.tokens += tokensOf(p);
+            t.requests++;
+            all += p.usd;
+        }
+    let list = [...totals.values()].sort((a, b) => b.usd - a.usd);
+    // Small keys pooled, so the fit has a column only for what can be told apart.
+    const small = list.filter((t) => all > 0 && t.usd / all < MIN_KEY_SHARE);
+    if (small.length > 1) {
+        const other = { key: "other", usd: 0, tokens: 0, requests: 0, share: 0 };
+        for (const t of small) {
+            other.usd += t.usd;
+            other.tokens += t.tokens;
+            other.requests += t.requests;
+        }
+        list = [...list.filter((t) => !small.includes(t)), other];
+    }
+    for (const t of list)
+        t.share = all > 0 ? t.usd / all : 0;
+    if (list.length === 1 && whole) {
+        list[0].usdPerPct = whole.r;
+        list[0].relSe = whole.relSe;
+    }
+    else if (list.length > 1 && segments.length >= MIN_SEGMENTS) {
+        const col = new Map(list.map((t, i) => [t.key, i]));
+        const otherCol = col.get("other");
+        const rows = inSeg.map((pts) => {
+            const r = new Array(list.length).fill(0);
+            for (const p of pts)
+                r[col.get(keyOf(p)) ?? otherCol ?? 0] += p.usd;
+            return r;
+        });
+        const fit = olsSe(rows, segments.map((s) => s.dpct));
+        if (fit)
+            list.forEach((t, j) => {
+                const k = fit.coef[j], se = fit.se[j];
+                if (k > 0 && se / k <= MAX_KEY_REL_SE) {
+                    t.usdPerPct = 1 / k;
+                    t.relSe = se / k;
+                }
+            });
+    }
+    return list;
+}
+/** One window's readings cut at each reset: the periods, oldest first. */
+function periodsOf(readings) {
+    const clean = cleanReadings(readings);
+    const res = resolutionOf(clean);
+    const out = [];
+    for (const r of clean) {
+        const cur = out[out.length - 1];
+        if (cur && samePeriod(cur[cur.length - 1], r, res))
+            cur.push(r);
+        else
+            out.push([r]);
+    }
+    return out;
+}
+/**
+ * Each reset window of one weekly window's readings: % used, dollars and
+ * tokens per 1% (over the stretches with usage here; rises with none are
+ * counted apart), the split by entrypoint and by model, and the Claude Code
+ * versions. `usage` in time order.
+ */
+export function resetWindowsOf(readings, usage, opts = {}) {
+    const now = opts.now ?? Date.now();
+    const out = [];
+    for (const period of periodsOf(readings)) {
+        const first = period[0], last = period[period.length - 1];
+        const windowMs = last.windowMs ?? 7 * DAY;
+        const resetsAt = last.resetsAt ?? first.ts + windowMs;
+        const { segments, elsewherePct } = segmentsOf(period, usage, opts.stretchMs);
+        // The requests of each stretch: both lists are in time order.
+        const inSeg = segments.map(() => []);
+        let g = 0;
+        for (const p of usage) {
+            while (g < segments.length && segments[g].to < p.ts)
+                g++;
+            if (g >= segments.length)
+                break;
+            if (p.ts > segments[g].from)
+                inSeg[g].push(p);
+        }
+        const usd = segments.reduce((a, s) => a + s.usd, 0);
+        const tokens = inSeg.reduce((a, pts) => a + pts.reduce((b, p) => b + tokensOf(p), 0), 0);
+        const pctMatched = segments.reduce((a, s) => a + s.dpct, 0);
+        const w = {
+            window: last.window,
+            label: windowLabel(last.window, last.windowMs),
+            app: last.app,
+            start: resetsAt - windowMs,
+            resetsAt,
+            current: resetsAt > now,
+            readings: period.length,
+            firstReading: first.ts,
+            lastReading: last.ts,
+            pctUsed: Math.max(...period.map((r) => r.pct)),
+            pctMatched,
+            pctElsewhere: elsewherePct,
+            stretches: segments.length,
+            requests: segments.reduce((a, s) => a + s.requests, 0),
+            usd,
+            tokens,
+            byEntrypoint: [],
+            byModel: [],
+            versions: [],
+        };
+        const fit = ratio(segments.map((s) => s.usd), segments.map((s) => s.dpct));
+        if (segments.length < MIN_RESET_STRETCHES)
+            w.why = `${segments.length} stretch${segments.length === 1 ? "" : "es"} of readings with usage here; ${MIN_RESET_STRETCHES} make a figure`;
+        else if (pctMatched < MIN_RESET_PCT)
+            w.why = `the limit rose ${pts(pctMatched)} points beside usage here; ${MIN_RESET_PCT} make a figure`;
+        else if (!fit || !(usd > 0))
+            w.why = "no priced usage beside the rises";
+        else {
+            w.usdPerPct = fit.r;
+            w.tokensPerPct = tokens / pctMatched;
+            w.relSe = fit.relSe;
+            if (!(fit.relSe <= MAX_RESET_REL_SE))
+                w.why = `known only to ±${Number.isFinite(fit.relSe) ? Math.round(fit.relSe * 100) : "∞"}%: the rises follow the usage here loosely`;
+        }
+        const quoted = w.usdPerPct !== undefined && !w.why ? fit : undefined;
+        w.byEntrypoint = splitBy(segments, inSeg, (p) => p.entrypoint ?? (p.app === "codex" ? "codex" : "unknown"), quoted);
+        w.byModel = splitBy(segments, inSeg, (p) => reportModel(p.model), quoted);
+        w.versions = [...new Set(inSeg.flat().map((p) => p.version).filter((v) => !!v))].sort(compareVersions);
+        out.push(w);
+    }
+    return out;
+}
+/** "2.1.9" before "2.1.10". */
+function compareVersions(a, b) {
+    const pa = a.split(/[.-]/).map(Number), pb = b.split(/[.-]/).map(Number);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        const d = (pa[i] || 0) - (pb[i] || 0);
+        if (d)
+            return d;
+    }
+    return a.localeCompare(b);
+}
+/**
+ * A model id as a report may carry it: a model's name, never a cloud
+ * resource (a Bedrock ARN holds an account number) or anything path-shaped.
+ */
+export function reportModel(model) {
+    if (!model)
+        return "unknown";
+    if (!/^[a-z][\w.:@[\]-]{0,59}$/i.test(model) || /^arn:/i.test(model) || /\d{8,}/.test(model))
+        return "custom model id";
+    return model;
+}
+/** The two sides of a move, each a ratio with its error: how many standard errors apart (log scale). */
+function sigmaOf(a, b, factor) {
+    const se = Math.sqrt(a.relSe ** 2 + b.relSe ** 2);
+    return se > 0 ? Math.abs(Math.log(factor)) / se : Infinity;
+}
+/**
+ * Where what 1% costs moved: between consecutive windows that each have a
+ * figure (dated at the reset), and inside a window at the one split of its
+ * stretches that separates two rates best (dated at that stretch). Reported
+ * from a 1.5x move either way, beyond 3 standard errors between windows and
+ * 4 inside one (the split is searched for).
+ */
+export function slopeChanges(windows, usage = [], readings = [], stretchMs) {
+    const out = [];
+    const quoted = windows.filter((w) => w.usdPerPct !== undefined && w.relSe !== undefined && Number.isFinite(w.relSe) && !w.why);
+    for (let i = 1; i < quoted.length; i++) {
+        const a = quoted[i - 1], b = quoted[i];
+        if (a.window !== b.window)
+            continue;
+        const factor = b.usdPerPct / a.usdPerPct;
+        const sigma = sigmaOf({ relSe: a.relSe }, { relSe: b.relSe }, factor);
+        if (Math.max(factor, 1 / factor) < MIN_FACTOR || sigma < RESET_SIGMA)
+            continue;
+        out.push({
+            window: b.window, label: b.label, kind: "reset", at: b.start, prevEnd: a.resetsAt,
+            usdPerPctBefore: a.usdPerPct, usdPerPctAfter: b.usdPerPct, tokensPerPctBefore: a.tokensPerPct, tokensPerPctAfter: b.tokensPerPct,
+            factor, sigma, versionsBefore: a.versions, versionsAfter: b.versions,
+        });
+    }
+    // Inside a window: its own stretches again, split once where two rates fit best.
+    const periods = readings.length ? periodsOf(readings) : [];
+    // Every window with a figure, loose ones too: a move inside a window is what makes its figure loose.
+    for (const w of windows.filter((x) => x.usdPerPct !== undefined)) {
+        const period = periods.find((p) => p[0].ts === w.firstReading && p[p.length - 1].ts === w.lastReading);
+        if (!period)
+            continue;
+        const segs = segmentsOf(period, usage, stretchMs).segments;
+        if (segs.length < 2 * MIN_SIDE)
+            continue;
+        const u = segs.map((s) => s.usd), d = segs.map((s) => s.dpct);
+        const sse = (from, to) => {
+            const r = ratio(u.slice(from, to), d.slice(from, to));
+            return r ? u.slice(from, to).reduce((a, v, i) => a + (v - r.r * d[from + i]) ** 2, 0) : Infinity;
+        };
+        let best;
+        for (let s = MIN_SIDE; s <= segs.length - MIN_SIDE; s++) {
+            const cost = sse(0, s) + sse(s, segs.length);
+            if (!best || cost < best.cost)
+                best = { at: s, cost };
+        }
+        if (!best)
+            continue;
+        const before = ratio(u.slice(0, best.at), d.slice(0, best.at)), after = ratio(u.slice(best.at), d.slice(best.at));
+        if (!before || !after)
+            continue;
+        const factor = after.r / before.r;
+        const sigma = sigmaOf(before, after, factor);
+        if (Math.max(factor, 1 / factor) < MIN_FACTOR || sigma < WITHIN_SIGMA)
+            continue;
+        const tok = (from, to) => {
+            const t = usage.filter((p) => p.ts > segs[from].from && p.ts <= segs[to - 1].to).reduce((a, p) => a + tokensOf(p), 0);
+            const pct = d.slice(from, to).reduce((a, v) => a + v, 0);
+            return pct > 0 ? t / pct : undefined;
+        };
+        const vers = (from, to) => [...new Set(usage.filter((p) => p.ts > segs[from].from && p.ts <= segs[to - 1].to).map((p) => p.version).filter((v) => !!v))].sort(compareVersions);
+        out.push({
+            window: w.window, label: w.label, kind: "within", at: segs[best.at].from,
+            usdPerPctBefore: before.r, usdPerPctAfter: after.r, tokensPerPctBefore: tok(0, best.at), tokensPerPctAfter: tok(best.at, segs.length),
+            factor, sigma, versionsBefore: vers(0, best.at), versionsAfter: vers(best.at, segs.length),
+        });
+    }
+    return out.sort((a, b) => a.at - b.at);
+}
+/** Every weekly window's resets and the moves between them, for one app's readings and usage. */
+function perReset(readings, usage, now) {
+    const resets = [];
+    const changes = [];
+    for (const [, rs] of byWindow(readings)) {
+        const ms = rs[rs.length - 1]?.windowMs ?? 0;
+        if (ms < PER_RESET_MIN_MS)
+            continue;
+        const ws = resetWindowsOf(rs, usage, { now });
+        resets.push(...ws);
+        changes.push(...slopeChanges(ws, usage, rs));
+    }
+    return { resets, changes };
+}
 function byWindow(readings) {
     const m = new Map();
     for (const r of readings) {
@@ -879,6 +1296,11 @@ export function limitsReport(days = 30, opts = {}) {
     const fits = [];
     // Claude usage is read only when there are readings to fit it against, and only over their span.
     const claudeUse = claude.length >= 2 ? claudeUsage(claude[0].ts - HOUR, claude[claude.length - 1].ts, opts.claudePaths) : [];
+    const claudeReset = perReset(claude, claudeUse, now);
+    const codexReset = perReset(codex.readings, codex.usage, now);
+    const claudeSources = {};
+    for (const r of claude)
+        claudeSources[r.source ?? "earlier"] = (claudeSources[r.source ?? "earlier"] ?? 0) + 1;
     for (const [, rs] of byWindow(claude)) {
         const s = windowStatus(rs, now);
         if (s)
@@ -895,7 +1317,24 @@ export function limitsReport(days = 30, opts = {}) {
         if (f)
             fits.push(f);
     }
-    return { days, now, claudeLog: logPath, claudeReadings: claude.length, codexReadings: codex.readings.length, windows, fits };
+    return {
+        days, now, claudeLog: logPath, claudeReadings: claude.length, codexReadings: codex.readings.length, windows, fits,
+        resets: [...claudeReset.resets, ...codexReset.resets],
+        changes: [...claudeReset.changes, ...codexReset.changes],
+        claudeWindows: CLAUDE_WINDOWS.filter((w) => claude.some((r) => r.window === w)),
+        claudeSources,
+    };
+}
+/**
+ * The per-reset view of the limits, for a pane or a script: every window's
+ * current state, every weekly window with its dollars and tokens per 1%
+ * (by entrypoint and model where the readings allow) and every move in that
+ * figure, dated. Reads the limits ledger, Codex's rollouts and the
+ * transcripts over the readings' span; never writes.
+ */
+export function limitsByReset(days = 30, opts = {}) {
+    const r = limitsReport(days, opts);
+    return { now: r.now, windows: r.windows, resets: r.resets, changes: r.changes, noFiveHour: r.claudeWindows.length === 1 && r.claudeWindows[0] === "seven_day", readings: r.claudeReadings + r.codexReadings };
 }
 /** The Claude fit to quote savings in: the weekly window first (savings are weekly), then the 5-hour one. */
 export function claudeLimitFit(r) {
@@ -953,10 +1392,60 @@ function clock(ms, now) {
     return Math.abs(ms - now) < 20 * HOUR ? t : `${d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} ${t}`;
 }
 const pts = (v) => (v >= 10 ? Math.round(v).toString() : v >= 1 ? v.toFixed(1) : v.toFixed(2));
+/**
+ * The one line that says how to start recording Claude readings: the
+ * plugin's mod (after each turn, in the Desktop app, the terminal and VS
+ * Code), or the autopilot proxy (from the API's rate-limit headers).
+ */
+export const HOW_TO_RECORD = "To record them: `context-doctor install` (the plugin's mod writes them after each turn, Claude Code 2.1.286+; `install --statusline` on older ones), or `context-doctor autopilot on` (its proxy reads them from the API's replies).";
+/** "2026-11-03" and "2026-11-03 14:00 UTC": the same date for whoever reads a pasted report. */
+const utcDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+const utcMinute = (ms) => `${new Date(ms).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+/** "$25.10", "$4.02", "$130". */
+const dollars = (v) => (v >= 100 ? `$${Math.round(v)}` : `$${v.toFixed(2)}`);
+/** "21.0M", "450k". */
+const tokenCount = (v) => (v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${Math.round(v / 1e3)}k` : String(Math.round(v)));
+const plusMinus = (relSe) => (relSe !== undefined && Number.isFinite(relSe) ? ` ±${Math.max(1, Math.round(relSe * 100))}%` : "");
+/** "2.1.321", "2.1.321 to 2.1.325 (3)". */
+const versionSpan = (vs) => (!vs.length ? "unknown" : vs.length === 1 ? vs[0] : `${vs[0]} to ${vs[vs.length - 1]}${vs.length > 2 ? ` (${vs.length})` : ""}`);
+/** "claude-desktop 88%, cli 12%". */
+const sharesLine = (list) => list.map((t) => `${t.key} ${Math.round(t.share * 100)}%`).join(", ");
+/** Two windows of the same kind with a figure each: something to compare. */
+const comparable = (ws) => {
+    const seen = new Map();
+    for (const w of ws)
+        if (w.usdPerPct !== undefined && !w.why)
+            seen.set(w.window, (seen.get(w.window) ?? 0) + 1);
+    return [...seen.values()].some((n) => n > 1);
+};
+/** Two keys or more with a real share of the dollars: a split worth a line. */
+const mixed = (list) => list.filter((t) => t.share >= MIN_KEY_SHARE).length >= 2;
+/** A move in words: when, from what to what, how many times, and the Claude Code versions either side. */
+function changeLine(c) {
+    const when = c.kind === "reset"
+        ? c.prevEnd !== undefined && Math.abs(c.prevEnd - c.at) > SAME_RESET_MS
+            ? `between the reset of ${utcMinute(c.prevEnd)} and the window from ${utcMinute(c.at)}`
+            : `at the reset of ${utcMinute(c.at)}`
+        : `within the window, around ${utcMinute(c.at)}`;
+    const times = c.factor < 1 ? `${(1 / c.factor).toFixed(1)}x less use per 1%: the limit drains faster` : `${c.factor.toFixed(1)}x more use per 1%: the limit drains slower`;
+    const tok = c.tokensPerPctBefore !== undefined && c.tokensPerPctAfter !== undefined ? `; tokens per 1% ${tokenCount(c.tokensPerPctBefore)} to ${tokenCount(c.tokensPerPctAfter)}` : "";
+    const ver = versionSpan(c.versionsBefore) !== versionSpan(c.versionsAfter) ? `; Claude Code ${versionSpan(c.versionsBefore)} before, ${versionSpan(c.versionsAfter)} after` : "";
+    return `${c.label}, ${when}: 1% went from ${dollars(c.usdPerPctBefore)} to ${dollars(c.usdPerPctAfter)} of API-equivalent use (${times})${tok}${ver}.`;
+}
+/** Each key's own dollars per 1%, where the fit told them apart: "sdk-cli $13.90 ±9%, cli $25.00 ±7% (sdk-cli drains 1.8x per dollar)". */
+function splitLine(list) {
+    const known = list.filter((t) => t.usdPerPct !== undefined);
+    if (known.length < 2)
+        return undefined;
+    const sorted = [...known].sort((a, b) => a.usdPerPct - b.usdPerPct);
+    const fast = sorted[0], slow = sorted[sorted.length - 1];
+    const ratio = slow.usdPerPct / fast.usdPerPct;
+    return `${sorted.map((t) => `${t.key} ${dollars(t.usdPerPct)}${plusMinus(t.relSe)}`).join(", ")} per 1%${ratio >= 1.1 ? ` (${fast.key} drains ${ratio.toFixed(1)}x per dollar against ${slow.key})` : ""}`;
+}
 export function renderLimits(r) {
     const out = ["USAGE LIMITS", "═".repeat(60)];
-    if (!r.windows.length) {
-        out.push("No limit readings yet.", "", "Claude (Pro and Max): `context-doctor statusline` records the 5-hour and weekly", "windows as Claude Code reports them. Set it up with", "  context-doctor install --statusline", `(or keep your own status line and pipe its input to it too). Readings: ${r.claudeLog.replace(homedir(), "~")}`, "Codex: read from ~/.codex/sessions; none found in the period.");
+    if (!r.windows.length && !r.resets.length) {
+        out.push(`No limit readings yet. ${HOW_TO_RECORD}`, "", `Claude readings are kept in ${r.claudeLog.replace(homedir(), "~")}; Codex's are read from ~/.codex/sessions (none in the period).`);
         return out.join("\n");
     }
     for (const s of r.windows) {
@@ -982,6 +1471,43 @@ export function renderLimits(r) {
             }
         }
     }
+    if (r.claudeWindows.length === 1 && r.claudeWindows[0] === "seven_day") {
+        out.push("", "No 5-hour window in Claude's readings: a plan without one (Ultra), so the weekly window is the limit.");
+    }
+    if (r.resets.length) {
+        out.push("", "Each weekly (or longer) window, reset to reset: API-equivalent use per 1% (UTC dates)");
+        out.push("─".repeat(60));
+        for (const w of r.resets) {
+            const head = `${w.label}, ${utcDay(w.start)} to ${utcDay(w.resetsAt)}${w.current ? " (now)" : ""}: ${pts(w.pctUsed)}% used`;
+            if (w.usdPerPct !== undefined && !w.why)
+                out.push(`${head}; ${dollars(w.usdPerPct)} per 1%${plusMinus(w.relSe)}, ${tokenCount(w.tokensPerPct ?? 0)} tokens per 1%`);
+            else
+                out.push(`${head}; no figure: ${w.why}`);
+            if (w.pctElsewhere > 0)
+                out.push(`  ${pts(w.pctElsewhere)} points rose with no usage here (used elsewhere), left out.`);
+            if (w.byEntrypoint.length)
+                out.push(`  By entrypoint (share of dollars): ${sharesLine(w.byEntrypoint)}`);
+            const ep = splitLine(w.byEntrypoint);
+            if (ep)
+                out.push(`    ${ep}`);
+            if (mixed(w.byModel))
+                out.push(`  By model: ${sharesLine(w.byModel)}`);
+            const md = splitLine(w.byModel);
+            if (md)
+                out.push(`    ${md}`);
+            if (w.versions.length)
+                out.push(`  Claude Code ${versionSpan(w.versions)}`);
+        }
+        if (r.changes.length) {
+            out.push("", "What 1% buys moved:");
+            for (const c of r.changes)
+                out.push(`  ${changeLine(c)}`);
+        }
+        else if (comparable(r.resets)) {
+            out.push("", "What 1% buys held steady across these windows (no move of 1.5x or more beyond the error).");
+        }
+        out.push("`context-doctor limits --report` prints this as a block to paste into a bug report.");
+    }
     out.push("", "What 1M tokens cost in each limit (fitted on your own readings)");
     out.push("─".repeat(60));
     for (const f of r.fits) {
@@ -998,7 +1524,65 @@ export function renderLimits(r) {
             out.push(`    rate known to ±${Math.round((f.byPrice.relSe ?? 0) * 100)}%; explains ${Math.round(Math.max(0, f.byPrice.r2) * 100)}% of the rises; predicts each within ±${pts(f.byPrice.looRmse)} points (${Math.round(f.byPrice.relError * 100)}%)`);
         }
         out.push(f.usable ? "  Good enough to show savings in this limit (savings, cache-misses, compact-window)." : `  Too thin to quote: ${f.why}.`);
+        if (r.changes.some((c) => c.window === f.window))
+            out.push("  This fit spans the move in what 1% buys (above): read the per-window figures.");
     }
-    out.push("", "Readings: Claude Code's status line input (Pro/Max, 0.1% steps) and Codex's", "rollouts (whole percents). Usage elsewhere (the web app, another computer)", "moves the limit without a transcript here, so it widens the error.");
+    out.push("", "Readings: Claude Code's (Pro, Max and Ultra; 0.1% steps) from the plugin's mod,", "the status line or the proxy, and Codex's rollouts (whole percents). Usage", "elsewhere (the web app, another computer) moves the limit without a transcript", "here, so it widens the error.");
+    return out.join("\n");
+}
+/**
+ * `limits --report`: a block to paste into a GitHub issue. Per weekly
+ * window: % used, dollars and tokens per 1%, the split by entrypoint and
+ * model, Claude Code's versions, and every move in what 1% buys, dated. It
+ * carries figures, dates, model and entrypoint names and version numbers
+ * only: no prompt, no path, no session or account id (reportModel masks a
+ * model id that is a cloud resource).
+ */
+export function renderLimitsReport(r) {
+    if (!r.windows.length && !r.resets.length)
+        return `No limit readings yet. ${HOW_TO_RECORD}`;
+    const out = ["### Usage limits, measured on my machine", ""];
+    const versions = [...new Set(r.resets.filter((w) => w.app === "claude").flatMap((w) => w.versions))].sort(compareVersions);
+    const claude = r.claudeWindows.length
+        ? r.claudeWindows.includes("five_hour") ? "weekly and 5-hour" : "weekly only (no 5-hour window in the readings)"
+        : "none";
+    const srcNames = { mod: "the plugin's mod", statusline: "the status line", proxy: "the proxy", earlier: "an earlier recorder" };
+    const sources = Object.entries(r.claudeSources).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} from ${srcNames[k] ?? k}`).join(", ");
+    out.push(`- Measured with context-doctor ${PROXY_VERSION} (\`context-doctor limits --report\`), ${r.days} days to ${utcMinute(r.now)}`, `- Claude windows read: ${claude}${r.claudeReadings ? `; ${r.claudeReadings} readings (${sources})` : ""}${r.codexReadings ? `; Codex: ${r.codexReadings} readings` : ""}`, ...(r.claudeReadings ? [`- Claude Code version${versions.length === 1 ? "" : "s"}: ${versions.length ? versions.join(", ") : "unknown"}`] : []), "- Dollars are API-equivalent: this machine's requests priced at API list rates, not a bill. % matched: the rise in stretches with usage here; the rest came with no transcript here (claude.ai, another computer).", "");
+    if (r.resets.length) {
+        out.push("| Window, reset to reset (UTC) | % used | % matched | $ per 1% | Tokens per 1% | By entrypoint ($ share) | Claude Code |", "|---|---|---|---|---|---|---|");
+        for (const w of r.resets) {
+            const fig = w.usdPerPct !== undefined && !w.why;
+            out.push(`| ${w.label.replace(/ weekly$/, "")} ${utcDay(w.start)} to ${utcDay(w.resetsAt)}${w.current ? " (now)" : ""} | ${pts(w.pctUsed)} | ${pts(w.pctMatched)} | ${fig ? `${dollars(w.usdPerPct)}${plusMinus(w.relSe)}` : "n/a"} | ${fig ? tokenCount(w.tokensPerPct ?? 0) : "n/a"} | ${sharesLine(w.byEntrypoint) || "none"} | ${w.app === "claude" ? versionSpan(w.versions) : "n/a"} |`);
+        }
+        out.push("");
+        out.push(r.changes.length ? "**What 1% buys moved:**" : comparable(r.resets) ? "**What 1% buys:** no move of 1.5x or more beyond the error between these windows." : "**What 1% buys:** fewer than two windows with a figure, nothing to compare yet.");
+        for (const c of r.changes)
+            out.push(`- ${changeLine(c)}`);
+        const splits = r.resets.flatMap((w) => {
+            const lines = [];
+            const ep = splitLine(w.byEntrypoint), md = splitLine(w.byModel);
+            if (ep)
+                lines.push(`- ${utcDay(w.start)} to ${utcDay(w.resetsAt)}, by entrypoint: ${ep}`);
+            if (md)
+                lines.push(`- ${utcDay(w.start)} to ${utcDay(w.resetsAt)}, by model: ${md}`);
+            if (!md && mixed(w.byModel))
+                lines.push(`- ${utcDay(w.start)} to ${utcDay(w.resetsAt)}, models ($ share): ${sharesLine(w.byModel)}`);
+            return lines;
+        });
+        if (splits.length)
+            out.push("", "**Per entrypoint and model** (each one's own $ per 1%, where the stretches tell them apart):", ...splits);
+        const thin = r.resets.filter((w) => w.why);
+        if (thin.length)
+            out.push("", ...thin.map((w) => `- No figure for ${utcDay(w.start)} to ${utcDay(w.resetsAt)}: ${w.why}.`));
+    }
+    else {
+        out.push("No weekly window with readings in the period yet.");
+    }
+    const now5h = r.windows.find((w) => w.window === "five_hour");
+    const nowWeek = r.windows.find((w) => w.window === "seven_day");
+    if (nowWeek || now5h)
+        out.push("", `Now: ${[nowWeek ? `weekly ${pts(nowWeek.pct)}%` : "", now5h ? `5-hour ${pts(now5h.pct)}%` : ""].filter(Boolean).join(", ")}.`);
+    out.push("", "No prompts, file paths, session or account ids are included.");
     return out.join("\n");
 }
