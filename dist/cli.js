@@ -162,12 +162,13 @@ Measure:
                                                 each runs out, $ and tokens per 1% of each weekly
                                                 window, by entrypoint and model, and when that moved.
                                                 --report: a block to paste into a bug report
-  context-doctor spend [--days n] [--share [--copy]]
+  context-doctor spend [--days n] [--by repo|branch] [--share [--copy]]
                                                 One bill across every tool here: Claude Code (with
-                                                its subagents), Codex, Gemini CLI and Cursor (an
-                                                estimate: no cache split), by project, model and
-                                                day, and what drives it, as billed at list rates.
-                                                --share: totals only, to paste
+                                                its subagents), Codex, Gemini CLI, Cursor (an
+                                                estimate: no cache split), Copilot CLI, OpenCode
+                                                and Cline, by project (or --by repository or
+                                                branch), model and day, and what drives it, as
+                                                billed at list rates. --share: totals only, to paste
   context-doctor cache-misses [--days n]        Requests that re-wrote the prompt cache while it was
                                                 still warm: priced, by model and context size, with
                                                 the cause where the transcript shows one
@@ -577,6 +578,7 @@ const FLAGS = [
     { names: ["--copy"], set: (a) => { a.copy = true; } },
     { names: ["--share"], set: (a) => { a.share = true; } },
     { names: ["--report"], set: (a) => { a.report = true; } },
+    { names: ["--by"], value: "text", set: (a, v) => { a.by = v; } },
     { names: ["--block"], set: (a) => { a.block = true; } },
     { names: ["--allow-dirty"], set: (a) => { a.allowDirty = true; } },
     { names: ["--statusline"], set: (a) => { a.statusLine = true; } },
@@ -1529,13 +1531,18 @@ async function main() {
     }
     if (args.command === "spend") {
         if (args.file !== undefined)
-            usageError(`Usage: context-doctor spend [--days n] [--limit n] [--share [--copy]] [--json]; got "${args.file}".`);
+            usageError(`Usage: context-doctor spend [--days n] [--limit n] [--by project|repo|branch] [--share [--copy]] [--json]; got "${args.file}".`);
         if (args.share && args.json)
             usageError("--share and --json do not go together: --share prints a few lines to paste.");
+        const by = args.by;
+        if (by !== undefined && by !== "project" && by !== "repo" && by !== "branch")
+            usageError(`--by takes project, repo or branch; got "${by}".${didYouMean(by, ["project", "repo", "branch"])}`);
+        if (by !== undefined && args.share)
+            usageError("--by and --share do not go together: --share carries no project, repository or branch.");
         const reading = progressLine("Reading your usage across tools");
         // The progress summaries' estimate: none after the variable turned them off (fix's record), none at all when set with no record.
         const ps = progressSummariesState({ cwd: process.cwd() });
-        const report = spendReport(args.days ?? 30, { onProgress: reading.tick, progress: { forkGateOff: ps.forkGateOff, offSince: ps.offSince, ...(ps.set && disablesSummaries(ps.set.value) ? { set: ps.set.where } : {}) } });
+        const report = spendReport(args.days ?? 30, { onProgress: reading.tick, ...(by ? { by } : {}), progress: { forkGateOff: ps.forkGateOff, offSince: ps.offSince, ...(ps.set && disablesSummaries(ps.set.value) ? { set: ps.set.where } : {}) } });
         reading.clear();
         if (args.json)
             console.log(JSON.stringify(report, null, 2));

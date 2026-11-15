@@ -48,6 +48,7 @@ import { estimateProgressSummaries, PROGRESS_ROWS, PROGRESS_SUMMARIES_ENV } from
 import { listGeminiChats, readGeminiMessages } from "./gemini.js";
 import { cursorClaudeId, cursorUsage, SqliteUnavailableError } from "./cursor.js";
 import { copilotCalls } from "./copilotusage.js";
+import { CLAUDE_PLACE_ROWS, placeAt, repoName } from "./spendplace.js";
 import { opencodeCalls } from "./opencode.js";
 import { clineCalls } from "./cline.js";
 import { addModifiers, isUnbilledModel, NO_MODIFIERS, openAIUsage, priceChangedText, requestCost } from "./pricing.js";
@@ -108,7 +109,7 @@ function priced(base, u, priceAs = base.model) {
  * Claude Code's requests between `since` and `until`, main threads and
  * subagents, over `tops` (default: every transcript written since `since`).
  */
-export function claudeSpend(since, until = Infinity, tops, onProgress) {
+export function claudeSpend(since, until = Infinity, tops, onProgress, place = false) {
     const out = [];
     const runRows = new Set();
     const files = claudeUsageFiles(since, tops);
@@ -123,6 +124,13 @@ export function claudeSpend(since, until = Infinity, tops, onProgress) {
         }
         const project = claudeProject(f.top);
         const session = basename(f.top, ".jsonl");
+        // Where each request ran (`--by repo`, `--by branch`): the transcript's folder and branch at the time.
+        let places = [];
+        if (place)
+            try {
+                places = rowsOf(f.file, CLAUDE_PLACE_ROWS);
+            }
+            catch { /* none */ }
         for (const r of reqs) {
             const price = r.rates;
             // claudeFileUsage priced it (requestCost: writes by TTL, its modifiers); the split is what the drivers show.
@@ -143,6 +151,13 @@ export function claudeSpend(since, until = Infinity, tops, onProgress) {
                 item.subagent = true;
             if (r.uuid)
                 item.key = r.uuid;
+            if (places.length) {
+                const at = placeAt(places, r.ts);
+                if (at.cwd)
+                    item.cwd = at.cwd;
+                if (at.branch)
+                    item.branch = at.branch;
+            }
             out.push(item);
         }
     }
@@ -170,7 +185,7 @@ function spawnedBy(p) {
  * every token_count event's last request and running total.
  */
 export const CODEX_SPEND_ROWS = {
-    id: "codex-spend.3",
+    id: "codex-spend.4",
     init: () => ({}),
     line(line, row, out, st) {
         if (!line.includes('"token_count"') && !line.includes('"turn_context"') && !line.includes('"session_meta"'))
@@ -190,6 +205,8 @@ export const CODEX_SPEND_ROWS = {
             const parent = spawnedBy(p);
             if (typeof p.id === "string")
                 out.push({ k: "meta", id: p.id, ...(parent ? { parent } : {}) });
+            if (typeof p.git?.branch === "string" && p.git.branch)
+                out.push({ k: "branch", branch: p.git.branch });
         }
         if (e.type === "session_meta" || e.type === "turn_context") {
             if (typeof p.cwd === "string")
@@ -211,11 +228,15 @@ const num = (v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0
 /** The requests of one Codex rollout since `since`. Throws when it cannot be read. */
 export function codexFileSpend(file, since, until = Infinity) {
     const out = [];
-    let model, cwd;
+    let model, cwd, branch;
     let total = -1;
     for (const r of rowsOf(file, CODEX_SPEND_ROWS)) {
         if (r.k === "meta")
             continue;
+        if (r.k === "branch") {
+            branch = branch ?? r.branch;
+            continue;
+        }
         if (r.k === "cwd") {
             cwd = cwd ?? r.cwd;
             continue;
@@ -233,7 +254,7 @@ export function codexFileSpend(file, since, until = Infinity) {
         if (!Number.isFinite(ts) || ts < since || ts > until || isUnbilledModel(model))
             continue;
         const u = openAIUsage(r.u);
-        out.push(priced({ tool: "codex", ts, project: cwd ? projectName(cwd) : "codex", session: basename(file, ".jsonl"), ...(model ? { model } : {}), input: num(u.input_tokens), read: num(u.cache_read_input_tokens), write: num(u.cache_creation_input_tokens), output: num(u.output_tokens), ...(r.key ? { key: r.key } : {}) }, u));
+        out.push(priced({ tool: "codex", ts, project: cwd ? projectName(cwd) : "codex", session: basename(file, ".jsonl"), ...(model ? { model } : {}), input: num(u.input_tokens), read: num(u.cache_read_input_tokens), write: num(u.cache_creation_input_tokens), output: num(u.output_tokens), ...(r.key ? { key: r.key } : {}), ...(cwd ? { cwd } : {}), ...(branch ? { branch } : {}) }, u));
     }
     return out;
 }
@@ -499,7 +520,7 @@ export function cursorSpend(since, until = Infinity) {
         // No cache split: every input token at the uncached rate. Cursor's own
         // names for Claude ("claude-4.6-opus-high-thinking") are priced as the
         // Claude id they stand for, shown as Cursor wrote them.
-        out.push(priced({ tool: "cursor", ts: r.ts, project: r.folder ? projectName(r.folder) : "(no folder)", session: r.composerId, ...(r.model ? { model: r.model } : {}), input: r.input, read: 0, write: 0, output: r.output }, { input_tokens: r.input, output_tokens: r.output }, cursorClaudeId(r.model) ?? r.model));
+        out.push(priced({ tool: "cursor", ts: r.ts, project: r.folder ? projectName(r.folder) : "(no folder)", session: r.composerId, ...(r.model ? { model: r.model } : {}), input: r.input, read: 0, write: 0, output: r.output, ...(r.folder ? { cwd: r.folder } : {}) }, { input_tokens: r.input, output_tokens: r.output }, cursorClaudeId(r.model) ?? r.model));
     }
     return out;
 }
@@ -518,6 +539,12 @@ export function copilotSpend(since, until = Infinity, home = homedir()) {
             it.credits = c.credits;
         if (c.premium !== undefined)
             it.premium = c.premium;
+        if (c.cwd)
+            it.cwd = c.cwd;
+        if (c.gitRoot)
+            it.root = c.gitRoot;
+        if (c.branch)
+            it.branch = c.branch;
         return it;
     });
 }
@@ -530,14 +557,14 @@ const asUsage = (c) => ({ input_tokens: c.input, cache_read_input_tokens: c.read
 export function opencodeSpend(since, until = Infinity, home = homedir()) {
     const { calls, sqlite } = opencodeCalls(since, until, home);
     // A compaction is a measured request here (its own tokens), not Claude Code's estimate: no `compaction` mark.
-    const items = calls.filter((c) => !isUnbilledModel(c.model)).map((c) => priced({ tool: "opencode", ts: c.ts, project: c.cwd ? projectName(c.cwd) : "opencode", session: c.session, ...(c.model ? { model: c.model } : {}), input: c.input, read: c.read, write: c.write, output: c.output, key: c.id }, asUsage(c)));
+    const items = calls.filter((c) => !isUnbilledModel(c.model)).map((c) => priced({ tool: "opencode", ts: c.ts, project: c.cwd ? projectName(c.cwd) : "opencode", session: c.session, ...(c.model ? { model: c.model } : {}), input: c.input, read: c.read, write: c.write, output: c.output, key: c.id, ...(c.cwd ? { cwd: c.cwd } : {}), ...(c.root ? { root: c.root } : {}) }, asUsage(c)));
     if (!sqlite)
         throw Object.assign(new SqliteUnavailableError("reading OpenCode's opencode.db needs SQLite: Node 22.13+ or the sqlite3 command"), { items });
     return items;
 }
 /** Cline's requests (cline.ts), each at its model's list price; one with no model is counted, not priced. */
 export function clineSpend(since, until = Infinity, home = homedir()) {
-    return clineCalls(since, until, home).filter((c) => !isUnbilledModel(c.model)).map((c) => priced({ tool: "cline", ts: c.ts, project: c.cwd ? projectName(c.cwd) : "cline", session: c.session, ...(c.model ? { model: c.model } : {}), input: c.input, read: c.read, write: c.write, output: c.output }, asUsage(c)));
+    return clineCalls(since, until, home).filter((c) => !isUnbilledModel(c.model)).map((c) => priced({ tool: "cline", ts: c.ts, project: c.cwd ? projectName(c.cwd) : "cline", session: c.session, ...(c.model ? { model: c.model } : {}), input: c.input, read: c.read, write: c.write, output: c.output, ...(c.cwd ? { cwd: c.cwd } : {}) }, asUsage(c)));
 }
 /** The local calendar day of `ts`, "YYYY-MM-DD". */
 export function localDay(ts) {
@@ -556,6 +583,8 @@ const runsText = (n) => `${n.toLocaleString("en-US")} ${n === 1 ? "run" : "runs"
 export function summarizeSpend(items, days, since, until, skipped = []) {
     const tools = new Map();
     const projects = new Map(), models = new Map(), daily = new Map();
+    const repos = new Map(), branches = new Map();
+    let byPlace = false, byBranch = false;
     const sessions = new Map();
     const sessionModels = new Map();
     const parts = { inputUsd: 0, writeUsd: 0, readUsd: 0, outputUsd: 0 };
@@ -610,6 +639,13 @@ export function summarizeSpend(items, days, since, until, skipped = []) {
                 e.models.push(m);
         }
         add(projects, it.project, it);
+        if (it.repo !== undefined) {
+            byPlace = true;
+            if (it.branch)
+                byBranch = true;
+            add(repos, it.repo, it);
+            add(branches, `${it.repo}\u0000${it.branch ?? ""}`, it);
+        }
         add(models, it.model ?? "unknown", it);
         add(daily, localDay(it.ts), it);
         parts.inputUsd += it.inputUsd;
@@ -646,6 +682,10 @@ export function summarizeSpend(items, days, since, until, skipped = []) {
         requests: items.length,
         tools: TOOLS.filter((t) => tools.has(t)).map((t) => tools.get(t)).sort(byUsd),
         projects: [...projects].map(([project, r]) => ({ project, ...r })).sort(byUsd),
+        ...(byPlace ? {
+            repos: [...repos].map(([repo, r]) => ({ repo, ...r })).sort(byUsd),
+            ...(byBranch ? { branches: [...branches].map(([k, r]) => { const [repo, branch] = k.split("\u0000"); return { repo, ...(branch ? { branch } : {}), ...r }; }).sort(byUsd) } : {}),
+        } : {}),
         models: [...models].map(([model, r]) => ({ model, ...r })).sort(byUsd),
         daily: days_,
         parts,
@@ -670,16 +710,20 @@ function claudeProgressSummaries(since, until, tops, o) {
  * --json died on a string too long), and 1e9 days fell off the calendar.
  */
 export const MAX_SPEND_DAYS = 3650;
-/** The last `days` days, every tool on this machine. A tool with nothing on disk is just absent. */
-export function spendReport(days = 30, opts = {}) {
+/** Every request of the last `days` days, every tool on this machine, and what could not be read. */
+export function collectSpend(days = 30, opts = {}) {
     days = Math.min(days, MAX_SPEND_DAYS);
     const until = opts.now ?? Date.now();
     const since = until - days * DAY;
     const home = opts.home ?? homedir();
+    const place = opts.by === "repo" || opts.by === "branch";
     // A subagent's transcript read once for its usage and its timeline (the progress summaries).
     if (opts.progress !== false)
         prescan([{ paths: claudeUsageFiles(since, opts.claudePaths).filter((f) => f.subagent && !f.run).map((f) => f.file), extractors: [USAGE_ROWS, PROGRESS_ROWS] }]);
-    const items = [...claudeSpend(since, until, opts.claudePaths, opts.onProgress), ...codexSpend(since, until, home), ...geminiSpend(since, until, home), ...copilotSpend(since, until, home)];
+    // Grouped by where it ran: each transcript read once for its usage and its places.
+    if (place)
+        prescan([{ paths: claudeUsageFiles(since, opts.claudePaths).map((f) => f.file), extractors: [USAGE_ROWS, CLAUDE_PLACE_ROWS] }]);
+    const items = [...claudeSpend(since, until, opts.claudePaths, opts.onProgress, place), ...codexSpend(since, until, home), ...geminiSpend(since, until, home), ...copilotSpend(since, until, home)];
     const skipped = [];
     try {
         items.push(...cursorSpend(since, until));
@@ -698,6 +742,19 @@ export function spendReport(days = 30, opts = {}) {
             skipped.push({ tool: "opencode", reason: "reading OpenCode's opencode.db needs SQLite: Node 22.13+ or the sqlite3 command" });
     }
     items.push(...clineSpend(since, until, home));
+    // A request's repository: its git root's or folder's (spendplace.ts), else its project as named here.
+    if (place)
+        for (const it of items) {
+            it.repo = it.root || it.cwd ? repoName((it.root ?? it.cwd), home) : it.project;
+            if (opts.by === "repo")
+                delete it.branch;
+        }
+    return { items, days, since, until, skipped };
+}
+/** The last `days` days, every tool on this machine. A tool with nothing on disk is just absent. */
+export function spendReport(days = 30, opts = {}) {
+    const { items, since, until, skipped, days: d } = collectSpend(days, opts);
+    days = d;
     const report = summarizeSpend(items, days, since, until, skipped);
     const progress = opts.progress === false ? undefined : claudeProgressSummaries(since, until, opts.claudePaths, opts.progress);
     return progress ? { ...report, progressSummaries: progress } : report;
@@ -721,7 +778,7 @@ export function modifiersText(m) {
 }
 /** AI credits or premium requests: whole above 100, else to two places. */
 const creditsText = (n) => (n >= 100 ? Math.round(n).toLocaleString("en-US") : String(Math.round(n * 100) / 100));
-/** The full report, kept within 80 columns. `top`: rows per list. */
+/** The full report, kept within 80 columns. `top`: rows per list. Grouped by repository or branch instead of project when the report has them (`--by`). */
 export function renderSpend(r, top = 8) {
     const lines = [];
     if (r.requests === 0) {
@@ -755,7 +812,12 @@ export function renderSpend(r, top = 8) {
             lines.push(`  … and ${more} more`);
     };
     const toolsOf = (byTool) => (r.tools.length > 1 ? TOOLS.filter((t) => (byTool[t] ?? 0) > 0).map((t) => TOOL_NAME[t]).join(", ") : undefined);
-    list("By project", r.projects.slice(0, top).map((p) => ({ name: p.project, usd: p.usd, tail: toolsOf(p.byTool) })), r.projects.length - top);
+    if (r.branches)
+        list("By branch", r.branches.slice(0, top).map((b) => ({ name: `${b.repo} ${b.branch ?? "(no branch)"}`, usd: b.usd, tail: toolsOf(b.byTool) })), r.branches.length - top);
+    else if (r.repos)
+        list("By repository", r.repos.slice(0, top).map((p) => ({ name: p.repo, usd: p.usd, tail: toolsOf(p.byTool) })), r.repos.length - top);
+    else
+        list("By project", r.projects.slice(0, top).map((p) => ({ name: p.project, usd: p.usd, tail: toolsOf(p.byTool) })), r.projects.length - top);
     // A model with no list price reads "not priced", not a $0.00 that looks free.
     const unpricedModels = new Set(r.tools.flatMap((t) => t.unpricedModels));
     // One priced by its family's row reads as the estimate it is.

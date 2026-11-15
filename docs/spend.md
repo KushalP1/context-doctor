@@ -10,7 +10,12 @@ Claude Code, Codex, Gemini CLI, Cursor, Copilot CLI, OpenCode and Cline each kee
 context-doctor spend                 # the last 30 days (--days n), 8 rows per list (--limit n)
 context-doctor spend --json          # everything, every day and session
 context-doctor spend --share         # totals only, no paths or project names, to post (--copy)
+context-doctor spend --by repo       # by git repository instead of project; --by branch: by repository and branch
 ```
+
+### By repository and branch: `--by repo`, `--by branch`
+
+Each request goes to the folder and branch it ran in, as each tool records them: Claude Code writes `cwd` and `gitBranch` on every row of a transcript, and a request takes the ones in effect when it was made (a session that switched branch, or moved into a worktree, is split there); Codex the `cwd` and `git.branch` of its `session_meta`; Copilot CLI `session.start`'s `context` (`cwd`, `gitRoot`, `branch`); OpenCode a message's `path`; Cursor and Cline the workspace folder. A folder's repository is the nearest folder above it holding `.git`, never the home folder itself; a git worktree (a `.git` file naming `<repo>/.git/worktrees/<name>`) counts as the repository it was cut from, so Claude Code's agent worktrees land in their repository; a folder gone from disk is walked up the same way; a folder in no repository is its own name. A tool that records no folder (Gemini CLI) keeps its project name; one that records no branch is "(no branch)". The total is unchanged; "By repository" (or "By branch") replaces "By project", and `--json` adds `repos` (and `branches`). The first run reads each Claude Code transcript once more for its folders and branches, then the cache keeps them.
 
 ### What it reads
 

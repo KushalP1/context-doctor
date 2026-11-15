@@ -82,6 +82,12 @@ export interface SpendItem {
     credits?: number;
     /** Copilot CLI: the premium requests it counted (its multiplier); not in `usd`. */
     premium?: number;
+    /** The folder it ran in, and its git root and branch where the tool recorded them (spendplace.ts). Read for `--by repo` and `--by branch` only; never exported. */
+    cwd?: string;
+    root?: string;
+    branch?: string;
+    /** Its repository's name (spendplace.ts repoName), set when the report groups by repository or branch. */
+    repo?: string;
 }
 /**
  * A project folder's name (its path with "-" for separators, as Claude Code
@@ -99,7 +105,7 @@ export declare const anyModifier: (m: Modifiers | undefined) => m is Modifiers;
  * Claude Code's requests between `since` and `until`, main threads and
  * subagents, over `tops` (default: every transcript written since `since`).
  */
-export declare function claudeSpend(since: number, until?: number, tops?: string[], onProgress?: (done: number, total: number) => void): SpendItem[];
+export declare function claudeSpend(since: number, until?: number, tops?: string[], onProgress?: (done: number, total: number) => void, place?: boolean): SpendItem[];
 /**
  * What `spend` takes from a Codex rollout: its folder, its own id and the
  * thread that spawned it (the first session_meta), each model change, and
@@ -211,6 +217,15 @@ export interface SpendReport {
     projects: Array<SpendRow & {
         project: string;
     }>;
+    /** By repository (`--by repo` or `--by branch`): a folder's git repository, else the project. Absent otherwise. */
+    repos?: Array<SpendRow & {
+        repo: string;
+    }>;
+    /** By repository and branch (`--by branch`); a request whose tool records no branch has none. Absent otherwise. */
+    branches?: Array<SpendRow & {
+        repo: string;
+        branch?: string;
+    }>;
     models: Array<SpendRow & {
         model: string;
     }>;
@@ -276,6 +291,8 @@ export declare function localDay(ts: number): string;
 export declare function summarizeSpend(items: SpendItem[], days: number, since: number, until: number, skipped?: SpendReport["skipped"]): SpendReport;
 export interface SpendOptions {
     home?: string;
+    /** Group by repository, or by repository and branch, besides project: reads where each request ran (spendplace.ts). */
+    by?: "project" | "repo" | "branch";
     /** Claude Code transcripts to read instead of every one written in the window (tests). */
     claudePaths?: string[];
     onProgress?: (done: number, total: number) => void;
@@ -294,12 +311,20 @@ export interface SpendOptions {
  * --json died on a string too long), and 1e9 days fell off the calendar.
  */
 export declare const MAX_SPEND_DAYS = 3650;
+/** Every request of the last `days` days, every tool on this machine, and what could not be read. */
+export declare function collectSpend(days?: number, opts?: SpendOptions): {
+    items: SpendItem[];
+    days: number;
+    since: number;
+    until: number;
+    skipped: SpendReport["skipped"];
+};
 /** The last `days` days, every tool on this machine. A tool with nothing on disk is just absent. */
 export declare function spendReport(days?: number, opts?: SpendOptions): SpendReport;
 export declare const usd: (n: number) => string;
 /** "fast mode +$4.10, US-only +$0.93, web searches $0.12 (12), long-prompt tier +$0.40": what each billing modifier added, the ones that added anything. */
 export declare function modifiersText(m: Modifiers): string;
-/** The full report, kept within 80 columns. `top`: rows per list. */
+/** The full report, kept within 80 columns. `top`: rows per list. Grouped by repository or branch instead of project when the report has them (`--by`). */
 export declare function renderSpend(r: SpendReport, top?: number): string;
 /**
  * `spend --share`: totals only. No project names, paths or session ids, so
