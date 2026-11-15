@@ -15,6 +15,7 @@
  *    priced per month from the user's own request and cold-start counts.
  */
 import { type McpServerConfig, type McpServerSize, type McpUsage } from "./mcpschema.js";
+import { type StartsReport } from "./starts.js";
 export type Agent = "Claude Code" | "Codex" | "Cursor" | "Gemini CLI";
 export interface MemoryFile {
     agent: Agent;
@@ -53,6 +54,8 @@ export interface OverheadReport {
     files: MemoryFile[];
     findings: OverheadFinding[];
     mcp: McpSection;
+    /** Each session's and subagent's first request, per entrypoint and subagent type, priced across the period (starts.ts). */
+    starts?: StartsReport;
 }
 export interface McpSection {
     configs: McpServerConfig[];

@@ -49,8 +49,9 @@ import { adviseTtl, CACHE_TTL_SINCE, estimateCacheTtl, subagentTranscripts } fro
 import { compareVersions, describeInstalls } from "./modelswitch.js";
 import { ABSENT, getPath, parseSettingsText, readSettings, removeFile, sameJson, setJsonPath, SettingsError, settingsLockPath, withLock, withSettingsLock, writeAtomic } from "./settingsedit.js";
 import { compactWindowOverrides, effectiveEnv, processEnvWhere, settingsSources, shellSet, ttlOverrides, underClaudeCode } from "./effective.js";
-import { tilde } from "./claudedir.js";
+import { claudeJsonPath, tilde } from "./claudedir.js";
 import { applyPrune, undoPrune } from "./prune.js";
+import { applyMcpDefer, MCP_DEFER_SINCE, undoMcpDefer } from "./mcpdefer.js";
 import { fallbackStateDir, readLedger } from "./ledger.js";
 import { claudeDir } from "./claudedir.js";
 import { comparisonLine } from "./abstore.js";
@@ -66,7 +67,7 @@ import { CODEX_COMPACT_KEY, CODEX_COMPACT_LIMIT, codexCompactOverrides, codexCom
  * the subagent variable ahead of agent definitions there). autoCompactWindow
  * is not in 2.1.62 and the changelog does not say when it came: not named.
  */
-const SINCE = { "cache-ttl": CACHE_TTL_SINCE, "cache-ttl-subagents": CACHE_TTL_SINCE, "tool-output": BASH_OUTPUT_SINCE, "progress-summaries": PROGRESS_SUMMARIES_SINCE };
+const SINCE = { "mcp-defer": MCP_DEFER_SINCE, "cache-ttl": CACHE_TTL_SINCE, "cache-ttl-subagents": CACHE_TTL_SINCE, "tool-output": BASH_OUTPUT_SINCE, "progress-summaries": PROGRESS_SUMMARIES_SINCE };
 /** Below this a priced fix is not worth a setting. */
 const MIN_USD = 1;
 export const money = (n) => (n >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
@@ -270,6 +271,20 @@ export function planFixes(i) {
         const n = ps.none.host;
         fixes.push({ id: "progress-summaries", title: "Subagent progress summaries", basis: "", quality: "", change: "", state: "not-here", note: `your ${n} background subagent${n === 1 ? "" : "s"} ran in ${ps.hosts.map(hostName).join(" and ")}, where Claude Code writes no progress summaries: nothing to turn off` });
     }
+    const md = i.mcpDefer?.servers.filter((s) => s.scope === "user" || s.scope === "project") ?? [];
+    if (md.length) {
+        const usd = md.reduce((t, s) => t + s.usd, 0);
+        fixes.push({
+            id: "mcp-defer",
+            title: `Keep ${md.length === 1 ? `the MCP server ${md[0].name}` : `${md.length} MCP servers`} behind tool search`,
+            ...(usd > 0 ? { savedUsd: usd } : {}),
+            basis: `${md.map((s) => `${s.name} (~${k(s.tokens)} tokens)`).join(", ")} went whole into every session and subagent start that loaded ${md.length === 1 ? "it" : "them"}, re-read at each step: what that cost in ${i.mcpDefer.days} days, at most (the tool names stay)`,
+            quality: "Claude loads one of their tools through tool search when it needs it: one more step the first time in a conversation. Not measured here: applied only when named",
+            change: `${tilde(claudeJsonPath())}: "alwaysLoad": false on ${md.map((s) => s.name).join(", ")}`,
+            state: "available",
+            value: "false",
+        });
+    }
     for (const f of fixes) {
         const o = i.overrides?.[f.id];
         if (o?.length && f.state === "available")
@@ -352,7 +367,7 @@ const YOURS = new Set(["subagent-model", "tool-output", "progress-summaries"]);
 /** The environment variable a settings fix writes, when the shell's own value is the user's too. */
 const SHELL_ENV = { "subagent-model": SUBAGENT_MODEL_ENV, "progress-summaries": PROGRESS_SUMMARIES_ENV };
 /** Fixes with a quality cost not measured here: applied only when named, never by `--apply all`. */
-const NAMED_ONLY = new Set(["subagent-model"]);
+const NAMED_ONLY = new Set(["subagent-model", "mcp-defer"]);
 /** What would keep this fix's value from taking effect, as Claude Code merges settings. */
 export function fixOverrides(id, deps = {}) {
     // Codex reads its own config.toml: a profile's value, or a project's file.
@@ -548,6 +563,23 @@ export async function applyFix(fix, deps = {}, context = {}) {
                 withLock(lockPath(home), () => writeFixRecords([...loadFixRecords(home).filter((x) => x.id !== "autopilot"), { id: "autopilot", at }], home));
             return r;
         }
+        if (fix.id === "mcp-defer") {
+            const servers = context.mcpDefer?.servers ?? [];
+            if (!servers.length)
+                return { ok: false, lines: ["mcp-defer: no MCP server of yours went whole into a start"] };
+            return withLock(lockPath(home), () => {
+                const records = loadFixRecords(home);
+                const r = applyMcpDefer(servers, { home, cwd: deps.cwd });
+                if (r.entries.length) {
+                    const old = records.find((x) => x.id === "mcp-defer");
+                    // A second apply keeps the first one's entries (their earlier values) and adds the new keys.
+                    const same = (a, b) => a.key.join("/") === b.key.join("/");
+                    const entries = [...(old?.entries ?? []).filter((e) => !r.entries.some((n) => same(n, e))), ...r.entries.map((n) => old?.entries?.find((e) => same(e, n)) ?? n)];
+                    writeFixRecords([...records.filter((x) => x.id !== "mcp-defer"), { id: "mcp-defer", at: old?.at ?? at, file: r.file, entries }], home);
+                }
+                return { ok: true, lines: r.lines };
+            });
+        }
         if (fix.id === "prune") {
             if (!context.prune)
                 return { ok: false, lines: ["prune: no plan for this folder"] };
@@ -652,6 +684,9 @@ export async function undoFixes(ids, deps = {}) {
                     lines.push("autopilot: run context-doctor autopilot off");
                     done = false;
                 }
+            }
+            else if (r.id === "mcp-defer") {
+                lines.push(...withLock(lockPath(home), () => undoMcpDefer(r.file ?? claudeJsonPath(home), r.entries ?? [])));
             }
             else if (r.id === "prune") {
                 const u = r.cwd ? undoPrune(r.cwd) : undefined;
@@ -848,6 +883,7 @@ const LABEL = {
     "tool-output": "Long Bash output",
     "codex-compact": "Codex auto-compact limit",
     "progress-summaries": "Subagent progress summaries",
+    "mcp-defer": "MCP servers sent whole",
 };
 /**
  * Priced levers that save part of the same dollars, and why: each is

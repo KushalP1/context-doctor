@@ -41,13 +41,14 @@
 import { type CacheTtlReport, type CurrentTtl } from "./cachettl.js";
 import { type ClaudeCodeInstall } from "./modelswitch.js";
 import { type ProjectPlan } from "./prune.js";
+import { type DeferEntry } from "./mcpdefer.js";
 import { readLedger } from "./ledger.js";
 import { type AbStoredResult } from "./abstore.js";
 import { type SubagentModelReplay } from "./subagentmodel.js";
 import { type ToolOutputReplay } from "./tooloutput.js";
 import { type ProgressSummaryEstimate } from "./progresssummaries.js";
 import { type CodexCompactReport } from "./codexcompact.js";
-export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model" | "tool-output" | "codex-compact" | "progress-summaries";
+export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model" | "tool-output" | "codex-compact" | "progress-summaries" | "mcp-defer";
 export interface Fix {
     id: FixId;
     title: string;
@@ -151,6 +152,20 @@ export interface FixInputs {
         value: string;
         where: string;
     };
+    /**
+     * MCP servers in the user's own config whose tool definitions went whole
+     * into session and subagent starts (starts.ts), each with its share of what
+     * re-reading them cost over the period.
+     */
+    mcpDefer?: {
+        servers: Array<{
+            name: string;
+            scope: string;
+            tokens: number;
+            usd: number;
+        }>;
+        days: number;
+    };
 }
 export declare const money: (n: number) => string;
 /** " (48%)", or " (37% of subagents)" for a share of something else. */
@@ -176,6 +191,8 @@ export interface FixRecord {
     oneHourShareBefore?: number;
     /** For prune: the project folder. */
     cwd?: string;
+    /** For mcp-defer: each alwaysLoad key it set in ~/.claude.json, and what was there before. */
+    entries?: DeferEntry[];
     /** For subagent-model: the models the moved types' subagents ran on before the change, each one's share of their tokens (Sonnet-or-cheaper ones included): the baseline "since" compares against. */
     modelsBefore?: Record<string, number>;
 }
@@ -217,6 +234,7 @@ export declare function applyFix(fix: Fix, deps?: FixDeps, context?: {
     oneHourShare?: number;
     prune?: ProjectPlan;
     modelsBefore?: Record<string, number>;
+    mcpDefer?: FixInputs["mcpDefer"];
 }): Promise<{
     ok: boolean;
     lines: string[];

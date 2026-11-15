@@ -28,6 +28,7 @@ import { claudeDir } from "./claudedir.js";
 import { mcpjsonServerApproved } from "./prune.js";
 import { REQUEST_ROWS } from "./coldresume.js";
 import { rowsOf } from "./scan.js";
+import { measureStarts, renderStarts } from "./starts.js";
 const TTL_MS = 3_600_000;
 const CLAUDE = "claude-opus-5"; // Claude's tokenizer ratios; the model only picks the provider here.
 function readText(path) {
@@ -421,7 +422,8 @@ export function overheadReport(opts = {}) {
     // MCP usage comes from Claude Code transcripts only (the tool-name scheme is theirs).
     const claudePaths = opts.paths?.filter((p) => !isGeminiChat(p) && !/[\\/]\.codex[\\/]/.test(p));
     const mcp = { configs: claudeMcpConfigs(cwd, home), usage: mcpUsage(opts.days ?? 30, claudePaths, tick("mcp")) };
-    return { cwd, baseline, baselines, files, findings: overheadFindings(files, baselines), mcp };
+    const starts = measureStarts({ days: opts.days ?? 30, paths: claudePaths, cwd, home });
+    return { cwd, baseline, baselines, files, findings: overheadFindings(files, baselines), mcp, starts };
 }
 /**
  * Launch each configured server and size its tool definitions, then add the
@@ -486,6 +488,8 @@ export function renderOverhead(r, home = homedir()) {
                 ? ` Each 1k tokens ~${formatUsd(o.usdPerKPerMonth)} a month (${o.requests.toLocaleString("en-US")} requests, ${o.coldStarts.toLocaleString("en-US")} cold starts, ${o.model} ${priceBasis().replace(/^at /, "")}).`
                 : ""));
     }
+    if (r.starts)
+        out.push(...renderStarts(r.starts));
     out.push(...renderMcp(r));
     out.push("", "Memory files loaded in this directory", "─".repeat(56));
     if (r.files.length === 0)

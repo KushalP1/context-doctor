@@ -57,6 +57,7 @@ Every replay prices a request as `spend` does ([what is billed](spend.md)): its 
 | `tool-output`: long Bash output to a file sooner ([below](#long-bash-output-tool-output)) | `bashOutputMaxChars` (8,000-20,000, from your history) | long output goes to a file the model can still open; it sees the first 2,000 characters and the path. In `--apply all`: nothing is lost, only moved |
 | `codex-compact`: Codex compacts earlier, at 150k tokens ([below](#codexs-auto-compact-limit-codex-compact)) | `model_auto_compact_token_limit` in `~/.codex/config.toml` | as `compact-window`: each compaction keeps a summary, not the full history |
 | `progress-summaries`: Claude Code's subagent progress summaries off ([below](#subagent-progress-summaries-progress-summaries)) | `env.CLAUDE_CODE_DISABLE_AGENT_PROGRESS_SUMMARIES = "1"` (Claude Code 2.1.318+) | none to the work: a summary never enters the subagent's context; the 3-5 word progress line on a running subagent's task row goes. In `--apply all` |
+| `mcp-defer`: MCP servers of yours sent whole into every start, kept behind tool search ([below](#mcp-servers-sent-whole-mcp-defer)) | `"alwaysLoad": false` on each server's entry in `~/.claude.json` (Claude Code 2.1.287+) | Claude loads one of their tools through tool search when it needs it: one more step the first time in a conversation. Not measured: applied only when named |
 
 The `/compact` offer at cold returns is listed under "Advice you act on": it is the every-prompt hook's job, and `fix` says whether the hook is there to make it.
 
@@ -164,6 +165,14 @@ While a background subagent runs, Claude Code asks a model every 30 seconds for 
 **Yours stays yours.** A value you set, in your `settings.json` or the environment Claude Code starts in, is never overwritten, `0` included: the plan names it (as applied when it turns them off). A project's, local or managed settings `env` that keeps them wins over the user's file, and the plan says so. An installed Claude Code older than 2.1.318 ignores the variable, and is named.
 
 **On the author's machine** (last 30 days, read-only, 2026-11-13): 170 subagents, 160 of them in the background, every one in the Desktop app: none summarized, nothing to turn off. The roadmap's $390-$1,040 assumed every subagent got them. Replayed as if they had run in a terminal: 5,525 summaries, **$74 as notes, $463 at the whole context**.
+
+## MCP servers sent whole: `mcp-defer`
+
+Tool search defers MCP tool definitions by default, but a server configured with `"alwaysLoad": true`, or whose tools its author marks `_meta["anthropic/alwaysLoad"]`, goes whole into the start of every session and subagent, re-read at each step. `overhead` reads which ones from the requests Claude Code records ([the start of every session and subagent](pack-and-overhead.md)); `fix` offers `mcp-defer` when one of them is in your own `~/.claude.json` (user scope, or this project's local scope), priced at its share of what the starts it went into cost over the period. It writes `"alwaysLoad": false` on each one's entry, which defers all of its tools, the author-marked ones too ([MCP docs](https://code.claude.com/docs/en/mcp), "Defer a server's tools", Claude Code 2.1.287+). A server in the folder's `.mcp.json` is named, not written: the file is shared with everyone who clones the repository. `fix undo mcp-defer` puts back each key as it was (absent, or the value it had) where it still holds `false`; Claude Code rewrites `~/.claude.json` all the time, so the file is never restored whole.
+
+**Quality.** Claude sees the tools' names and loads one through tool search when it needs it: one more step the first time in a conversation, and a tool whose author wanted it in view on every turn no longer is. Not measured here, so `--apply all` leaves it out.
+
+**What it cannot reach.** The Desktop app's own servers and connectors (its browser, session, preview and terminal tools): the app hands them to Claude Code in-process with their tools loaded upfront, and no MCP setting reaches them. On the author's machine (30 days to 2026-11-15) they were all of what went whole: $94.85 of $455 in session and subagent starts, and no lever.
 
 ## The prompt cache's lifetime: `context-doctor cache-ttl`
 

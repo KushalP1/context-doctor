@@ -5,6 +5,16 @@ Memory files loaded here are ~0 of that; the rest is Claude Code's system prompt
 At your usage (247 requests, 40 cold starts, claude-opus-5-5 list prices) every 1k tokens of it costs ~$0.337 a month;
 the whole overhead ~$18.74 a month.
 
+Session and subagent starts (the first request, before the first message)
+────────────────────────────────────────────────────────
+  terminal sessions                 6  median   ~63k (p10 ~38k, p90 ~75k)  159 steps re-read it: $23.49
+  Desktop app sessions              1  median   ~50k (p10 ~50k, p90 ~50k)  30 steps re-read it: $2.29
+  general-purpose (subagent)        2  median   ~64k (p10 ~42k, p90 ~64k)  28 steps re-read it: $1.45
+  workflow-subagent (subagent)      1  median   ~47k (p10 ~47k, p90 ~47k)  9 steps re-read it: $1.20
+  workflow (subagent)               1  median   ~61k (p10 ~61k, p90 ~61k)  9 steps re-read it: $0.994
+  Every start, re-read at each step over 30 days: $29.43 (subagents $3.65). Token counts are the API's; tool sizes are estimates from their length.
+  Desktop app vs terminal: a Desktop session starts no larger here (median ~50k against ~63k).
+
 MCP servers
 ────────────────────────────────────────────────────────
 Tool search was used in 8 of 8 sessions: Claude Code defers MCP definitions, so a server costs about its tool names until the model looks one up.

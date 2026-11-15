@@ -56,6 +56,7 @@ import { analyzeCacheUsage, renderCacheReport } from "./cache.js";
 import { renderToolTimings } from "./timing.js";
 import { packContextSemantic, readSources, renderPack } from "./pack.js";
 import { measureBaselines, measureMcpSizes, overheadReport, renderOverhead } from "./overhead.js";
+import { deferrableConfigured, measureStarts, START_ROWS } from "./starts.js";
 import { applySplit, planSplit, renderSplit } from "./split.js";
 import { ciReport, renderCiMarkdown, renderCiText } from "./ci.js";
 import { renderReads, repeatedReads } from "./reads.js";
@@ -405,10 +406,12 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
   // With autopilot already on, its replay (most of the time) answers nothing `fix` asks.
   const replaying = progressLine(autopilotOnNow ? "Reading your Claude Code sessions" : "Replaying your Claude Code sessions");
   const setWindow = currentCompactWindow();
+  // The starts are measured only when a server of the user's own could have gone whole into them (mcp-defer).
+  const configured = claudeMcpConfigs(cwd).some((c) => c.scope !== ".mcp.json");
   // Each transcript read once for every replay below; what an earlier run kept is not read again (scan.ts).
   prescan([
-    { paths: claudeTranscripts(days), extractors: [savingsRows(!autopilotOnNow), REQUEST_ROWS, TOOL_OUTPUT_ROWS] },
-    { paths: subagentTranscripts(Date.now() - days * 86_400_000), extractors: [REQUEST_ROWS, SUBAGENT_ROWS, TOOL_OUTPUT_ROWS, PROGRESS_ROWS] },
+    { paths: claudeTranscripts(days), extractors: [savingsRows(!autopilotOnNow), REQUEST_ROWS, TOOL_OUTPUT_ROWS, ...(configured ? [START_ROWS] : [])] },
+    { paths: subagentTranscripts(Date.now() - days * 86_400_000), extractors: [REQUEST_ROWS, SUBAGENT_ROWS, TOOL_OUTPUT_ROWS, PROGRESS_ROWS, ...(configured ? [START_ROWS] : [])] },
     ...(setWindow === undefined ? [{ paths: claudeTranscripts(60), extractors: [QUALITY_ROWS] }] : []),
     { paths: codexRollouts(Date.now() - days * 86_400_000), extractors: [CODEX_COMPACT_ROWS] },
   ], replaying.tick);
@@ -473,6 +476,7 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
   }
   let userSettings: Record<string, any> = {};
   try { userSettings = JSON.parse(readFileSync(join(claudeDir(), "settings.json"), "utf8")) ?? {}; } catch { /* none */ }
+  const deferrable = configured ? deferrableConfigured(measureStarts({ days, cwd })) : [];
   let recordProblem: string | undefined;
   try { loadFixRecords(); } catch (e) { recordProblem = (e as Error).message; }
   const sessions = report.sessions.length;
@@ -489,6 +493,7 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
       toolSearchOff,
       mcpServers: toolSearchOff ? servers.length : 0,
       prune: prunePlan,
+      ...(deferrable.length ? { mcpDefer: { servers: deferrable, days } } : {}),
       subagentModel,
       subagentModelSet,
       // The newest ab --via claude-code comparison of Sonnet 5.5 with another model: the subagent-model line quotes it.
@@ -860,7 +865,7 @@ async function applyChosenFixes(chosen: FixId[], fixes: Fix[], inputs: FixInputs
       continue;
     }
     const kind = id === "cache-ttl" ? "main" : id === "cache-ttl-subagents" ? "subagents" : undefined;
-    const r = await applyFix(f, { autopilotOn: () => autopilotOn(port ?? DEFAULT_AUTOPILOT_PORT) }, { oneHourShare: kind ? inputs.ttl?.[kind].oneHourShare : undefined, prune: prunePlan, modelsBefore: inputs.subagentModel ? shares(inputs.subagentModel.before) : undefined });
+    const r = await applyFix(f, { autopilotOn: () => autopilotOn(port ?? DEFAULT_AUTOPILOT_PORT) }, { oneHourShare: kind ? inputs.ttl?.[kind].oneHourShare : undefined, prune: prunePlan, modelsBefore: inputs.subagentModel ? shares(inputs.subagentModel.before) : undefined, mcpDefer: inputs.mcpDefer });
     results.push({ id, ...r });
   }
   return results;
@@ -1755,8 +1760,8 @@ async function main(): Promise<void> {
     // One read of each Claude Code transcript for both counts (scan.ts); subagents hold MCP calls too.
     const mains = claudeTranscripts(args.days ?? 30);
     prescan([
-      { paths: mains, extractors: [REQUEST_ROWS, MCP_ROWS] },
-      { paths: mains.flatMap((p) => subagentFiles(p).map((f) => f.file)), extractors: [MCP_ROWS] },
+      { paths: mains, extractors: [REQUEST_ROWS, MCP_ROWS, START_ROWS] },
+      { paths: mains.flatMap((p) => subagentFiles(p).map((f) => f.file)), extractors: [MCP_ROWS, REQUEST_ROWS, START_ROWS] },
     ], sessions.tick);
     const report = overheadReport({
       days: args.days,

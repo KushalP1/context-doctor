@@ -56,6 +56,85 @@
       "sessions": 8,
       "toolSearchSessions": 8
     }
+  },
+  "starts": {
+    "days": 30,
+    "groups": [
+      {
+        "kind": "session",
+        "entrypoint": "cli",
+        "starts": 6,
+        "median": 62568,
+        "p10": 38254,
+        "p90": 74834,
+        "requests": 159,
+        "usd": 23.489753399999998,
+        "unpriced": 0,
+        "shaped": 0,
+        "servers": []
+      },
+      {
+        "kind": "session",
+        "entrypoint": "claude-desktop",
+        "starts": 1,
+        "median": 50451,
+        "p10": 50451,
+        "p90": 50451,
+        "requests": 30,
+        "usd": 2.2914562000000007,
+        "unpriced": 0,
+        "shaped": 0,
+        "servers": []
+      },
+      {
+        "kind": "subagent",
+        "entrypoint": "cli",
+        "agentType": "general-purpose",
+        "starts": 2,
+        "median": 63524,
+        "p10": 41585,
+        "p90": 63524,
+        "requests": 28,
+        "usd": 1.4544494000000001,
+        "unpriced": 0,
+        "shaped": 0,
+        "servers": []
+      },
+      {
+        "kind": "subagent",
+        "entrypoint": "cli",
+        "agentType": "workflow-subagent",
+        "starts": 1,
+        "median": 46686,
+        "p10": 46686,
+        "p90": 46686,
+        "requests": 9,
+        "usd": 1.2044798,
+        "unpriced": 0,
+        "shaped": 0,
+        "servers": []
+      },
+      {
+        "kind": "subagent",
+        "entrypoint": "cli",
+        "agentType": "workflow",
+        "starts": 1,
+        "median": 61351,
+        "p10": 61351,
+        "p90": 61351,
+        "requests": 9,
+        "usd": 0.9939812000000001,
+        "unpriced": 0,
+        "shaped": 0,
+        "servers": []
+      }
+    ],
+    "gap": {
+      "desktop": 50451,
+      "terminal": 62568,
+      "tokens": -12117,
+      "usd": 0
+    }
   }
 }
 

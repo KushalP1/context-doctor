@@ -1,0 +1,181 @@
+/** overhead's starts: each session's and subagent's first request, per entrypoint and subagent type, priced across the period; and fix's mcp-defer lever. */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { deferrableConfigured, entrypointName, measureStarts, mcpServerOf, renderStarts } from "../starts.js";
+import { applyFix, parseFixIds, planFixes, readFixRecords, undoFixes } from "../fix.js";
+import { tokensForLength } from "../tokens.js";
+process.env.CONTEXT_DOCTOR_CACHE_DIR = mkdtempSync(join(tmpdir(), "cd-starts-cache-"));
+const near = (a, b, what = "") => assert.ok(Math.abs(a - b) < 1e-9, `${what} ${a} vs ${b}`);
+const OPUS = "claude-opus-5-5"; // $4 in, $0.20 cache read; writes 1.25x (5 minutes), 2x (1 hour)
+const t0 = Date.now() - 2 * 86_400_000;
+const iso = (at) => new Date(at).toISOString();
+let n = 0;
+function reply(at, u, extra = {}) {
+    const id = `msg_st${n++}`;
+    const w1 = u.write1h ?? 0, w5 = u.write5m ?? 0;
+    return JSON.stringify({
+        type: "assistant", uuid: `u-${id}`, timestamp: iso(at), ...extra,
+        message: { id, model: OPUS, content: [{ type: "text", text: "ok" }], usage: { input_tokens: u.input ?? 0, cache_read_input_tokens: u.read ?? 0, cache_creation_input_tokens: w1 + w5, output_tokens: 20, cache_creation: { ephemeral_5m_input_tokens: w5, ephemeral_1h_input_tokens: w1 } } },
+    });
+}
+const user = (text, extra = {}) => JSON.stringify({ type: "user", uuid: `q${n++}`, timestamp: iso(t0), message: { role: "user", content: text }, ...extra });
+const tool = (name, chars, deferred = false) => ({ name, description: "d".repeat(chars), input_schema: { type: "object" }, ...(deferred ? { defer_loading: true } : {}) });
+const shape = (tools, extra = {}) => JSON.stringify({ type: "api-request-shape", timestamp: iso(t0), shape: { system: [{ type: "text", text: "s".repeat(1000) }], tools }, ...extra });
+const tokensOf = (t) => tokensForLength(JSON.stringify(t).length, false, "claude-opus-5");
+const BASH = tool("Bash", 3000);
+const BROWSER = tool("mcp__Claude_Browser__navigate", 8000);
+const MINE = tool("mcp__mine__do", 4000);
+const LATER = tool("mcp__later__x", 5000, true);
+const FETCH = tool("WebFetch", 2000); // announced as deferred: not sent whole
+function fixture() {
+    const home = mkdtempSync(join(tmpdir(), "cd-starts-"));
+    const proj = join(home, ".claude", "projects", "-work-app");
+    mkdirSync(proj, { recursive: true });
+    const cwd = join(home, "work", "app");
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(home, ".claude.json"), JSON.stringify({ numStartups: 3, mcpServers: { mine: { command: "mine-server", alwaysLoad: true } }, projects: { [resolve(cwd)]: { mcpServers: { proj: { command: "proj-server" } } } } }, null, 2));
+    const write = (name, rows) => {
+        const p = join(proj, name);
+        writeFileSync(p, rows.join("\n") + "\n");
+        return p;
+    };
+    // The Desktop app: a 70k start (the API's count, less "hi"), written at 1 hour, then read.
+    const desktop = write("desk.jsonl", [
+        JSON.stringify({ type: "attachment", entrypoint: "claude-desktop", timestamp: iso(t0), attachment: { type: "deferred_tools_delta", addedNames: ["WebFetch"] } }),
+        user("hi", { entrypoint: "claude-desktop" }),
+        JSON.stringify({ type: "api-request", querySource: "sdk", timestamp: iso(t0) }),
+        shape([BASH, BROWSER, MINE, LATER, FETCH]),
+        reply(t0, { input: 1, write1h: 70_000 }),
+        reply(t0 + 60_000, { input: 1, read: 70_500, write1h: 100 }),
+    ]);
+    // The terminal: a 13k start.
+    const terminal = write("term.jsonl", [user("hi", { entrypoint: "cli" }), reply(t0, { input: 1, write1h: 13_000 })]);
+    // claude -p: an SDK entrypoint of its own.
+    const sdk = write("sdk.jsonl", [user("hi", { entrypoint: "sdk-cli" }), reply(t0, { input: 1, write1h: 20_000 })]);
+    // The Desktop session's subagents: one typed by its meta file, one by its first request's query source.
+    const subs = join(proj, "desk", "subagents");
+    mkdirSync(subs, { recursive: true });
+    writeFileSync(join(subs, "agent-a1.meta.json"), JSON.stringify({ agentType: "general-purpose" }));
+    writeFileSync(join(subs, "agent-a1.jsonl"), [
+        user("do the task", { isSidechain: true, entrypoint: "claude-desktop" }),
+        JSON.stringify({ type: "api-request", querySource: "agent:builtin:general-purpose", timestamp: iso(t0), isSidechain: true }),
+        shape([BASH, BROWSER, MINE], { isSidechain: true }),
+        reply(t0, { input: 4, write5m: 52_000 }, { isSidechain: true }),
+        reply(t0 + 10_000, { input: 1, read: 52_000, write5m: 500 }, { isSidechain: true }),
+    ].join("\n") + "\n");
+    writeFileSync(join(subs, "agent-a2.jsonl"), [
+        user("look around", { isSidechain: true }),
+        JSON.stringify({ type: "api-request", querySource: "agent:builtin:Explore", timestamp: iso(t0), isSidechain: true }),
+        reply(t0, { input: 4, write5m: 30_000 }, { isSidechain: true }),
+    ].join("\n") + "\n");
+    return { home, cwd, paths: [desktop, terminal, sdk] };
+}
+test("names: entrypoints as people call them, MCP servers from tool names", () => {
+    assert.equal(entrypointName("claude-desktop"), "Desktop app");
+    assert.equal(entrypointName("cli"), "terminal");
+    assert.equal(entrypointName("sdk-cli"), "claude -p / SDK");
+    assert.equal(mcpServerOf("mcp__Claude_Browser__navigate"), "Claude_Browser");
+    assert.equal(mcpServerOf("mcp__1a59c906-04da__batch"), "1a59c906-04da");
+    assert.equal(mcpServerOf("Bash"), undefined);
+});
+test("starts: per entrypoint and subagent type, the API's count less the first message, priced on every step that re-read it", () => {
+    const { home, cwd, paths } = fixture();
+    const r = measureStarts({ days: 30, paths, home, cwd });
+    const group = (kind, key) => r.groups.find((g) => g.kind === kind && (kind === "session" ? g.entrypoint === key : g.agentType === key));
+    const desk = group("session", "claude-desktop");
+    assert.equal(desk.starts, 1);
+    assert.equal(desk.median, 70_000);
+    assert.equal(desk.requests, 2);
+    // Written at 1 hour ($8/M), then read ($0.20/M): only the start's 70k, not what followed it.
+    near(desk.usd, (70_000 * 8 + 70_000 * 0.2) / 1e6, "desktop");
+    // Sent whole: Bash, the browser and mine; the deferred tool and the one announced as deferred are not.
+    assert.equal(desk.wholeTools, 3);
+    assert.equal(desk.wholeTokens, tokensOf(BASH) + tokensOf(BROWSER) + tokensOf(MINE));
+    assert.equal(desk.mcpTokens, tokensOf(BROWSER) + tokensOf(MINE));
+    near(desk.deferrableUsd, desk.usd * (tokensOf(BROWSER) + tokensOf(MINE)) / 70_000, "deferrable");
+    assert.deepEqual(desk.servers.map((s) => [s.name, s.configured]), [["Claude_Browser", undefined], ["mine", "user"]]);
+    assert.equal(group("session", "cli").median, 13_000);
+    assert.equal(group("session", "sdk-cli").median, 20_000);
+    const gp = group("subagent", "general-purpose");
+    assert.equal(gp.entrypoint, "claude-desktop");
+    assert.equal(gp.median, 52_000);
+    // The subagent's brief is not part of its start; its writes are at 5 minutes ($5/M).
+    near(gp.usd, (52_000 * 5 + 52_000 * 0.2) / 1e6, "subagent");
+    const explore = group("subagent", "Explore");
+    assert.equal(explore.median, 30_000, "typed by its query source, its parent's entrypoint");
+    assert.equal(explore.entrypoint, "claude-desktop");
+    assert.equal(explore.shaped, 0);
+    // Desktop against terminal: the start above a terminal-sized one, at the Desktop requests' own rates.
+    assert.deepEqual([r.gap.desktop, r.gap.terminal, r.gap.tokens], [70_000, 13_000, 57_000]);
+    near(r.gap.usd, desk.usd * 57_000 / 70_000, "gap");
+    const text = renderStarts(r).join("\n");
+    assert.match(text, /Desktop app sessions\s+1\s+median\s+~70k/);
+    assert.match(text, /terminal sessions/);
+    assert.match(text, /general-purpose \(subagent\)/);
+    assert.match(text, /Desktop app vs terminal: a Desktop session starts ~57k tokens larger/);
+    assert.match(text, /Claude_Browser .*provided by the app or a connector/);
+    assert.match(text, /mine .*~\/\.claude\.json: `alwaysLoad: false` defers it/);
+    assert.match(text, /No setting defers the server the app provides/);
+    assert.match(text, /fix --apply mcp-defer/);
+    const conf = deferrableConfigured(r);
+    assert.deepEqual(conf.map((c) => [c.name, c.scope]), [["mine", "user"]]);
+    assert.ok(conf[0].usd > 0);
+});
+test("starts: no terminal session, no gap, and the report says so; a fork's copied first request is not a start", () => {
+    const { home, cwd, paths } = fixture();
+    const fork = join(home, ".claude", "projects", "-work-app", "fork.jsonl");
+    // A fork begins with its parent's rows, uuids and reply ids included.
+    writeFileSync(fork, readFileSync(paths[0], "utf8"));
+    const r = measureStarts({ days: 30, paths: [paths[0], fork], home, cwd });
+    assert.equal(r.gap, undefined);
+    assert.equal(r.groups.find((g) => g.kind === "session").starts, 1);
+    assert.match(renderStarts(r).join("\n"), /No terminal sessions in the period to compare/);
+});
+test("mcp-defer: offered for your own servers only, never by --apply all; apply and undo key by key in a throwaway HOME", async () => {
+    const { home, cwd } = fixture();
+    const inputs = { days: 30, billedUsd: 100, mcpDefer: { days: 30, servers: [{ name: "mine", scope: "user", tokens: 1_500, usd: 2 }, { name: "proj", scope: "project", tokens: 800, usd: 1 }, { name: "shared", scope: ".mcp.json", tokens: 900, usd: 1 }] } };
+    const fixes = planFixes(inputs);
+    const f = fixes.find((x) => x.id === "mcp-defer");
+    assert.equal(f.state, "available");
+    near(f.savedUsd, 3, "the repository's .mcp.json is not written");
+    assert.ok(!f.qualityFree);
+    assert.match(f.quality, /one more step/);
+    assert.deepEqual(parseFixIds("all", fixes).ids.includes("mcp-defer"), false);
+    assert.deepEqual(parseFixIds("mcp-defer", fixes).ids, ["mcp-defer"]);
+    const file = join(home, ".claude.json");
+    const r = await applyFix(f, { home, cwd }, { mcpDefer: inputs.mcpDefer });
+    assert.ok(r.ok, r.lines.join("\n"));
+    let cfg = JSON.parse(readFileSync(file, "utf8"));
+    assert.equal(cfg.mcpServers.mine.alwaysLoad, false);
+    assert.equal(cfg.projects[resolve(cwd)].mcpServers.proj.alwaysLoad, false);
+    assert.ok(r.lines.some((l) => /shared: in \.mcp\.json/.test(l)));
+    assert.equal(readFixRecords(home).find((x) => x.id === "mcp-defer").entries.length, 2);
+    // Claude Code rewrites the file meanwhile: undo puts back each key, not the file.
+    cfg.numStartups = 4;
+    writeFileSync(file, JSON.stringify(cfg, null, 2));
+    const lines = await undoFixes(["mcp-defer"], { home, cwd });
+    cfg = JSON.parse(readFileSync(file, "utf8"));
+    assert.equal(cfg.mcpServers.mine.alwaysLoad, true, lines.join("\n"));
+    assert.equal("alwaysLoad" in cfg.projects[resolve(cwd)].mcpServers.proj, false);
+    assert.equal(cfg.numStartups, 4);
+    assert.equal(readFixRecords(home).length, 0);
+});
+test("mcp-defer: a second apply keeps the first value; undo leaves a key the user changed since", async () => {
+    const { home, cwd } = fixture();
+    const inputs = { days: 30, billedUsd: 100, mcpDefer: { days: 30, servers: [{ name: "mine", scope: "user", tokens: 1_500, usd: 2 }] } };
+    const f = planFixes(inputs).find((x) => x.id === "mcp-defer");
+    assert.ok((await applyFix(f, { home, cwd }, { mcpDefer: inputs.mcpDefer })).ok);
+    const again = await applyFix(f, { home, cwd }, { mcpDefer: inputs.mcpDefer });
+    assert.ok(again.lines.some((l) => /already deferred/.test(l)));
+    assert.equal(readFixRecords(home)[0].entries[0].previous, true);
+    const file = join(home, ".claude.json");
+    const cfg = JSON.parse(readFileSync(file, "utf8"));
+    cfg.mcpServers.mine.alwaysLoad = "yes";
+    writeFileSync(file, JSON.stringify(cfg, null, 2));
+    const lines = await undoFixes(["mcp-defer"], { home, cwd });
+    assert.ok(lines.some((l) => /changed since fix set it/.test(l)), lines.join("\n"));
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).mcpServers.mine.alwaysLoad, "yes");
+});

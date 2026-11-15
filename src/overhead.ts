@@ -29,6 +29,7 @@ import { claudeDir } from "./claudedir.js";
 import { mcpjsonServerApproved } from "./prune.js";
 import { REQUEST_ROWS } from "./coldresume.js";
 import { rowsOf } from "./scan.js";
+import { measureStarts, renderStarts, type StartsReport } from "./starts.js";
 
 export type Agent = "Claude Code" | "Codex" | "Cursor" | "Gemini CLI";
 
@@ -72,6 +73,8 @@ export interface OverheadReport {
   files: MemoryFile[];
   findings: OverheadFinding[];
   mcp: McpSection;
+  /** Each session's and subagent's first request, per entrypoint and subagent type, priced across the period (starts.ts). */
+  starts?: StartsReport;
 }
 
 export interface McpSection {
@@ -464,7 +467,8 @@ export function overheadReport(
   // MCP usage comes from Claude Code transcripts only (the tool-name scheme is theirs).
   const claudePaths = opts.paths?.filter((p) => !isGeminiChat(p) && !/[\\/]\.codex[\\/]/.test(p));
   const mcp: McpSection = { configs: claudeMcpConfigs(cwd, home), usage: mcpUsage(opts.days ?? 30, claudePaths, tick("mcp")) };
-  return { cwd, baseline, baselines, files, findings: overheadFindings(files, baselines), mcp };
+  const starts = measureStarts({ days: opts.days ?? 30, paths: claudePaths, cwd, home });
+  return { cwd, baseline, baselines, files, findings: overheadFindings(files, baselines), mcp, starts };
 }
 
 /**
@@ -541,6 +545,7 @@ export function renderOverhead(r: OverheadReport, home = homedir()): string {
           : "")
     );
   }
+  if (r.starts) out.push(...renderStarts(r.starts));
   out.push(...renderMcp(r));
   out.push("", "Memory files loaded in this directory", "─".repeat(56));
   if (r.files.length === 0) out.push("  none");
