@@ -72,9 +72,9 @@ export interface Engine {
    * `$.model.fork` (claude-code.d.ts, mods/types on GitHub, read 2026-11-15):
    * the main thread's last request again (its model, system prompt, tools,
    * messages) with `prompt` after it, tools denied, its own tail never
-   * cached, nothing written to the transcript. Absent on an engine without it.
+   * cached, nothing written to the transcript. An engine without it throws a TypeError at the call (a module may not test for it: validate refuses `$.model` read as a value).
    */
-  model?: { fork: (request: { prompt: string }) => Promise<ForkResult> };
+  model: { fork: (request: { prompt: string }) => Promise<ForkResult> };
   clock: { now: () => Promise<number>; every: (ms: number, fn: () => void) => { cancel: () => void } };
   env: { get: (name: string) => Promise<string | undefined> };
 }

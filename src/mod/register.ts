@@ -231,7 +231,8 @@ async function keepWarm($: Engine, now: number): Promise<void> {
   const step = keepWarmStep(S.kw, S.data, now);
   if (step.do === "stop") return stopKeepWarm($, step.why);
   if (step.do !== "ping" || !S.kw || !S.data) return;
-  if (!$.model?.fork) return stopKeepWarm($, "this Claude Code has no $.model.fork");
+  // No presence check: `claude plugin validate` refuses `$.model` read as a value (a module spells
+  // `$` only as `$.noun.call(...)`), so an engine without the call is found by calling it.
   S.pinging = true;
   const kw = S.kw, d = S.data;
   try {
@@ -250,7 +251,7 @@ async function keepWarm($: Engine, now: number): Promise<void> {
     if (kw.spentUsd >= kw.capUsd) return stopKeepWarm($, `it reached its ${money(kw.capUsd)} limit`);
     $.ui.invalidate("ui.render");
   } catch (err) {
-    stopKeepWarm($, `the ping could not be sent: ${err instanceof Error ? err.message : String(err)}`);
+    stopKeepWarm($, err instanceof TypeError ? "this Claude Code has no $.model.fork" : `the ping could not be sent: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     S.pinging = false;
   }
@@ -267,7 +268,6 @@ async function keepWarmCommand($: Engine, args: string | undefined): Promise<{ t
     stopKeepWarm($, "you stopped it");
     return { text: `Stopped keeping the cache warm (${S.kw.pings} ping${S.kw.pings === 1 ? "" : "s"}, ~${money(S.kw.spentUsd)}).` };
   }
-  if (!$.model?.fork) return { text: "This Claude Code has no $.model.fork, which keeping warm needs. Nothing was started." };
   const refusal = keepWarmRefusal(S.data, now);
   if (refusal) return { text: `Not started: ${refusal}` };
   // A new yes replaces one in force, with what it spent counted from zero.

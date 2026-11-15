@@ -954,6 +954,9 @@ test("keep-warm: a ping that finds the cache cold, the dollar limit, Stop, a ses
   const old = engine(home, { cwd, now, noFork: true });
   await fire(old, "session.start", { cwd, surface: "desktop", isInteractive: true });
   await fire(old, "session.measure", { context: { tokens: 520_010, window: 1_000_000 }, rateLimits: [], changed: [] });
-  assert.match((await fire(old, "command.run", { command: KEEP_WARM_COMMAND, args: "2h" })).text, /no \$\.model\.fork/);
-  assert.equal(state().kw, undefined);
+  // No fork on this engine: found at the first ping (validate refuses a presence check of `$.model`), which stops it for good.
+  assert.match((await fire(old, "command.run", { command: KEEP_WARM_COMMAND, args: "2h" })).text, /^Keeping this session's prompt cache warm/);
+  await tickOnce(old, state().data!.lastReplyAt! + 54.75 * MIN);
+  assert.equal(state().kw!.stopped, "this Claude Code has no $.model.fork");
+  assert.equal(state().kw!.pings, 0);
 });
