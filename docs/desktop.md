@@ -18,18 +18,19 @@ Claude Code's status line never runs in the Desktop app's Code tab or in the VS 
 
 **A band above the prompt, only when it pays.** In the Desktop app (Claude Code draws a mod's band in the terminal and the Desktop app; the VS Code extension has no such band, so there the mod keeps the measurements and opens the fix pane, and draws nothing above the prompt):
 
-```
-context-doctor: cache warm for 3 min, then your next message re-writes 520k tokens (~$5.20) · session $42.10 (Claude Code: $41.90)   [ Hide ]
-```
+By default it shows one thing only, and stays away the rest of the time.
 
-It shows before the cache goes cold on a context of 150k tokens or more (in the 1-hour cache's last five minutes; in the 5-minute cache's last minute, a fifth of its life, so it does not follow every turn), once the cache has expired, and when the session passes a price threshold ($25, $100, $500, or `CONTEXT_DOCTOR_SESSION_PRICE`). Otherwise it stays away. The cache's life is read from the transcript (the 5-minute or 1-hour entries the last reply wrote), because mods are not handed Claude Code's `prompt_cache`; so the miss causes the status line records stay status-line-only. `Hide` hides that state for the session; the next one shows again. `CONTEXT_DOCTOR_MOD_BAND=always` keeps the clock and the price up at all times. In the terminal the status line already shows both, so there the band appears only for the next case.
-
-**On a cold return, a Compact first button.** Back at a session of 150k tokens or more after its cache expired (past the cache's life by five minutes, as the every-prompt hook's cold-resume notice decides), the band says what the next message will re-write and offers:
+**On a cold return, a Compact first button.** Back at a session of 150k tokens or more after its cache expired (past the cache's life by five minutes, as the every-prompt hook's cold-resume notice decides), the band says what the next message will cost and offers to compact first:
 
 ```
-context-doctor: idle 1h 20m, the cache expired: your next message re-writes 520k tokens (~$5.20) · session $42.10
-[ Compact first ]  Compact first: each later message re-reads ~$0.26 of context now, ~$0.02 after   [ Hide ]
+context-doctor: you were away 1h 20m, so the cache expired. Your next message re-sends this 520k-token chat at full price (~$5.20).
+Compact first to shrink it: each message after that costs ~$0.02 instead of ~$0.26.
+[ Compact first ]  [ Hide ]
 ```
+
+`Hide` hides it for that idle period; the next one shows again. The cache's life is read from the transcript (the 5-minute or 1-hour entries the last reply wrote), because mods are not handed Claude Code's `prompt_cache`.
+
+**`CONTEXT_DOCTOR_MOD_BAND=always`** also shows the cache clock ("cache warm for 3 min, then your next message re-writes 520k tokens (~$5.20)"), the expired notice and the session price beside Claude Code's own figure ("session $42.10 (Claude Code: $41.90)"). These used to show by default (in the cache's last minutes, once it expired, and past $25, $100 and $500), but on a big session one of them was up after nearly every reply. In the terminal the status line shows them, so there the band shows only the cold return.
 
 The button calls Claude Code's own compaction (`/compact`), between turns only: while a turn runs there is no button, and a press that meets one is a toast, not a compaction. A compaction Claude Code refuses for another reason (nothing to compact, a failed summary) is a toast with Claude Code's own reason. It is not offered past the point where Claude Code compacts by itself. Each press is counted in the cost ledger, so how often it is taken can be compared with the text offer's 1 in 33.
 

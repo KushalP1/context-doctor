@@ -33,64 +33,49 @@ const data = (over = {}) => ({
     tokens: 520_000, model: "claude-opus-5-5", lastReplyAt: T, ttlMs: 60 * MIN, coldMarginMs: 5 * MIN,
     rewriteUsd: 5.2, perMessageUsd: 0.26, afterCompactPerMessageUsd: 0.02, usd: 12.5, ccUsd: 12.4, ...over,
 });
-test("band: silent while the cache is warm and the session cheap; the countdown in its last five minutes; terminal and mobile stay out of it", () => {
-    assert.equal(band(data(), T + 10 * MIN, "desktop").kind, "none");
-    const warm = band(data(), T + 57 * MIN, "desktop");
-    assert.equal(warm.kind, "warm");
-    assert.equal(warm.text, "context-doctor: cache warm for 3 min, then your next message re-writes 520k tokens (~$5.20) · session $12.50 (Claude Code: $12.40)");
-    assert.equal(band(data(), T + 57 * MIN, "vscode").kind, "warm");
-    // The terminal has the status line for that; mobile draws nothing of ours.
-    assert.equal(band(data(), T + 57 * MIN, "terminal").kind, "none");
+test("band: by default only the cold return shows; the clock, the expired notice and the price stay away after every turn", () => {
+    for (const at of [10, 57, 62])
+        assert.equal(band(data(), T + at * MIN, "desktop").kind, "none", `${at} min`);
+    assert.equal(band(data({ ttlMs: 5 * MIN }), T + 4.5 * MIN, "desktop").kind, "none", "a 5-minute cache's last minute");
+    assert.equal(band(data({ usd: 1215, ccUsd: 1325, tokens: undefined }), T, "desktop").kind, "none", "a session past $500");
     assert.equal(band(data(), T + 90 * MIN, "mobile").kind, "none");
     // A small context: a cold cache is cheap, nothing to say.
-    assert.equal(band(data({ tokens: 90_000 }), T + 57 * MIN, "desktop").kind, "none");
     assert.equal(band(data({ tokens: 90_000 }), T + 90 * MIN, "desktop").kind, "none");
     assert.equal(band(undefined, T, "desktop").kind, "none");
 });
-test("band: expired, then a cold return with the Compact first offer, on every surface but mobile; not past Claude Code's own compaction point", () => {
-    const expired = band(data(), T + 62 * MIN, "desktop");
-    assert.equal(expired.kind, "expired");
-    assert.match(expired.text, /the cache expired, so your next message re-writes 520k tokens \(~\$5\.20\)/);
+test("band: a cold return with the Compact first offer in plain words, no session price, on every surface but mobile; not past Claude Code's own compaction point", () => {
     for (const s of ["desktop", "vscode", "terminal"]) {
         const cold = band(data(), T + 80 * MIN, s);
         assert.equal(cold.kind, "cold", s);
         const c = cold;
-        assert.match(c.text, /^context-doctor: idle 1h 20m, the cache expired: your next message re-writes 520k tokens \(~\$5\.20\)/);
-        assert.equal(c.compact, "Compact first: each later message re-reads ~$0.26 of context now, ~$0.02 after");
-        // The terminal's band leaves the price to the status line.
-        assert.equal(/session \$/.test(c.text), s !== "terminal");
+        assert.equal(c.text, "context-doctor: you were away 1h 20m, so the cache expired. Your next message re-sends this 520k-token chat at full price (~$5.20).");
+        assert.equal(c.compact, "Compact first to shrink it: each message after that costs ~$0.02 instead of ~$0.26.");
     }
-    assert.equal(band(data({ autoCompactAt: 500_000 }), T + 80 * MIN, "desktop").kind, "expired", "Claude Code compacts this one itself");
+    const tiny = band(data({ perMessageUsd: 0.043, afterCompactPerMessageUsd: 0.004 }), T + 80 * MIN, "desktop");
+    assert.equal(tiny.compact, "Compact first to shrink it: each message after that costs under $0.01 instead of ~$0.04.");
+    assert.equal(band(data({ autoCompactAt: 500_000 }), T + 80 * MIN, "desktop").kind, "none", "Claude Code compacts this one itself");
     assert.equal(band(data(), T + 80 * MIN, "mobile").kind, "none");
-});
-test("band: the price past a threshold, Hide hides that state only, and `always` keeps the clock up", () => {
-    const p = band(data({ usd: 112, ccUsd: 110.4, tokens: undefined }), T, "desktop");
-    assert.equal(p.kind, "price");
-    assert.equal(p.text, "context-doctor: session $112 (Claude Code: $110)");
-    assert.equal(band(data({ usd: 24, ccUsd: 24, tokens: undefined }), T, "desktop").kind, "none");
-    const key = p.key;
-    assert.equal(band(data({ usd: 112, tokens: undefined }), T, "desktop", { hidden: new Set([key]) }).kind, "none");
-    // The next threshold is a new state: it shows again.
-    assert.equal(band(data({ usd: 510, tokens: undefined }), T, "desktop", { hidden: new Set([key]) }).kind, "price");
     // Hiding the cold offer of one idle period leaves the next one's.
-    const cold = band(data(), T + 80 * MIN, "desktop");
-    assert.equal(band(data(), T + 80 * MIN, "desktop", { hidden: new Set([cold.key]) }).kind, "none");
-    assert.equal(band(data({ lastReplyAt: T + MIN }), T + 81 * MIN, "desktop", { hidden: new Set([cold.key]) }).kind, "cold");
-    assert.equal(band(data(), T + 10 * MIN, "desktop", { always: true }).kind, "warm");
-    assert.match(band(data(), T + 10 * MIN, "desktop", { always: true }).text, /cache warm for 50 min/);
-    // Claude Code's figure alone (the CLI could not run): said as Claude Code's.
-    const cc = band({ at: T, coldMinTokens: 150_000, thresholds: [25], ccUsd: 30 }, T, "desktop");
-    assert.equal(cc.text, "context-doctor: session $30.00 (Claude Code's figure)");
+    const key = band(data(), T + 80 * MIN, "desktop").key;
+    assert.equal(band(data(), T + 80 * MIN, "desktop", { hidden: new Set([key]) }).kind, "none");
+    assert.equal(band(data({ lastReplyAt: T + MIN }), T + 81 * MIN, "desktop", { hidden: new Set([key]) }).kind, "cold");
 });
-test("band: a 5-minute cache warns in its last minute, not after every turn; the 1-hour cache in its last five", () => {
-    const five = data({ ttlMs: 5 * MIN });
-    assert.equal(band(five, T + MIN, "desktop").kind, "none", "a minute after the reply: four left, no band");
-    assert.equal(band(five, T + 3.5 * MIN, "desktop").kind, "none");
-    assert.equal(band(five, T + 4.5 * MIN, "desktop").kind, "warm");
-    assert.equal(band(five, T + 7 * MIN, "desktop").kind, "expired");
-    assert.equal(band(data(), T + 54 * MIN, "desktop").kind, "none");
-    assert.equal(band(data(), T + 56 * MIN, "desktop").kind, "warm");
-    assert.equal(band(five, T + MIN, "desktop", { always: true }).kind, "warm", "`always` keeps the clock up");
+test("band: `always` brings back the clock, the expired notice and the price (not in the terminal, whose status line has them)", () => {
+    const always = { always: true };
+    const warm = band(data(), T + 57 * MIN, "desktop", always);
+    assert.equal(warm.kind, "warm");
+    assert.equal(warm.text, "context-doctor: cache warm for 3 min, then your next message re-writes 520k tokens (~$5.20) · session $12.50 (Claude Code: $12.40)");
+    assert.equal(band(data(), T + 62 * MIN, "desktop", always).kind, "expired");
+    assert.equal(band(data(), T + 57 * MIN, "terminal", always).kind, "none");
+    const p = band(data({ usd: 112, ccUsd: 110.4, tokens: undefined }), T, "desktop", always);
+    assert.equal(p.text, "context-doctor: session $112 (Claude Code: $110)");
+    // Hide hides that state only; the next threshold shows again.
+    const key = p.key;
+    assert.equal(band(data({ usd: 112, tokens: undefined }), T, "desktop", { ...always, hidden: new Set([key]) }).kind, "none");
+    assert.equal(band(data({ usd: 510, tokens: undefined }), T, "desktop", { ...always, hidden: new Set([key]) }).kind, "price");
+    // Claude Code's figure alone (the CLI could not run): said as Claude Code's.
+    const cc = band({ at: T, coldMinTokens: 150_000, thresholds: [25], ccUsd: 30 }, T, "desktop", always);
+    assert.equal(cc.text, "context-doctor: session $30.00 (Claude Code's figure)");
 });
 test("thresholds without the CLI: the mod reads the environment as the session price does", () => {
     for (const [raw, off] of [[undefined, undefined], ["", undefined], ["10, $50 200", undefined], ["50 10 50", undefined], ["nonsense", undefined], ["10", "1"], [undefined, "0"]]) {
@@ -322,7 +307,8 @@ test("after a turn: the readings reach the limits ledger and the cost ledger thr
     assert.ok(d.rewriteUsd > 0 && d.perMessageUsd > d.afterCompactPerMessageUsd);
     // The band: a cold return over 150k, with the button; none while a turn runs; the engine's own when off.
     const tree = await render(s, "AbovePrompt", "desktop", { hasSurvey: false, isWorking: false });
-    assert.match(texts(tree)[0], /^context-doctor: idle 1h 2\dm, the cache expired: your next message re-writes 520k tokens \(~\$\d+\.\d\d\) · session \$/);
+    assert.match(texts(tree)[0], /^context-doctor: you were away 1h 2\dm, so the cache expired\. Your next message re-sends this 520k-token chat at full price \(~\$\d+\.\d\d\)\.$/);
+    assert.match(texts(tree)[1], /^Compact first to shrink it: each message after that costs /);
     assert.ok(button(tree, "cd-compact"));
     assert.equal(await render(s, "AbovePrompt", "desktop", { isWorking: true }), "ENGINE");
     assert.equal(await render(s, "AbovePrompt", "desktop", { hasSurvey: true }), "ENGINE");
@@ -385,16 +371,17 @@ test("graceful: no Node for the CLI keeps Claude Code's own figure; CONTEXT_DOCT
     await fire(s, "session.start", { cwd: home, surface: "desktop", isInteractive: true });
     await fire(s, "session.measure", { context: { window: 1e6 }, rateLimits: [], cost: { usd: 120 }, changed: ["cost"] });
     assert.equal(state().data?.ccUsd, 120);
-    assert.equal(texts(await render(s, "AbovePrompt", "desktop", {}))[0], "context-doctor: session $120 (Claude Code's figure)");
+    // The price is not shown by default; CONTEXT_DOCTOR_MOD_BAND=always shows it below.
+    assert.equal(await render(s, "AbovePrompt", "desktop", {}), "ENGINE");
     // The pane says why it has no plan rather than failing.
     await fire(s, "command.run", { command: COMMAND });
     await new Promise((r) => setTimeout(r, 20));
     assert.match(texts(await render(s, "Pane", "desktop", {}, PANE)).join("\n"), /could not run: spawn node ENOENT\. It needs Node\.js on the PATH/);
-    // Without the CLI the thresholds still follow the environment: a lower one, or none at all.
-    const low = engine(home, { noProcess: true, env: { CONTEXT_DOCTOR_SESSION_PRICE: "5" } });
-    await fire(low, "session.start", { cwd: home, surface: "desktop", isInteractive: true });
-    await fire(low, "session.measure", { context: { window: 1e6 }, rateLimits: [], cost: { usd: 6 }, changed: ["cost"] });
-    assert.equal(texts(await render(low, "AbovePrompt", "desktop", {}))[0], "context-doctor: session $6.00 (Claude Code's figure)");
+    // With `always`, the price without the CLI is Claude Code's own figure, said as such.
+    const always = engine(home, { noProcess: true, env: { CONTEXT_DOCTOR_MOD_BAND: "always" } });
+    await fire(always, "session.start", { cwd: home, surface: "desktop", isInteractive: true });
+    await fire(always, "session.measure", { context: { window: 1e6 }, rateLimits: [], cost: { usd: 6 }, changed: ["cost"] });
+    assert.equal(texts(await render(always, "AbovePrompt", "desktop", {}))[0], "context-doctor: session $6.00 (Claude Code's figure)");
     const none = engine(home, { noProcess: true, env: { CONTEXT_DOCTOR_NO_SESSION_PRICE: "1" } });
     await fire(none, "session.start", { cwd: home, surface: "desktop", isInteractive: true });
     await fire(none, "session.measure", { context: { window: 1e6 }, rateLimits: [], cost: { usd: 120 }, changed: ["cost"] });

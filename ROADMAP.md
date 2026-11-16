@@ -374,6 +374,8 @@ Each release with the measurements behind it. Dollar figures are as measured whe
 
 ## Shipped on main, not yet released
 
+- **The Desktop band shows only the cold return.** On a big session the cache clock, the expired notice and the session price (with Claude Code's figure beside ours) put a band up after nearly every reply, and it read as noise. By default the band now shows only a return after the cache expired, in plain words ("you were away 1h 25m, so the cache expired. Your next message re-sends this 214k-token chat at full price (~$1.71)"), with **Compact first** and **Hide** on a row of their own, not wrapped between lines of text. `CONTEXT_DOCTOR_MOD_BAND=always` brings the rest back.
+
 - **What Claude Code's own figure still held (F1 follow-up).** Subagent replies whose rows Claude Code 2.1.284-2.1.299 never settled are priced with their output estimated from their content (text, tool input, a thinking block's signature), in every report that reads usage; `spend` says how much of its total that is. The gap to Claude Code's `cost-state` names its prompt suggestions (how many, by the input it counts beyond ours, and about what they cost) and the requests that hung and were sent again (`api-request` rows no reply answers), without counting either: neither is in any file. The author's -8.3% session is -6.6%, with the rest named.
 
 ## Shipped in 0.49.0: Count what Claude Code counts, cold returns, limits you can paste, a Desktop usage pane, and teams

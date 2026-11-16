@@ -46,20 +46,7 @@ export type Band =
   | { kind: "warm" | "expired" | "price"; key: string; text: string }
   | { kind: "cold"; key: string; text: string; compact: string };
 
-/** The band shows within this long of the cache going cold... */
-export const WARN_BEFORE_MS = 5 * 60_000;
 const MIN = 60_000;
-/**
- * ...or within this share of the cache's life, when that is shorter: the last
- * minute of a 5-minute cache (WARN_BEFORE_MS would be all of it, the band
- * after every turn), the last five of the 1-hour cache.
- */
-export const WARN_SHARE = 1 / 5;
-
-/** How long before the cache goes cold the band warns, for a cache that lives `ttlMs`. */
-export function warnBeforeMs(ttlMs: number): number {
-  return Math.min(WARN_BEFORE_MS, ttlMs * WARN_SHARE);
-}
 
 /** The session price thresholds when the CLI cannot say them (no Node): the defaults, the environment's own, or none. */
 export const DEFAULT_THRESHOLDS = [25, 100, 500];
@@ -119,53 +106,54 @@ export interface BandOptions {
   always?: boolean;
 }
 
+/** "~$0.04", or "under $0.01" where `money` would say "<$0.01". */
+function about(n: number): string {
+  return n < 0.01 ? "under $0.01" : `~${money(n)}`;
+}
+
 /**
- * The band above the prompt at `now`. Quiet unless it pays (the cache about
- * to go cold, or gone cold, on a context worth caring about; the session
- * past a price threshold), except with `always`. The terminal has the
- * status line for the clock and the price, so there the band shows only the
- * cold return, the one thing with a button. Nothing on mobile.
+ * The band above the prompt at `now`. By default it shows one thing: a cold
+ * return (back at a big session after its cache expired), the one moment
+ * with something to press. The cache clock, the expired notice and the
+ * session price came up after nearly every turn on a big session and read
+ * as noise, so they show only with `always`. Nothing on mobile.
  */
 export function band(d: BandData | undefined, now: number, surface: Surface, opts: BandOptions = {}): Band {
   if (!d || surface === "mobile") return { kind: "none" };
   const hidden = opts.hidden ?? new Set<string>();
   const show = (b: Exclude<Band, { kind: "none" }>): Band => (hidden.has(b.key) ? { kind: "none" } : b);
-  const terminal = surface === "terminal";
+  // The terminal's status line already shows the clock and the price.
+  const extra = opts.always === true && surface !== "terminal";
   const price = priceText(d);
   const big = d.tokens !== undefined && d.tokens >= d.coldMinTokens;
   const known = d.tokens !== undefined && d.lastReplyAt !== undefined && d.ttlMs !== undefined;
   if (known) {
     const expiresAt = d.lastReplyAt! + d.ttlMs!;
     const coldAt = expiresAt + (d.coldMarginMs ?? 0);
-    const rewrite = `${tokens(d.tokens!)} tokens${d.rewriteUsd !== undefined ? ` (~${money(d.rewriteUsd)})` : ""}`;
-    const tail = price && !terminal ? ` · ${price}` : "";
+    const cost = d.rewriteUsd !== undefined ? ` (~${money(d.rewriteUsd)})` : "";
     // The return the cold-resume offer is about: past the cache's life by the margin, big enough, and not about to be compacted by Claude Code anyway.
     if (now >= coldAt && big && d.tokens! < (d.autoCompactAt ?? Infinity)) {
-      const each = d.perMessageUsd !== undefined && d.afterCompactPerMessageUsd !== undefined
-        ? `each later message re-reads ~${money(d.perMessageUsd)} of context now, ~${money(d.afterCompactPerMessageUsd)} after`
-        : `each later message re-reads ${tokens(d.tokens!)} tokens now, far fewer after`;
+      const after = d.perMessageUsd !== undefined && d.afterCompactPerMessageUsd !== undefined
+        ? `each message after that costs ${about(d.afterCompactPerMessageUsd)} instead of ${about(d.perMessageUsd)}`
+        : `each message after that re-reads far fewer than ${tokens(d.tokens!)} tokens`;
       return show({
         kind: "cold",
         key: `cold:${d.lastReplyAt}`,
-        text: `context-doctor: idle ${duration(now - d.lastReplyAt!)}, the cache expired: your next message re-writes ${rewrite}${tail}`,
-        compact: `Compact first: ${each}`,
+        text: `context-doctor: you were away ${duration(now - d.lastReplyAt!)}, so the cache expired. Your next message re-sends this ${tokens(d.tokens!)}-token chat at full price${cost}.`,
+        compact: `Compact first to shrink it: ${after}.`,
       });
     }
-    if (terminal) return { kind: "none" };
-    if (now >= expiresAt && (big || opts.always)) {
+    if (!extra) return { kind: "none" };
+    const tail = price ? ` · ${price}` : "";
+    const rewrite = `${tokens(d.tokens!)} tokens${cost}`;
+    if (now >= expiresAt) {
       return show({ kind: "expired", key: `expired:${d.lastReplyAt}`, text: `context-doctor: the cache expired, so your next message re-writes ${rewrite}${tail}` });
     }
-    if (now < expiresAt && (opts.always || (big && expiresAt - now <= warnBeforeMs(d.ttlMs!)))) {
-      return show({ kind: "warm", key: `warm:${d.lastReplyAt}`, text: `context-doctor: cache warm for ${duration(expiresAt - now)}, then your next message re-writes ${rewrite}${tail}` });
-    }
+    return show({ kind: "warm", key: `warm:${d.lastReplyAt}`, text: `context-doctor: cache warm for ${duration(expiresAt - now)}, then your next message re-writes ${rewrite}${tail}` });
   }
-  if (terminal) return { kind: "none" };
-  const usd = d.usd ?? d.ccUsd;
-  const t = passedThreshold(usd, d.thresholds);
-  if (price && (t !== undefined || opts.always)) {
-    return show({ kind: "price", key: `price:${t ?? 0}`, text: `context-doctor: ${price}` });
-  }
-  return { kind: "none" };
+  if (!extra || !price) return { kind: "none" };
+  const t = passedThreshold(d.usd ?? d.ccUsd, d.thresholds);
+  return show({ kind: "price", key: `price:${t ?? 0}`, text: `context-doctor: ${price}` });
 }
 
 // -- The fix pane ----------------------------------------------------------------

@@ -50,16 +50,6 @@ export type Band = {
     text: string;
     compact: string;
 };
-/** The band shows within this long of the cache going cold... */
-export declare const WARN_BEFORE_MS: number;
-/**
- * ...or within this share of the cache's life, when that is shorter: the last
- * minute of a 5-minute cache (WARN_BEFORE_MS would be all of it, the band
- * after every turn), the last five of the 1-hour cache.
- */
-export declare const WARN_SHARE: number;
-/** How long before the cache goes cold the band warns, for a cache that lives `ttlMs`. */
-export declare function warnBeforeMs(ttlMs: number): number;
 /** The session price thresholds when the CLI cannot say them (no Node): the defaults, the environment's own, or none. */
 export declare const DEFAULT_THRESHOLDS: number[];
 /** CONTEXT_DOCTOR_SESSION_PRICE and CONTEXT_DOCTOR_NO_SESSION_PRICE read as sessionprice.ts reads them. */
@@ -81,11 +71,11 @@ export interface BandOptions {
     always?: boolean;
 }
 /**
- * The band above the prompt at `now`. Quiet unless it pays (the cache about
- * to go cold, or gone cold, on a context worth caring about; the session
- * past a price threshold), except with `always`. The terminal has the
- * status line for the clock and the price, so there the band shows only the
- * cold return, the one thing with a button. Nothing on mobile.
+ * The band above the prompt at `now`. By default it shows one thing: a cold
+ * return (back at a big session after its cache expired), the one moment
+ * with something to press. The cache clock, the expired notice and the
+ * session price came up after nearly every turn on a big session and read
+ * as noise, so they show only with `always`. Nothing on mobile.
  */
 export declare function band(d: BandData | undefined, now: number, surface: Surface, opts?: BandOptions): Band;
 /** A lever as `context-doctor fix --json` prints it (the fields the pane reads). */

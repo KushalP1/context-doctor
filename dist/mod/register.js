@@ -413,7 +413,9 @@ export function register(on) {
         const hideButton = h(Button, { key: "cd-hide", label: "Hide", onPress: () => hide($, b.key) });
         if (b.kind !== "cold")
             return h(Box, { flexDirection: "row", flexWrap: "wrap", columnGap: 1 }, h(Text, { dimColor: true }, b.text), hideButton);
-        return h(Box, { flexDirection: "column" }, h(Text, { dimColor: true }, b.text), h(Box, { flexDirection: "row", flexWrap: "wrap", columnGap: 1 }, h(Button, { key: "cd-compact", label: S.compacting ? "Compacting…" : "Compact first", variant: "primary", onPress: () => compact($) }), h(Text, { dimColor: true }, b.compact), hideButton));
+        return h(Box, { flexDirection: "column" }, h(Text, { dimColor: true }, b.text), h(Text, { dimColor: true }, b.compact), 
+        // The buttons on a row of their own: between lines of wrapped text they read as part of it.
+        h(Box, { flexDirection: "row", columnGap: 1 }, h(Button, { key: "cd-compact", label: S.compacting ? "Compacting…" : "Compact first", variant: "primary", onPress: () => compact($) }), hideButton));
     });
     on("command.run", { command: "context-doctor-usage" }, async ($) => {
         if (S.off)
