@@ -43,6 +43,7 @@ import { addModifiers, extraIterations, isUnbilledModel, NO_MODIFIERS, openAIUsa
 import { realModel } from "./tokens.js";
 import { isCompactionRow, newTrack, slimSummary, trackCompaction } from "./compactcost.js";
 import { PROXY_VERSION } from "./proxy.js";
+import { contentOutputTokens, unsettledVersion } from "./sidecost.js";
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
@@ -372,22 +373,42 @@ export function codexLimitData(since, root = codexSessionsRoot()) {
  * kept only where some bill beyond its top-level usage (extraIterations).
  * Also Claude Code's own running cost: each `cost-state` row as
  * costStateRecord keeps it, with the Claude Code version of the replies
- * before it (ccost.ts compares it with ours).
+ * before it (ccost.ts compares it with ours). A reply row keeps its
+ * `stop_reason` and `entrypoint` (a prompt suggestion follows a main-thread
+ * turn's end, sidecost.ts) and, where it has no `stop_reason`, its content
+ * as output tokens (`oc`: what a reply whose rows never settled cost,
+ * sidecost.ts). Each `api-request` row (what Claude Code sent, 2.1.308+) as
+ * its id, the request it repeats or extends and the time, a reply's
+ * `requestRef` to it, and an `api_error` row's code: a request no reply
+ * answers and Claude Code sent again a minute or more later is one that hung
+ * (ccost.ts names them).
  */
 export const USAGE_ROWS = {
-    id: "usage.5",
+    id: "usage.6",
     init: () => ({ ids: {} }),
     line(line, row, out, st) {
         const compaction = isCompactionRow(line);
         const cost = !compaction && line.startsWith('{"type":"cost-state"');
         const refusal = !compaction && !cost && line.includes('"model_refusal_fallback"');
-        if (!compaction && !cost && !refusal && !line.includes('"usage"'))
+        const sent = !compaction && !cost && line.startsWith('{"type":"api-request",');
+        const failed = !compaction && !cost && !sent && line.includes('"subtype":"api_error"');
+        if (!compaction && !cost && !refusal && !sent && !failed && !line.includes('"usage"'))
             return;
         let e;
         try {
             e = row();
         }
         catch {
+            return;
+        }
+        if (sent) {
+            if (e?.type === "api-request" && typeof e.id === "string")
+                out.push({ type: "api-request", id: e.id, ...(typeof e.base === "string" ? { base: e.base } : {}), t: Array.isArray(e.tail) ? e.tail.length : 0, timestamp: e.timestamp });
+            return;
+        }
+        if (failed) {
+            if (e?.type === "system" && e.subtype === "api_error")
+                out.push({ type: "system", subtype: "api_error", timestamp: e.timestamp, code: String(e.error?.connection?.code ?? e.error?.status ?? "").slice(0, 40) });
             return;
         }
         if (cost || refusal) {
@@ -415,14 +436,23 @@ export const USAGE_ROWS = {
             if (st.ids[m.id]) {
                 // Its billed iterations too: a streamed reply may settle those on a later row as well.
                 const its = slimUsage(m.usage, { iterations: true });
-                out.push({ type: "assistant", message: { id: m.id, usage: { ...pick(m.usage, ["output_tokens"]), ...(its?.iterations ? { iterations: its.iterations } : {}) } } });
+                out.push({ type: "assistant", message: { id: m.id, usage: { ...pick(m.usage, ["output_tokens"]), ...(its?.iterations ? { iterations: its.iterations } : {}) }, ...settling(m, e.version) } });
                 return;
             }
             st.ids[m.id] = 1;
         }
-        out.push(pick({ ...e, isSidechain: e.isSidechain === true || undefined, message: pick({ ...m, usage: slimUsage(m.usage, { iterations: true }) }, ["id", "model", "usage"]) }, ["type", "uuid", "timestamp", "isSidechain", "message"]));
+        out.push(pick({ ...e, isSidechain: e.isSidechain === true || undefined, message: { ...pick({ ...m, usage: slimUsage(m.usage, { iterations: true }) }, ["id", "model", "usage"]), ...settling(m, e.version) } }, ["type", "uuid", "timestamp", "isSidechain", "entrypoint", "requestRef", "message"]));
     },
 };
+/** A reply row's `stop_reason`, or (none, from a Claude Code that left replies unsettled: unsettledVersion) its content as output tokens. */
+function settling(m, version) {
+    if (typeof m.stop_reason === "string" && m.stop_reason)
+        return { stop_reason: m.stop_reason.slice(0, 40) };
+    if (!unsettledVersion(version))
+        return {};
+    const oc = contentOutputTokens(m.content);
+    return oc > 0 ? { oc } : {};
+}
 /** A compaction's estimated request as a request point (no message id: its key is the boundary's uuid). */
 export function compactionPoint(c) {
     const u = c.usage;
@@ -476,6 +506,8 @@ export function claudeFileUsage(file, since, until = Infinity, runRows) {
     const sighting = replyCounter(runRows);
     const settle = outputSettler();
     const byId = new Map();
+    // Per reply: whether a row of it settled (has a stop_reason), and what its rows' content took to write (sidecost.ts).
+    const settled = new Map();
     const track = newTrack();
     rowsOf(file, USAGE_ROWS).forEach((e) => {
         const done = trackCompaction(track, e);
@@ -484,6 +516,12 @@ export function claudeFileUsage(file, since, until = Infinity, runRows) {
         const m = e?.message;
         if (e?.type !== "assistant" || !m?.usage)
             return;
+        if (typeof m.id === "string") {
+            const s = settled.get(m.id) ?? settled.set(m.id, { stop: false, oc: 0 }).get(m.id);
+            if (m.stop_reason)
+                s.stop = true;
+            s.oc += typeof m.oc === "number" ? m.oc : 0;
+        }
         const seen = sighting(e);
         if (seen === "repeat") {
             const known = typeof m.id === "string" ? byId.get(m.id) : undefined;
@@ -547,6 +585,23 @@ export function claudeFileUsage(file, since, until = Infinity, runRows) {
         if (typeof m.id === "string")
             byId.set(m.id, { point, u });
     });
+    // A reply none of whose rows settled (Claude Code 2.1.284-2.1.299's subagents): its output from its content, where that is more.
+    for (const [id, s] of settled) {
+        const known = byId.get(id);
+        if (s.stop || !known || s.oc <= known.point.output)
+            continue;
+        const p = known.point, more = s.oc - p.output;
+        p.output += more;
+        p.unsettled = more;
+        if (p.rates) {
+            p.usd += (more * p.rates.outputPerM) / 1e6;
+            if (p.modifiers.fastUsd || p.modifiers.geoUsd || p.modifiers.longUsd) {
+                p.modifiers = { ...requestCost(p.model, { ...known.u, output_tokens: p.output }, p.ts).modifiers };
+                for (const x of p.extra ?? [])
+                    addModifiers(p.modifiers, x.modifiers);
+            }
+        }
+    }
     return out;
 }
 /**

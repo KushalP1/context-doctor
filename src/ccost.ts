@@ -34,6 +34,8 @@ import { realModel } from "./tokens.js";
 import { rowsOf } from "./scan.js";
 import { USAGE_ROWS } from "./limits.js";
 import type { SpendItem } from "./spend.js";
+import { subagentFiles } from "./subagents.js";
+import { SUGGESTION_PROMPT_TOKENS, suggestionCost } from "./sidecost.js";
 
 /** What one model's line of a `cost-state` holds, as numbers. */
 export interface CcModel {
@@ -141,6 +143,18 @@ export interface SessionGap {
   /** Of ours: the compactions' own requests, which we estimate (no row records their usage). */
   compactionUsd: number;
   compactions: number;
+  /**
+   * The main-thread turns that ended where Claude Code may send a prompt
+   * suggestion (sidecost.ts), and what one after each would cost: not in
+   * ours, since whether it was sent is in no file (gapText takes the count
+   * from Claude Code's own input tokens).
+   */
+  turnEnds?: { n: number; usd: number };
+  /** Of ours: subagent replies whose rows never settled their output, estimated from their content (sidecost.ts). */
+  unsettledUsd?: number;
+  unsettled?: number;
+  /** Requests that hung and Claude Code sent again (stalledRetries): billed when the API had begun them, and in no row. */
+  stalled?: number;
   version?: string;
   unknown?: true;
   models: ModelGap[];
@@ -208,6 +222,54 @@ function atOurPrices(model: string, m: CcModel, at: number, writePerToken?: numb
   return c.totalUsd - c.modifiers.longUsd + (writePerToken === undefined ? 0 : rest * writePerToken);
 }
 
+/** The turns of a main transcript's rows that ended where Claude Code may send a prompt suggestion, within [`from`, `to`], and their price (sidecost.ts). */
+export function turnEnds(rows: unknown[], from: number, to: number): { n: number; usd: number } {
+  let n = 0, usd = 0;
+  for (const r of rows as Array<Record<string, any>>) {
+    const ts = Date.parse(String(r?.timestamp ?? ""));
+    if (!(ts >= from && ts <= to)) continue;
+    const c = suggestionCost(r);
+    if (c) { n++; usd += c.cost.totalUsd; }
+  }
+  return { n, usd };
+}
+
+/** A connection error that means the request never reached the API (not billed). */
+const UNSENT = /^(ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH)$/;
+/** A request no reply answers, sent again unchanged this long after or later: it hung. */
+export const HUNG_MS = 60_000;
+
+/**
+ * Requests that hung: Claude Code sent one (an `api-request` row, 2.1.308+),
+ * no reply answers it, and Claude Code sent it again unchanged (a row whose
+ * `base` is it, with no new messages) a minute or more later, with no error
+ * between saying it never left the machine. On the author's machine they
+ * come in runs while the network is down or the machine sleeps (a subagent
+ * sent the same 380k-token prompt every ~16 minutes through a night), and
+ * the two stretches between Claude Code's cost-state records that hold most
+ * of them hold most of the gap: Claude Code bills a request the API had
+ * begun, and no row records its usage. Which ones the API had begun is in
+ * no file, so they are counted, not priced. Within [`from`, `to`].
+ */
+export function stalledRetries(files: string[], from: number, to: number): number {
+  let n = 0;
+  for (const f of files) {
+    let rows: Array<Record<string, any>>;
+    try { rows = rowsOf(f, USAGE_ROWS); } catch { continue; }
+    const answered = new Set<string>();
+    for (const r of rows) if (r?.type === "assistant" && typeof r.requestRef === "string") answered.add(r.requestRef);
+    let pending: { id: string; at: number; unsent: boolean } | undefined;
+    for (const r of rows) {
+      if (r?.type === "system" && r.subtype === "api_error") { if (pending && UNSENT.test(String(r.code ?? ""))) pending.unsent = true; continue; }
+      if (r?.type !== "api-request") continue;
+      const at = Date.parse(String(r.timestamp ?? ""));
+      if (pending && r.base === pending.id && r.t === 0 && !pending.unsent && at - pending.at >= HUNG_MS && pending.at >= from && pending.at <= to) n++;
+      pending = typeof r.id === "string" && !answered.has(r.id) && Number.isFinite(at) ? { id: r.id, at, unsent: false } : undefined;
+    }
+  }
+  return n;
+}
+
 /**
  * The comparison for the sessions among `tops` whose Claude Code record and
  * our requests both fall inside [`since`, `until`]: `items` are spend's
@@ -229,7 +291,12 @@ export function compareSessions(tops: string[], items: SpendItem[], since = -Inf
     if (start < since || rec.to > until) continue;
     const session = basename(top, ".jsonl");
     const mine = (bySession.get(session) ?? []).filter((it) => it.ts >= start - 1000 && it.ts <= rec.to);
-    out.push(sessionGap(session, rec.cs, mine, start, rec.to, rec.declined));
+    const g = sessionGap(session, rec.cs, mine, start, rec.to, rec.declined);
+    const stalled = stalledRetries([top, ...subagentFiles(top).map((f) => f.file)], start - 1000, rec.to);
+    if (stalled) g.stalled = stalled;
+    const ends = turnEnds(rowsOf(top, USAGE_ROWS), start - 1000, rec.to);
+    if (ends.n) g.turnEnds = ends;
+    out.push(g);
   }
   return out.sort((a, b) => b.ccUsd - a.ccUsd);
 }
@@ -238,7 +305,7 @@ export function compareSessions(tops: string[], items: SpendItem[], since = -Inf
 export function sessionGap(session: string, cs: CostStateRecord, mine: SpendItem[], from: number, to: number, declined: Record<string, number> = {}): SessionGap {
   const models = new Map<string, ModelGap>();
   const line = (model: string) => models.get(model) ?? models.set(model, { model, ccUsd: 0, cc: { input: 0, output: 0, read: 0, write: 0, searches: 0 }, ourUsd: 0, ours: { input: 0, output: 0, read: 0, write: 0, requests: 0 }, ccAtOurUsd: 0 }).get(model)!;
-  let compactionUsd = 0, compactions = 0;
+  let compactionUsd = 0, compactions = 0, unsettledUsd = 0, unsettled = 0;
   const writeUsd = new Map<string, number>();
   for (const it of mine) {
     const g = line(it.model ?? "unknown");
@@ -246,6 +313,7 @@ export function sessionGap(session: string, cs: CostStateRecord, mine: SpendItem
     g.ours.input += it.input; g.ours.output += it.output; g.ours.read += it.read; g.ours.write += it.write; g.ours.requests++;
     writeUsd.set(g.model, (writeUsd.get(g.model) ?? 0) + it.writeUsd);
     if (it.compaction) { compactionUsd += it.usd; compactions++; }
+    if (it.unsettled && it.output > 0) { unsettledUsd += (it.outputUsd * it.unsettled) / it.output; unsettled++; }
   }
   for (const [model, m] of Object.entries(cs.models)) {
     const g = line(realModel(model) ?? model);
@@ -259,6 +327,7 @@ export function sessionGap(session: string, cs: CostStateRecord, mine: SpendItem
   }
   return {
     session, ...(mine[0]?.project ? { project: mine[0].project } : {}), from, to, ccUsd: cs.usd, ourUsd: mine.reduce((n, it) => n + it.usd, 0), compactionUsd, compactions,
+    ...(unsettled ? { unsettledUsd, unsettled } : {}),
     ...(cs.version ? { version: cs.version } : {}), ...(cs.unknown ? { unknown: true as const } : {}),
     models: [...models.values()].sort((a, b) => b.ccUsd - a.ccUsd),
   };
@@ -293,10 +362,28 @@ export function gapText(sessions: SessionGap[]): string[] {
   if (Math.abs(p.declinedUsd) >= 0.005) parts.push([p.declinedUsd, `Claude Code counts ${more(p.declinedUsd)} on ${list(p.declinedModels)}, requests it declined (${p.declined} refusal${p.declined === 1 ? "" : "s"} recorded) and Claude Code sent again on another model: no row records their usage`]);
   if (Math.abs(p.sideUsd) >= 0.005) parts.push([p.sideUsd, `Claude Code counts ${more(p.sideUsd)} on ${list(p.sideModels)}, its own side requests${p.sideSearches ? ` (${p.sideSearches} web search${p.sideSearches === 1 ? "" : "es"} among them)` : ""}: no transcript row records them`]);
   // Ours holds the compactions' own requests as estimates (no row records their usage): what its tokens say of them.
-  const compText = nComp ? `${nComp} compaction${nComp === 1 ? "'s" : "s'"} own request${nComp === 1 ? "" : "s"}, which we estimate at ${usd(comp)}` : "";
+  // Claude Code's prompt suggestions: as many as its input beyond ours on the session's models has room for (each adds its
+  // ~506-token instruction), priced as the turn ends they may follow are on average (sidecost.ts). An estimate of a part of the gap.
+  let nSug = 0, sug = 0;
+  for (const s of sessions) {
+    const ends = s.turnEnds;
+    if (!ends?.n) continue;
+    const room = Math.round(s.models.filter((m) => m.ours.requests > 0).reduce((t, m) => t + Math.max(0, m.cc.input - m.ours.input), 0) / SUGGESTION_PROMPT_TOKENS);
+    const k = Math.min(ends.n, room);
+    nSug += k; sug += (ends.usd * k) / ends.n;
+  }
+  const nUns = sessions.reduce((n, s) => n + (s.unsettled ?? 0), 0), uns = sessions.reduce((n, s) => n + (s.unsettledUsd ?? 0), 0);
+  const stalled = sessions.reduce((n, s) => n + (s.stalled ?? 0), 0);
+  const ests = [
+    nComp ? `${nComp} compaction${nComp === 1 ? "'s" : "s'"} own request${nComp === 1 ? "" : "s"} (${usd(comp)})` : "",
+    nUns ? `the output of ${nUns.toLocaleString("en-US")} subagent repl${nUns === 1 ? "y" : "ies"} whose rows never settled it (${usd(uns)})` : "",
+  ].filter(Boolean);
+  const compText = ests.length ? `${ests.length > 1 ? `${ests.slice(0, -1).join(", ")} and ${ests[ests.length - 1]}` : ests[0]}, which we estimate` : "";
+  const sugText = nSug ? `; about ${nSug.toLocaleString("en-US")} of them Claude Code's prompt suggestions (the line it suggests after a turn, reading the conversation from the cache; counted by the ${SUGGESTION_PROMPT_TOKENS} input tokens each adds), about ${usd(sug)}` : "";
+  const hung = stalled ? `; ${stalled.toLocaleString("en-US")} request${stalled === 1 ? "" : "s"} hung and ${stalled === 1 ? "was" : "were"} sent again (no reply, retried a minute or more later, most while the network was down): Claude Code bills those the API had begun, and no file says which` : "";
   if (Math.abs(p.tokensUsd) >= 0.005) {
     parts.push([p.tokensUsd, p.tokensUsd > 0
-      ? `Claude Code counts ${more(p.tokensUsd)} in tokens on the same models, at our prices: requests no row records the usage of${compText ? `, beyond our ${compText}` : ""}`
+      ? `Claude Code counts ${more(p.tokensUsd)} in tokens on the same models, at our prices: requests no row records the usage of${compText ? `, beyond our ${compText}` : ""}${sugText}${hung}`
       : `Claude Code counts ${more(p.tokensUsd)} in tokens on the same models, at our prices: ${compText ? `our ${compText}, are above what it counted` : "requests we count that it does not"}`]);
   }
   if (Math.abs(p.priceUsd) >= 0.005) parts.push([p.priceUsd, `Its prices come to ${more(p.priceUsd)} than ours on its own tokens (its price table, fast mode, a long prompt's tier, contracted rates)`]);

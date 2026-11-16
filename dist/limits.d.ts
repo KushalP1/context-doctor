@@ -132,7 +132,15 @@ export declare function codexLimitData(since: number, root?: string): {
  * kept only where some bill beyond its top-level usage (extraIterations).
  * Also Claude Code's own running cost: each `cost-state` row as
  * costStateRecord keeps it, with the Claude Code version of the replies
- * before it (ccost.ts compares it with ours).
+ * before it (ccost.ts compares it with ours). A reply row keeps its
+ * `stop_reason` and `entrypoint` (a prompt suggestion follows a main-thread
+ * turn's end, sidecost.ts) and, where it has no `stop_reason`, its content
+ * as output tokens (`oc`: what a reply whose rows never settled cost,
+ * sidecost.ts). Each `api-request` row (what Claude Code sent, 2.1.308+) as
+ * its id, the request it repeats or extends and the time, a reply's
+ * `requestRef` to it, and an `api_error` row's code: a request no reply
+ * answers and Claude Code sent again a minute or more later is one that hung
+ * (ccost.ts names them).
  */
 export declare const USAGE_ROWS: Extractor<{
     ids: Record<string, 1>;
@@ -160,6 +168,8 @@ export interface ClaudeRequest extends UsagePoint {
     changedOn?: string;
     /** A compaction's own request, which no row records usage for: estimated (compactcost.ts). */
     compaction?: boolean;
+    /** Output tokens estimated from the reply's content, inside `output` and `usd`: its rows never settled it (sidecost.ts). */
+    unsettled?: number;
     /**
      * The iterations its top-level usage leaves out (extraIterations: an
      * advisor's call, an attempt a fallback replaced), each priced at its own

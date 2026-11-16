@@ -85,6 +85,8 @@ export interface SpendItem {
     key?: string;
     /** Claude Code: a compaction's own request, which no row records usage for: estimated from the context it read and its summary (compactcost.ts). */
     compaction?: boolean;
+    /** Claude Code: output tokens estimated from the reply's content, inside `output` and `usd`, where its rows never settled it (sidecost.ts). */
+    unsettled?: number;
     /** Copilot CLI: the AI credits it used (one is $0.01), as Copilot recorded them; not in `usd`. */
     credits?: number;
     /** Copilot CLI: the premium requests it counted (its multiplier); not in `usd`. */
@@ -267,6 +269,12 @@ export interface SpendReport {
     /** Claude Code's compactions, each one's own request estimated (no row records its usage): inside `usd`; absent when none. */
     compactions?: {
         requests: number;
+        usd: number;
+    };
+    /** Claude Code subagent replies whose rows never settled their output (2.1.284-2.1.299): the output estimated from their content, inside `usd`; absent when none. */
+    unsettled?: {
+        replies: number;
+        tokens: number;
         usd: number;
     };
     /** Claude Code: iterations billed beyond their request's top-level usage (the advisor's calls, attempts a fallback replaced), by type: inside `usd`; absent when none. */

@@ -105,6 +105,8 @@ export interface SpendItem {
   key?: string;
   /** Claude Code: a compaction's own request, which no row records usage for: estimated from the context it read and its summary (compactcost.ts). */
   compaction?: boolean;
+  /** Claude Code: output tokens estimated from the reply's content, inside `output` and `usd`, where its rows never settled it (sidecost.ts). */
+  unsettled?: number;
   /** Copilot CLI: the AI credits it used (one is $0.01), as Copilot recorded them; not in `usd`. */
   credits?: number;
   /** Copilot CLI: the premium requests it counted (its multiplier); not in `usd`. */
@@ -208,6 +210,7 @@ export function claudeSpend(since: number, until = Infinity, tops?: string[], on
       };
       label(item, { estimated: r.estimated, changedOn: r.changedOn, modifiers: extra.reduce((m, x) => minus(m, x.modifiers), { ...r.modifiers }) });
       if (r.compaction) item.compaction = true;
+      if (r.unsettled) item.unsettled = r.unsettled;
       if (r.model) item.model = r.model;
       if (f.run) item.workflow = `${session}/${f.run}`;
       else if (f.subagent || r.sidechain) item.subagent = true;
@@ -648,6 +651,8 @@ export interface SpendReport {
   priceChanged?: Array<{ model: string; on: string; requests: number; usd: number }>;
   /** Claude Code's compactions, each one's own request estimated (no row records its usage): inside `usd`; absent when none. */
   compactions?: { requests: number; usd: number };
+  /** Claude Code subagent replies whose rows never settled their output (2.1.284-2.1.299): the output estimated from their content, inside `usd`; absent when none. */
+  unsettled?: { replies: number; tokens: number; usd: number };
   /** Claude Code: iterations billed beyond their request's top-level usage (the advisor's calls, attempts a fallback replaced), by type: inside `usd`; absent when none. */
   iterations?: Record<string, { calls: number; usd: number; models: string[] }>;
   /**
@@ -696,9 +701,11 @@ export function summarizeSpend(items: SpendItem[], days: number, since: number, 
   const mods: Modifiers = { ...NO_MODIFIERS };
   const changed = new Map<string, NonNullable<SpendReport["priceChanged"]>[number]>();
   const compactions = { requests: 0, usd: 0 };
+  const unsettled = { replies: 0, tokens: 0, usd: 0 };
   const iterations: NonNullable<SpendReport["iterations"]> = {};
   for (const it of items) {
     if (it.compaction) { compactions.requests++; compactions.usd += it.usd; }
+    if (it.unsettled) { unsettled.replies++; unsettled.tokens += it.unsettled; unsettled.usd += it.output > 0 ? (it.outputUsd * it.unsettled) / it.output : 0; }
     if (it.iteration) {
       const x = (iterations[it.iteration] ??= { calls: 0, usd: 0, models: [] });
       x.calls++;
@@ -784,6 +791,7 @@ export function summarizeSpend(items: SpendItem[], days: number, since: number, 
     ...(anyModifier(mods) ? { modifiers: mods } : {}),
     ...(changed.size ? { priceChanged: [...changed.values()].sort((a, b) => b.usd - a.usd) } : {}),
     ...(compactions.requests ? { compactions } : {}),
+    ...(unsettled.replies ? { unsettled } : {}),
     ...(Object.keys(iterations).length ? { iterations } : {}),
     sessions: [...sessions.values()].sort(byUsd),
     skipped,
@@ -976,6 +984,7 @@ export function renderSpend(r: SpendReport, top = 8): string {
   if (r.modifiers) lines.push(`  Of it, billed above list rates: ${modifiersText(r.modifiers)}`);
   // A compaction's own request is in no row's usage: estimated from the context it read and the summary it wrote.
   if (r.compactions) lines.push(`  Of it, ${r.compactions.requests.toLocaleString("en-US")} Claude Code ${r.compactions.requests === 1 ? "compaction's own request" : "compactions' own requests"} ${usd(r.compactions.usd)}, an estimate (no row records their usage)`);
+  if (r.unsettled) lines.push(`  Of it, ${usd(r.unsettled.usd)} output of ${r.unsettled.replies.toLocaleString("en-US")} subagent ${r.unsettled.replies === 1 ? "reply" : "replies"} whose rows Claude Code never settled (2.1.284-2.1.299), an estimate from ${r.unsettled.replies === 1 ? "its" : "their"} content`);
   // Calls inside a request that its usage totals leave out: the advisor's, an attempt a fallback replaced.
   for (const [type, x] of Object.entries(r.iterations ?? {})) lines.push(`  Of it, ${x.calls.toLocaleString("en-US")} ${ITERATION_NAME[type]?.[x.calls === 1 ? 0 : 1] ?? `"${type}" iterations`} ${usd(x.usd)} (${x.models.slice(0, 2).join(", ")}), beyond their requests' usage totals`);
   const claude = r.tools.find((t) => t.tool === "claude");

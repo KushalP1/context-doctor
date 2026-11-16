@@ -109,6 +109,21 @@ export interface SessionGap {
     /** Of ours: the compactions' own requests, which we estimate (no row records their usage). */
     compactionUsd: number;
     compactions: number;
+    /**
+     * The main-thread turns that ended where Claude Code may send a prompt
+     * suggestion (sidecost.ts), and what one after each would cost: not in
+     * ours, since whether it was sent is in no file (gapText takes the count
+     * from Claude Code's own input tokens).
+     */
+    turnEnds?: {
+        n: number;
+        usd: number;
+    };
+    /** Of ours: subagent replies whose rows never settled their output, estimated from their content (sidecost.ts). */
+    unsettledUsd?: number;
+    unsettled?: number;
+    /** Requests that hung and Claude Code sent again (stalledRetries): billed when the API had begun them, and in no row. */
+    stalled?: number;
     version?: string;
     unknown?: true;
     models: ModelGap[];
@@ -130,6 +145,26 @@ export interface GapParts {
 }
 /** The parts of the gap of one or more sessions (see GapParts). */
 export declare function gapParts(sessions: SessionGap[]): GapParts;
+/** The turns of a main transcript's rows that ended where Claude Code may send a prompt suggestion, within [`from`, `to`], and their price (sidecost.ts). */
+export declare function turnEnds(rows: unknown[], from: number, to: number): {
+    n: number;
+    usd: number;
+};
+/** A request no reply answers, sent again unchanged this long after or later: it hung. */
+export declare const HUNG_MS = 60000;
+/**
+ * Requests that hung: Claude Code sent one (an `api-request` row, 2.1.308+),
+ * no reply answers it, and Claude Code sent it again unchanged (a row whose
+ * `base` is it, with no new messages) a minute or more later, with no error
+ * between saying it never left the machine. On the author's machine they
+ * come in runs while the network is down or the machine sleeps (a subagent
+ * sent the same 380k-token prompt every ~16 minutes through a night), and
+ * the two stretches between Claude Code's cost-state records that hold most
+ * of them hold most of the gap: Claude Code bills a request the API had
+ * begun, and no row records its usage. Which ones the API had begun is in
+ * no file, so they are counted, not priced. Within [`from`, `to`].
+ */
+export declare function stalledRetries(files: string[], from: number, to: number): number;
 /**
  * The comparison for the sessions among `tops` whose Claude Code record and
  * our requests both fall inside [`since`, `until`]: `items` are spend's
