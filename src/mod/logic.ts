@@ -102,7 +102,9 @@ export function priceText(d: Pick<BandData, "usd" | "ccUsd">): string | undefine
 export interface BandOptions {
   /** Keys the person hid this session. */
   hidden?: ReadonlySet<string>;
-  /** CONTEXT_DOCTOR_MOD_BAND=always: show the cache clock and the price at all times, not only when they pay. */
+  /** CONTEXT_DOCTOR_MOD_BAND=cold: show the cold-return offer (Compact first). */
+  cold?: boolean;
+  /** CONTEXT_DOCTOR_MOD_BAND=always: the cold return, and the cache clock and the price at all times. */
   always?: boolean;
 }
 
@@ -112,14 +114,14 @@ function about(n: number): string {
 }
 
 /**
- * The band above the prompt at `now`. By default it shows one thing: a cold
- * return (back at a big session after its cache expired), the one moment
- * with something to press. The cache clock, the expired notice and the
- * session price came up after nearly every turn on a big session and read
- * as noise, so they show only with `always`. Nothing on mobile.
+ * The band above the prompt at `now`. Off by default: on a big session it came
+ * up after nearly every reply, and the every-prompt hook already has Claude
+ * offer to compact on a cold return. `cold` shows that return (back at a big
+ * session after its cache expired) with Compact first; `always` adds the cache
+ * clock, the expired notice and the session price. Nothing on mobile.
  */
 export function band(d: BandData | undefined, now: number, surface: Surface, opts: BandOptions = {}): Band {
-  if (!d || surface === "mobile") return { kind: "none" };
+  if (!d || surface === "mobile" || !(opts.cold || opts.always)) return { kind: "none" };
   const hidden = opts.hidden ?? new Set<string>();
   const show = (b: Exclude<Band, { kind: "none" }>): Band => (hidden.has(b.key) ? { kind: "none" } : b);
   // The terminal's status line already shows the clock and the price.

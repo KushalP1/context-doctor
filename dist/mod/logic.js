@@ -72,14 +72,14 @@ function about(n) {
     return n < 0.01 ? "under $0.01" : `~${money(n)}`;
 }
 /**
- * The band above the prompt at `now`. By default it shows one thing: a cold
- * return (back at a big session after its cache expired), the one moment
- * with something to press. The cache clock, the expired notice and the
- * session price came up after nearly every turn on a big session and read
- * as noise, so they show only with `always`. Nothing on mobile.
+ * The band above the prompt at `now`. Off by default: on a big session it came
+ * up after nearly every reply, and the every-prompt hook already has Claude
+ * offer to compact on a cold return. `cold` shows that return (back at a big
+ * session after its cache expired) with Compact first; `always` adds the cache
+ * clock, the expired notice and the session price. Nothing on mobile.
  */
 export function band(d, now, surface, opts = {}) {
-    if (!d || surface === "mobile")
+    if (!d || surface === "mobile" || !(opts.cold || opts.always))
         return { kind: "none" };
     const hidden = opts.hidden ?? new Set();
     const show = (b) => (hidden.has(b.key) ? { kind: "none" } : b);

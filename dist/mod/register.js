@@ -52,7 +52,7 @@ const FIX_TIMEOUT_MS = 10 * 60_000;
 const MEASURE_TIMEOUT_MS = 30_000;
 /** `mod usage` measures 30 days the first time (~3 s cold on 22,000 requests); later runs read its 5-minute cache. */
 const USAGE_TIMEOUT_MS = 2 * 60_000;
-const fresh = () => ({ off: false, always: false, thresholds: DEFAULT_THRESHOLDS, hidden: new Set(), drawn: "", compacting: false, loading: false, presses: new Map(), pinging: false, usageOpen: false, usageLoading: false, period: "today", usageDrawn: "" });
+const fresh = () => ({ off: false, cold: false, always: false, thresholds: DEFAULT_THRESHOLDS, hidden: new Set(), drawn: "", compacting: false, loading: false, presses: new Map(), pinging: false, usageOpen: false, usageLoading: false, period: "today", usageDrawn: "" });
 let S = fresh();
 /** For tests: the state the hooks share. */
 export const state = () => S;
@@ -65,7 +65,7 @@ function cliOf($) {
     return `${root}${sep}dist${sep}cli.js`;
 }
 function bandKey(now, surface) {
-    const b = band(S.data, now, surface, { hidden: S.hidden, always: S.always });
+    const b = band(S.data, now, surface, { hidden: S.hidden, cold: S.cold, always: S.always });
     return b.kind === "none" ? "" : `${b.key}|${b.text}`;
 }
 /** Hand the reading to the CLI; with no CLI (no node on PATH), keep what Claude Code said. */
@@ -348,7 +348,9 @@ export function register(on) {
     on("session.start", async ($, e, next) => {
         try {
             S.off = (await $.env.get("CONTEXT_DOCTOR_NO_MOD")) === "1";
-            S.always = (await $.env.get("CONTEXT_DOCTOR_MOD_BAND")) === "always";
+            const bandMode = (await $.env.get("CONTEXT_DOCTOR_MOD_BAND"))?.trim().toLowerCase();
+            S.cold = bandMode === "cold";
+            S.always = bandMode === "always";
             S.thresholds = thresholdsFrom(await $.env.get("CONTEXT_DOCTOR_SESSION_PRICE"), await $.env.get("CONTEXT_DOCTOR_NO_SESSION_PRICE"));
             S.pingEveryMs = keepWarmTestEvery(await $.env.get("CONTEXT_DOCTOR_KEEP_WARM_PING_MS"));
             if (!S.off) {
@@ -405,7 +407,7 @@ export function register(on) {
             const { Box, Text, Button } = $.ui.resolve(e);
             return h(Box, { flexDirection: "row", flexWrap: "wrap", columnGap: 1 }, h(Text, { dimColor: true }, keepWarmText(S.kw, now)), h(Button, { key: "cd-keep-warm-stop", label: "Stop", onPress: () => stopKeepWarm($, "you stopped it") }));
         }
-        const b = band(S.data, now, e.surface, { hidden: S.hidden, always: S.always });
+        const b = band(S.data, now, e.surface, { hidden: S.hidden, cold: S.cold, always: S.always });
         // A compaction only runs between turns: no button while one runs.
         if (b.kind === "none" || (b.kind === "cold" && e.props.isWorking))
             return next(e);

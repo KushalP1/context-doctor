@@ -214,7 +214,7 @@ Every release, with the details: [docs/whats-new.md](./docs/whats-new.md).
 - [Library](./docs/library.md): `profileConversation`, `optimizeConversation`, `packContext`, `withContextDoctor`
 - [Budgets and CI](./docs/ci.md): the GitHub Action and `.contextdoctorrc`
 - [Privacy](./docs/privacy.md) and [the directory submission](./docs/directory-submission.md): what the plugin reads, writes and sends; the package for Anthropic's plugin directory
-- [Desktop app and VS Code](./docs/desktop.md): the plugin's mod: limit readings, Claude Code's own cost, `/context-doctor-fix`, `/context-doctor-usage` (the context ring, limit windows, tokens and dollars by model, running subagents) and `/context-doctor-keep-warm` (Desktop app, VS Code, terminal), and the cache band with Compact first (Desktop app and terminal only)
+- [Desktop app and VS Code](./docs/desktop.md): the plugin's mod: limit readings, Claude Code's own cost, `/context-doctor-fix`, `/context-doctor-usage` (the context ring, limit windows, tokens and dollars by model, running subagents) and `/context-doctor-keep-warm` (Desktop app, VS Code, terminal), and an optional cache band with Compact first (`CONTEXT_DOCTOR_MOD_BAND=cold`; Desktop app and terminal only)
 - [Editor and status line](./docs/editor-and-statusline.md): the VS Code / Cursor extension and Claude Code's status bar
 - [Token counts](./docs/tokenizer.md): why counts are "~", how the Claude ratios were measured, exact counts
 - [Performance](./docs/performance.md): what context-doctor itself costs (its six MCP tool definitions: at most ~2,344 tokens)

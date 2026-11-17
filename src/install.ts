@@ -1203,7 +1203,7 @@ function routeClaudeCode(route: ClaudeCodeRoute, attempt: (label: string, fn: ()
       ? `✓ Claude Code: the context-doctor plugin enabled (${tilde(settingsPath)}: extraKnownMarketplaces, enabledPlugins), in place of install's own MCP server, skill and hooks`
       : "✓ Claude Code: the context-doctor plugin already enabled, unchanged");
     console.log(`  ${describeInstalls(route.readiness.installs)} ${route.readiness.installs.length === 1 ? "runs" : "run"} its mod: limit readings and Claude Code's own session cost after each turn,`);
-    console.log("  the Compact first button on a cold return, /context-doctor-fix; and the MCP server, skills and hooks install used to add itself.");
+    console.log("  /context-doctor-fix, /context-doctor-usage (a Compact first band with CONTEXT_DOCTOR_MOD_BAND=cold); and the MCP server, skills and hooks install used to add itself.");
     if (pluginStage().stage !== "installed") {
       console.log("  Claude Code downloads it in the background at its next start and loads it from the session after (or at once: /reload-plugins).");
     }

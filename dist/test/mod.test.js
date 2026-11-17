@@ -33,32 +33,34 @@ const data = (over = {}) => ({
     tokens: 520_000, model: "claude-opus-5-5", lastReplyAt: T, ttlMs: 60 * MIN, coldMarginMs: 5 * MIN,
     rewriteUsd: 5.2, perMessageUsd: 0.26, afterCompactPerMessageUsd: 0.02, usd: 12.5, ccUsd: 12.4, ...over,
 });
-test("band: by default only the cold return shows; the clock, the expired notice and the price stay away after every turn", () => {
+test("band: off by default, even on a cold return; with `cold`, the clock, the expired notice and the price still stay away", () => {
+    assert.equal(band(data(), T + 80 * MIN, "desktop").kind, "none", "a cold return, with no CONTEXT_DOCTOR_MOD_BAND");
     for (const at of [10, 57, 62])
-        assert.equal(band(data(), T + at * MIN, "desktop").kind, "none", `${at} min`);
-    assert.equal(band(data({ ttlMs: 5 * MIN }), T + 4.5 * MIN, "desktop").kind, "none", "a 5-minute cache's last minute");
-    assert.equal(band(data({ usd: 1215, ccUsd: 1325, tokens: undefined }), T, "desktop").kind, "none", "a session past $500");
-    assert.equal(band(data(), T + 90 * MIN, "mobile").kind, "none");
+        assert.equal(band(data(), T + at * MIN, "desktop", { cold: true }).kind, "none", `${at} min`);
+    assert.equal(band(data({ ttlMs: 5 * MIN }), T + 4.5 * MIN, "desktop", { cold: true }).kind, "none", "a 5-minute cache's last minute");
+    assert.equal(band(data({ usd: 1215, ccUsd: 1325, tokens: undefined }), T, "desktop", { cold: true }).kind, "none", "a session past $500");
+    assert.equal(band(data(), T + 90 * MIN, "mobile", { cold: true }).kind, "none");
     // A small context: a cold cache is cheap, nothing to say.
-    assert.equal(band(data({ tokens: 90_000 }), T + 90 * MIN, "desktop").kind, "none");
+    assert.equal(band(data({ tokens: 90_000 }), T + 90 * MIN, "desktop", { cold: true }).kind, "none");
     assert.equal(band(undefined, T, "desktop").kind, "none");
 });
-test("band: a cold return with the Compact first offer in plain words, no session price, on every surface but mobile; not past Claude Code's own compaction point", () => {
+test("band: with `cold`, a cold return with the Compact first offer in plain words, no session price, on every surface but mobile; not past Claude Code's own compaction point", () => {
+    const C = { cold: true };
     for (const s of ["desktop", "vscode", "terminal"]) {
-        const cold = band(data(), T + 80 * MIN, s);
+        const cold = band(data(), T + 80 * MIN, s, C);
         assert.equal(cold.kind, "cold", s);
         const c = cold;
         assert.equal(c.text, "context-doctor: you were away 1h 20m, so the cache expired. Your next message re-sends this 520k-token chat at full price (~$5.20).");
         assert.equal(c.compact, "Compact first to shrink it: each message after that costs ~$0.02 instead of ~$0.26.");
     }
-    const tiny = band(data({ perMessageUsd: 0.043, afterCompactPerMessageUsd: 0.004 }), T + 80 * MIN, "desktop");
+    const tiny = band(data({ perMessageUsd: 0.043, afterCompactPerMessageUsd: 0.004 }), T + 80 * MIN, "desktop", C);
     assert.equal(tiny.compact, "Compact first to shrink it: each message after that costs under $0.01 instead of ~$0.04.");
-    assert.equal(band(data({ autoCompactAt: 500_000 }), T + 80 * MIN, "desktop").kind, "none", "Claude Code compacts this one itself");
-    assert.equal(band(data(), T + 80 * MIN, "mobile").kind, "none");
+    assert.equal(band(data({ autoCompactAt: 500_000 }), T + 80 * MIN, "desktop", C).kind, "none", "Claude Code compacts this one itself");
+    assert.equal(band(data(), T + 80 * MIN, "mobile", C).kind, "none");
     // Hiding the cold offer of one idle period leaves the next one's.
-    const key = band(data(), T + 80 * MIN, "desktop").key;
-    assert.equal(band(data(), T + 80 * MIN, "desktop", { hidden: new Set([key]) }).kind, "none");
-    assert.equal(band(data({ lastReplyAt: T + MIN }), T + 81 * MIN, "desktop", { hidden: new Set([key]) }).kind, "cold");
+    const key = band(data(), T + 80 * MIN, "desktop", C).key;
+    assert.equal(band(data(), T + 80 * MIN, "desktop", { ...C, hidden: new Set([key]) }).kind, "none");
+    assert.equal(band(data({ lastReplyAt: T + MIN }), T + 81 * MIN, "desktop", { ...C, hidden: new Set([key]) }).kind, "cold");
 });
 test("band: `always` brings back the clock, the expired notice and the price (not in the terminal, whose status line has them)", () => {
     const always = { always: true };
@@ -279,10 +281,12 @@ function sessionHome(idleMin, now = Date.now()) {
     writeFileSync(join(proj, "sess-1.jsonl"), rows.join("\n") + "\n");
     return { home, cwd };
 }
+/** The band is off by default; these tests turn on its cold-return offer. */
+const COLD = { CONTEXT_DOCTOR_MOD_BAND: "cold" };
 test("after a turn: the readings reach the limits ledger and the cost ledger through the CLI, and the band shows the cold return with its button", async () => {
     const now = Date.now();
     const { home, cwd } = sessionHome(80, now);
-    const s = engine(home, { cwd, now });
+    const s = engine(home, { cwd, now, env: COLD });
     await fire(s, "session.start", { cwd, surface: "desktop", isInteractive: true }, (e) => ({ cwd: e.cwd }));
     assert.deepEqual(s.commands, [COMMAND, USAGE_COMMAND, KEEP_WARM_COMMAND]);
     const reset = new Date(now + 2 * 3600e3).toISOString();
@@ -322,11 +326,20 @@ test("after a turn: the readings reach the limits ledger and the cost ledger thr
     // The old context's figures are gone: no second offer for it.
     assert.equal(await render(s, "AbovePrompt", "desktop", {}), "ENGINE");
 });
+test("by default the band draws nothing, even on a cold return; the readings are still kept", async () => {
+    const now = Date.now();
+    const { home, cwd } = sessionHome(80, now);
+    const s = engine(home, { cwd, now });
+    await fire(s, "session.start", { cwd, surface: "desktop", isInteractive: true });
+    await fire(s, "session.measure", { context: { tokens: 520_010, window: 1_000_000 }, rateLimits: [], cost: { usd: 9.87 }, changed: ["cost"] }, () => ({ changed: ["cost"] }));
+    assert.equal(state().data?.tokens, 520_010);
+    assert.equal(await render(s, "AbovePrompt", "desktop", { hasSurvey: false, isWorking: false }), "ENGINE");
+});
 test("after /clear or a resume the band is gone: no Compact first for the next session on the old one's figures", async () => {
     for (const reason of ["clear", "resume"]) {
         const now = Date.now();
         const { home, cwd } = sessionHome(80, now);
-        const s = engine(home, { cwd, now });
+        const s = engine(home, { cwd, now, env: COLD });
         await fire(s, "session.start", { cwd, surface: "desktop", isInteractive: true });
         await fire(s, "session.measure", { context: { window: 1e6 }, rateLimits: [], changed: ["context"] }, () => ({ changed: ["context"] }));
         assert.ok(button(await render(s, "AbovePrompt", "desktop", {}), "cd-compact"), reason);
@@ -341,7 +354,7 @@ test("after /clear or a resume the band is gone: no Compact first for the next s
 test("a compaction Claude Code refuses for its own reason says that reason", async () => {
     const now = Date.now();
     const { home, cwd } = sessionHome(80, now);
-    const s = engine(home, { cwd, now });
+    const s = engine(home, { cwd, now, env: COLD });
     s.$.session.compact = async () => { throw new Error("Not enough messages to compact."); };
     await fire(s, "session.start", { cwd, surface: "desktop", isInteractive: true });
     await fire(s, "session.measure", { context: { window: 1e6 }, rateLimits: [], changed: ["context"] }, () => ({ changed: ["context"] }));
@@ -355,7 +368,7 @@ test("a compaction Claude Code refuses for its own reason says that reason", asy
 test("the compact button: a turn in flight is a toast, not a compaction; Hide hides it", async () => {
     const now = Date.now();
     const { home, cwd } = sessionHome(80, now);
-    const s = engine(home, { cwd, now, compactRejects: true });
+    const s = engine(home, { cwd, now, env: COLD, compactRejects: true });
     await fire(s, "session.start", { cwd, surface: "desktop", isInteractive: true });
     await fire(s, "session.measure", { context: { window: 1e6 }, rateLimits: [], changed: ["context"] }, () => ({ changed: ["context"] }));
     const tree = await render(s, "AbovePrompt", "terminal", {});

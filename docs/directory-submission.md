@@ -140,7 +140,7 @@ HOME=$SAMPLE node dist/cli.js spend    # $145 across 276 requests, by project
 3. "What does every request re-read before my message, and what does it cost?" (`/context-doctor:overhead`)
 4. "Answer this from the log without reading all of it: which request failed first?" (`/context-doctor:pack`)
 
-**The mod:** in the Desktop app's Code tab, `/context-doctor-fix` opens the pane; a session over 150k tokens left idle past its cache shows the band with **Compact first**.
+**The mod:** in the Desktop app's Code tab, `/context-doctor-fix` opens the pane; with `CONTEXT_DOCTOR_MOD_BAND=cold`, a session over 150k tokens left idle past its cache shows the band with **Compact first** (the band is off by default).
 
 ## Evidence: the canary
 

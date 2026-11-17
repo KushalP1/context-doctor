@@ -49,6 +49,8 @@ export declare const USAGE_PANE = "context-doctor-usage";
 /** The mod's state for this load (a reload starts it over; the next turn measures again). */
 interface State {
     off: boolean;
+    /** CONTEXT_DOCTOR_MOD_BAND: the band is off unless it says `cold` or `always`. */
+    cold: boolean;
     always: boolean;
     /** The session price thresholds in force, for when the CLI cannot say them (no Node). */
     thresholds: number[];
