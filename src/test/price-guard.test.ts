@@ -121,7 +121,7 @@ test("the rows added on 2026-11-14, each at the page's price; every model the fi
   assert.deepEqual(p("gpt-6-cyber"), [20, 100, 2]);
   assert.deepEqual(unpriced([...openaiPageIds(OPENAI_PAGE), ...googlePageIds(GOOGLE_PAGE)]), []);
   // What the guard says for a model that arrives before its row: named, not passed.
-  assert.deepEqual(unpriced(["gemini-4-neon", "gpt-6.2-sol", "gemini-4-argon"]), ["gemini-4-neon", "gpt-6.2-sol"]);
+  assert.deepEqual(unpriced(["gemini-4-neon", "gpt-9.9-sol", "gemini-4-argon"]), ["gemini-4-neon", "gpt-9.9-sol"]);
 });
 
 test("dated rows: read from pricing.ts's source, each agreeing with the built table; a dated row with no name the check can read is an error", () => {

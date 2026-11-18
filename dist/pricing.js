@@ -144,6 +144,11 @@ const PRICING = [
     // no cached-input price (the -pro ones) read at full input. Not modelled:
     // Fast mode (priority processing; Codex records only its thread's
     // `service_tier`, not each request's) and the 10% regional uplift.
+    // GPT-6.2 Astra and Sol, read 2026-11-18. Astra for Law's price is
+    // promotional "at least through December 31, 2026": no end date yet.
+    [openai("gpt-6.2-astra"), ...openaiLong(8, 40, 0.4)],
+    [openai("gpt-6.2-astra-law"), ...openaiLong(8, 40, 0.4)],
+    [openai("gpt-6.2-sol"), ...openaiLong(2, 10, 0.1)],
     [openai("gpt-6-astra"), ...openaiLong(10, 50, 1)],
     // GPT-6 Astra for Law's price is promotional "at least through December
     // 31, 2026" (read 2026-11-14): no end date to record yet.

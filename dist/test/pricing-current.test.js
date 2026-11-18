@@ -83,8 +83,9 @@ test("OpenAI, gpt-6 family: each model by its exact name", () => {
         ["gpt-rosalind-discovery", [5, 25, 0.5], []],
     ]);
     // No gpt-6 fallback: an id the page does not list stays not priced.
-    for (const id of ["gpt-6", "gpt-6.1", "gpt-6-terra", "gpt-6.2-sol"])
+    for (const id of ["gpt-6", "gpt-6.1", "gpt-6-terra", "gpt-9.9-sol"])
         assert.equal(pricingFor(id), undefined, id);
+    assert.deepEqual([pricingFor("gpt-6.2-sol")?.inputPerM, pricingFor("gpt-6.2-astra")?.inputPerM, pricingFor("gpt-6.2-astra-law")?.outputPerM], [2, 8, 40]);
     // Snapshot dates and provider prefixes name the same model.
     assert.deepEqual(known("gpt-6.1-sol-2026-10-01"), [2, 10, 0.1]);
     assert.deepEqual(known("openai/gpt-6-luna"), [0.1, 0.5, 0.01]);
