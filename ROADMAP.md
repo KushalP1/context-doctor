@@ -372,7 +372,7 @@ the estimator to noise. Calibration needs a real tokenizer, not this data.
 
 Each release with the measurements behind it. Dollar figures are as measured when the release shipped, with the prices and counting of the time; the 0.32 audit fixed both, and the README's headline figures are the re-measured ones.
 
-## Shipped on main, not yet released
+## Shipped in 0.49.1: The Desktop band off by default, and the rest of Claude Code's figure explained
 
 - **The Desktop band is off by default.** On a big session the cache clock, the expired notice and the session price (with Claude Code's figure beside ours) put a band up after nearly every reply, the **Compact first** button wrapped between lines of text, and on a cold return it repeated what the every-prompt hook already has Claude say. The mod still keeps its readings; the band draws nothing unless `CONTEXT_DOCTOR_MOD_BAND=cold` (the cold return only, in plain words: "you were away 1h 25m, so the cache expired. Your next message re-sends this 214k-token chat at full price (~$1.71)", with **Compact first** and **Hide** on a row of their own) or `always` (also the clock, the expired notice and the price).
 
