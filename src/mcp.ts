@@ -18,6 +18,7 @@
  *   save_handoff      — store a handoff brief the next chat starts from (a chat's history cannot be cut)
  *   recall            — search this session's own transcript (compacted turns, cleared output); stdio only
  * Prompts: context_checkup, handoff, ask_file. Resources (stdio): handoff://latest, handoff://<id>.
+ * Codex only (stdio): the `statusline` tool and ui://context-doctor/statusline, its footer (codexstatusline.ts).
  *
  * Built on the MCP SDK's v2 packages: one server definition answers both
  * protocol eras, a 2025-era client's `initialize` (2024-10-07 to 2025-11-25)
@@ -53,6 +54,9 @@ import { HANDOFF_LIMITS, handoffDir, listHandoffs, maskSecrets, readHandoff, ren
 import { sourcesFromOpenAiFiles } from "./fileparams.js";
 import { exposureWarning, makeGuard, portArg, readJsonBody, refusal } from "./httpguard.js";
 import { currentTranscript, recall, renderRecall } from "./recall.js";
+import { CODEX_STATUSLINE_META, CODEX_STATUSLINE_STATE, CODEX_STATUSLINE_URI, CodexStatusline, PRICE_WORKER_ROLE, servePriceWorker } from "./codexstatusline.js";
+import { isMainThread, Worker, workerData } from "node:worker_threads";
+import { fileURLToPath } from "node:url";
 
 const STRATEGY_IDS = ["dedupe", "trim-tool-results", "trim-tool-calls", "strip-base64", "prune-history"] as const;
 
@@ -142,6 +146,45 @@ async function askConsent(server: McpServer, ctx: ServerContext, message: string
   } catch (e) {
     if (e instanceof SdkError && e.code === SdkErrorCode.RequestTimeout) return { asked: true, ok: false, content: {}, why: "no answer within two minutes" };
     return { asked: true, ok: false, content: {}, why: FAILED };
+  }
+}
+
+/**
+ * Codex's footer (codexstatusline.ts), one per process: the session prices it
+ * keeps are shared by every connection. Its worker runs this very file
+ * (bundled, dist/mcp.js) with PRICE_WORKER_ROLE as its data; see the
+ * transport dispatch at the end.
+ */
+const codexStatusline = new CodexStatusline(() => new Worker(fileURLToPath(import.meta.url), { workerData: { role: PRICE_WORKER_ROLE } }));
+
+/** The client is Codex (its MCP client names itself `codex-mcp-client`), by the handshake or a 2026-07-28 request's own envelope. */
+function isCodex(server: McpServer, req: unknown): boolean {
+  const meta = (req as { params?: { _meta?: Record<string, unknown> } } | undefined)?.params?._meta;
+  const name = (meta?.["io.modelcontextprotocol/clientInfo"] as { name?: unknown } | undefined)?.name ?? server.server.getClientVersion()?.name;
+  return typeof name === "string" && /^codex/i.test(name);
+}
+
+/**
+ * The status line's tool and resource are for Codex's footer alone: every
+ * other client would carry the definition in each request for nothing, so
+ * tools/list and resources/list leave them out unless Codex asks. A read of
+ * the resource by its URI is answered whoever asks.
+ */
+function codexOnly(server: McpServer): void {
+  const handlers = (server.server as unknown as { _requestHandlers?: Map<string, (req: unknown, extra: unknown) => Promise<unknown>> })._requestHandlers;
+  if (!handlers) return;
+  const hidden: Array<[method: string, key: string, hide: (x: Record<string, unknown>) => boolean]> = [
+    ["tools/list", "tools", (t) => t.name === "statusline"],
+    ["resources/list", "resources", (r) => r.uri === CODEX_STATUSLINE_URI],
+  ];
+  for (const [method, key, hide] of hidden) {
+    const list = handlers.get(method);
+    if (!list) continue;
+    handlers.set(method, async (req, extra) => {
+      const r = (await list(req, extra)) as Record<string, unknown>;
+      if (!isCodex(server, req) && Array.isArray(r?.[key])) r[key] = (r[key] as Array<Record<string, unknown>>).filter((x) => !hide(x));
+      return r;
+    });
   }
 }
 
@@ -614,6 +657,32 @@ server.registerTool(
     );
   }
 
+  // Codex's status line (Codex 0.171+, its `tui_extensions_statusline`
+  // experiment): picked by the person in /statusline, read about every
+  // second with the displayed thread's snapshot. A local server only, listed
+  // to Codex only (codexOnly).
+  if (fileAccess) {
+    server.registerTool(
+      "statusline",
+      {
+        title: "context-doctor: context, cost, limits",
+        description: "Codex's footer reads this; nothing to call.",
+        inputSchema: z.object({}),
+        annotations: { title: "Status line", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        _meta: CODEX_STATUSLINE_META,
+      },
+      async () => ({ content: [{ type: "text" as const, text: "context-doctor's status line for Codex's footer: turn on Custom status line in /experimental, then pick it in /statusline." }] })
+    );
+    server.registerResource(
+      "codex-statusline",
+      CODEX_STATUSLINE_URI,
+      { title: "Codex status line", description: "Codex's footer: context, this session's cost, the plan's limits.", mimeType: "application/json" },
+      async (_uri, ctx) => ({
+        contents: [{ uri: CODEX_STATUSLINE_URI, mimeType: "application/json", text: await codexStatusline.read((ctx.mcpReq._meta as Record<string, unknown> | undefined)?.[CODEX_STATUSLINE_STATE]) }],
+      })
+    );
+  }
+
   server.registerTool(
     "context_best_practices",
     {
@@ -631,6 +700,7 @@ server.registerTool(
   );
 
   leanToolSchemas(server);
+  codexOnly(server);
   return server;
 }
 
@@ -740,7 +810,10 @@ async function sendWebResponse(res: import("node:http").ServerResponse, response
 // default: it opens with `server/discover` and stamps every request) gets
 // that revision.
 const argv = process.argv.slice(2);
-if (argv.includes("--http")) {
+if (!isMainThread) {
+  // The status line's price worker (CodexStatusline): this file, run again in a thread.
+  if ((workerData as { role?: unknown } | undefined)?.role === PRICE_WORKER_ROLE) await servePriceWorker();
+} else if (argv.includes("--http")) {
   const argAfter = (flag: string): string | undefined => {
     const i = argv.indexOf(flag);
     return i >= 0 ? argv[i + 1] : undefined;
