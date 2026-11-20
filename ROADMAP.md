@@ -372,6 +372,10 @@ the estimator to noise. Calibration needs a real tokenizer, not this data.
 
 Each release with the measurements behind it. Dollar figures are as measured when the release shipped, with the prices and counting of the time; the 0.32 audit fixed both, and the README's headline figures are the re-measured ones.
 
+## Shipped on main, not yet released
+
+- **Gemini 4 Neon priced** ($3 / $15 / $0.15, implicit caching only), from Google's page read 2026-11-20. Genie 4, a world-generation model billed by video tokens, is left out on purpose with the other non-text models.
+
 ## Shipped in 0.49.1: The Desktop band off by default, and the rest of Claude Code's figure explained
 
 - **GPT-6.2 priced.** `gpt-6.2-astra` ($8 / $40), `gpt-6.2-sol` ($2 / $10) and `gpt-6.2-astra-law` (Astra's price, promotional through at least 2026-12-31), with their long-context rates, from OpenAI's page read 2026-11-18.

@@ -270,6 +270,10 @@ const PRICING: Array<[pattern: RegExp, pricing: ModelPricing, billing?: RowBilli
   [gemini("gemini-4-carbon"), rate(2, 10, 0.1), { changes: "2026-12-01", then: rate(4, 20, 0.2) }],
   [gemini("gemini-4-argon"), rate(2, 10, 0.1), { changes: "2026-12-01", then: rate(4, 20, 0.2) }],
   [gemini("gemini-4-hydrogen"), rate(1.5, 7.5, 0.075)],
+  // Gemini 4 Neon, read 2026-11-20: $3 / $15 / $0.15 (implicit caching
+  // only), no date, no long-prompt tier. Genie 4 (world generation, billed
+  // by video tokens) is not a text model: modelids.ts NOT_A_TEXT_MODEL.
+  [gemini("gemini-4-neon"), rate(3, 15, 0.15)],
   // 3.6 and 3.8 Flash double "starting January 1, 2027" ($1.50 / $7.50 / $0.15).
   [gemini("gemini-3.8-flash"), rate(0.75, 3.75, 0.075), { changes: "2027-01-01", then: rate(1.5, 7.5, 0.15) }],
   [gemini("gemini-3.6-flash"), rate(0.75, 3.75, 0.075), { changes: "2027-01-01", then: rate(1.5, 7.5, 0.15) }],

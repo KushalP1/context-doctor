@@ -83,11 +83,11 @@ export function unpriced(ids: string[]): string[] {
 /**
  * Models priced per image, per minute or per character, or not by the token
  * at all (embeddings, moderation), and Google's endpoints that are not
- * models a coding agent runs (video, music, robots, the Decisions API, Gemma
+ * models a coding agent runs (video, music, world generation, robots, the Decisions API, Gemma
  * on the free tier only): the table has no row for them on purpose
  * (pricing.ts header). Matched anywhere in the id.
  */
-const NOT_A_TEXT_MODEL = /image|realtime|audio|tts|transcribe|whisper|translate|(?:^|-)live(?:-|$)|embedding|moderation|omni|robotics|decision|lyria|veo|imagen|gemma|nano-banana|sora/i;
+const NOT_A_TEXT_MODEL = /image|realtime|audio|tts|transcribe|whisper|translate|(?:^|-)live(?:-|$)|embedding|moderation|omni|robotics|decision|lyria|veo|imagen|gemma|nano-banana|sora|genie/i;
 
 /**
  * The models OpenAI's price page (developers.openai.com/api/docs/pricing,

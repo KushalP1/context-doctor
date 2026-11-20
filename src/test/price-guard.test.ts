@@ -121,7 +121,7 @@ test("the rows added on 2026-11-14, each at the page's price; every model the fi
   assert.deepEqual(p("gpt-6-cyber"), [20, 100, 2]);
   assert.deepEqual(unpriced([...openaiPageIds(OPENAI_PAGE), ...googlePageIds(GOOGLE_PAGE)]), []);
   // What the guard says for a model that arrives before its row: named, not passed.
-  assert.deepEqual(unpriced(["gemini-4-neon", "gpt-9.9-sol", "gemini-4-argon"]), ["gemini-4-neon", "gpt-9.9-sol"]);
+  assert.deepEqual(unpriced(["gemini-9-neon", "gpt-9.9-sol", "gemini-4-argon"]), ["gemini-9-neon", "gpt-9.9-sol"]);
 });
 
 test("dated rows: read from pricing.ts's source, each agreeing with the built table; a dated row with no name the check can read is an error", () => {
@@ -166,10 +166,10 @@ test("scripts/check-models.mjs: the pages, the catalogs and --dated; exit 1 nami
     assert.match(ok.stdout, /✓ \d+ dated rows: every one ending within 14 days of 2026-11-14 has its successor price \(next without one: gpt-5\.6\S*, changes 2026-12-01\)/);
 
     // A model the table does not know yet, and the promotion's end two weeks out.
-    writeFileSync(google, `${GOOGLE_PAGE}\n  *[\`gemini-4-neon\`](/docs/models/gemini-4-neon)*\n`);
+    writeFileSync(google, `${GOOGLE_PAGE}\n  *[\`gemini-9-neon\`](/docs/models/gemini-9-neon)*\n`);
     const bad = run("--google", google, "--dated", "--today", "2026-11-16");
     assert.equal(bad.status, 1, bad.stdout + bad.stderr);
-    assert.match(bad.stdout, /1 of 4 Gemini models have no price of their own in src\/pricing\.ts: gemini-4-neon/);
+    assert.match(bad.stdout, /1 of 4 Gemini models have no price of their own in src\/pricing\.ts: gemini-9-neon/);
     assert.match(bad.stdout, /✗ gpt-5\.6-sol: its price ends on 2026-11-30, in 14 days, and src\/pricing\.ts has no price for after it/);
     assert.equal(run("--dated", "--today", "2026-12-02").status, 1);
     assert.match(run("--dated", "--today", "2026-12-02").stdout, /gpt-5\.6-sol: its price ended on 2026-11-30/);
