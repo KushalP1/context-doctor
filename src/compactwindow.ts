@@ -35,6 +35,7 @@ import { withInvocation } from "./invocation.js";
 import { idleCompactMinTokens, isIdleCompactNotice, REQUEST_ROWS } from "./coldresume.js";
 import { rowsOf } from "./scan.js";
 import { claudeDir, tilde } from "./claudedir.js";
+import { sameModel } from "./appwindow.js";
 
 /** Claude Code compacts at about this share of the window (970k of 1M, measured). */
 const TRIGGER_SHARE = 0.97;
@@ -73,6 +74,12 @@ export interface CompactWindowReport {
   estimates: WindowEstimate[];
   /** Re-read tokens charged to each simulated compaction (0 when not measured). */
   rereadTokens?: number;
+  /**
+   * Sessions not replayed at the windows because most of their requests ran
+   * on a model whose window the Desktop app asked about (appwindow.ts): in
+   * "as now", saving nothing. Absent when none.
+   */
+  leftAlone?: { sessions: number; models: string[] };
 }
 
 /**
@@ -97,8 +104,9 @@ const UNPRICED: ModelPricing = { inputPerM: 0, outputPerM: 0, cacheReadPerM: 0 }
  * those at the TTL it writes everything else at, mostly 1 hour (2x) for
  * Claude Code's main thread, not the 1.25x a constant assumed.
  */
-function readRequests(path: string, runRows?: Set<string>): { reqs: Req[]; writeMult: number; priced: boolean } {
+function readRequests(path: string, runRows?: Set<string>): { reqs: Req[]; writeMult: number; priced: boolean; models: Map<string, number> } {
   const reqs: Req[] = [];
+  const models = new Map<string, number>();
   let model: string | undefined, writes5m = 0, writes1h = 0, priced = false;
   const sighting = replyCounter(runRows);
   rowsOf(path, REQUEST_ROWS).forEach((e) => {
@@ -124,6 +132,7 @@ function readRequests(path: string, runRows?: Set<string>): { reqs: Req[]; write
     if (!(prompt > 0) || !Number.isFinite(at)) return;
     // Each request at its own model's price; "<synthetic>" rows carry no usage.
     model = realModel(e.message.model) ?? model;
+    if (model && seen !== "copy") models.set(model, (models.get(model) ?? 0) + 1);
     const card = rateCard(model, u, at);
     if (card) priced = true;
     const w = cacheWriteSplit(u);
@@ -131,7 +140,7 @@ function readRequests(path: string, runRows?: Set<string>): { reqs: Req[]; write
     writes1h += w.oneHour;
     reqs.push({ at, prompt, ...(card ? { card } : {}), copy: seen === "copy", billedUsd: billedCost(model, u, at)?.promptUsd ?? 0 });
   });
-  return { reqs, writeMult: writeMultiplier(writes5m, writes1h), priced };
+  return { reqs, writeMult: writeMultiplier(writes5m, writes1h), priced, models };
 }
 
 /**
@@ -204,12 +213,17 @@ export function estimateCompactWindows(
   days = 30,
   paths?: string[],
   rereadTokens = 0,
-  onProgress?: (done: number, total: number) => void
+  onProgress?: (done: number, total: number) => void,
+  opts: {
+    /** Models whose window the Desktop app asked about: a session mostly on one is left as it ran. */
+    leaveModels?: string[];
+  } = {}
 ): CompactWindowReport {
   const since = Date.now() - days * 86_400_000;
   const targets = paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
   const acc = windows.map((w) => ({ window: w, billed: 0, saved: 0, replayBase: 0, extra: 0 }));
-  let sessions = 0, actualCompactions = 0, idleCompactions = 0;
+  let sessions = 0, actualCompactions = 0, idleCompactions = 0, left = 0;
+  const leftModels = new Set<string>();
   // Shared by every transcript of the run, so a fork's copy counts once.
   const runRows = new Set<string>();
   for (const [i, p] of targets.entries()) {
@@ -225,6 +239,15 @@ export function estimateCompactWindows(
     const asNow = replay(parsed.reqs, Number.MAX_SAFE_INTEGER, since, 0, parsed.writeMult);
     actualCompactions += asNow.actual;
     idleCompactions += asNow.idle;
+    // Most of its requests on a model the Desktop app asked about: that window is the person's, left alone.
+    const main = [...parsed.models.entries()].sort((x, y) => y[1] - x[1])[0]?.[0];
+    const leave = main ? opts.leaveModels?.find((m) => sameModel(m, main)) : undefined;
+    if (leave) {
+      left++;
+      leftModels.add(leave);
+      for (const a of acc) { a.billed += billed; a.replayBase += asNow.base / 1e6; a.extra += asNow.actual; }
+      continue;
+    }
     for (const a of acc) {
       const r = replay(parsed.reqs, a.window, since, rereadTokens, parsed.writeMult);
       // The replay's share saved, applied to what this session was billed.
@@ -243,6 +266,7 @@ export function estimateCompactWindows(
     actualCompactions,
     idleCompactions,
     rereadTokens,
+    ...(left ? { leftAlone: { sessions: left, models: [...leftModels] } } : {}),
     estimates: acc.map((a) => ({
       window: a.window,
       baselineUsd: a.billed,
@@ -326,13 +350,15 @@ export function parseWindow(raw: string): number | undefined {
 const usd = (n: number) => (Math.abs(n) >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
 const k = (n: number) => `${Math.round(n / 1000)}k`;
 
-export function renderCompactWindows(r: CompactWindowReport, current?: number, limitLines?: (estimates: WindowEstimate[]) => string[]): string {
+export function renderCompactWindows(r: CompactWindowReport, current?: number, limitLines?: (estimates: WindowEstimate[]) => string[], appLines: string[] = []): string {
   const lines: string[] = [];
   lines.push("Auto-compact window: compact earlier, automatically (Claude Code's own setting)");
   // Counted and said exactly as `savings` says it, so the two screens agree.
   lines.push(`Last ${r.days} days, ${sessionsLabel(r.sessions, r.transcripts ?? r.sessions)}, ${priceBasis()}`);
   lines.push("─".repeat(66));
   lines.push(`Now: ${current ? `${k(current)} (set in ${tilde(settingsPath())})` : "not set: Claude Code compacts near the model's full window"}`);
+  // What the Desktop app asked, and what the server sets: only when something is on file.
+  lines.push(...appLines);
   if (r.sessions === 0) {
     lines.push("No sessions with 10+ requests in the window to replay.");
     return withInvocation(lines.join("\n"));

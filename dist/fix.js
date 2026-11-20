@@ -96,7 +96,12 @@ export function planFixes(i) {
                 state: applied ? "applied" : "available",
                 note: applied ? `autoCompactWindow is ${cw.current}` : undefined,
                 value: cw.window,
+                ...(cw.app && !applied ? { detail: [...cw.app.lines, ...(cw.app.answered.length ? [`Applying writes one window for every model; whether it or the app's choice wins for ${cw.app.answered.join(", ")} is not recorded here.`] : [])] } : {}),
             });
+        }
+        else if (cw.app && cw.app.leftSessions > 0) {
+            // Under a dollar once the sessions on the app's answered models are left alone: say why, offer nothing.
+            fixes.push({ id: "compact-window", title: "Compact earlier", basis: "", quality: "", change: "", state: "not-here", note: `you answered the Desktop app's own window offer for ${cw.app.answered.join(", ")}, so ${cw.app.leftSessions === 1 ? "its session is" : `its ${cw.app.leftSessions} sessions are`} left alone; the rest would save under $1` });
         }
     }
     for (const kind of ["main", "subagents"]) {

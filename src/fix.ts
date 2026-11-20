@@ -102,7 +102,14 @@ export interface FixInputs {
   days: number;
   /** Input billed over the period, the sessions `savings` counts. */
   billedUsd: number;
-  compactWindow?: { window: number; savedUsd: number; savedShare: number; compactionsPerWeek: number; nowPerWeek: number; current?: number };
+  compactWindow?: {
+    window: number; savedUsd: number; savedShare: number; compactionsPerWeek: number; nowPerWeek: number; current?: number;
+    /**
+     * The Desktop app's own window offer and the server's windows (appwindow.ts), when any is on file:
+     * what to say under the lever, the models answered (by name), and the sessions on them left as they ran.
+     */
+    app?: { lines: string[]; answered: string[]; leftSessions: number };
+  };
   ttl?: CacheTtlReport;
   currentTtl?: CurrentTtl;
   autopilot?: { on: boolean; reachableUsd: number; reachableShare: number; unreachableSessions: number; sessions: number };
@@ -197,7 +204,11 @@ export function planFixes(i: FixInputs): Fix[] {
         state: applied ? "applied" : "available",
         note: applied ? `autoCompactWindow is ${cw.current}` : undefined,
         value: cw.window,
+        ...(cw.app && !applied ? { detail: [...cw.app.lines, ...(cw.app.answered.length ? [`Applying writes one window for every model; whether it or the app's choice wins for ${cw.app.answered.join(", ")} is not recorded here.`] : [])] } : {}),
       });
+    } else if (cw.app && cw.app.leftSessions > 0) {
+      // Under a dollar once the sessions on the app's answered models are left alone: say why, offer nothing.
+      fixes.push({ id: "compact-window", title: "Compact earlier", basis: "", quality: "", change: "", state: "not-here", note: `you answered the Desktop app's own window offer for ${cw.app.answered.join(", ")}, so ${cw.app.leftSessions === 1 ? "its session is" : `its ${cw.app.leftSessions} sessions are`} left alone; the rest would save under $1` });
     }
   }
   for (const kind of ["main", "subagents"] as const) {

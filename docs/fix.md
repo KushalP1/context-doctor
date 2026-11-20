@@ -79,6 +79,20 @@ The `/compact` offer at cold returns is listed under "Advice you act on": it is 
 
 **On the author's machine** (last 30 days, read-only, 2026-10-28): $2,781 of input; 1. compact earlier at 400k, $1,418 (51%); 2. the main conversation's cache at 1 hour, $197 (7%); autopilot is on but cannot reach the desktop app where all 34 sessions ran; advice: `/compact` at cold returns, $640 over 197 returns. The first had its own command since 0.25 and was still not applied: the reason `fix` exists. After the QA fixes `fix` takes 19 s there (was 35 s): with autopilot already on it skips autopilot's replay, with a window set it skips the compaction replay, and it reads every transcript for unused servers only when the project has servers or skills to prune.
 
+## The Desktop app's own window offer (`compact-window`)
+
+The Desktop app's Code tab is testing an offer of a lower auto-compact window of its own. Read from the 2.1.329 binary: the app passes the person's answer to Claude Code in its own settings (`autoCompactOfferAnswer: { model, choice: 'accept'|'keep'|'undo', tokens, at }`, where `tokens` is "the window they chose or kept"), and Claude Code records it in `~/.claude.json` as `autoCompactOfferCodeTab[account][model] = { choice, tokens, at }`. Claude Code reads that record back only to keep an older answer from replacing a newer one; nothing in the binary sets a window from it, and what the app itself passes after an answer is in its own settings, not on disk. So whether accepting changes the window Claude Code uses is **not known here**, and nothing assumes it does.
+
+`compact-window`, `fix` and `savings` read the record (never write it; every account's answers, the newest per model) and, when there is one:
+- say what the app offered and what you chose: "The Desktop app, Fable 5.1: on 2026-09-25 it offered a 300k auto-compact window and you accepted it" (for `keep`: "it offered a lower auto-compact window and you kept yours (400k)"; for `undo`: "you undid the lower auto-compact window it had set (on record: 400k)");
+- leave that model alone: a session most of whose requests ran on it is billed in "as now" and saves nothing at any window; only the rest are replayed, so the lever's dollars never come from a model whose window you just answered for ("mostly on Fable 5.1 (1 here) are left as they ran");
+- under the `fix` lever, say that applying writes one window for every model and that whether it or the app's choice wins for that model is not recorded here; when the rest would save under $1, `fix` says why the lever is not offered instead of dropping it silently;
+- `compact-window --json` adds `leftAlone` and `desktopApp` (the answers as read).
+
+Also read: `autoCompactWindowsCache` in `~/.claude.json`, the per-model windows Anthropic's server sends with the account (Anthropic API only), which Claude Code uses for that model when no environment variable or settings file sets a window ("Anthropic's server sets an auto-compact window on your account: 600k for Opus 5.5"); and `autoCompactRaisedForLoad` in a settings file, named as doing nothing there, since Claude Code reads it from the app's own settings only. An `autoCompactOfferAnswer` found in a settings file counts as an answer too.
+
+With none of these on file (the author's machine), `compact-window` and `fix` print exactly what they printed before (the golden files in `src/test/golden`). Not verified against a live answer: no machine here has one, so the fixtures are built from the binary's shapes.
+
 ## The subagents' model: `subagent-model`
 
 Every subagent runs on the main conversation's model unless something says otherwise, so a session on Opus 5.5 ($4/$20 per million tokens in/out) or Fable 5.1 ($10/$50) runs its general-purpose subagents there too. Claude Code reads `CLAUDE_CODE_SUBAGENT_MODEL` (default `inherit`); `fix` offers `claude-sonnet-5-5` ($2/$10; cache reads $0.10, against $0.20 on Opus 5.5 and $0.25 on Fable 5.1) when your subagents ran on a pricier model, and says nothing when they already run on Sonnet or Haiku.

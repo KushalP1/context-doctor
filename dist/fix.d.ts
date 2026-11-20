@@ -93,6 +93,15 @@ export interface FixInputs {
         compactionsPerWeek: number;
         nowPerWeek: number;
         current?: number;
+        /**
+         * The Desktop app's own window offer and the server's windows (appwindow.ts), when any is on file:
+         * what to say under the lever, the models answered (by name), and the sessions on them left as they ran.
+         */
+        app?: {
+            lines: string[];
+            answered: string[];
+            leftSessions: number;
+        };
     };
     ttl?: CacheTtlReport;
     currentTtl?: CurrentTtl;

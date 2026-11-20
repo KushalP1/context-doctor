@@ -47,8 +47,20 @@ export interface CompactWindowReport {
     estimates: WindowEstimate[];
     /** Re-read tokens charged to each simulated compaction (0 when not measured). */
     rereadTokens?: number;
+    /**
+     * Sessions not replayed at the windows because most of their requests ran
+     * on a model whose window the Desktop app asked about (appwindow.ts): in
+     * "as now", saving nothing. Absent when none.
+     */
+    leftAlone?: {
+        sessions: number;
+        models: string[];
+    };
 }
-export declare function estimateCompactWindows(windows: number[], days?: number, paths?: string[], rereadTokens?: number, onProgress?: (done: number, total: number) => void): CompactWindowReport;
+export declare function estimateCompactWindows(windows: number[], days?: number, paths?: string[], rereadTokens?: number, onProgress?: (done: number, total: number) => void, opts?: {
+    /** Models whose window the Desktop app asked about: a session mostly on one is left as it ran. */
+    leaveModels?: string[];
+}): CompactWindowReport;
 /** "37 sessions with 10+ requests (of 85 transcripts)": what the replayed reports count, said the same way. */
 export declare function sessionsLabel(sessions: number, transcripts: number): string;
 export declare function settingsPath(home?: string): string;
@@ -80,4 +92,4 @@ export interface SetWindowResult {
 export declare function setCompactWindow(window: number | undefined, home?: string): SetWindowResult;
 /** "400k" / "400000" / "0.4m" -> 400000. Undefined when unparseable. */
 export declare function parseWindow(raw: string): number | undefined;
-export declare function renderCompactWindows(r: CompactWindowReport, current?: number, limitLines?: (estimates: WindowEstimate[]) => string[]): string;
+export declare function renderCompactWindows(r: CompactWindowReport, current?: number, limitLines?: (estimates: WindowEstimate[]) => string[], appLines?: string[]): string;

@@ -36,6 +36,8 @@ import { replaySubagentModels, shares, SUBAGENT_MODEL_ENV, SUBAGENT_MODEL_FORCE_
 import { BASH_OUTPUT_ENV, BASH_OUTPUT_KEY, replayToolOutput, TOOL_OUTPUT_ROWS } from "./tooloutput.js";
 import { CODEX_COMPACT_ROWS, codexRollouts, currentCodexCompact, replayCodexCompact } from "./codexcompact.js";
 import { currentCompactWindow, estimateCompactWindows, MAX_WINDOW, MIN_WINDOW, parseWindow, renderCompactWindows, setCompactWindow, settingsPath } from "./compactwindow.js";
+import { appWindowLines, readAppWindows } from "./appwindow.js";
+import { modelName } from "./subagentmodel.js";
 import { tilde } from "./claudedir.js";
 import { renderPreferences, copyToClipboard, CHAT_PREFERENCES } from "./preferences.js";
 import { recordLedger } from "./ledger.js";
@@ -440,10 +442,13 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
     const reread = compactionQuality(60, undefined, measuring.tick).extraRereadTokensPerCompaction;
     measuring.clear();
     const windowing = progressLine("Replaying an earlier auto-compact window");
-    const cw = estimateCompactWindows([400_000], days, undefined, reread, windowing.tick);
+    // The Desktop app's own window offer, answered: that model's sessions are left as they ran.
+    const app = readAppWindows({ cwd });
+    const cw = estimateCompactWindows([400_000], days, undefined, reread, windowing.tick, { leaveModels: app.answers.map((a) => a.model) });
     windowing.clear();
     const est = cw.estimates[0];
-    if (cw.sessions > 0 && est) compactWindow = { window: est.window, savedUsd: est.savedUsd, savedShare: est.savedPct, compactionsPerWeek: (est.compactions / cw.days) * 7, nowPerWeek: (cw.actualCompactions / cw.days) * 7 };
+    const appLines = appWindowLines(app, cw.leftAlone?.sessions ?? 0);
+    if (cw.sessions > 0 && est) compactWindow = { window: est.window, savedUsd: est.savedUsd, savedShare: est.savedPct, compactionsPerWeek: (est.compactions / cw.days) * 7, nowPerWeek: (cw.actualCompactions / cw.days) * 7, ...(appLines.length ? { app: { lines: appLines, answered: app.answers.map((a) => modelName(a.model)), leftSessions: cw.leftAlone?.sessions ?? 0 } } : {}) };
   }
   const ttling = progressLine("Replaying both cache lifetimes");
   const ttl = estimateCacheTtl(days, { onProgress: ttling.tick });
@@ -1286,7 +1291,7 @@ async function main(): Promise<void> {
     const reread = compactionQuality(60, undefined, measuring.tick).extraRereadTokensPerCompaction;
     measuring.clear();
     const windowing = progressLine("Replaying an earlier auto-compact window");
-    const cwReport = estimateCompactWindows([setWindow ?? 400_000], args.days ?? 30, undefined, reread, windowing.tick);
+    const cwReport = estimateCompactWindows([setWindow ?? 400_000], args.days ?? 30, undefined, reread, windowing.tick, { leaveModels: readAppWindows().answers.map((a) => a.model) });
     windowing.clear();
     const est = cwReport.estimates[0];
     const cwLine = cwReport.sessions > 0 && est
@@ -1359,6 +1364,11 @@ async function main(): Promise<void> {
       console.log(`✓ autoCompactWindow = ${w} in ${tilde(settingsPath())}${note ? ` (${note})` : ""}.`);
       console.log("  Claude Code sessions started from now on compact as if the window were that size,");
       console.log("  in the terminal, IDEs and the desktop app. Check in a session with /context.");
+      const answered = readAppWindows().answers;
+      if (answered.length) {
+        console.log(`  You answered the Desktop app's own window offer for ${answered.map((a) => modelName(a.model)).join(", ")}: whether this setting`);
+        console.log("  or the app's choice wins there is not recorded on this computer.");
+      }
       const over = fixOverrides("compact-window");
       if (over.length) {
         console.log(`  ⚠ It will not take effect while ${over.join("; ")} ${over.length === 1 ? "overrides" : "override"} it.`);
@@ -1378,14 +1388,17 @@ async function main(): Promise<void> {
     const reread = compactionQuality(60, undefined, measuring.tick).extraRereadTokensPerCompaction;
     measuring.clear();
     const replaying = progressLine("Replaying your sessions at each window");
-    const cw = estimateCompactWindows(windows.sort((a, b) => a - b), args.days ?? 30, undefined, reread, replaying.tick);
+    const app = readAppWindows();
+    const cw = estimateCompactWindows(windows.sort((a, b) => a - b), args.days ?? 30, undefined, reread, replaying.tick, { leaveModels: app.answers.map((a) => a.model) });
     replaying.clear();
+    const appLines = appWindowLines(app, cw.leftAlone?.sessions ?? 0);
     if (args.json) {
-      console.log(JSON.stringify({ ...cw, current: current ?? null }, null, 2));
+      // The Desktop app's answers and the server's windows, only when there are some (the output is otherwise as before).
+      console.log(JSON.stringify({ ...cw, current: current ?? null, ...(appLines.length ? { desktopApp: app } : {}) }, null, 2));
       return;
     }
     const limitFit = claudeLimitFit(limitsReport(cw.days, { claudeOnly: true }));
-    console.log(renderCompactWindows(cw, current, (estimates) => limitSavingsLines(limitFit, estimates.map((e) => [`${Math.round(e.window / 1000)}k window`, Math.max(0, e.savedUsd)] as [string, number]), cw.days)));
+    console.log(renderCompactWindows(cw, current, (estimates) => limitSavingsLines(limitFit, estimates.map((e) => [`${Math.round(e.window / 1000)}k window`, Math.max(0, e.savedUsd)] as [string, number]), cw.days), appLines));
     return;
   }
 
