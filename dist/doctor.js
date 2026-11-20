@@ -27,7 +27,8 @@ import { describeDesktopUsage, desktopUsage } from "./desktopusage.js";
 import { withInvocation } from "./invocation.js";
 import { describeInstalls, modelSwitchReadiness, PRE_MODEL_SWITCH_SINCE } from "./modelswitch.js";
 import { describeCosts, subagentCostsPath } from "./fanout.js";
-import { claudeCodePresent, claudeDir, claudeJsonPath } from "./claudedir.js";
+import { claudeCodePresent, claudeDir, claudeJsonPath, readExtraUsage } from "./claudedir.js";
+import { extraUsageText } from "./credits.js";
 import { codexDir } from "./codexdir.js";
 import { periodSpend, readBudget } from "./budget.js";
 import { sessionPriceThresholds } from "./sessionprice.js";
@@ -422,6 +423,15 @@ export function unpricedModelsCheck(days = 30, now = Date.now(), home = homedir(
  * does not (Desktop) and has no transcript to measure either way: say that,
  * rather than nothing or a false "ok".
  */
+/**
+ * Extra usage (usage credits past a plan's limit), as Claude Code cached it
+ * in `~/.claude.json`: on or off, and when on but held back, why. A fact,
+ * not a fault: "ok" either way. Undefined when the file says nothing.
+ */
+export function extraUsageCheck(home) {
+    const t = extraUsageText(readExtraUsage(home));
+    return t ? { label: "Extra usage", status: "ok", detail: t.text } : undefined;
+}
 export function devinCheck(home = homedir()) {
     const label = "Devin";
     const app = [join("/Applications", "Devin.app"), join(home, "Applications", "Devin.app"), join(home, "Library", "Application Support", "Devin"), join(home, ".devin")].find((p) => existsSync(p));
@@ -671,6 +681,10 @@ export async function runDoctor() {
     }
     if (claudeCodePresent())
         checks.push(...claudeRouteChecks(layers, plugin));
+    // Whether past a plan limit Claude Code keeps going on usage credits (real money): said, never judged.
+    const xu = extraUsageCheck();
+    if (xu)
+        checks.push(xu);
     // Codex (OpenAI): MCP table in config.toml, hook in hooks.json, skill.
     const codexHome = codexDir();
     if (existsSync(codexHome)) {

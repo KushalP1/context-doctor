@@ -96,6 +96,45 @@ export declare function rateLimitsFromHeaders(get: (name: string) => string | nu
     used_percentage: number;
     resets_at?: number;
 }> | undefined;
+/**
+ * What a reply's `anthropic-ratelimit-unified-overage-*` headers say about
+ * usage credits (Claude's "extra usage": past a plan's limit, requests go on
+ * and are paid from credits). Only the four the proxy records, as given:
+ * `-overage-status` ("allowed", "allowed_warning", "rejected"),
+ * `-overage-in-use` ("true" while requests are being paid from credits),
+ * `-overage-utilization` (a fraction of the credits' cap, kept here as a
+ * percent in 0.1 steps) and `-overage-reset` (epoch seconds). Read from
+ * Claude Code 2.1.311's own parsing of the same headers. Undefined when a
+ * reply carries none of them (an API key, Bedrock, Vertex).
+ */
+export interface OverageHeaders {
+    status?: string;
+    inUse?: boolean;
+    pct?: number;
+    reset?: number;
+}
+export declare function overageFromHeaders(get: (name: string) => string | null | undefined): OverageHeaders | undefined;
+/** One reading of the credits headers, as the log keeps it. */
+export interface OverageReading {
+    ts: number;
+    status?: string;
+    inUse?: boolean;
+    /** Percent of the credits' cap used. */
+    pct?: number;
+    /** When the credits' cap resets, ms. */
+    resetsAt?: number;
+    source?: LimitSource;
+}
+/**
+ * Append what the credits headers say to the same log as the windows, as a
+ * line of its own (`"w": "overage"`, which older versions skip): at
+ * once when the status, whether credits are in use, or the reset changed;
+ * a moved utilization at most once a minute; an unchanged one every 15
+ * minutes. Never throws. Returns the lines written (0 or 1).
+ */
+export declare function recordOverage(o: OverageHeaders | undefined, now?: number, path?: string, source?: LimitSource): number;
+/** Every credits reading in the log since `since`, oldest first. */
+export declare function readOverageReadings(since?: number, path?: string): OverageReading[];
 export declare function codexSessionsRoot(home?: string): string;
 /** Codex rollouts under `root` (YYYY/MM/DD folders, or flat) written since `since`. */
 export declare function rolloutFiles(root: string, since: number): string[];
@@ -510,7 +549,12 @@ export declare function limitSavingsLines(fit: LimitFit | undefined, items: Arra
  * Code), or the autopilot proxy (from the API's rate-limit headers).
  */
 export declare const HOW_TO_RECORD = "To record them: `context-doctor install` (the plugin's mod writes them after each turn, Claude Code 2.1.286+; `install --statusline` on older ones), or `context-doctor autopilot on` (its proxy reads them from the API's replies).";
-export declare function renderLimits(r: LimitsReport): string;
+/**
+ * The full `limits` report. `pastLimit`: lines on requests paid from usage
+ * credits past a limit (credits.ts creditsLines), placed under the windows;
+ * none when nothing went past one.
+ */
+export declare function renderLimits(r: LimitsReport, pastLimit?: string[]): string;
 /**
  * `limits --report`: a block to paste into a GitHub issue. Per weekly
  * window: % used, dollars and tokens per 1%, the split by entrypoint and

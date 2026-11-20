@@ -197,15 +197,20 @@ export function recordLimits(rateLimits: unknown, now = Date.now(), path = limit
       return now - p.ts >= THROTTLE_MS;
     });
     if (!due.length) return 0;
-    if (existsSync(path) && statSync(path).size > LOG_ROTATE_AT) {
-      const text = tail(path, LOG_KEEP_BYTES);
-      writeFileSync(path, text.slice(text.indexOf("\n") + 1));
-    }
-    appendFileSync(path, due.map((l) => JSON.stringify(l)).join("\n") + "\n");
+    appendLog(path, due);
     return due.length;
   } catch {
     return 0;
   }
+}
+
+/** Append lines to the log, keeping its newest LOG_KEEP_BYTES once it passes LOG_ROTATE_AT. Throws on a write error (callers catch). */
+function appendLog(path: string, lines: object[]): void {
+  if (existsSync(path) && statSync(path).size > LOG_ROTATE_AT) {
+    const text = tail(path, LOG_KEEP_BYTES);
+    writeFileSync(path, text.slice(text.indexOf("\n") + 1));
+  }
+  appendFileSync(path, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
 }
 
 /** Every Claude reading in the log since `since`. */
@@ -245,6 +250,133 @@ export function rateLimitsFromHeaders(get: (name: string) => string | null | und
     out[w] = { used_percentage: Math.round(u * 1000) / 10, ...(Number.isFinite(reset) && reset > 0 ? { resets_at: Math.round(reset) } : {}) };
   }
   return Object.keys(out).length ? out : undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Usage credits ("extra usage"): what the API's replies say about them
+// ---------------------------------------------------------------------------
+
+/**
+ * What a reply's `anthropic-ratelimit-unified-overage-*` headers say about
+ * usage credits (Claude's "extra usage": past a plan's limit, requests go on
+ * and are paid from credits). Only the four the proxy records, as given:
+ * `-overage-status` ("allowed", "allowed_warning", "rejected"),
+ * `-overage-in-use` ("true" while requests are being paid from credits),
+ * `-overage-utilization` (a fraction of the credits' cap, kept here as a
+ * percent in 0.1 steps) and `-overage-reset` (epoch seconds). Read from
+ * Claude Code 2.1.311's own parsing of the same headers. Undefined when a
+ * reply carries none of them (an API key, Bedrock, Vertex).
+ */
+export interface OverageHeaders {
+  status?: string;
+  inUse?: boolean;
+  pct?: number;
+  reset?: number;
+}
+
+export function overageFromHeaders(get: (name: string) => string | null | undefined): OverageHeaders | undefined {
+  const h = (n: string): string | undefined => {
+    const v = get(`anthropic-ratelimit-unified-overage-${n}`);
+    return typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
+  };
+  const out: OverageHeaders = {};
+  const status = h("status");
+  if (status && /^[a-z_]{1,40}$/.test(status)) out.status = status;
+  const inUse = h("in-use");
+  if (inUse === "true" || inUse === "false") out.inUse = inUse === "true";
+  const u = Number(h("utilization"));
+  if (h("utilization") !== undefined && Number.isFinite(u) && u >= 0 && u <= 10) out.pct = Math.round(u * 1000) / 10;
+  const reset = Number(h("reset"));
+  if (h("reset") !== undefined && Number.isFinite(reset) && reset > 0) out.reset = Math.round(reset);
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** One reading of the credits headers, as the log keeps it. */
+export interface OverageReading {
+  ts: number;
+  status?: string;
+  inUse?: boolean;
+  /** Percent of the credits' cap used. */
+  pct?: number;
+  /** When the credits' cap resets, ms. */
+  resetsAt?: number;
+  source?: LimitSource;
+}
+
+interface OverageLine {
+  ts: number;
+  app: "claude";
+  w: "overage";
+  status?: string;
+  inUse?: boolean;
+  pct?: number;
+  reset?: number;
+  src?: LimitSource;
+}
+
+function parseOverageLine(line: string): OverageLine | undefined {
+  let e: Record<string, unknown>;
+  try {
+    e = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (!e || typeof e !== "object" || e.w !== "overage" || typeof e.ts !== "number" || !Number.isFinite(e.ts)) return undefined;
+  return {
+    ts: e.ts, app: "claude", w: "overage",
+    ...(typeof e.status === "string" && /^[a-z_]{1,40}$/.test(e.status) ? { status: e.status } : {}),
+    ...(typeof e.inUse === "boolean" ? { inUse: e.inUse } : {}),
+    ...(typeof e.pct === "number" && Number.isFinite(e.pct) && e.pct >= 0 && e.pct <= 1000 ? { pct: e.pct } : {}),
+    ...(typeof e.reset === "number" && Number.isFinite(e.reset) && e.reset > 0 ? { reset: e.reset } : {}),
+    ...(typeof e.src === "string" && SOURCES.includes(e.src) ? { src: e.src as LimitSource } : {}),
+  };
+}
+
+/**
+ * Append what the credits headers say to the same log as the windows, as a
+ * line of its own (`"w": "overage"`, which older versions skip): at
+ * once when the status, whether credits are in use, or the reset changed;
+ * a moved utilization at most once a minute; an unchanged one every 15
+ * minutes. Never throws. Returns the lines written (0 or 1).
+ */
+export function recordOverage(o: OverageHeaders | undefined, now = Date.now(), path = limitsLogPath(), source: LimitSource = "proxy"): number {
+  if (!o) return 0;
+  const line: OverageLine = { ts: now, app: "claude", w: "overage", ...o, src: source };
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    let last: OverageLine | undefined;
+    if (existsSync(path)) {
+      for (const l of tail(path, 16 * 1024).split("\n")) last = parseOverageLine(l) ?? last;
+    }
+    const sameReset = last && (last.reset !== undefined && line.reset !== undefined ? Math.abs(last.reset - line.reset) * 1000 <= SAME_RESET_MS : last.reset === line.reset);
+    const due = !last || now < last.ts || last.status !== line.status || last.inUse !== line.inUse || !sameReset
+      ? true
+      : last.pct === line.pct ? now - last.ts >= KEEPALIVE_MS : now - last.ts >= THROTTLE_MS;
+    if (!due) return 0;
+    appendLog(path, [line]);
+    return 1;
+  } catch {
+    return 0;
+  }
+}
+
+/** Every credits reading in the log since `since`, oldest first. */
+export function readOverageReadings(since = 0, path = limitsLogPath()): OverageReading[] {
+  if (!existsSync(path)) return [];
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return [];
+  }
+  const out: OverageReading[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.includes('"overage"')) continue;
+    const l = parseOverageLine(line);
+    if (!l || l.ts < since) continue;
+    out.push({ ts: l.ts, ...(l.status ? { status: l.status } : {}), ...(l.inUse !== undefined ? { inUse: l.inUse } : {}), ...(l.pct !== undefined ? { pct: l.pct } : {}), ...(l.reset ? { resetsAt: l.reset * 1000 } : {}), ...(l.src ? { source: l.src } : {}) });
+  }
+  return out.sort((a, b) => a.ts - b.ts);
 }
 
 // ---------------------------------------------------------------------------
@@ -1736,7 +1868,12 @@ function splitLine(list: UsageShare[]): string | undefined {
   return `${sorted.map((t) => `${t.key} ${dollars(t.usdPerPct!)}${plusMinus(t.relSe)}`).join(", ")} per 1%${ratio >= 1.1 ? ` (${fast.key} drains ${ratio.toFixed(1)}x per dollar against ${slow.key})` : ""}`;
 }
 
-export function renderLimits(r: LimitsReport): string {
+/**
+ * The full `limits` report. `pastLimit`: lines on requests paid from usage
+ * credits past a limit (credits.ts creditsLines), placed under the windows;
+ * none when nothing went past one.
+ */
+export function renderLimits(r: LimitsReport, pastLimit: string[] = []): string {
   const out: string[] = ["USAGE LIMITS", "═".repeat(60)];
   if (!r.windows.length && !r.resets.length) {
     out.push(
@@ -1769,6 +1906,9 @@ export function renderLimits(r: LimitsReport): string {
   }
   if (r.claudeWindows.length === 1 && r.claudeWindows[0] === "seven_day") {
     out.push("", "No 5-hour window in Claude's readings: a plan without one (Ultra), so the weekly window is the limit.");
+  }
+  if (pastLimit.length) {
+    out.push("", "Past your plan's limit: usage credits", "─".repeat(60), ...pastLimit);
   }
   if (r.resets.length) {
     out.push("", "Each weekly (or longer) window, reset to reset: API-equivalent use per 1% (UTC dates)");

@@ -56,6 +56,8 @@ import { clineCalls } from "./cline.js";
 import { addModifiers, isUnbilledModel, NO_MODIFIERS, openAIUsage, priceChangedText, priceEndWord, requestCost, type Modifiers, type RecordedUsage } from "./pricing.js";
 import { managedSourcesLine, orgRates, orgRatesLine, priceBasis } from "./orgrates.js";
 import { compareSessions, renderComparison, type SessionGap } from "./ccost.js";
+import { AT_LIST_PRICES, creditsInputs, creditsOf, nothingPast, whenText } from "./credits.js";
+import type { ExtraUsage } from "./claudedir.js";
 
 /**
  * What spend's dollars are: each request as it was billed (its tier, fast mode,
@@ -670,6 +672,13 @@ export interface SpendReport {
    */
   progressSummaries?: { agents: number; calls: number; smallCalls?: number; notesUsd: number; forkUsd: number } | { set: string };
   sessions: Array<{ tool: Tool; project: string; session: string; model?: string; usd: number; requests: number; first: number; last: number }>;
+  /**
+   * Claude Code past the plan's limit, paid from usage credits (credits.ts):
+   * its dollars and requests (`fromHeaders` as the API's replies said,
+   * `inferred` from a window at 100%), `claudeUsd` all of Claude Code's,
+   * `since` when the first such limit ran out. Inside `usd`; absent when none.
+   */
+  credits?: { usd: number; requests: number; claudeUsd: number; fromHeaders: number; inferred: number; since: number };
   /** A tool that could not be read (Cursor without SQLite), and why. */
   skipped: Array<{ tool: Tool; reason: string }>;
 }
@@ -813,6 +822,10 @@ export interface SpendOptions {
    * (fix's record), or where it is set with no record (then not estimated); false: none.
    */
   progress?: false | (Pick<ProgressOptions, "forkGateOff" | "offSince"> & { set?: string });
+  /** The limits ledger to read for requests past the plan's limit (tests); default ~/.claude's. */
+  limitsLogPath?: string;
+  /** `~/.claude.json`'s extra-usage word (tests); null: none. Default read from `home`. */
+  extraUsage?: ExtraUsage | null;
 }
 
 /** The subagent progress summaries Claude Code wrote in the window, for the report. */
@@ -902,6 +915,13 @@ export function spendReport(days = 30, opts: SpendOptions = {}): SpendReport {
   const tops = [...new Set(claudeUsageFiles(since, opts.claudePaths).filter((f) => !f.subagent).map((f) => f.top))];
   const gaps = compareSessions(tops, items, since, until);
   if (gaps.length) report.claudeCode = { ccUsd: gaps.reduce((n, g) => n + g.ccUsd, 0), ourUsd: gaps.reduce((n, g) => n + g.ourUsd, 0), sessions: gaps };
+  // Claude Code past the plan's limit: only when the limits ledger says a limit ran out or credits were in use.
+  const inp = creditsInputs(since, { now: until, logPath: opts.limitsLogPath, extraUsage: opts.extraUsage, home: opts.home });
+  if (!nothingPast(inp)) {
+    const claude = items.filter((it) => it.tool === "claude" && it.ts >= since && it.ts <= until);
+    const c = creditsOf(claude, inp);
+    if (c.requests) report.credits = { usd: c.usd, requests: c.requests, claudeUsd: claude.reduce((n, it) => n + it.usd, 0), fromHeaders: c.fromHeaders, inferred: c.inferred, since: c.episodes[0].ranOutAt };
+  }
   const progress = opts.progress === false ? undefined : claudeProgressSummaries(since, until, opts.claudePaths, opts.progress);
   return progress ? { ...report, progressSummaries: progress } : report;
 }
@@ -932,6 +952,22 @@ export function modifiersText(m: Modifiers): string {
 /** AI credits or premium requests: whole above 100, else to two places. */
 const creditsText = (n: number) => (n >= 100 ? Math.round(n).toLocaleString("en-US") : String(Math.round(n * 100) / 100));
 
+/**
+ * Claude Code's dollars split at the plan's limit: what ran past it on usage
+ * credits, and the rest, inside the plan.
+ */
+export function creditsSplitLines(c: NonNullable<SpendReport["credits"]>, now: number): string[] {
+  const n = `${c.requests.toLocaleString("en-US")} ${c.requests === 1 ? "request" : "requests"}`;
+  const how = !c.inferred ? "paid from usage credits" : !c.fromHeaders ? "likely paid from usage credits (inferred from 100% readings)" : `paid from usage credits (${c.inferred.toLocaleString("en-US")} inferred from 100% readings)`;
+  return [
+    "",
+    `Past your plan's limit since ${whenText(c.since, now).replace(/^(at|on) /, "")}: ${usd(c.usd)} of Claude Code's ${usd(c.claudeUsd)},`,
+    `  ${n}, ${how},`,
+    `  ${orgRates() ? "at your rates above (an estimate)" : AT_LIST_PRICES}. The other ${usd(Math.max(0, c.claudeUsd - c.usd))} was inside the plan.`,
+    "  `context-doctor limits` says when each limit ran out.",
+  ];
+}
+
 /** The full report, kept within 80 columns. `top`: rows per list. Grouped by repository or branch instead of project when the report has them (`--by`). */
 export function renderSpend(r: SpendReport, top = 8): string {
   const lines: string[] = [];
@@ -954,6 +990,7 @@ export function renderSpend(r: SpendReport, top = 8): string {
     lines.push(`${t.name.padEnd(14)}${`${t.estimate ? "~" : ""}${usd(t.usd)}`.padStart(11)}  ${`${t.requests.toLocaleString("en-US")} ${unit}`.padEnd(16)}${note}`);
   }
   if (r.tools.length > 1) lines.push(`${"Total".padEnd(14)}${usd(r.usd).padStart(11)}`);
+  if (r.credits) lines.push(...creditsSplitLines(r.credits, r.until));
 
   const list = (title: string, rows: Array<{ name: string; usd: number; tail?: string }>, more: number) => {
     lines.push("", title);

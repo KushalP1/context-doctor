@@ -9,7 +9,7 @@
  * (tests, a throwaway home) gets that home's folders: the variable describes
  * the real user's setup, not someone else's.
  */
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 function configDirEnv(home, env) {
@@ -42,6 +42,24 @@ export function claudeCodePresent(home, env = process.env) {
     }
     catch {
         return false;
+    }
+}
+export function readExtraUsage(home, env = process.env) {
+    try {
+        const j = JSON.parse(readFileSync(claudeJsonPath(home, env), "utf8"));
+        if (!j || typeof j !== "object")
+            return undefined;
+        const out = {};
+        const en = j.oauthAccount?.hasExtraUsageEnabled;
+        if (typeof en === "boolean")
+            out.enabled = en;
+        const r = j.cachedExtraUsageDisabledReason;
+        if (r === null || (typeof r === "string" && /^[a-z_]{1,60}$/.test(r)))
+            out.disabledReason = r;
+        return Object.keys(out).length ? out : undefined;
+    }
+    catch {
+        return undefined;
     }
 }
 /** A path for messages: the home folder as `~`. */

@@ -10,7 +10,7 @@
  * the real user's setup, not someone else's.
  */
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -44,6 +44,36 @@ export function claudeCodePresent(home?: string, env: NodeJS.ProcessEnv = proces
     return entries.length === 0 || entries.some((f) => !f.startsWith(".context-doctor"));
   } catch {
     return false;
+  }
+}
+
+/**
+ * Whether the signed-in account pays past its plan's limit from usage
+ * credits ("extra usage"), as Claude Code last cached it in `~/.claude.json`:
+ * `oauthAccount.hasExtraUsageEnabled` (from the account's profile) and the
+ * top-level `cachedExtraUsageDisabledReason` (the last reply's
+ * `anthropic-ratelimit-unified-overage-disabled-reason`, null when it had
+ * none: read from the 2.1.311 binary). Undefined when the file has neither
+ * (an API key, Bedrock, Vertex, never signed in) or cannot be read.
+ */
+export interface ExtraUsage {
+  enabled?: boolean;
+  /** Why the last reply said credits are off ("out_of_credits", "org_level_disabled"...); null: it said nothing against them. */
+  disabledReason?: string | null;
+}
+
+export function readExtraUsage(home?: string, env: NodeJS.ProcessEnv = process.env): ExtraUsage | undefined {
+  try {
+    const j = JSON.parse(readFileSync(claudeJsonPath(home, env), "utf8"));
+    if (!j || typeof j !== "object") return undefined;
+    const out: ExtraUsage = {};
+    const en = j.oauthAccount?.hasExtraUsageEnabled;
+    if (typeof en === "boolean") out.enabled = en;
+    const r = j.cachedExtraUsageDisabledReason;
+    if (r === null || (typeof r === "string" && /^[a-z_]{1,60}$/.test(r))) out.disabledReason = r;
+    return Object.keys(out).length ? out : undefined;
+  } catch {
+    return undefined;
   }
 }
 

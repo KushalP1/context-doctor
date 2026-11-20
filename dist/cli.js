@@ -68,6 +68,7 @@ import { renderPayback, subagentPayback, SUBAGENT_CANDIDATE } from "./subagentpa
 import { compactionQuality, renderCompactionQuality, QUALITY_ROWS } from "./compactquality.js";
 import { isHandoffId, listHandoffs, readHandoff, renderHandoffList, stripControls } from "./handoff.js";
 import { claudeLimitFit, limitSavingsLines, limitsReport, renderLimits, renderLimitsReport } from "./limits.js";
+import { creditsLines, creditsReport } from "./credits.js";
 import { currentTranscript, findSession, recall, renderRecall } from "./recall.js";
 import { measureSubagentCosts, renderCostMedians, saveSubagentCosts } from "./fanout.js";
 import { applyPrune, canonical, installedSkills, planPrune, renderPrune, undoPrune } from "./prune.js";
@@ -1566,7 +1567,9 @@ async function main() {
                 console.log(copyToClipboard(text) ? "\n(copied to the clipboard)" : "\n(no clipboard tool found; copy the lines above)");
             return;
         }
-        console.log(args.json ? JSON.stringify(report, null, 2) : renderLimits(report));
+        // Requests paid from usage credits past a limit: read only when the ledger says a limit ran out.
+        const credits = creditsReport(report.days, { now: report.now });
+        console.log(args.json ? JSON.stringify(credits ? { ...report, credits } : report, null, 2) : renderLimits(report, credits ? creditsLines(credits, report.now) : []));
         return;
     }
     if (args.command === "spend") {

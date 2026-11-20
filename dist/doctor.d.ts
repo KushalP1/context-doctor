@@ -51,6 +51,12 @@ export declare function unpricedModelsCheck(days?: number, now?: number, home?: 
  * does not (Desktop) and has no transcript to measure either way: say that,
  * rather than nothing or a false "ok".
  */
+/**
+ * Extra usage (usage credits past a plan's limit), as Claude Code cached it
+ * in `~/.claude.json`: on or off, and when on but held back, why. A fact,
+ * not a fault: "ok" either way. Undefined when the file says nothing.
+ */
+export declare function extraUsageCheck(home?: string): Check | undefined;
 export declare function devinCheck(home?: string): Check;
 /**
  * How long the handshake may take: 15 s, or CONTEXT_DOCTOR_MCP_HANDSHAKE_MS.

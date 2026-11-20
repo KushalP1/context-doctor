@@ -28,6 +28,8 @@ export const DEFAULT_MAX_BODY_BYTES = 100 * 1024 * 1024;
 export const PROXY_VERSION = "0.49.1";
 /** Connection-level headers that must not be forwarded. */
 const SKIP_REQUEST_HEADERS = new Set(["host", "content-length", "connection", "transfer-encoding", "accept-encoding", "expect"]);
+/** A reply carrying any of these has something for the limits ledger: a plan window, or the usage-credits state. */
+const LIMIT_HEADERS = ["7d-utilization", "5h-utilization", "overage-status", "overage-in-use"].map((h) => `anthropic-ratelimit-unified-${h}`);
 const SKIP_RESPONSE_HEADERS = new Set(["content-length", "content-encoding", "transfer-encoding", "connection"]);
 /**
  * Remove a leading `/t/<token>` from a request path, or return undefined when
@@ -566,16 +568,19 @@ export function startProxy(opts = {}) {
                     upstream = new Response(text, { status: upstream.status, statusText: upstream.statusText, headers: upstream.headers });
                 }
             }
-            // The plan's windows, as Claude Code reads them from the same headers:
+            // The plan's windows, as Claude Code reads them from the same headers,
+            // and whether usage credits are paying past them (the overage headers):
             // into the limits ledger, after the reply is on its way (recordLimits
-            // writes only a change, at most once a minute, and never throws).
-            if (upstreamBase === (opts.anthropicUpstream ?? "https://api.anthropic.com") && process.env.CONTEXT_DOCTOR_NO_LIMITS_LOG !== "1" && (upstream.headers.has("anthropic-ratelimit-unified-7d-utilization") || upstream.headers.has("anthropic-ratelimit-unified-5h-utilization"))) {
+            // and recordOverage write only a change, at most once a minute, and
+            // never throw).
+            if (upstreamBase === (opts.anthropicUpstream ?? "https://api.anthropic.com") && process.env.CONTEXT_DOCTOR_NO_LIMITS_LOG !== "1" && LIMIT_HEADERS.some((h) => upstream.headers.has(h))) {
                 const got = upstream.headers;
                 // Loaded on first use: limits.ts reads transcripts and imports this module's version.
                 void import("./limits.js").then((m) => {
                     const rl = m.rateLimitsFromHeaders((n) => got.get(n));
                     if (rl)
                         m.recordLimits(rl, Date.now(), opts.limitsLogPath, "proxy");
+                    m.recordOverage(m.overageFromHeaders((n) => got.get(n)), Date.now(), opts.limitsLogPath, "proxy");
                 }).catch(() => undefined);
             }
             console.error(`[context-doctor] ${req.method} ${logUrl(url)} → ${upstream.status} in ${Date.now() - upstreamStart}ms | ${note}` +
