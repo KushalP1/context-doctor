@@ -35,6 +35,18 @@
  *    the notes. So both are priced: the notes as the low figure, the whole
  *    context as the high one.
  *
+ * From 2.1.328 (its CHANGELOG: "written by the default small fast model
+ * from short notes ... using far fewer tokens", terminal sessions on the
+ * Anthropic API; 2.1.327 moved Bedrock, Vertex and Foundry to notes on the
+ * agent's own model) there is one way: the notes, on the small fast model.
+ * The 2.1.329 binary agrees: the writer is ANTHROPIC_SMALL_FAST_MODEL's
+ * default, the catalog's Haiku (`claude-haiku-5-5` on the Anthropic API),
+ * and the notes are cut to 2,000 - 500 tokens less the label lines, by its
+ * own count of about 3 characters a token, under a ~100-token system prompt
+ * and a ~250-token instruction: NOTES_TOKENS stays the ceiling. So a
+ * subagent whose transcript says `version` 2.1.328 or later is priced once,
+ * at Haiku 5.5's rates (low and high the same); an older one as before.
+ *
  * Estimated per subagent from what its transcript does record: the time of
  * each message (the ticks and whether the transcript changed), each reply's
  * prompt size and model (the context a fork would read, the rates). Each
@@ -59,6 +71,11 @@ export const PROGRESS_SUMMARIES_SINCE = "2.1.318";
 export const SUMMARY_TICK_MS = 30_000;
 /** A short summary's prompt: notes capped at 2,000 - 500 tokens, plus its system prompt and instruction. */
 export const NOTES_TOKENS = 1_850;
+/** The first Claude Code that writes every summary from notes on the small fast model (its CHANGELOG). */
+export const SMALL_NOTES_SINCE = "2.1.328";
+/** The small fast model those run on: the 2.1.329 catalog's Haiku on the Anthropic API. */
+export const SMALL_FAST_MODEL = "claude-haiku-5-5";
+export const SMALL_FAST_MODEL_NAME = "Haiku 5.5";
 /** A fork summary's own instruction, after the agent's context. */
 export const FORK_PROMPT_TOKENS = 150;
 /** Each summary's output: #86879's measured mean (21,966 tokens over 339 summaries). */
@@ -146,7 +163,7 @@ type Rec = { t: "h"; entrypoint?: string; version?: string } | { t: "m"; ts: num
  * it has 3+ messages and more than at the last summary. Only ticks in
  * [since, until] are counted.
  */
-export function simulateAgent(recs: Rec[], since = -Infinity, until = Infinity): AgentSummaries {
+export function simulateAgent(recs: Rec[], since = -Infinity, until = Infinity, smallNotes = false): AgentSummaries {
   const msgs = recs.filter((r): r is Extract<Rec, { t: "m" }> => r.t === "m").map((r) => r.ts).sort((a, b) => a - b);
   const replies = recs.filter((r): r is Extract<Rec, { t: "r" }> => r.t === "r").sort((a, b) => a.ts - b.ts);
   const out: AgentSummaries = { calls: 0, notesUsd: 0, forkUsd: 0 };
@@ -170,6 +187,15 @@ export function simulateAgent(recs: Rec[], since = -Infinity, until = Infinity):
     const read = cur ? cur.p : 0;
     const fresh = (next ? Math.max(0, next.p - read) : 0) + FORK_PROMPT_TOKENS;
     const b: Pick<RecordedUsage, "speed" | "inference_geo"> = { ...(ref.speed ? { speed: ref.speed } : {}), ...(ref.geo ? { inference_geo: ref.geo } : {}) };
+    if (smallNotes) {
+      // 2.1.328+: the notes on the small fast model, the one way it sends them (the agent's fast mode is not the writer's).
+      const small = requestCost(SMALL_FAST_MODEL, { input_tokens: NOTES_TOKENS, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: SUMMARY_OUTPUT_TOKENS, ...(ref.geo ? { inference_geo: ref.geo } : {}) }, at);
+      if (!small) continue;
+      out.calls++;
+      out.forkUsd += small.totalUsd;
+      out.notesUsd += small.totalUsd;
+      continue;
+    }
     const fork = requestCost(model, { input_tokens: fresh, cache_read_input_tokens: read, cache_creation_input_tokens: 0, output_tokens: SUMMARY_OUTPUT_TOKENS, ...b }, at);
     const notes = requestCost(model, { input_tokens: NOTES_TOKENS, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: SUMMARY_OUTPUT_TOKENS, ...b }, at);
     if (!fork || !notes) continue;
@@ -186,6 +212,8 @@ export interface ProgressSummaryEstimate {
   /** Agents Claude Code wrote summaries for in the window, by the rules above. */
   summarized: number;
   calls: number;
+  /** Of `calls`, those by agents on Claude Code 2.1.328+: notes on the small fast model, the same in both figures. */
+  smallCalls: number;
   /** The summaries as short notes (what Anthropic serves since November 2026): the low figure. */
   notesUsd: number;
   /** As a fork of the whole context (before): the high figure. */
@@ -211,7 +239,7 @@ export interface ProgressOptions {
 
 /** The summaries of the subagents in `files` (their `.jsonl` transcripts), estimated. */
 export function estimateProgressSummaries(files: string[], opts: ProgressOptions = {}): ProgressSummaryEstimate {
-  const r: ProgressSummaryEstimate = { agents: 0, summarized: 0, calls: 0, notesUsd: 0, forkUsd: 0, none: {}, hosts: [] };
+  const r: ProgressSummaryEstimate = { agents: 0, summarized: 0, calls: 0, smallCalls: 0, notesUsd: 0, forkUsd: 0, none: {}, hosts: [] };
   const hosts = new Set<string>();
   for (const file of files) {
     let recs: Rec[];
@@ -230,10 +258,12 @@ export function estimateProgressSummaries(files: string[], opts: ProgressOptions
       // An agent that started after the variable was set got none.
       if (first > until) why = "off";
       else {
-        const s = simulateAgent(recs, opts.since, until);
+        const small = !!head?.version && compareVersions(head.version, SMALL_NOTES_SINCE) >= 0;
+        const s = simulateAgent(recs, opts.since, until, small);
         // One that ran under 30 s, or outside the window, sent none.
         if (s.calls) r.summarized++;
         r.calls += s.calls;
+        if (small) r.smallCalls += s.calls;
         r.notesUsd += s.notesUsd;
         r.forkUsd += s.forkUsd;
         continue;

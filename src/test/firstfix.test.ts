@@ -64,7 +64,7 @@ test("the quality-free set is the levers whose quality line is none: never compa
 });
 
 test("progress summaries off joins the one question by its own mark, and --apply all agrees with the set", () => {
-  const fixes = planFixes({ ...inputs, progressSummaries: { agents: 40, summarized: 30, calls: 900, notesUsd: 74, forkUsd: 463, none: {}, hosts: [] } });
+  const fixes = planFixes({ ...inputs, progressSummaries: { agents: 40, summarized: 30, calls: 900, smallCalls: 0, notesUsd: 74, forkUsd: 463, none: {}, hosts: [] } });
   const { free } = splitFirstFixes(fixes);
   assert.ok(free.some((f) => f.id === "progress-summaries"));
   assert.match(renderFirstScreen({ days: 30, billedUsd: 2000, fixes, command: cmd, ask: true }), /^ +\$74\.00  Subagent progress summaries off$/m);

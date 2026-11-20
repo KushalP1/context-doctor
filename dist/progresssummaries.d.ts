@@ -35,6 +35,18 @@
  *    the notes. So both are priced: the notes as the low figure, the whole
  *    context as the high one.
  *
+ * From 2.1.328 (its CHANGELOG: "written by the default small fast model
+ * from short notes ... using far fewer tokens", terminal sessions on the
+ * Anthropic API; 2.1.327 moved Bedrock, Vertex and Foundry to notes on the
+ * agent's own model) there is one way: the notes, on the small fast model.
+ * The 2.1.329 binary agrees: the writer is ANTHROPIC_SMALL_FAST_MODEL's
+ * default, the catalog's Haiku (`claude-haiku-5-5` on the Anthropic API),
+ * and the notes are cut to 2,000 - 500 tokens less the label lines, by its
+ * own count of about 3 characters a token, under a ~100-token system prompt
+ * and a ~250-token instruction: NOTES_TOKENS stays the ceiling. So a
+ * subagent whose transcript says `version` 2.1.328 or later is priced once,
+ * at Haiku 5.5's rates (low and high the same); an older one as before.
+ *
  * Estimated per subagent from what its transcript does record: the time of
  * each message (the ticks and whether the transcript changed), each reply's
  * prompt size and model (the context a fork would read, the rates). Each
@@ -52,6 +64,11 @@ export declare const PROGRESS_SUMMARIES_SINCE = "2.1.318";
 export declare const SUMMARY_TICK_MS = 30000;
 /** A short summary's prompt: notes capped at 2,000 - 500 tokens, plus its system prompt and instruction. */
 export declare const NOTES_TOKENS = 1850;
+/** The first Claude Code that writes every summary from notes on the small fast model (its CHANGELOG). */
+export declare const SMALL_NOTES_SINCE = "2.1.328";
+/** The small fast model those run on: the 2.1.329 catalog's Haiku on the Anthropic API. */
+export declare const SMALL_FAST_MODEL = "claude-haiku-5-5";
+export declare const SMALL_FAST_MODEL_NAME = "Haiku 5.5";
 /** A fork summary's own instruction, after the agent's context. */
 export declare const FORK_PROMPT_TOKENS = 150;
 /** Each summary's output: #86879's measured mean (21,966 tokens over 339 summaries). */
@@ -113,13 +130,15 @@ type Rec = {
  * it has 3+ messages and more than at the last summary. Only ticks in
  * [since, until] are counted.
  */
-export declare function simulateAgent(recs: Rec[], since?: number, until?: number): AgentSummaries;
+export declare function simulateAgent(recs: Rec[], since?: number, until?: number, smallNotes?: boolean): AgentSummaries;
 export interface ProgressSummaryEstimate {
     /** Subagent transcripts read (workflow agents included). */
     agents: number;
     /** Agents Claude Code wrote summaries for in the window, by the rules above. */
     summarized: number;
     calls: number;
+    /** Of `calls`, those by agents on Claude Code 2.1.328+: notes on the small fast model, the same in both figures. */
+    smallCalls: number;
     /** The summaries as short notes (what Anthropic serves since November 2026): the low figure. */
     notesUsd: number;
     /** As a fork of the whole context (before): the high figure. */

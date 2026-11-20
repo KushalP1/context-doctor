@@ -57,7 +57,7 @@ import { claudeDir } from "./claudedir.js";
 import { comparisonLine } from "./abstore.js";
 import { movedFromNames, renderSubagentTypes, subagentModelSavedSince, SUBAGENT_CANDIDATE, SUBAGENT_CANDIDATE_NAME, SUBAGENT_MODEL_ENV } from "./subagentmodel.js";
 import { BASH_OUTPUT_DEFAULT, BASH_OUTPUT_KEY, BASH_OUTPUT_SINCE, breakEven, renderToolOutputCaps, toolOutputSavedSince } from "./tooloutput.js";
-import { disablesSummaries, estimateProgressSummaries, hostName, PROGRESS_SUMMARIES_ENV, PROGRESS_SUMMARIES_OFF, PROGRESS_SUMMARIES_SINCE } from "./progresssummaries.js";
+import { disablesSummaries, estimateProgressSummaries, hostName, PROGRESS_SUMMARIES_ENV, PROGRESS_SUMMARIES_OFF, PROGRESS_SUMMARIES_SINCE, SMALL_FAST_MODEL_NAME, SMALL_NOTES_SINCE } from "./progresssummaries.js";
 import { CODEX_COMPACT_KEY, CODEX_COMPACT_LIMIT, codexCompactOverrides, codexCompactSavedSince, codexConfigPath, renderCodexLimits, setTopLevelInt, topLevelValue } from "./codexcompact.js";
 /**
  * The Claude Code version that first reads each setting a fix writes, from
@@ -259,7 +259,7 @@ export function planFixes(i) {
             savedUsd: ps.notesUsd,
             savedShare: billed > 0 ? ps.notesUsd / billed : undefined,
             shareOf: "of subagents",
-            basis: `${ps.calls.toLocaleString("en-US")} summaries for ${ps.summarized} background subagent${ps.summarized === 1 ? "" : "s"}, one each 30 s while one ran and its transcript changed; no transcript records them, so an estimate: ~1,850 tokens of notes each (what Anthropic serves since November 2026), ${money(ps.forkUsd)} if each sent the whole context, as before`,
+            basis: `${ps.calls.toLocaleString("en-US")} summaries for ${ps.summarized} background subagent${ps.summarized === 1 ? "" : "s"}, one each 30 s while one ran and its transcript changed; no transcript records them, so an estimate: ${ps.smallCalls === ps.calls ? `~1,850 tokens of notes each, written by ${SMALL_FAST_MODEL_NAME} (Claude Code ${SMALL_NOTES_SINCE}+)` : `~1,850 tokens of notes each (what Anthropic serves since November 2026)${ps.smallCalls ? `, by ${SMALL_FAST_MODEL_NAME} for the ${ps.smallCalls.toLocaleString("en-US")} on Claude Code ${SMALL_NOTES_SINCE}+` : ""}, ${money(ps.forkUsd)} if each sent the whole context, as before`}`,
             quality: "none to the work: a summary never enters the subagent's context; you lose the 3-5 word progress line on a running subagent's task row",
             qualityFree: true,
             change: `${where}: env.${PROGRESS_SUMMARIES_ENV} = "${PROGRESS_SUMMARIES_OFF}" (Claude Code ${PROGRESS_SUMMARIES_SINCE}+)`,
@@ -857,7 +857,7 @@ export function savedSince(records, opts = {}) {
         }
         else if (r.id === "progress-summaries") {
             const s = progressSummariesSavedSince(r.at, opts.subagentPaths);
-            out.push({ id: r.id, at: r.at, savedUsd: s.summarized ? s.notesUsd : undefined, detail: s.summarized ? `estimated: ${s.calls.toLocaleString("en-US")} summaries it stopped for ${s.summarized} background subagent${s.summarized === 1 ? "" : "s"} on Claude Code ${PROGRESS_SUMMARIES_SINCE}+, as notes (${money(s.forkUsd)} at the whole context)` : "no background subagent in a terminal session since" });
+            out.push({ id: r.id, at: r.at, savedUsd: s.summarized ? s.notesUsd : undefined, detail: s.summarized ? `estimated: ${s.calls.toLocaleString("en-US")} summaries it stopped for ${s.summarized} background subagent${s.summarized === 1 ? "" : "s"} on Claude Code ${PROGRESS_SUMMARIES_SINCE}+, as notes${s.smallCalls === s.calls ? ` by ${SMALL_FAST_MODEL_NAME} (${SMALL_NOTES_SINCE}+)` : ` (${money(s.forkUsd)} at the whole context)`}` : "no background subagent in a terminal session since" });
         }
         else if (r.id === "autopilot") {
             const ledger = opts.ledger ?? readLedger();

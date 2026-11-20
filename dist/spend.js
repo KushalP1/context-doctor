@@ -32,7 +32,8 @@
  * Not in the total: Claude Code's subagent progress summaries, side requests
  * no transcript records (progresssummaries.ts). They are estimated per
  * background subagent and shown beside the total as a range, the two ways
- * Anthropic may serve them (short notes, or the whole context).
+ * Anthropic may serve them (short notes, or the whole context); a subagent
+ * on Claude Code 2.1.328+ once, as notes on the small fast model.
  *
  * `savings` bills a narrower slice of the same Claude Code requests: the main
  * conversation's input (cache writes and reads included, output not), in
@@ -44,7 +45,7 @@ import { codexDir } from "./codexdir.js";
 import { homedir } from "node:os";
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { claudeFileUsage, claudeUsageFiles, codexEventKey, codexSessionsRoot, rolloutFiles, USAGE_ROWS } from "./limits.js";
-import { estimateProgressSummaries, PROGRESS_ROWS, PROGRESS_SUMMARIES_ENV } from "./progresssummaries.js";
+import { estimateProgressSummaries, PROGRESS_ROWS, PROGRESS_SUMMARIES_ENV, SMALL_FAST_MODEL_NAME as SMALL_NAME, SMALL_NOTES_SINCE } from "./progresssummaries.js";
 import { listGeminiChats, readGeminiMessages } from "./gemini.js";
 import { cursorClaudeId, cursorUsage, SqliteUnavailableError } from "./cursor.js";
 import { copilotCalls } from "./copilotusage.js";
@@ -763,7 +764,7 @@ function claudeProgressSummaries(since, until, tops, o) {
         return { set: o.set };
     const files = claudeUsageFiles(since, tops).filter((f) => f.subagent && !f.run).map((f) => f.file);
     const e = estimateProgressSummaries(files, { since, until, forkGateOff: o?.forkGateOff, offSince: o?.offSince });
-    return e.calls ? { agents: e.summarized, calls: e.calls, notesUsd: e.notesUsd, forkUsd: e.forkUsd } : undefined;
+    return e.calls ? { agents: e.summarized, calls: e.calls, ...(e.smallCalls ? { smallCalls: e.smallCalls } : {}), notesUsd: e.notesUsd, forkUsd: e.forkUsd } : undefined;
 }
 /**
  * The longest window: ten years, older than any history these tools keep.
@@ -952,7 +953,13 @@ export function renderSpend(r, top = 8) {
     const ps = r.progressSummaries;
     if (ps && "calls" in ps) {
         lines.push(`  Not in it: ~${ps.calls.toLocaleString("en-US")} subagent progress summaries (${ps.agents} background ${ps.agents === 1 ? "agent" : "agents"}), an estimate:`);
-        lines.push(`  ${usd(ps.notesUsd)} as notes, ${usd(ps.forkUsd)} at the whole context; no transcript records them`);
+        if (ps.smallCalls === ps.calls)
+            lines.push(`  ${usd(ps.notesUsd)}, short notes on ${SMALL_NAME} (Claude Code ${SMALL_NOTES_SINCE}+); in no transcript`);
+        else {
+            lines.push(`  ${usd(ps.notesUsd)} as notes, ${usd(ps.forkUsd)} at the whole context; no transcript records them`);
+            if (ps.smallCalls)
+                lines.push(`  (${ps.smallCalls.toLocaleString("en-US")} of them on Claude Code ${SMALL_NOTES_SINCE}+: notes on ${SMALL_NAME} either way)`);
+        }
     }
     else if (ps)
         lines.push(`  Subagent progress summaries: not estimated, ${PROGRESS_SUMMARIES_ENV} is set in ${ps.set}`);
@@ -1028,7 +1035,7 @@ export function renderSpendShare(r) {
         lines.push(`Billed above list rates: ${modifiersText(r.modifiers)}.`);
     const ps = r.progressSummaries;
     if (ps && "calls" in ps)
-        lines.push(`Not in it: Claude Code's subagent progress summaries, which no transcript records: ${usd(ps.notesUsd)}-${usd(ps.forkUsd)}, an estimate.`);
+        lines.push(`Not in it: Claude Code's subagent progress summaries, which no transcript records: ${ps.smallCalls === ps.calls ? usd(ps.notesUsd) : `${usd(ps.notesUsd)}-${usd(ps.forkUsd)}`}, an estimate.`);
     const parts = [["cache writes", r.parts.writeUsd], ["cache reads", r.parts.readUsd], ["output", r.parts.outputUsd], ["uncached input", r.parts.inputUsd], ["web searches", r.parts.webSearchUsd ?? 0]];
     const [bigPart, bigUsd] = parts.sort((a, b) => b[1] - a[1])[0];
     const busiest = [...r.daily].sort((a, b) => b.usd - a.usd)[0];

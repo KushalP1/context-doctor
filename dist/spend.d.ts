@@ -32,7 +32,8 @@
  * Not in the total: Claude Code's subagent progress summaries, side requests
  * no transcript records (progresssummaries.ts). They are estimated per
  * background subagent and shown beside the total as a range, the two ways
- * Anthropic may serve them (short notes, or the whole context).
+ * Anthropic may serve them (short notes, or the whole context); a subagent
+ * on Claude Code 2.1.328+ once, as notes on the small fast model.
  *
  * `savings` bills a narrower slice of the same Claude Code requests: the main
  * conversation's input (cache writes and reads included, output not), in
@@ -295,12 +296,14 @@ export interface SpendReport {
     /**
      * Claude Code's subagent progress summaries, estimated (no transcript records them): NOT in `usd`.
      * `notesUsd` as short notes (served since November 2026), `forkUsd` as the whole context (before).
+     * `smallCalls`: of `calls`, those on Claude Code 2.1.328+, notes on the small fast model in both figures (absent when none).
      * `set`: CLAUDE_CODE_DISABLE_AGENT_PROGRESS_SUMMARIES is set there, since when unknown: not estimated.
      * Absent when no subagent got any.
      */
     progressSummaries?: {
         agents: number;
         calls: number;
+        smallCalls?: number;
         notesUsd: number;
         forkUsd: number;
     } | {

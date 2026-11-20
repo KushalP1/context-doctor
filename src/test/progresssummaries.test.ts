@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { eligibility, estimateProgressSummaries, FORK_PROMPT_TOKENS, NOTES_TOKENS, simulateAgent, SUMMARY_OUTPUT_TOKENS, type ProgressSummaryEstimate } from "../progresssummaries.js";
+import { eligibility, estimateProgressSummaries, FORK_PROMPT_TOKENS, NOTES_TOKENS, simulateAgent, SMALL_FAST_MODEL, SUMMARY_OUTPUT_TOKENS, type ProgressSummaryEstimate } from "../progresssummaries.js";
 import { requestCost } from "../pricing.js";
 import { renderSpend, renderSpendShare, spendReport } from "../spend.js";
 import { costGaps } from "../modmeasure.js";
@@ -177,8 +177,54 @@ test("the mod's ledger: Claude Code's cost above ours by the summaries it billed
 });
 
 /** An estimate whose figures the plan tests choose. */
-const estimate = (notesUsd: number, forkUsd = notesUsd * 6, over: Partial<ProgressSummaryEstimate> = {}): ProgressSummaryEstimate => ({ agents: 40, summarized: 30, calls: 4_000, notesUsd, forkUsd, none: {}, hosts: [], ...over });
+const estimate = (notesUsd: number, forkUsd = notesUsd * 6, over: Partial<ProgressSummaryEstimate> = {}): ProgressSummaryEstimate => ({ agents: 40, summarized: 30, calls: 4_000, smallCalls: 0, notesUsd, forkUsd, none: {}, hosts: [], ...over });
 const base: FixInputs = { days: 30, billedUsd: 2000 };
+
+test("2.1.328+: notes on the small fast model, one price; 2.1.327 keeps both; spend and fix say which", () => {
+  const home = mkdtempSync(join(tmpdir(), "cd-ps-328-"));
+  const { agents } = history(home, "s28", [
+    { id: "v27", start: T0, steps: 10, stepMs: 10_000, version: "2.1.327", prompt0: 80_000 },
+    { id: "v28", start: T0, steps: 10, stepMs: 10_000, version: "2.1.328", prompt0: 80_000 },
+  ]);
+  const [old, cur] = agents.map((f) => estimateProgressSummaries([f]));
+  const opusNotes = requestCost(OPUS, { input_tokens: NOTES_TOKENS, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: SUMMARY_OUTPUT_TOKENS }, T0 + 30_000)!.totalUsd;
+  const haiku = requestCost(SMALL_FAST_MODEL, { input_tokens: NOTES_TOKENS, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: SUMMARY_OUTPUT_TOKENS }, T0 + 30_000)!.totalUsd;
+  assert.equal(SMALL_FAST_MODEL, "claude-haiku-5-5");
+  // The same timer either way: 3 ticks.
+  assert.deepEqual([old.calls, cur.calls, old.smallCalls, cur.smallCalls], [3, 3, 0, 3]);
+  near(old.notesUsd, 3 * opusNotes, "2.1.327 notes on the agent's model");
+  assert.ok(old.forkUsd > old.notesUsd, "2.1.327 keeps the whole-context high end");
+  near(cur.notesUsd, 3 * haiku, "2.1.328 notes on Haiku 5.5");
+  near(cur.forkUsd, cur.notesUsd, "2.1.328: one way, one price");
+  assert.ok(cur.notesUsd < old.notesUsd / 5, `${cur.notesUsd} vs ${old.notesUsd}`);
+  const both = estimateProgressSummaries(agents);
+  assert.deepEqual([both.calls, both.smallCalls], [6, 3]);
+
+  // spend: all on 2.1.328+ is one figure; mixed names the share.
+  const one = mkdtempSync(join(tmpdir(), "cd-ps-328s-"));
+  const h1 = history(one, "s29", [{ id: "w1", start: T0, steps: 30, stepMs: 10_000, version: "2.1.329" }]);
+  const r = spendReport(3, { claudePaths: [h1.main], now: NOW });
+  const ps = r.progressSummaries;
+  assert.ok(ps && "calls" in ps && ps.smallCalls === ps.calls);
+  const text = renderSpend(r);
+  assert.match(text, /\n {2}(<\$0\.01|\$0\.\d\d), short notes on Haiku 5\.5 \(Claude Code 2\.1\.328\+\); in no transcript/);
+  for (const l of text.split("\n").filter((x) => /progress summaries|notes/.test(x))) assert.ok(l.length <= 80, l);
+  assert.match(renderSpendShare(r), /which no transcript records: (<\$0\.01|\$0\.\d\d), an estimate\./);
+  const mixed = mkdtempSync(join(tmpdir(), "cd-ps-328m-"));
+  const h2 = history(mixed, "s30", [{ id: "x1", start: T0, steps: 30, stepMs: 10_000, version: "2.1.327" }, { id: "x2", start: T0, steps: 30, stepMs: 10_000, version: "2.1.328" }]);
+  assert.match(renderSpend(spendReport(3, { claudePaths: [h2.main], now: NOW })), /as notes, \$\d\.\d\d at the whole context; no transcript records them\n {2}\(10 of them on Claude Code 2\.1\.328\+: notes on Haiku 5\.5 either way\)/);
+  // Older transcripts: the report is as before (no new field).
+  const pre = mkdtempSync(join(tmpdir(), "cd-ps-327-"));
+  const h3 = history(pre, "s31", [{ id: "y1", start: T0, steps: 30, stepMs: 10_000, version: "2.1.327" }]);
+  const r3 = spendReport(3, { claudePaths: [h3.main], now: NOW }).progressSummaries;
+  assert.ok(r3 && "calls" in r3 && !("smallCalls" in r3));
+
+  // fix: the basis names the writer; under a dollar it is not offered.
+  const f = planFixes({ ...base, progressSummaries: estimate(42, 42, { smallCalls: 4_000 }) })[0];
+  assert.match(f.basis, /~1,850 tokens of notes each, written by Haiku 5\.5 \(Claude Code 2\.1\.328\+\)/);
+  assert.doesNotMatch(f.basis, /whole context/);
+  assert.deepEqual(planFixes({ ...base, progressSummaries: estimate(cur.notesUsd, cur.notesUsd, { smallCalls: 4_000 }) }), []);
+});
 
 test("fix: offered at the notes' figure with what the user loses, in --apply all; a value set is named; none in the Desktop app", () => {
   const fixes = planFixes({ ...base, progressSummaries: estimate(42, 300), subagentModel: { candidate: "claude-sonnet-5-5", agents: 40, requests: 9000, billedUsd: 600, atCandidateUsd: 600, savedUsd: 0, unpriced: 0, movedFrom: {}, before: {}, byType: [] } });
