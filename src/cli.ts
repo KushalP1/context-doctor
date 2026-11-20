@@ -57,7 +57,8 @@ import { analyzeCacheUsage, renderCacheReport } from "./cache.js";
 import { renderToolTimings } from "./timing.js";
 import { packContextSemantic, readSources, renderPack } from "./pack.js";
 import { measureBaselines, measureMcpSizes, overheadReport, renderOverhead } from "./overhead.js";
-import { deferrableConfigured, measureStarts, START_ROWS } from "./starts.js";
+import { CALL_ROWS, deferrableApp, deferrableConfigured, measureStarts, START_ROWS } from "./starts.js";
+import { DEFER_APP_TOOLS_ENV } from "./mod/logic.js";
 import { applySplit, planSplit, renderSplit } from "./split.js";
 import { ciReport, renderCiMarkdown, renderCiText } from "./ci.js";
 import { renderReads, repeatedReads } from "./reads.js";
@@ -419,12 +420,12 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
   // With autopilot already on, its replay (most of the time) answers nothing `fix` asks.
   const replaying = progressLine(autopilotOnNow ? "Reading your Claude Code sessions" : "Replaying your Claude Code sessions");
   const setWindow = currentCompactWindow();
-  // The starts are measured only when a server of the user's own could have gone whole into them (mcp-defer).
+  // A server of the user's own that could have gone whole into a start (mcp-defer); the Desktop app's own servers (desktop-tools-defer) are measured from every start.
   const configured = claudeMcpConfigs(cwd).some((c) => c.scope !== ".mcp.json");
   // Each transcript read once for every replay below; what an earlier run kept is not read again (scan.ts).
   prescan([
-    { paths: claudeTranscripts(days), extractors: [savingsRows(!autopilotOnNow), REQUEST_ROWS, TOOL_OUTPUT_ROWS, ...(configured ? [START_ROWS] : [])] },
-    { paths: subagentTranscripts(Date.now() - days * 86_400_000), extractors: [REQUEST_ROWS, SUBAGENT_ROWS, TOOL_OUTPUT_ROWS, PROGRESS_ROWS, ...(configured ? [START_ROWS] : [])] },
+    { paths: claudeTranscripts(days), extractors: [savingsRows(!autopilotOnNow), REQUEST_ROWS, TOOL_OUTPUT_ROWS, START_ROWS, CALL_ROWS] },
+    { paths: subagentTranscripts(Date.now() - days * 86_400_000), extractors: [REQUEST_ROWS, SUBAGENT_ROWS, TOOL_OUTPUT_ROWS, PROGRESS_ROWS, START_ROWS, CALL_ROWS] },
     ...(setWindow === undefined ? [{ paths: claudeTranscripts(60), extractors: [QUALITY_ROWS] }] : []),
     { paths: codexRollouts(Date.now() - days * 86_400_000), extractors: [CODEX_COMPACT_ROWS] },
   ], replaying.tick);
@@ -492,11 +493,23 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
   }
   let userSettings: Record<string, any> = {};
   try { userSettings = JSON.parse(readFileSync(join(claudeDir(), "settings.json"), "utf8")) ?? {}; } catch { /* none */ }
-  const deferrable = configured ? deferrableConfigured(measureStarts({ days, cwd })) : [];
+  const starts = measureStarts({ days, cwd });
+  const deferrable = configured ? deferrableConfigured(starts) : [];
+  const appTools = deferrableApp(starts);
+  // CONTEXT_DOCTOR_DEFER_MCP: the user's settings.json env (fix writes it there), else a shell's own value (not the session's copy of a settings value).
+  const userDt = sources.find((s) => s.name === "user")?.settings.env?.[DEFER_APP_TOOLS_ENV];
+  const desktopToolsSet = userDt !== undefined && userDt !== null && String(userDt).trim() !== ""
+    ? { value: String(userDt), where: `${tilde(join(claudeDir(), "settings.json"))} env` }
+    : !underClaudeCode() && shellSet(DEFER_APP_TOOLS_ENV, sources, process.env)
+      ? { value: process.env[DEFER_APP_TOOLS_ENV]!, where: "the environment" }
+      : undefined;
   let recordProblem: string | undefined;
   try { loadFixRecords(); } catch (e) { recordProblem = (e as Error).message; }
   const sessions = report.sessions.length;
-  const ids: FixId[] = ["compact-window", "cache-ttl", "cache-ttl-subagents", "tool-search", "subagent-model", "tool-output", "codex-compact", "progress-summaries"];
+  const ids: FixId[] = ["compact-window", "cache-ttl", "cache-ttl-subagents", "tool-search", "subagent-model", "tool-output", "codex-compact", "progress-summaries", "desktop-tools-defer"];
+  const overrides = Object.fromEntries(ids.map((id) => [id, fixOverrides(id, { cwd })]));
+  // The mod is what reads the variable: without the plugin, nothing moves.
+  if (appTools.length && !claudePluginEnabled()) overrides["desktop-tools-defer"].push("context-doctor's Claude Code plugin is not enabled, and its mod is what reads this (/plugin install context-doctor@context-doctor inside Claude Code)");
   return {
     prunePlan,
     inputs: {
@@ -510,6 +523,8 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
       mcpServers: toolSearchOff ? servers.length : 0,
       prune: prunePlan,
       ...(deferrable.length ? { mcpDefer: { servers: deferrable, days } } : {}),
+      ...(appTools.length ? { desktopTools: { servers: appTools.map((s) => ({ name: s.name, tools: s.tools, tokens: s.tokens, starts: s.starts, calledStarts: s.calledStarts, usd: s.usd, unusedUsd: s.unusedUsd })), days } } : {}),
+      ...(desktopToolsSet ? { desktopToolsSet } : {}),
       subagentModel,
       subagentModelSet,
       // The newest ab --via claude-code comparison of Sonnet 5.5 with another model: the subagent-model line quotes it.
@@ -520,7 +535,7 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
       ...(psState.set ? { progressSummariesSet: psState.set } : {}),
       ...(codexCompact.requests > 0 ? { codexCompact } : {}),
       ...(cxSet ? { codexCompactSet: { raw: cxSet.raw, where: cxSet.where } } : {}),
-      overrides: Object.fromEntries(ids.map((id) => [id, fixOverrides(id, { cwd })])),
+      overrides,
       recordProblem,
       // The installs a setting is too new for are named on its fix.
       claudeCodeInstalls: claudeCodeInstallsFromEnv(),
@@ -1839,8 +1854,8 @@ async function main(): Promise<void> {
     // One read of each Claude Code transcript for both counts (scan.ts); subagents hold MCP calls too.
     const mains = claudeTranscripts(args.days ?? 30);
     prescan([
-      { paths: mains, extractors: [REQUEST_ROWS, MCP_ROWS, START_ROWS] },
-      { paths: mains.flatMap((p) => subagentFiles(p).map((f) => f.file)), extractors: [MCP_ROWS, REQUEST_ROWS, START_ROWS] },
+      { paths: mains, extractors: [REQUEST_ROWS, MCP_ROWS, START_ROWS, CALL_ROWS] },
+      { paths: mains.flatMap((p) => subagentFiles(p).map((f) => f.file)), extractors: [MCP_ROWS, REQUEST_ROWS, START_ROWS, CALL_ROWS] },
     ], sessions.tick);
     const report = overheadReport({
       days: args.days,

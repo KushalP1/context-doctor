@@ -31,6 +31,10 @@
  *    subagents with their model, context and cost so far. Drawing only reads
  *    what the mod holds; `context-doctor mod usage` refreshes it on the
  *    timer, only while the pane is open (usageDue).
+ *  - `tool.describe` (2.1.326+): once `fix --apply desktop-tools-defer`
+ *    named the Desktop app's own MCP servers in CONTEXT_DOCTOR_DEFER_MCP,
+ *    their tools go behind tool search from the next new conversation; never
+ *    ccd_turn, never with `breakPromptCache`. Unset, nothing moves.
  *
  * Nothing happens without a press or a command: no auto-compaction, no auto-apply, no ping. The
  * mod writes no file itself; the CLI writes ours. Off: CONTEXT_DOCTOR_NO_MOD=1.

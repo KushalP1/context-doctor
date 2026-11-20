@@ -27,6 +27,7 @@ import { listSessions, isClaudeSession, replyCounter, textOf } from "./session.j
 import { subagentFiles, workflowRunOf } from "./subagents.js";
 import { cacheWriteSplit, formatUsd, rateCard, ratesAt, usageCost } from "./pricing.js";
 import { formatTokens, isCodeLike, realModel, tokensForLength } from "./tokens.js";
+import { APP_TOOL_SERVERS } from "./mod/logic.js";
 
 const CLAUDE = "claude-opus-5";
 
@@ -95,6 +96,29 @@ export const START_ROWS: Extractor<{ e?: 1; q?: 1; s?: 1; u?: 1; r?: 1 }> = {
   },
 };
 
+/**
+ * The MCP servers a transcript called a tool of, by name only: which starts
+ * needed a server whose tools could have waited behind tool search (fix's
+ * desktop-tools-defer prices only the starts that never called it).
+ */
+export const CALL_ROWS: Extractor<{ seen: string[] }> = {
+  id: "startcalls.1",
+  init: () => ({ seen: [] }),
+  line(raw, row, out, st) {
+    if (!raw.includes('"tool_use"') || !raw.includes('"name":"mcp__')) return;
+    let e: any;
+    try { e = row(); } catch { return; }
+    const content = e?.message?.content;
+    if (!Array.isArray(content)) return;
+    for (const b of content) {
+      const server = b?.type === "tool_use" && typeof b.name === "string" ? mcpServerOf(b.name) : undefined;
+      if (!server || st.seen.includes(server)) continue;
+      st.seen.push(server);
+      out.push(server.slice(0, 200));
+    }
+  },
+};
+
 /** An entrypoint as people call it. */
 export function entrypointName(e: string | undefined): string {
   switch (e) {
@@ -126,6 +150,8 @@ interface Start {
   priced: boolean;
   requests: number;
   shape?: { wholeTools: number; wholeTokens: number; mcpTokens: number; servers: Map<string, { tools: number; tokens: number }> };
+  /** The MCP servers this transcript called a tool of. */
+  called?: Set<string>;
 }
 
 export interface StartServer {
@@ -137,6 +163,10 @@ export interface StartServer {
   tokens: number;
   /** In the user's own MCP config (~/.claude.json, the folder's .mcp.json): `alwaysLoad: false` there defers it. */
   configured?: "user" | "project" | ".mcp.json";
+  /** Of `starts`, the ones whose session or subagent called one of its tools. */
+  calledStarts: number;
+  /** Its definitions' part of the starts that never called it, each start at its own rates: what keeping it behind tool search would have saved there. */
+  unusedUsd: number;
 }
 
 export interface StartGroup {
@@ -254,6 +284,7 @@ function measureStart(path: string, kind: Start["kind"], since: number, runRows?
       s.tokens += t;
     }
     start.shape = { wholeTools, wholeTokens: Math.min(wholeTokens, tokens), mcpTokens: Math.min(mcpTokens, tokens), servers };
+    if (servers.size) start.called = new Set(rowsOf<string>(path, CALL_ROWS));
   }
   return start;
 }
@@ -306,10 +337,12 @@ export function measureStarts(opts: { days?: number; paths?: string[]; cwd?: str
     const med = (xs: number[]) => (xs.length ? xs.sort((a, b) => a - b)[Math.floor(xs.length / 2)] : undefined);
     const servers = new Map<string, StartServer>();
     for (const s of shaped) for (const [name, v] of s.shape!.servers) {
-      const cur = servers.get(name) ?? servers.set(name, { name, starts: 0, tools: 0, tokens: 0, ...(configured.get(name) ? { configured: configured.get(name) } : {}) }).get(name)!;
+      const cur = servers.get(name) ?? servers.set(name, { name, starts: 0, tools: 0, tokens: 0, calledStarts: 0, unusedUsd: 0, ...(configured.get(name) ? { configured: configured.get(name) } : {}) }).get(name)!;
       cur.starts++;
       cur.tools = Math.max(cur.tools, v.tools);
       cur.tokens += v.tokens;
+      if (s.called?.has(name)) cur.calledStarts++;
+      else cur.unusedUsd += s.usd * Math.min(1, v.tokens / s.tokens);
     }
     for (const s of servers.values()) s.tokens = Math.round(s.tokens / s.starts);
     const g: StartGroup = {
@@ -365,6 +398,27 @@ export function deferrableConfigured(r: StartsReport): Array<{ name: string; sco
   return [...out.values()].sort((a, b) => b.usd - a.usd);
 }
 
+/** Every server whose tools went whole into some start, across the groups: its share of each group's deferrable part, as `overhead` lists it. */
+export function startServers(r: StartsReport): Array<StartServer & { usd: number }> {
+  const servers = new Map<string, StartServer & { usd: number }>();
+  for (const g of r.groups) for (const s of g.servers) {
+    const share = g.deferrableUsd ? (g.deferrableUsd * s.tokens * s.starts) / (g.servers.reduce((t, x) => t + x.tokens * x.starts, 0) || 1) : 0;
+    const cur = servers.get(s.name);
+    if (cur) { cur.usd += share; cur.starts += s.starts; cur.calledStarts += s.calledStarts; cur.unusedUsd += s.unusedUsd; cur.tokens = Math.max(cur.tokens, s.tokens); cur.tools = Math.max(cur.tools, s.tools); }
+    else servers.set(s.name, { ...s, usd: share });
+  }
+  return [...servers.values()].sort((a, b) => b.usd - a.usd);
+}
+
+/**
+ * The Desktop app's own servers (Claude_Browser, ccd_session, visualize,
+ * terminal) whose tools went whole into some start, and no config file of the
+ * user's holds: fix's desktop-tools-defer, which context-doctor's mod applies.
+ */
+export function deferrableApp(r: StartsReport): Array<StartServer & { usd: number }> {
+  return startServers(r).filter((s) => !s.configured && APP_TOOL_SERVERS.includes(s.name));
+}
+
 const tok = (n: number) => `~${formatTokens(n)}`;
 
 /** The starts section of `overhead`. */
@@ -398,14 +452,7 @@ export function renderStarts(r: StartsReport): string[] {
   }
 
   // What could be deferred, and whether any setting reaches it.
-  const servers = new Map<string, StartServer & { usd: number }>();
-  for (const g of r.groups) for (const s of g.servers) {
-    const share = g.deferrableUsd ? (g.deferrableUsd * s.tokens * s.starts) / (g.servers.reduce((t, x) => t + x.tokens * x.starts, 0) || 1) : 0;
-    const cur = servers.get(s.name);
-    if (cur) { cur.usd += share; cur.starts += s.starts; cur.tokens = Math.max(cur.tokens, s.tokens); cur.tools = Math.max(cur.tools, s.tools); }
-    else servers.set(s.name, { ...s, usd: share });
-  }
-  const list = [...servers.values()].sort((a, b) => b.usd - a.usd);
+  const list = startServers(r);
   if (list.length) {
     out.push("  MCP tool definitions sent whole (not deferred behind tool search):");
     for (const s of list.slice(0, 8)) {
@@ -420,6 +467,8 @@ export function renderStarts(r: StartsReport): string[] {
         `  No setting defers the ${app.length === 1 ? "server" : `${app.length} servers`} the app provides (${formatUsd(app.reduce((t, s) => t + s.usd, 0))} of the starts' cost): the Desktop app hands its own servers and connectors to Claude Code in-process with their tools marked to load upfront, and no MCP setting or ENABLE_TOOL_SEARCH value reaches them (tool search is on: the other tools are deferred). A subagent definition's \`tools:\` list or \`disallowedTools: mcp__*\` keeps them out of that agent's start, and out of its reach too.`
       );
     }
+    const own = app.filter((s) => APP_TOOL_SERVERS.includes(s.name));
+    if (own.length) out.push(`  \`context-doctor fix --apply desktop-tools-defer\` has context-doctor's mod keep ${own.map((s) => s.name).join(", ")} behind tool search in new sessions (Claude Code 2.1.326+ with the plugin; reversible with \`fix undo desktop-tools-defer\`); \`fix\` prices it on the starts that never called them.`);
     if (list.some((s) => s.configured)) out.push("  `context-doctor fix --apply mcp-defer` sets `alwaysLoad: false` on the ones in your own config (reversible with `fix undo mcp-defer`).");
   } else if (r.groups.some((g) => g.shaped > 0)) {
     out.push("  Every MCP tool definition was deferred behind tool search: nothing of the start to defer.");

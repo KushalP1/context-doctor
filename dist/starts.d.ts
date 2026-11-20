@@ -33,6 +33,14 @@ export declare const START_ROWS: Extractor<{
     u?: 1;
     r?: 1;
 }>;
+/**
+ * The MCP servers a transcript called a tool of, by name only: which starts
+ * needed a server whose tools could have waited behind tool search (fix's
+ * desktop-tools-defer prices only the starts that never called it).
+ */
+export declare const CALL_ROWS: Extractor<{
+    seen: string[];
+}>;
 /** An entrypoint as people call it. */
 export declare function entrypointName(e: string | undefined): string;
 /** The MCP server a tool name belongs to (`mcp__<server>__<tool>`), or undefined for a built-in. */
@@ -46,6 +54,10 @@ export interface StartServer {
     tokens: number;
     /** In the user's own MCP config (~/.claude.json, the folder's .mcp.json): `alwaysLoad: false` there defers it. */
     configured?: "user" | "project" | ".mcp.json";
+    /** Of `starts`, the ones whose session or subagent called one of its tools. */
+    calledStarts: number;
+    /** Its definitions' part of the starts that never called it, each start at its own rates: what keeping it behind tool search would have saved there. */
+    unusedUsd: number;
 }
 export interface StartGroup {
     kind: "session" | "subagent";
@@ -100,6 +112,18 @@ export declare function deferrableConfigured(r: StartsReport): Array<{
     name: string;
     scope: NonNullable<StartServer["configured"]>;
     tokens: number;
+    usd: number;
+}>;
+/** Every server whose tools went whole into some start, across the groups: its share of each group's deferrable part, as `overhead` lists it. */
+export declare function startServers(r: StartsReport): Array<StartServer & {
+    usd: number;
+}>;
+/**
+ * The Desktop app's own servers (Claude_Browser, ccd_session, visualize,
+ * terminal) whose tools went whole into some start, and no config file of the
+ * user's holds: fix's desktop-tools-defer, which context-doctor's mod applies.
+ */
+export declare function deferrableApp(r: StartsReport): Array<StartServer & {
     usd: number;
 }>;
 /** The starts section of `overhead`. */

@@ -566,3 +566,44 @@ export function parseUsage(stdout) {
         return undefined;
     }
 }
+// -- The Desktop app's own MCP tools behind tool search (fix's desktop-tools-defer) ------
+/**
+ * The variable `fix --apply desktop-tools-defer` writes to ~/.claude/settings.json's
+ * `env`: the MCP servers whose tools the mod answers `isDeferred: true` for at
+ * `tool.describe`. Unset (the default, and after `fix undo`), the mod moves nothing.
+ * register.ts spells the name again as a literal: Claude Code reads the
+ * variables a module reads off its source.
+ */
+export const DEFER_APP_TOOLS_ENV = "CONTEXT_DOCTOR_DEFER_MCP";
+/**
+ * The Desktop app's own servers `fix` offers to defer: in-process (`sdk`)
+ * servers no MCP setting reaches, whose tools go whole into every Desktop
+ * session and subagent start. On the author's 30 days (ROADMAP, Research
+ * 2026-11-20) they cost $88.63 of starts, and most sessions never called them.
+ */
+export const APP_TOOL_SERVERS = ["Claude_Browser", "ccd_session", "visualize", "terminal"];
+/** Kept in front whatever the variable says: the app's turn tool, called in most sessions (31 of 61 on the author's). */
+export const KEEP_APP_SERVERS = ["ccd_turn"];
+/** The servers the variable names (comma or space separated), less the ones always kept, each once. */
+export function deferredServers(raw) {
+    const out = [];
+    for (const n of (raw ?? "").split(/[\s,]+/)) {
+        if (!/^[A-Za-z0-9_.-]{1,80}$/.test(n) || KEEP_APP_SERVERS.includes(n) || out.includes(n))
+            continue;
+        out.push(n);
+    }
+    return out;
+}
+/**
+ * Whether the mod moves this tool behind ToolSearch: an MCP tool
+ * (`mcp__<server>__<tool>`) of a server the variable names, that the engine
+ * would send whole. Never on an engine without `mcpServer` on the input
+ * (older than 2.1.326, which cannot place a tool from a hook either), never
+ * a tool already behind ToolSearch (its second, loaded description among
+ * them), never one of the servers always kept.
+ */
+export function shouldDefer(e, servers) {
+    if (!e || typeof e.tool !== "string" || !e.mcpServer || typeof e.mcpServer !== "object" || e.isDeferred === true)
+        return false;
+    return servers.some((n) => !KEEP_APP_SERVERS.includes(n) && e.tool.startsWith(`mcp__${n}__`));
+}

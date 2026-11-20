@@ -26,6 +26,7 @@ import { listSessions, isClaudeSession, replyCounter, textOf } from "./session.j
 import { subagentFiles, workflowRunOf } from "./subagents.js";
 import { cacheWriteSplit, formatUsd, rateCard, ratesAt, usageCost } from "./pricing.js";
 import { formatTokens, isCodeLike, realModel, tokensForLength } from "./tokens.js";
+import { APP_TOOL_SERVERS } from "./mod/logic.js";
 const CLAUDE = "claude-opus-5";
 /**
  * What a start's measurement takes from a transcript: the entrypoint, the
@@ -87,6 +88,36 @@ export const START_ROWS = {
             const u = e.message?.usage;
             if (u && (Number(u.input_tokens) || 0) + (Number(u.cache_read_input_tokens) || 0) + (Number(u.cache_creation_input_tokens) || 0) > 0)
                 st.r = 1;
+        }
+    },
+};
+/**
+ * The MCP servers a transcript called a tool of, by name only: which starts
+ * needed a server whose tools could have waited behind tool search (fix's
+ * desktop-tools-defer prices only the starts that never called it).
+ */
+export const CALL_ROWS = {
+    id: "startcalls.1",
+    init: () => ({ seen: [] }),
+    line(raw, row, out, st) {
+        if (!raw.includes('"tool_use"') || !raw.includes('"name":"mcp__'))
+            return;
+        let e;
+        try {
+            e = row();
+        }
+        catch {
+            return;
+        }
+        const content = e?.message?.content;
+        if (!Array.isArray(content))
+            return;
+        for (const b of content) {
+            const server = b?.type === "tool_use" && typeof b.name === "string" ? mcpServerOf(b.name) : undefined;
+            if (!server || st.seen.includes(server))
+                continue;
+            st.seen.push(server);
+            out.push(server.slice(0, 200));
         }
     },
 };
@@ -211,6 +242,8 @@ function measureStart(path, kind, since, runRows, parentEntry) {
             s.tokens += t;
         }
         start.shape = { wholeTools, wholeTokens: Math.min(wholeTokens, tokens), mcpTokens: Math.min(mcpTokens, tokens), servers };
+        if (servers.size)
+            start.called = new Set(rowsOf(path, CALL_ROWS));
     }
     return start;
 }
@@ -275,10 +308,14 @@ export function measureStarts(opts = {}) {
         const servers = new Map();
         for (const s of shaped)
             for (const [name, v] of s.shape.servers) {
-                const cur = servers.get(name) ?? servers.set(name, { name, starts: 0, tools: 0, tokens: 0, ...(configured.get(name) ? { configured: configured.get(name) } : {}) }).get(name);
+                const cur = servers.get(name) ?? servers.set(name, { name, starts: 0, tools: 0, tokens: 0, calledStarts: 0, unusedUsd: 0, ...(configured.get(name) ? { configured: configured.get(name) } : {}) }).get(name);
                 cur.starts++;
                 cur.tools = Math.max(cur.tools, v.tools);
                 cur.tokens += v.tokens;
+                if (s.called?.has(name))
+                    cur.calledStarts++;
+                else
+                    cur.unusedUsd += s.usd * Math.min(1, v.tokens / s.tokens);
             }
         for (const s of servers.values())
             s.tokens = Math.round(s.tokens / s.starts);
@@ -334,6 +371,34 @@ export function deferrableConfigured(r) {
     }
     return [...out.values()].sort((a, b) => b.usd - a.usd);
 }
+/** Every server whose tools went whole into some start, across the groups: its share of each group's deferrable part, as `overhead` lists it. */
+export function startServers(r) {
+    const servers = new Map();
+    for (const g of r.groups)
+        for (const s of g.servers) {
+            const share = g.deferrableUsd ? (g.deferrableUsd * s.tokens * s.starts) / (g.servers.reduce((t, x) => t + x.tokens * x.starts, 0) || 1) : 0;
+            const cur = servers.get(s.name);
+            if (cur) {
+                cur.usd += share;
+                cur.starts += s.starts;
+                cur.calledStarts += s.calledStarts;
+                cur.unusedUsd += s.unusedUsd;
+                cur.tokens = Math.max(cur.tokens, s.tokens);
+                cur.tools = Math.max(cur.tools, s.tools);
+            }
+            else
+                servers.set(s.name, { ...s, usd: share });
+        }
+    return [...servers.values()].sort((a, b) => b.usd - a.usd);
+}
+/**
+ * The Desktop app's own servers (Claude_Browser, ccd_session, visualize,
+ * terminal) whose tools went whole into some start, and no config file of the
+ * user's holds: fix's desktop-tools-defer, which context-doctor's mod applies.
+ */
+export function deferrableApp(r) {
+    return startServers(r).filter((s) => !s.configured && APP_TOOL_SERVERS.includes(s.name));
+}
 const tok = (n) => `~${formatTokens(n)}`;
 /** The starts section of `overhead`. */
 export function renderStarts(r) {
@@ -368,21 +433,7 @@ export function renderStarts(r) {
         out.push("  No terminal sessions in the period to compare the Desktop app's start with (#105328 reports ~79k against ~13k).");
     }
     // What could be deferred, and whether any setting reaches it.
-    const servers = new Map();
-    for (const g of r.groups)
-        for (const s of g.servers) {
-            const share = g.deferrableUsd ? (g.deferrableUsd * s.tokens * s.starts) / (g.servers.reduce((t, x) => t + x.tokens * x.starts, 0) || 1) : 0;
-            const cur = servers.get(s.name);
-            if (cur) {
-                cur.usd += share;
-                cur.starts += s.starts;
-                cur.tokens = Math.max(cur.tokens, s.tokens);
-                cur.tools = Math.max(cur.tools, s.tools);
-            }
-            else
-                servers.set(s.name, { ...s, usd: share });
-        }
-    const list = [...servers.values()].sort((a, b) => b.usd - a.usd);
+    const list = startServers(r);
     if (list.length) {
         out.push("  MCP tool definitions sent whole (not deferred behind tool search):");
         for (const s of list.slice(0, 8)) {
@@ -396,6 +447,9 @@ export function renderStarts(r) {
         if (app.length) {
             out.push(`  No setting defers the ${app.length === 1 ? "server" : `${app.length} servers`} the app provides (${formatUsd(app.reduce((t, s) => t + s.usd, 0))} of the starts' cost): the Desktop app hands its own servers and connectors to Claude Code in-process with their tools marked to load upfront, and no MCP setting or ENABLE_TOOL_SEARCH value reaches them (tool search is on: the other tools are deferred). A subagent definition's \`tools:\` list or \`disallowedTools: mcp__*\` keeps them out of that agent's start, and out of its reach too.`);
         }
+        const own = app.filter((s) => APP_TOOL_SERVERS.includes(s.name));
+        if (own.length)
+            out.push(`  \`context-doctor fix --apply desktop-tools-defer\` has context-doctor's mod keep ${own.map((s) => s.name).join(", ")} behind tool search in new sessions (Claude Code 2.1.326+ with the plugin; reversible with \`fix undo desktop-tools-defer\`); \`fix\` prices it on the starts that never called them.`);
         if (list.some((s) => s.configured))
             out.push("  `context-doctor fix --apply mcp-defer` sets `alwaysLoad: false` on the ones in your own config (reversible with `fix undo mcp-defer`).");
     }

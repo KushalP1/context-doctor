@@ -10,7 +10,8 @@
  * and the events `session.start`, `session.measure`, `session.end`,
  * `command.run`, `ui.render`; from 2.1.325's, for the usage pane,
  * `$.agent.list`, `$.session.usage`, the `Svg` element, a pane's `placement`
- * and `bodyColumns`, and `ui.close`. A subset, structurally compatible: no
+ * and `bodyColumns`, and `ui.close`; from 2.1.329's, `tool.describe` with
+ * its `mcpServer` and an answer's `isDeferred`. A subset, structurally compatible: no
  * runtime code.
  */
 export type Surface = "terminal" | "desktop" | "vscode" | "mobile";
@@ -202,4 +203,29 @@ export interface On {
             kind: string;
         };
     }, unknown>): unknown;
+    (event: "tool.describe", hook: Hook<ToolDescribeInput, ToolDescribeResult>): unknown;
+}
+/**
+ * `tool.describe` (2.1.323+; `mcpServer` and an answer's `isDeferred` from
+ * 2.1.326, read in 2.1.329's declarations): one tool's description the first
+ * time the engine renders its schema in a session. `isDeferred: true` on the
+ * answer puts the tool behind ToolSearch from the next new thread or `/clear`;
+ * `breakPromptCache` would send it at the next turn by re-writing the whole
+ * prompt cache, which the mod never asks for.
+ */
+export interface ToolDescribeInput {
+    tool: string;
+    description: string;
+    isDeferred?: true;
+    provider?: unknown;
+    mcpServer?: {
+        type: "stdio" | "http" | "sse" | "ws" | "sdk" | "sse-ide" | "ws-ide" | "claudeai-proxy" | string;
+        origin?: string;
+        connectorId?: string;
+    };
+}
+export interface ToolDescribeResult {
+    description: string;
+    isDeferred?: boolean;
+    breakPromptCache?: boolean;
 }

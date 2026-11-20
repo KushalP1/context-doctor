@@ -48,7 +48,7 @@ import { type SubagentModelReplay } from "./subagentmodel.js";
 import { type ToolOutputReplay } from "./tooloutput.js";
 import { type ProgressSummaryEstimate } from "./progresssummaries.js";
 import { type CodexCompactReport } from "./codexcompact.js";
-export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model" | "tool-output" | "codex-compact" | "progress-summaries" | "mcp-defer";
+export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model" | "tool-output" | "codex-compact" | "progress-summaries" | "mcp-defer" | "desktop-tools-defer";
 export interface Fix {
     id: FixId;
     title: string;
@@ -174,7 +174,32 @@ export interface FixInputs {
         }>;
         days: number;
     };
+    /**
+     * The Desktop app's own MCP servers whose tools went whole into starts
+     * (starts.ts deferrableApp): per server, its starts, the ones whose session
+     * or subagent called it, its share of the starts' cost as `overhead` lists
+     * it, and the part from starts that never called it.
+     */
+    desktopTools?: {
+        servers: Array<{
+            name: string;
+            tools: number;
+            tokens: number;
+            starts: number;
+            calledStarts: number;
+            usd: number;
+            unusedUsd: number;
+        }>;
+        days: number;
+    };
+    /** CONTEXT_DOCTOR_DEFER_MCP where the user (or fix) set it: applied, never overwritten. */
+    desktopToolsSet?: {
+        value: string;
+        where: string;
+    };
 }
+/** The Claude Code version whose `tool.describe` names a tool's MCP server and lets a mod answer `isDeferred`. */
+export declare const DESKTOP_TOOLS_DEFER_SINCE = "2.1.326";
 export declare const money: (n: number) => string;
 /** " (48%)", or " (37% of subagents)" for a share of something else. */
 export declare const share: (f: Fix) => string;

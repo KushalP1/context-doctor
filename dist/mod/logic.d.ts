@@ -429,3 +429,42 @@ export declare function usageDue(s: {
 export declare function usageArgv(node: string, cli: string): string[];
 /** Parse `mod usage`'s output; undefined when it is not one. */
 export declare function parseUsage(stdout: string): UsagePaneData | undefined;
+/**
+ * The variable `fix --apply desktop-tools-defer` writes to ~/.claude/settings.json's
+ * `env`: the MCP servers whose tools the mod answers `isDeferred: true` for at
+ * `tool.describe`. Unset (the default, and after `fix undo`), the mod moves nothing.
+ * register.ts spells the name again as a literal: Claude Code reads the
+ * variables a module reads off its source.
+ */
+export declare const DEFER_APP_TOOLS_ENV = "CONTEXT_DOCTOR_DEFER_MCP";
+/**
+ * The Desktop app's own servers `fix` offers to defer: in-process (`sdk`)
+ * servers no MCP setting reaches, whose tools go whole into every Desktop
+ * session and subagent start. On the author's 30 days (ROADMAP, Research
+ * 2026-11-20) they cost $88.63 of starts, and most sessions never called them.
+ */
+export declare const APP_TOOL_SERVERS: readonly string[];
+/** Kept in front whatever the variable says: the app's turn tool, called in most sessions (31 of 61 on the author's). */
+export declare const KEEP_APP_SERVERS: readonly string[];
+/** The servers the variable names (comma or space separated), less the ones always kept, each once. */
+export declare function deferredServers(raw: string | undefined): string[];
+/** What `tool.describe` hands a hook (Claude Code 2.1.326+'s declarations: ToolDescribeInput, ToolMcpServer). */
+export interface DescribeInput {
+    tool: string;
+    description: string;
+    isDeferred?: true;
+    mcpServer?: {
+        type: string;
+        origin?: string;
+        connectorId?: string;
+    };
+}
+/**
+ * Whether the mod moves this tool behind ToolSearch: an MCP tool
+ * (`mcp__<server>__<tool>`) of a server the variable names, that the engine
+ * would send whole. Never on an engine without `mcpServer` on the input
+ * (older than 2.1.326, which cannot place a tool from a hook either), never
+ * a tool already behind ToolSearch (its second, loaded description among
+ * them), never one of the servers always kept.
+ */
+export declare function shouldDefer(e: DescribeInput, servers: readonly string[]): boolean;

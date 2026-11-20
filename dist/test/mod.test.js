@@ -15,7 +15,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyOutcome, band, bar, duration, fixArgv, KEEP_WARM_COMMAND, keepWarmRefusal, keepWarmStep, keepWarmTestEvery, mergeLimits, money, outcome, paneRows, parseKeepWarm, parsePlan, parseUsage, passedThreshold, pctText, PING_EVERY_1H_MS, PING_EVERY_5M_MS, PING_PROMPT, pingOutcome, ringSvg, shortModel, thresholdsFrom, tokens, usageDue, usageText, usageView, withPresses } from "../mod/logic.js";
+import { applyOutcome, band, bar, deferredServers, duration, fixArgv, KEEP_WARM_COMMAND, keepWarmRefusal, keepWarmStep, keepWarmTestEvery, mergeLimits, money, outcome, paneRows, parseKeepWarm, parsePlan, parseUsage, passedThreshold, pctText, PING_EVERY_1H_MS, PING_EVERY_5M_MS, PING_PROMPT, pingOutcome, ringSvg, shortModel, thresholdsFrom, tokens, usageDue, usageText, usageView, withPresses } from "../mod/logic.js";
 import { PING_EVERY_1H_MS as REPLAY_1H, PING_EVERY_5M_MS as REPLAY_5M } from "../coldreturns.js";
 import { limitFitsOf, limitWindows, summarizeHistory } from "../usagepane.js";
 import { sessionPriceThresholds } from "../sessionprice.js";
@@ -898,4 +898,99 @@ test("keep-warm: a ping that finds the cache cold, the dollar limit, Stop, a ses
     await tickOnce(old, state().data.lastReplyAt + 54.75 * MIN);
     assert.equal(state().kw.stopped, "this Claude Code has no $.model.fork");
     assert.equal(state().kw.pings, 0);
+});
+// -- The Desktop app's own tools behind tool search (G1: tool.describe) ---------------------
+/** `tool.describe` through the mod, the engine's own answer beneath it (2.1.326+: `mcpServer` on the input). */
+const describe = (s, tool, over = { mcpServer: { type: "sdk" } }) => fire(s, "tool.describe", { tool, description: `about ${tool}`, provider: { plugin: "engine", tier: "core" }, ...over }, (e) => ({ description: e.description }));
+const APP_TOOLS = ["mcp__Claude_Browser__navigate", "mcp__ccd_session__start_session", "mcp__visualize__show_widget", "mcp__terminal__read_terminal"];
+test("tool.describe: applied, the named servers' tools come back behind tool search, never with breakPromptCache; ccd_turn and every other tool untouched", async () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-mod-describe-"));
+    // ccd_turn named too: kept in front all the same.
+    const s = engine(home, { env: { CONTEXT_DOCTOR_DEFER_MCP: "Claude_Browser,ccd_session,visualize,terminal,ccd_turn" } });
+    assert.equal(s.hooks.get("tool.describe")?.length, 1, "registered with no matcher: every tool");
+    for (const tool of APP_TOOLS)
+        assert.deepEqual(await describe(s, tool), { description: `about ${tool}`, isDeferred: true }, tool);
+    // Untouched: the engine's own answer, as it gave it.
+    for (const tool of ["mcp__ccd_turn__report", "mcp__context-doctor__pack_context", "mcp__terminal_two__x", "mcp__1a59c906-04da__batch"])
+        assert.deepEqual(await describe(s, tool), { description: `about ${tool}` }, tool);
+    assert.deepEqual(await describe(s, "Bash", {}), { description: "about Bash" }, "a built-in has no mcpServer");
+    // Already behind tool search (its loaded description, the second time it fires): left to the engine.
+    assert.deepEqual(await describe(s, APP_TOOLS[0], { mcpServer: { type: "sdk" }, isDeferred: true }), { description: `about ${APP_TOOLS[0]}` });
+    // Another hook's description beneath is kept; only the placement changes.
+    const kept = await fire(s, "tool.describe", { tool: APP_TOOLS[0], description: "x", mcpServer: { type: "sdk" } }, () => ({ description: "rewritten below" }));
+    assert.deepEqual(kept, { description: "rewritten below", isDeferred: true });
+});
+test("tool.describe: not applied, an older engine, or the mod off: every tool comes back untouched", async () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-mod-describe-"));
+    const unset = engine(home);
+    for (const tool of APP_TOOLS)
+        assert.deepEqual(await describe(unset, tool), { description: `about ${tool}` }, `unset: ${tool}`);
+    const blank = engine(home, { env: { CONTEXT_DOCTOR_DEFER_MCP: " , " } });
+    assert.deepEqual(await describe(blank, APP_TOOLS[0]), { description: `about ${APP_TOOLS[0]}` });
+    // 2.1.323-2.1.325: tool.describe without mcpServer (and no isDeferred on an answer): nothing moves.
+    const old = engine(home, { env: { CONTEXT_DOCTOR_DEFER_MCP: "Claude_Browser" } });
+    assert.deepEqual(await describe(old, APP_TOOLS[0], {}), { description: `about ${APP_TOOLS[0]}` });
+    const off = engine(home, { env: { CONTEXT_DOCTOR_DEFER_MCP: "Claude_Browser", CONTEXT_DOCTOR_NO_MOD: "1" } });
+    assert.deepEqual(await describe(off, APP_TOOLS[0]), { description: `about ${APP_TOOLS[0]}` });
+    // An engine that does not know the event refuses it at registration: the rest of the mod still registers.
+    const refused = [];
+    register(((event) => { if (event === "tool.describe")
+        throw new Error("unknown event"); refused.push(event); }));
+    assert.ok(refused.includes("session.start") && refused.includes("command.run"));
+    assert.deepEqual(deferredServers("Claude_Browser, ccd_turn visualize,,Claude_Browser $(x)"), ["Claude_Browser", "visualize"]);
+});
+/** A Desktop-app history: three sessions whose starts carry the app's tools whole; one of them calls ccd_session. */
+function desktopHome() {
+    const now = Date.now();
+    const home = mkdtempSync(join(tmpdir(), "cd-mod-desktop-"));
+    mkdirSync(join(home, ".claude"));
+    writeFileSync(join(home, ".claude", "settings.json"), '{\n  "a": 1\n}');
+    const proj = join(home, ".claude", "projects", "-tmp-desk");
+    mkdirSync(proj, { recursive: true });
+    const tool = (name, chars) => ({ name, description: "d".repeat(chars), input_schema: { type: "object" } });
+    const tools = [tool("Bash", 3_000), tool("mcp__Claude_Browser__navigate", 120_000), tool("mcp__ccd_session__start_session", 20_000), tool("mcp__ccd_turn__report", 8_000)];
+    let n = 0;
+    for (const d of [3, 2, 1]) {
+        const t0 = now - d * 864e5;
+        const at = (i) => new Date(t0 + i * 60_000).toISOString();
+        const rows = [
+            JSON.stringify({ type: "user", uuid: `u${d}`, entrypoint: "claude-desktop", timestamp: at(0), message: { role: "user", content: "hi" } }),
+            JSON.stringify({ type: "api-request-shape", timestamp: at(0), shape: { system: [{ type: "text", text: "s".repeat(1000) }], tools } }),
+        ];
+        for (let i = 0; i < 60; i++) {
+            const first = i === 0;
+            rows.push(JSON.stringify({ type: "assistant", uuid: `a${n}`, timestamp: at(i), message: { id: `m${n++}`, model: "claude-opus-5-5", content: d === 1 && i === 5 ? [{ type: "tool_use", id: "t1", name: "mcp__ccd_session__start_session", input: {} }] : [{ type: "text", text: "ok" }], usage: { input_tokens: 1, cache_read_input_tokens: first ? 0 : 100_000, cache_creation_input_tokens: first ? 100_000 : 0, output_tokens: 5, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: first ? 100_000 : 0 } } } }));
+        }
+        writeFileSync(join(proj, `desk${d}.jsonl`), rows.join("\n") + "\n");
+    }
+    return home;
+}
+test("desktop-tools-defer end to end: fix prices it from the history, --apply writes the variable the mod reads, undo puts settings.json back byte for byte", async () => {
+    const home = desktopHome();
+    const before = readFileSync(join(home, ".claude", "settings.json"), "utf8");
+    const plan = runCli(home, "fix", "--json");
+    assert.equal(plan.status, 0, plan.stderr);
+    const f = JSON.parse(plan.stdout).fixes.find((x) => x.id === "desktop-tools-defer");
+    assert.ok(f, plan.stdout);
+    assert.equal(f.state, "available");
+    assert.equal(f.value, "Claude_Browser,ccd_session");
+    assert.ok(f.savedUsd >= 1, `priced: ${f.savedUsd}`);
+    assert.match(f.basis, /ccd_session ~\d+k tokens, called in 1 of 3 starts/);
+    assert.match(f.overriddenBy.join("\n"), /plugin is not enabled/);
+    assert.deepEqual(snapshot(home)["settings.json"], before, "measuring changed nothing");
+    const r = runCli(home, "fix", "--apply", "desktop-tools-defer");
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const value = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8")).env.CONTEXT_DOCTOR_DEFER_MCP;
+    assert.equal(value, "Claude_Browser,ccd_session");
+    // A new session's Claude Code carries settings.json's env: the mod reads it at each describe.
+    const s = engine(home, { env: { CONTEXT_DOCTOR_DEFER_MCP: value } });
+    assert.equal((await describe(s, "mcp__Claude_Browser__navigate")).isDeferred, true);
+    assert.equal((await describe(s, "mcp__ccd_session__start_session")).isDeferred, true);
+    assert.deepEqual(await describe(s, "mcp__ccd_turn__report"), { description: "about mcp__ccd_turn__report" });
+    const again = JSON.parse(runCli(home, "fix", "--json").stdout).fixes.find((x) => x.id === "desktop-tools-defer");
+    assert.equal(again.state, "applied");
+    const u = runCli(home, "fix", "undo", "desktop-tools-defer");
+    assert.equal(u.status, 0, u.stdout + u.stderr);
+    assert.equal(readFileSync(join(home, ".claude", "settings.json"), "utf8"), before);
+    assert.equal(existsSync(join(home, ".claude", ".context-doctor-fixes.json")), false);
 });

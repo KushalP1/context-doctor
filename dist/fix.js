@@ -52,6 +52,7 @@ import { compactWindowOverrides, effectiveEnv, processEnvWhere, settingsSources,
 import { claudeJsonPath, tilde } from "./claudedir.js";
 import { applyPrune, undoPrune } from "./prune.js";
 import { applyMcpDefer, MCP_DEFER_SINCE, undoMcpDefer } from "./mcpdefer.js";
+import { DEFER_APP_TOOLS_ENV, deferredServers, KEEP_APP_SERVERS } from "./mod/logic.js";
 import { fallbackStateDir, readLedger } from "./ledger.js";
 import { claudeDir } from "./claudedir.js";
 import { comparisonLine } from "./abstore.js";
@@ -59,6 +60,8 @@ import { movedFromNames, renderSubagentTypes, subagentModelSavedSince, SUBAGENT_
 import { BASH_OUTPUT_DEFAULT, BASH_OUTPUT_KEY, BASH_OUTPUT_SINCE, breakEven, renderToolOutputCaps, toolOutputSavedSince } from "./tooloutput.js";
 import { disablesSummaries, estimateProgressSummaries, hostName, PROGRESS_SUMMARIES_ENV, PROGRESS_SUMMARIES_OFF, PROGRESS_SUMMARIES_SINCE, SMALL_FAST_MODEL_NAME, SMALL_NOTES_SINCE } from "./progresssummaries.js";
 import { CODEX_COMPACT_KEY, CODEX_COMPACT_LIMIT, codexCompactOverrides, codexCompactSavedSince, codexConfigPath, renderCodexLimits, setTopLevelInt, topLevelValue } from "./codexcompact.js";
+/** The Claude Code version whose `tool.describe` names a tool's MCP server and lets a mod answer `isDeferred`. */
+export const DESKTOP_TOOLS_DEFER_SINCE = "2.1.326";
 /**
  * The Claude Code version that first reads each setting a fix writes, from
  * its changelog (2.1.243 added promptCacheTtl and subagentPromptCacheTtl,
@@ -67,7 +70,7 @@ import { CODEX_COMPACT_KEY, CODEX_COMPACT_LIMIT, codexCompactOverrides, codexCom
  * the subagent variable ahead of agent definitions there). autoCompactWindow
  * is not in 2.1.62 and the changelog does not say when it came: not named.
  */
-const SINCE = { "mcp-defer": MCP_DEFER_SINCE, "cache-ttl": CACHE_TTL_SINCE, "cache-ttl-subagents": CACHE_TTL_SINCE, "tool-output": BASH_OUTPUT_SINCE, "progress-summaries": PROGRESS_SUMMARIES_SINCE };
+const SINCE = { "mcp-defer": MCP_DEFER_SINCE, "desktop-tools-defer": DESKTOP_TOOLS_DEFER_SINCE, "cache-ttl": CACHE_TTL_SINCE, "cache-ttl-subagents": CACHE_TTL_SINCE, "tool-output": BASH_OUTPUT_SINCE, "progress-summaries": PROGRESS_SUMMARIES_SINCE };
 /** Below this a priced fix is not worth a setting. */
 const MIN_USD = 1;
 export const money = (n) => (n >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
@@ -285,6 +288,33 @@ export function planFixes(i) {
             value: "false",
         });
     }
+    const dt = i.desktopTools;
+    if (i.desktopToolsSet) {
+        const named = deferredServers(i.desktopToolsSet.value);
+        fixes.push({ id: "desktop-tools-defer", title: "The Desktop app's own tools behind tool search", basis: "set", quality: "", change: `env.${DEFER_APP_TOOLS_ENV}`, state: named.length ? "applied" : "not-here", note: named.length ? `context-doctor's mod keeps ${named.join(", ")} behind tool search (${i.desktopToolsSet.where})` : `${i.desktopToolsSet.where} names no server: left as you set it`, value: i.desktopToolsSet.value });
+    }
+    else if (dt) {
+        // A server called in at least half the starts it went into would cost a tool-search step in most of them: kept in front.
+        const pick = dt.servers.filter((s) => !KEEP_APP_SERVERS.includes(s.name) && s.calledStarts * 2 < s.starts && s.unusedUsd > 0).sort((a, b) => b.unusedUsd - a.unusedUsd);
+        const kept = dt.servers.filter((s) => !pick.includes(s)).map((s) => s.name);
+        const usd = pick.reduce((t, s) => t + s.unusedUsd, 0);
+        if (pick.length && usd >= MIN_USD) {
+            const all = pick.reduce((t, s) => t + s.usd, 0);
+            const value = pick.map((s) => s.name).join(",");
+            fixes.push({
+                id: "desktop-tools-defer",
+                title: `Keep the Desktop app's own tools behind tool search (${pick.map((s) => s.name).join(", ")})`,
+                savedUsd: usd,
+                basis: `the Desktop app sends these tools' definitions whole into every session and subagent start, and each step re-reads them: ${pick.map((s) => `${s.name} ~${s.tokens < 1000 ? s.tokens : k(s.tokens)} tokens, called in ${s.calledStarts} of ${s.starts} starts`).join("; ")}. The figure is what that cost in the ${i.desktopTools.days} days' starts that never called them (${money(all)} counting the ones that did, as overhead lists it; those would load a tool through tool search instead)`,
+                quality: `Claude loads one of these tools through tool search the first time a conversation needs it: one more step then. Kept in front: ${[...KEEP_APP_SERVERS, ...kept.filter((n) => !KEEP_APP_SERVERS.includes(n))].join(", ")} (called in most sessions). It takes effect in new sessions only, so no running conversation's cache is written again. Not measured here: applied only when named`,
+                change: `${where}: env.${DEFER_APP_TOOLS_ENV} = "${value}", read by context-doctor's mod (its plugin, Claude Code ${DESKTOP_TOOLS_DEFER_SINCE}+)`,
+                state: "available",
+                value,
+                // Built from Claude Code's mods declarations; whether the app's in-process servers raise tool.describe is not yet seen on a live session.
+                detail: ["Not yet confirmed on a live Desktop session: after applying, start a new session and run context-doctor overhead; these servers should no longer be listed as sent whole."],
+            });
+        }
+    }
     for (const f of fixes) {
         const o = i.overrides?.[f.id];
         if (o?.length && f.state === "available")
@@ -361,13 +391,14 @@ const KEY_PATH = {
     "subagent-model": ["env", SUBAGENT_MODEL_ENV],
     "tool-output": [BASH_OUTPUT_KEY],
     "progress-summaries": ["env", PROGRESS_SUMMARIES_ENV],
+    "desktop-tools-defer": ["env", DEFER_APP_TOOLS_ENV],
 };
 /** Fixes that never overwrite a value already there: the user set it. */
-const YOURS = new Set(["subagent-model", "tool-output", "progress-summaries"]);
+const YOURS = new Set(["subagent-model", "tool-output", "progress-summaries", "desktop-tools-defer"]);
 /** The environment variable a settings fix writes, when the shell's own value is the user's too. */
-const SHELL_ENV = { "subagent-model": SUBAGENT_MODEL_ENV, "progress-summaries": PROGRESS_SUMMARIES_ENV };
+const SHELL_ENV = { "subagent-model": SUBAGENT_MODEL_ENV, "progress-summaries": PROGRESS_SUMMARIES_ENV, "desktop-tools-defer": DEFER_APP_TOOLS_ENV };
 /** Fixes with a quality cost not measured here: applied only when named, never by `--apply all`. */
-const NAMED_ONLY = new Set(["subagent-model", "mcp-defer"]);
+const NAMED_ONLY = new Set(["subagent-model", "mcp-defer", "desktop-tools-defer"]);
 /** What would keep this fix's value from taking effect, as Claude Code merges settings. */
 export function fixOverrides(id, deps = {}) {
     // Codex reads its own config.toml: a profile's value, or a project's file.
@@ -399,6 +430,14 @@ export function fixOverrides(id, deps = {}) {
     if (id === "progress-summaries") {
         // A project's, local or managed env is applied over the user's: a value there that does not turn them off wins.
         return sources.filter((s) => s.name !== "user" && s.settings.env?.[PROGRESS_SUMMARIES_ENV] !== undefined && s.settings.env[PROGRESS_SUMMARIES_ENV] !== null && !disablesSummaries(s.settings.env[PROGRESS_SUMMARIES_ENV])).map((s) => `${PROGRESS_SUMMARIES_ENV}=${s.settings.env[PROGRESS_SUMMARIES_ENV]} in ${tilde(s.path)} env`);
+    }
+    if (id === "desktop-tools-defer") {
+        // A project's, local or managed env is applied over the user's; CONTEXT_DOCTOR_NO_MOD=1 turns the mod off.
+        const out = sources.filter((s) => s.name !== "user" && s.settings.env?.[DEFER_APP_TOOLS_ENV] !== undefined && s.settings.env[DEFER_APP_TOOLS_ENV] !== null).map((s) => `${DEFER_APP_TOOLS_ENV}=${s.settings.env[DEFER_APP_TOOLS_ENV]} in ${tilde(s.path)} env`);
+        const off = effectiveEnv("CONTEXT_DOCTOR_NO_MOD", sources, env);
+        if (off?.value === "1")
+            out.push(`${off.where} (context-doctor's mod is off)`);
+        return out;
     }
     if (id === "tool-output") {
         // Merged settings: a project's or managed value wins over the user's (BASH_MAX_OUTPUT_LENGTH does not: the setting replaces it).
@@ -884,6 +923,7 @@ const LABEL = {
     "codex-compact": "Codex auto-compact limit",
     "progress-summaries": "Subagent progress summaries",
     "mcp-defer": "MCP servers sent whole",
+    "desktop-tools-defer": "The Desktop app's own tools",
 };
 /**
  * Priced levers that save part of the same dollars, and why: each is

@@ -31,6 +31,10 @@
  *    subagents with their model, context and cost so far. Drawing only reads
  *    what the mod holds; `context-doctor mod usage` refreshes it on the
  *    timer, only while the pane is open (usageDue).
+ *  - `tool.describe` (2.1.326+): once `fix --apply desktop-tools-defer`
+ *    named the Desktop app's own MCP servers in CONTEXT_DOCTOR_DEFER_MCP,
+ *    their tools go behind tool search from the next new conversation; never
+ *    ccd_turn, never with `breakPromptCache`. Unset, nothing moves.
  *
  * Nothing happens without a press or a command: no auto-compaction, no auto-apply, no ping. The
  * mod writes no file itself; the CLI writes ours. Off: CONTEXT_DOCTOR_NO_MOD=1.
@@ -40,7 +44,7 @@
  * reads which calls a module makes from its source: `$` is passed only to
  * functions declared at the top of this file.
  */
-import { applyOutcome, band, bar, DEFAULT_THRESHOLDS, fixArgv, KEEP_WARM_COMMAND, keepWarmTestEvery, keepWarmArmedText, keepWarmRefusal, keepWarmStatusText, keepWarmStep, keepWarmText, MODEL_CHANGE, money, outcome, paneRows, parseKeepWarm, parsePlan, parseUsage, pctText, PING_PROMPT, pingOutcome, ringSvg, RUNNING, thresholdsFrom, usageArgv, usageDue, usageText, usageView, withPresses } from "./logic.js";
+import { applyOutcome, band, bar, DEFAULT_THRESHOLDS, deferredServers, fixArgv, KEEP_WARM_COMMAND, keepWarmTestEvery, keepWarmArmedText, keepWarmRefusal, keepWarmStatusText, keepWarmStep, keepWarmText, MODEL_CHANGE, money, outcome, paneRows, parseKeepWarm, parsePlan, parseUsage, pctText, PING_PROMPT, pingOutcome, ringSvg, RUNNING, shouldDefer, thresholdsFrom, usageArgv, usageDue, usageText, usageView, withPresses } from "./logic.js";
 export const COMMAND = "context-doctor-fix";
 export const PANE = "context-doctor-fix";
 export const USAGE_COMMAND = "context-doctor-usage";
@@ -434,6 +438,26 @@ export function register(on) {
         await loadUsage($, true);
         return { text: usageText(viewAt(await $.clock.now())) };
     });
+    // The Desktop app's own MCP tools behind tool search, only once `fix --apply desktop-tools-defer`
+    // named their servers in CONTEXT_DOCTOR_DEFER_MCP (settings.json env). Read at each describe,
+    // which the engine asks once per tool and session. The answer moves the tool for the next new
+    // thread or /clear; no breakPromptCache, so a running conversation's cache is never re-written.
+    // An engine older than 2.1.326 (no `mcpServer` on the input) gets its own answer back untouched.
+    try {
+        on("tool.describe", async ($, e, next) => {
+            if (!e?.mcpServer || e.isDeferred === true)
+                return next(e);
+            let servers = [];
+            try {
+                if ((await $.env.get("CONTEXT_DOCTOR_NO_MOD")) !== "1")
+                    servers = deferredServers(await $.env.get("CONTEXT_DOCTOR_DEFER_MCP"));
+            }
+            catch { /* no variable: nothing moves */ }
+            const r = await next(e);
+            return shouldDefer(e, servers) && r && typeof r === "object" ? { ...r, isDeferred: true } : r;
+        });
+    }
+    catch { /* an engine without tool.describe: nothing to defer */ }
     // An engine that does not know the event (the pane's timer then stops at the next session) keeps the rest of the mod.
     try {
         on("ui.close", async ($, e, next) => {

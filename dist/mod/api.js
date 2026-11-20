@@ -10,7 +10,8 @@
  * and the events `session.start`, `session.measure`, `session.end`,
  * `command.run`, `ui.render`; from 2.1.325's, for the usage pane,
  * `$.agent.list`, `$.session.usage`, the `Svg` element, a pane's `placement`
- * and `bodyColumns`, and `ui.close`. A subset, structurally compatible: no
+ * and `bodyColumns`, and `ui.close`; from 2.1.329's, `tool.describe` with
+ * its `mcpServer` and an answer's `isDeferred`. A subset, structurally compatible: no
  * runtime code.
  */
 export {};

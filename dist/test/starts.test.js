@@ -1,10 +1,10 @@
-/** overhead's starts: each session's and subagent's first request, per entrypoint and subagent type, priced across the period; and fix's mcp-defer lever. */
+/** overhead's starts: each session's and subagent's first request, per entrypoint and subagent type, priced across the period; and fix's mcp-defer and desktop-tools-defer levers. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { deferrableConfigured, entrypointName, measureStarts, mcpServerOf, renderStarts } from "../starts.js";
+import { deferrableApp, deferrableConfigured, entrypointName, measureStarts, mcpServerOf, renderStarts } from "../starts.js";
 import { applyFix, parseFixIds, planFixes, readFixRecords, undoFixes } from "../fix.js";
 import { tokensForLength } from "../tokens.js";
 process.env.CONTEXT_DOCTOR_CACHE_DIR = mkdtempSync(join(tmpdir(), "cd-starts-cache-"));
@@ -178,4 +178,62 @@ test("mcp-defer: a second apply keeps the first value; undo leaves a key the use
     const lines = await undoFixes(["mcp-defer"], { home, cwd });
     assert.ok(lines.some((l) => /changed since fix set it/.test(l)), lines.join("\n"));
     assert.equal(JSON.parse(readFileSync(file, "utf8")).mcpServers.mine.alwaysLoad, "yes");
+});
+test("desktop-tools-defer: the app's own servers, priced on the starts that never called them; overhead names the lever", () => {
+    const { home, cwd, paths } = fixture();
+    // The general-purpose subagent calls the browser; the Desktop session never does.
+    const sub = join(home, ".claude", "projects", "-work-app", "desk", "subagents", "agent-a1.jsonl");
+    writeFileSync(sub, readFileSync(sub, "utf8") + JSON.stringify({ type: "assistant", uuid: "call-1", isSidechain: true, timestamp: iso(t0 + 20_000), message: { id: "msg_call1", model: OPUS, content: [{ type: "tool_use", id: "t1", name: "mcp__Claude_Browser__navigate", input: {} }] } }) + "\n");
+    const r = measureStarts({ days: 30, paths, home, cwd });
+    const desk = r.groups.find((g) => g.kind === "session" && g.entrypoint === "claude-desktop");
+    const app = deferrableApp(r);
+    assert.deepEqual(app.map((s) => [s.name, s.starts, s.calledStarts]), [["Claude_Browser", 2, 1]], "mine is in the user's config: mcp-defer's, not this one's");
+    near(app[0].unusedUsd, desk.usd * tokensOf(BROWSER) / 70_000, "only the Desktop session's start, which never called it");
+    assert.ok(app[0].usd > app[0].unusedUsd, "overhead's figure counts the subagent's start too");
+    assert.match(renderStarts(r).join("\n"), /fix --apply desktop-tools-defer` has context-doctor's mod keep Claude_Browser behind tool search in new sessions/);
+});
+test("desktop-tools-defer: offered by name only, priced in plain words, ccd_turn and much-called servers kept; apply and undo in a throwaway HOME", async () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-dtd-"));
+    mkdirSync(join(home, ".claude"));
+    const settings = join(home, ".claude", "settings.json");
+    writeFileSync(settings, '{\n  "env": {\n    "OTHER": "1"\n  }\n}\n');
+    const before = readFileSync(settings, "utf8");
+    const s = (name, starts, calledStarts, unusedUsd) => ({ name, tools: 5, tokens: 5_000, starts, calledStarts, usd: unusedUsd * 1.3, unusedUsd });
+    const inputs = { days: 30, billedUsd: 500, desktopTools: { days: 30, servers: [s("Claude_Browser", 100, 36, 40), s("ccd_session", 100, 12, 15), s("visualize", 100, 2, 9), s("terminal", 100, 70, 2)] } };
+    const fixes = planFixes(inputs);
+    const f = fixes.find((x) => x.id === "desktop-tools-defer");
+    assert.equal(f.state, "available");
+    near(f.savedUsd, 64, "terminal, called in most starts, is kept");
+    assert.equal(f.value, "Claude_Browser,ccd_session,visualize");
+    assert.match(f.basis, /Claude_Browser ~5k tokens, called in 36 of 100 starts/);
+    assert.match(f.basis, /never called them \(\$83\.20 counting the ones that did/);
+    assert.match(f.quality, /Kept in front: ccd_turn, terminal/);
+    assert.match(f.quality, /new sessions only/);
+    assert.match(f.change, /env\.CONTEXT_DOCTOR_DEFER_MCP = "Claude_Browser,ccd_session,visualize", read by context-doctor's mod/);
+    assert.ok(!f.qualityFree);
+    assert.equal(parseFixIds("all", fixes).ids.includes("desktop-tools-defer"), false, "never by --apply all");
+    assert.deepEqual(parseFixIds("desktop-tools-defer", fixes).ids, ["desktop-tools-defer"]);
+    // Below a dollar, or nothing measured: not offered.
+    assert.equal(planFixes({ ...inputs, desktopTools: { days: 30, servers: [s("visualize", 10, 0, 0.5)] } }).some((x) => x.id === "desktop-tools-defer"), false);
+    assert.equal(planFixes({ days: 30, billedUsd: 500 }).some((x) => x.id === "desktop-tools-defer"), false);
+    const r = await applyFix(f, { home, env: {} });
+    assert.ok(r.ok, r.lines.join("\n"));
+    assert.equal(JSON.parse(readFileSync(settings, "utf8")).env.CONTEXT_DOCTOR_DEFER_MCP, "Claude_Browser,ccd_session,visualize");
+    assert.equal(JSON.parse(readFileSync(settings, "utf8")).env.OTHER, "1");
+    assert.deepEqual(readFixRecords(home).map((x) => x.id), ["desktop-tools-defer"]);
+    // Applied, the plan says so and offers nothing.
+    const applied = planFixes({ ...inputs, desktopToolsSet: { value: "Claude_Browser,ccd_session,visualize", where: "~/.claude/settings.json env" } }).find((x) => x.id === "desktop-tools-defer");
+    assert.equal(applied.state, "applied");
+    assert.match(applied.note, /keeps Claude_Browser, ccd_session, visualize behind tool search/);
+    const lines = await undoFixes(["desktop-tools-defer"], { home });
+    assert.ok(lines.some((l) => /removed/.test(l)), lines.join("\n"));
+    assert.equal(readFileSync(settings, "utf8"), before, "byte for byte as before");
+    assert.equal(readFixRecords(home).length, 0);
+    // A value the user wrote is theirs: refused, nothing changed.
+    writeFileSync(settings, '{ "env": { "CONTEXT_DOCTOR_DEFER_MCP": "visualize" } }');
+    const mine = readFileSync(settings, "utf8");
+    const refused = await applyFix(f, { home, env: {} });
+    assert.equal(refused.ok, false);
+    assert.match(refused.lines.join("\n"), /a value you set: left as it is/);
+    assert.equal(readFileSync(settings, "utf8"), mine);
 });
