@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appWindowLines, hasAppWindows, modelKey, readAppWindows, sameModel } from "../appwindow.js";
-import { estimateCompactWindows } from "../compactwindow.js";
+import { estimateCompactWindows, renderCompactWindows } from "../compactwindow.js";
 import { planFixes, renderFixPlan } from "../fix.js";
 import { buildHistory } from "./history-fixture.js";
 import { goldenName, runReport } from "./golden-run.js";
@@ -147,4 +147,24 @@ test("the CLI on the fixture history: accept, keep and undo said in compact-wind
   for (const args of [["compact-window"], ["compact-window", "--json"], ["fix"], ["fix", "--json"]]) {
     assert.equal(runReport(cli, home, args, env), readFileSync(join(here, "..", "..", "src", "test", "golden", "base", goldenName(args)), "utf8"), args.join(" "));
   }
+});
+
+test("audit: an answer whose time is no date (out of range) is skipped, not a crash of compact-window or fix", () => {
+  const home = mkdtempSync(join(tmpdir(), "cd-appwin-odd-"));
+  writeFileSync(join(home, ".claude.json"), JSON.stringify({
+    autoCompactOfferCodeTab: { aaa: { "claude-opus-5-5": { choice: "accept", tokens: 400_000, at: 1e20 } } },
+  }));
+  const a = readAppWindows({ home, cwd: home, env: NO_ENV });
+  assert.deepEqual(a.answers, []);
+  assert.deepEqual(appWindowLines(a), []);
+});
+
+test("audit: with a window the server sets and none in settings, compact-window's Now line does not say Claude Code compacts near the full window", () => {
+  const empty = estimateCompactWindows([400_000], 30, []);
+  const lines = appWindowLines({ answers: [], served: [{ model: "claude-opus-5-5", window: 600_000 }] });
+  const text = renderCompactWindows(empty, undefined, undefined, lines, true);
+  assert.doesNotMatch(text, /Now: not set: Claude Code compacts near the model's full window/);
+  assert.match(text, /Now: not set in your settings: Claude Code compacts at the window Anthropic's server sets \(below\), else near the model's full window/);
+  // No server window: as before.
+  assert.match(renderCompactWindows(empty), /Now: not set: Claude Code compacts near the model's full window/);
 });

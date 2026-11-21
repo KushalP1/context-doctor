@@ -1318,7 +1318,7 @@ async function main() {
             return;
         }
         const limitFit = claudeLimitFit(limitsReport(cw.days, { claudeOnly: true }));
-        console.log(renderCompactWindows(cw, current, (estimates) => limitSavingsLines(limitFit, estimates.map((e) => [`${Math.round(e.window / 1000)}k window`, Math.max(0, e.savedUsd)]), cw.days), appLines));
+        console.log(renderCompactWindows(cw, current, (estimates) => limitSavingsLines(limitFit, estimates.map((e) => [`${Math.round(e.window / 1000)}k window`, Math.max(0, e.savedUsd)]), cw.days), appLines, app.served.length > 0));
         return;
     }
     if (args.command === "autopilot") {

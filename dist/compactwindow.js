@@ -301,13 +301,17 @@ export function parseWindow(raw) {
 }
 const usd = (n) => (Math.abs(n) >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
 const k = (n) => `${Math.round(n / 1000)}k`;
-export function renderCompactWindows(r, current, limitLines, appLines = []) {
+export function renderCompactWindows(r, current, limitLines, appLines = [], serverSet = false) {
     const lines = [];
     lines.push("Auto-compact window: compact earlier, automatically (Claude Code's own setting)");
     // Counted and said exactly as `savings` says it, so the two screens agree.
     lines.push(`Last ${r.days} days, ${sessionsLabel(r.sessions, r.transcripts ?? r.sessions)}, ${priceBasis()}`);
     lines.push("─".repeat(66));
-    lines.push(`Now: ${current ? `${k(current)} (set in ${tilde(settingsPath())})` : "not set: Claude Code compacts near the model's full window"}`);
+    // `serverSet`: Anthropic's server sets a window for some model (appwindow.ts), which Claude Code uses where no setting does.
+    const unset = serverSet
+        ? "not set in your settings: Claude Code compacts at the window Anthropic's server sets (below), else near the model's full window"
+        : "not set: Claude Code compacts near the model's full window";
+    lines.push(`Now: ${current ? `${k(current)} (set in ${tilde(settingsPath())})` : unset}`);
     // What the Desktop app asked, and what the server sets: only when something is on file.
     lines.push(...appLines);
     if (r.sessions === 0) {

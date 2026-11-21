@@ -63,7 +63,8 @@ function answerOf(v: any, model: string | undefined, where: string): AppWindowAn
   const m = typeof model === "string" && model ? model : typeof v.model === "string" ? v.model : undefined;
   if (!m || !CHOICES.has(v.choice)) return undefined;
   if (!(typeof v.tokens === "number" && Number.isInteger(v.tokens) && v.tokens > 0)) return undefined;
-  if (!(typeof v.at === "number" && Number.isFinite(v.at) && v.at > 0)) return undefined;
+  // A time a Date can hold (its range is ±8.64e15 ms): the lines print it as a day, which throws past it.
+  if (!(typeof v.at === "number" && Number.isFinite(v.at) && v.at > 0 && v.at <= 8.64e15)) return undefined;
   return { model: m, choice: v.choice, tokens: v.tokens, at: v.at, where };
 }
 
