@@ -1,5 +1,5 @@
 context-doctor fix: what to change, ranked by what it saves you
-Last 30 days of your Claude Code sessions, $136 of input at list prices
+Last 30 days of your Claude Code sessions, $136 of input in the main conversations (subagents not counted) at list prices
 ──────────────────────────────────────────────────────────────────
 1. Compact earlier: auto-compact window 400k          $13.31 (10%)
    measured: your sessions replayed request by request at a 400k window: 1.2 compactions a week instead of 0.7

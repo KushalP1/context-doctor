@@ -788,6 +788,8 @@ export function estimatedTtftSeconds(inputTokens: number): number {
 export function formatUsd(amount: number): string {
   // Same reasoning as formatTokens: "$NaN" is worse than "$0.00".
   if (!Number.isFinite(amount)) return "$0.00";
+  // Thousands grouped, as the reports' money() does: "$1442.13" beside "$1,436" read as two kinds of number.
+  if (amount >= 1000) return `$${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   if (amount >= 1) return `$${amount.toFixed(2)}`;
   if (amount >= 0.01) return `$${amount.toFixed(3)}`;
   return `$${amount.toFixed(4)}`;

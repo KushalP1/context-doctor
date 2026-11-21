@@ -269,6 +269,8 @@ test("numbers that cannot be formatted show as zero, never NaN", async () => {
   assert.equal(formatTokens(Number.NaN), "0");
   assert.equal(formatTokens(Number.POSITIVE_INFINITY), "0");
   assert.equal(formatUsd(Number.NaN), "$0.00");
+  assert.equal(formatUsd(1442.125), "$1,442.13");
+  assert.equal(formatUsd(999.5), "$999.50");
   assert.ok(!formatUsd(Number.POSITIVE_INFINITY).includes("Infinity"));
 
   // estimateTokens is public API; a TypeError is never the useful answer.

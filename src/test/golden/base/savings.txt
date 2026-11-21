@@ -1,7 +1,8 @@
 What context-doctor finds in your Claude Code sessions
 Last 30 days, 7 sessions with 10+ requests (of 8 transcripts), at list prices
 ────────────────────────────────────────────────────────────
-Input you were billed for              $127   from your transcripts' usage
+Input in your main conversations       $127   from your transcripts' usage
+   Not in it: output and subagents (context-doctor spend has the whole bill).
 
 1. Compact when you come back         $3.05 (2%)
    13 returns to a session over 150k tokens after the prompt cache
