@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { deferrableApp, deferrableConfigured, entrypointName, measureStarts, mcpServerOf, renderStarts } from "../starts.js";
-import { applyFix, parseFixIds, planFixes, readFixRecords, undoFixes } from "../fix.js";
+import { applyFix, overlaps, parseFixIds, planFixes, readFixRecords, renderFixPlan, undoFixes } from "../fix.js";
 import { tokensForLength } from "../tokens.js";
 process.env.CONTEXT_DOCTOR_CACHE_DIR = mkdtempSync(join(tmpdir(), "cd-starts-cache-"));
 const near = (a, b, what = "") => assert.ok(Math.abs(a - b) < 1e-9, `${what} ${a} vs ${b}`);
@@ -236,4 +236,14 @@ test("desktop-tools-defer: offered by name only, priced in plain words, ccd_turn
     assert.equal(refused.ok, false);
     assert.match(refused.lines.join("\n"), /a value you set: left as it is/);
     assert.equal(readFileSync(settings, "utf8"), mine);
+});
+test("audit: desktop-tools-defer saves part of the same start dollars as the cache lifetimes and the subagents' model, so the plan says not to add them up", () => {
+    const s = (name) => ({ name, tools: 5, tokens: 5_000, starts: 100, calledStarts: 2, usd: 52, unusedUsd: 40 });
+    const fixes = planFixes({ days: 30, billedUsd: 500, desktopTools: { days: 30, servers: [s("Claude_Browser")] } });
+    const dt = fixes.find((x) => x.id === "desktop-tools-defer");
+    const other = (id) => ({ ...dt, id, savedUsd: 10 });
+    for (const id of ["cache-ttl", "cache-ttl-subagents", "subagent-model"]) {
+        assert.equal(overlaps([dt, other(id)]).length, 1, id);
+    }
+    assert.match(renderFixPlan(30, 500, [dt, other("subagent-model")], []), /Do not add them up/);
 });

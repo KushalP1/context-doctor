@@ -945,6 +945,9 @@ const OVERLAPS = [
     ["tool-output", "subagent-model", "long output in subagents is priced at the subagents' model, which subagent-model changes"],
     ["subagent-model", "cache-ttl-subagents", "the subagents' cache is priced at their model's rates, which subagent-model changes"],
     ["progress-summaries", "subagent-model", "the progress summaries run on the subagents' model, which subagent-model changes"],
+    ["desktop-tools-defer", "cache-ttl", "the main conversation's cache lifetime changes what re-reading the app's tool definitions costs"],
+    ["desktop-tools-defer", "cache-ttl-subagents", "the subagents' cache lifetime changes what re-reading the app's tool definitions costs in their starts"],
+    ["desktop-tools-defer", "subagent-model", "the app's tool definitions in subagent starts are priced at the subagents' model, which subagent-model changes"],
 ];
 /** The overlap lines for the priced fixes in a plan, "a and b: why;" each. */
 export function overlaps(fixes) {
