@@ -133,13 +133,17 @@ Start here:
                                                 as billed. --share: totals only, to paste
   context-doctor fix [--apply ids|all] [--share] What to change, ranked by dollars on your own
                                                 sessions (compact earlier, the cache lifetime,
-                                                autopilot, MCP tool search, unused servers, the
-                                                subagents' model): each applied only on a yes
-                                                (the subagents' model only by name, never by
-                                                "all"), \`fix undo\` reverts them, later runs show
-                                                what each saved since. A bare \`context-doctor\`
-                                                in a terminal shows the same plan on one screen
-                                                and asks once about the fixes with no quality cost
+                                                autopilot, MCP tool search, MCP servers loaded up
+                                                front, the Desktop app's own tools, unused servers,
+                                                long Bash output to a file, the subagents' model,
+                                                Codex's auto-compact limit, subagent progress
+                                                summaries): each applied only on a yes (the
+                                                subagents' model and the two MCP deferrals only by
+                                                name, never by "all"), \`fix undo\` reverts them,
+                                                later runs show what each saved since. A bare
+                                                \`context-doctor\` in a terminal shows the same plan
+                                                on one screen and asks once about the fixes with
+                                                no quality cost
   context-doctor doctor                         Self-check the installation (configs, hook, skill,
                                                 MCP handshake) with one pasteable diagnosis
   context-doctor uninstall                      Undo install

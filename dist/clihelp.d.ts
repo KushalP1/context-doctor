@@ -4,7 +4,11 @@
  * cut out of the full help text. Kept apart from cli.ts, which runs on
  * import, so they can be tested directly.
  */
-/** Edit distance (insert, delete, substitute; each 1). */
+/**
+ * Edit distance (insert, delete, substitute, swap two neighbours; each 1).
+ * The swap is the commonest typo: without it `--reprot` was as far from
+ * `--repeat` as from `--report`, and the first listed won.
+ */
 export declare function levenshtein(a: string, b: string): number;
 /**
  * The closest candidate, when it is close enough to be a typo: within a

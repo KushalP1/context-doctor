@@ -22,6 +22,10 @@ test("levenshtein and suggest", () => {
     assert.equal(suggest("--dayz", ["--days", "--json"]), "--days");
     assert.equal(suggest("--strat", ["--strategy", "--json"]), "--strategy", "a prefix counts");
     assert.equal(suggest("--completely-different", ["--days", "--json"]), undefined);
+    // Two letters swapped is one edit: `limits --reprot` meant --report, not the --repeat listed first.
+    assert.equal(levenshtein("reprot", "report"), 1);
+    assert.equal(levenshtein("ab", "ba"), 1);
+    assert.equal(suggest("--reprot", ["--repeat", "--report"]), "--report");
 });
 test("an unknown option is an error naming it, with a suggestion", () => {
     const r = run("savings", "--dayz", "7");
