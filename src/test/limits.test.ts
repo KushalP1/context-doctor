@@ -142,6 +142,21 @@ test("pace and forecast: the recent rate, and whether it runs out before the res
   assert.match(renderLimits({ days: 30, now: T0 + 61 * MIN, claudeLog: "/x", claudeReadings: 3, codexReadings: 0, windows: [fast], fits: [], resets: [], changes: [], claudeWindows: [], claudeSources: {} }), /runs out .* before the reset/);
 });
 
+test("a weekly window first read hours after its reset paces from the reset (0%), not from a ten-minute burst", () => {
+  // Reset 6 hours before the first reading of the new week; 0% then 2% ten minutes later.
+  const resetsAt = T0 - 6 * HOUR + 7 * 86_400_000;
+  const r = (min: number, pct: number): LimitReading => ({ ts: T0 + min * MIN, app: "claude", window: "seven_day", pct, resetsAt, windowMs: 7 * 86_400_000 });
+  const s = windowStatus([r(0, 0), r(10, 2)], T0 + 11 * MIN)!;
+  assert.ok(s.recentPerHour! < 0.4, `2% over the 6 h 10 min since the reset, not 12 an hour: ${s.recentPerHour}`);
+  assert.equal(s.beforeReset, false, "2% in six hours lasts the week");
+  const text = renderLimits({ days: 30, now: T0 + 11 * MIN, claudeLog: "/x", claudeReadings: 2, codexReadings: 0, windows: [s], fits: [], resets: [], changes: [], claudeWindows: ["seven_day"], claudeSources: {} });
+  assert.match(text, /% of the limit an hour lately; .*% an hour on average this window/);
+  assert.match(text, /lasts until the reset/);
+  // A window whose start is past the lookback paces from its readings, as before.
+  const old = (min: number, pct: number): LimitReading => ({ ts: T0 + min * MIN, app: "claude", window: "seven_day", pct, resetsAt: T0 + 3 * 86_400_000, windowMs: 7 * 86_400_000 });
+  assert.equal(Math.round(windowStatus([old(0, 40), old(60, 45)], T0 + 61 * MIN)!.recentPerHour!), 5);
+});
+
 /** Readings and usage from known weights: the fit must find them. */
 function synthetic(weights: [number, number, number, number], segments: number, noise = 0, priceOf = (x: number[]) => x[0] * 4 + x[1] * 0.4 + x[2] * 5 + x[3] * 20) {
   const usage: UsagePoint[] = [];

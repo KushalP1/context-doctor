@@ -590,7 +590,7 @@ test("usage view: the context ring, both windows with their pace and dollars per
   const v = usageView({ data: usageData(), live: { at: T, context: { tokens: 412_000, window: 1_000_000, percent: 41 }, model: "claude-opus-5-5" }, agents: [{ id: "a1", type: "Explore", description: "Find the auth code", status: "running" }, { id: "a2", type: "Plan", description: "done one", status: "completed" }], now: T });
   assert.deepEqual(v.context, { pct: 41, text: "412k of 1.0M tokens (41%) · Opus 5.5" });
   assert.deepEqual(v.limits.map((l) => [l.label, l.text, l.sub]), [
-    ["5-hour", "31% · resets in 2h 10m · +6.2 points an hour lately, runs out in 1h 30m (before the reset)", "≈ $1.20 of list-price use per 1% (±8%), this window"],
+    ["5-hour", "31% · resets in 2h 10m · +6.2% an hour lately, runs out in 1h 30m (before the reset)", "≈ $1.20 of list-price use per 1% (±8%), this window"],
     ["Weekly", "18% · resets in 3 days", undefined],
   ]);
   assert.equal(v.limitsNote, undefined);

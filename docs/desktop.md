@@ -45,7 +45,7 @@ Context
  (ring 41%)  412k of 1.0M tokens (41%) · Opus 5.5
 
 Limits
-5-hour   ███████░░░░░░░░░░░░░░░░░ 31% · resets in 2h 10m · +6.2 points an hour lately, runs out in 1h 30m (before the reset)
+5-hour   ███████░░░░░░░░░░░░░░░░░ 31% · resets in 2h 10m · +6.2% an hour lately, runs out in 1h 30m (before the reset)
 Weekly   ████░░░░░░░░░░░░░░░░░░░░ 18% · resets in 3 days
          ≈ $5.04 of list-price use per 1% (±12%), this window; 1% moved from $25.00 to $5.04 7 days ago (5.0x less use per 1%)
 

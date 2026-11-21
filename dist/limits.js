@@ -883,7 +883,15 @@ export function windowStatus(readings, now = Date.now()) {
     const period = readings.slice(first);
     const lookback = last.windowMs && last.windowMs <= 5 * HOUR ? HOUR : DAY;
     const recent = period.filter((r) => r.ts >= last.ts - lookback);
-    const from = recent[0];
+    // A window that began within the lookback was at 0% when it began: the
+    // pace counts from there. From the period's first reading alone, a weekly
+    // window read for the first time hours after its reset (nothing used
+    // since) took ten minutes' burst for the day's pace and said a 2% week
+    // ran out in 8 hours.
+    const start = last.windowMs && last.resetsAt ? last.resetsAt - last.windowMs : undefined;
+    const from = start !== undefined && recent[0] && start >= last.ts - lookback && start < recent[0].ts
+        ? { ts: start, pct: 0 }
+        : recent[0];
     if (from && last.ts - from.ts >= 10 * MIN) {
         status.recentPerHour = Math.max(0, ((last.pct - from.pct) / (last.ts - from.ts)) * HOUR);
     }
@@ -1685,8 +1693,8 @@ export function renderLimits(r, pastLimit = []) {
         else if (s.recentPerHour === 0)
             out.push("  Pace: no rise over the recent readings.");
         else {
-            const avg = s.averagePerHour !== undefined ? `; ${pts(s.averagePerHour)} a hour on average this window` : "";
-            out.push(`  Pace: ${pts(s.recentPerHour)} points an hour lately${avg}.`);
+            const avg = s.averagePerHour !== undefined ? `; ${pts(s.averagePerHour)}% an hour on average this window` : "";
+            out.push(`  Pace: ${pts(s.recentPerHour)}% of the limit an hour lately${avg}.`);
             if (s.runsOutAt !== undefined) {
                 out.push(s.beforeReset
                     ? `  At that pace it runs out ${clock(s.runsOutAt, r.now)} (in ${hm(s.runsOutAt - r.now)}), before the reset.`

@@ -600,7 +600,7 @@ export function usageView(v: UsageViewInput): UsageView {
     if (w.stale) parts.push(`read ${duration(now - w.at)} ago, no pace from it`);
     else if (w.perHour !== undefined && w.perHour > 0) {
       const outIn = w.runsOutAt !== undefined && w.runsOutAt > now ? `, runs out in ${duration(w.runsOutAt - now)}${w.beforeReset ? " (before the reset)" : ""}` : "";
-      parts.push(`+${per(w.perHour)} points an hour lately${outIn}`);
+      parts.push(`+${per(w.perHour)}% an hour lately${outIn}`);
     }
     const subs: string[] = [];
     if (w.usdPerPct !== undefined) subs.push(`≈ ${money(w.usdPerPct)} of list-price use per 1%${w.relSe !== undefined ? ` (±${Math.round(w.relSe * 100)}%)` : ""}, ${w.fitFromEarlier ? "in the last window with enough readings" : "this window"}`);
