@@ -109,12 +109,20 @@ export function measureSubagentCosts(days = 30, opts = {}) {
     }
     files.sort((a, b) => b.at - a.at);
     const runs = [];
+    let limited = files.length > (opts.limit ?? Infinity);
     for (const f of files.slice(0, opts.limit ?? Infinity)) {
-        if (opts.budgetMs !== undefined && Date.now() - started > opts.budgetMs)
+        if (opts.budgetMs !== undefined && Date.now() - started > opts.budgetMs) {
+            limited = true;
             break;
+        }
         try {
             const s = scanSubagent(f.file);
             if (!(s.costUsd > 0))
+                continue;
+            // Each by its own start, as `subagents` counts them: a file touched in the
+            // window can hold a run from before it (131 of 300 here, so the medians
+            // said 300 subagents where `subagents` said 169 for the same 30 days).
+            if (Number.isFinite(s.start) && s.start < since)
                 continue;
             let type = "unknown";
             try {
@@ -138,6 +146,7 @@ export function measureSubagentCosts(days = 30, opts = {}) {
         computedAt: now,
         days,
         n: runs.length,
+        ...(limited ? { limited: true } : {}),
         all: runs.length ? stat(runs) : undefined,
         byType: group((r) => r.type),
         byTypeModel: group((r) => (r.model ? `${r.type}|${r.model}` : undefined)),
@@ -325,7 +334,8 @@ export function fanoutHook(input, costs, sessionId, now = Date.now()) {
 export function describeCosts(c) {
     if (!c || !c.all)
         return "no subagent runs measured yet";
-    return `${c.n} subagents in ${c.days} days, median ${formatUsd(c.all.median)} (${basename(subagentCostsPath())})`;
+    // The hook measures the newest 80 at most: "80 subagents in 30 days" read as a count, beside `subagents`' 169.
+    return `${c.limited ? `the newest ${c.n} subagents of the last ${c.days} days` : `${c.n} subagents in ${c.days} days`}, median ${formatUsd(c.all.median)} (${basename(subagentCostsPath())})`;
 }
 /** The medians the subagent price quotes, for `context-doctor subagents`. */
 export function renderCostMedians(c) {

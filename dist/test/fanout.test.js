@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { estimateSubagent, fanoutMessage, launchOf, measureSubagentCosts, priceRatio, subagentCosts } from "../fanout.js";
+import { describeCosts, estimateSubagent, fanoutMessage, launchOf, measureSubagentCosts, priceRatio, subagentCosts } from "../fanout.js";
 import { requestCost } from "../pricing.js";
 import { sandboxEnv } from "./sandbox.js";
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
@@ -109,7 +109,7 @@ test("a fan-out: five hooks at once for one session say the first price once, th
     assert.equal(outs.filter((o) => o.hookSpecificOutput?.additionalContext).length, 1);
 });
 /** A subagent transcript and its meta, under a parent session in the sandboxed home. */
-function subagent(home, id, type, model, inputTokens) {
+function subagent(home, id, type, model, inputTokens, at = new Date()) {
     const parent = join(home, ".claude", "projects", "-p", "parent.jsonl");
     mkdirSync(dirname(parent), { recursive: true });
     writeFileSync(parent, JSON.stringify({ type: "user", message: { role: "user", content: "x" } }) + "\n");
@@ -118,7 +118,7 @@ function subagent(home, id, type, model, inputTokens) {
     writeFileSync(join(dir, `agent-${id}.meta.json`), JSON.stringify({ agentType: type, description: "d" }));
     writeFileSync(join(dir, `agent-${id}.jsonl`), [
         JSON.stringify({ type: "user", isSidechain: true, message: { role: "user", content: "task" } }),
-        JSON.stringify({ type: "assistant", isSidechain: true, timestamp: new Date().toISOString(), message: { id: `m-${id}`, model, role: "assistant", content: [{ type: "text", text: "ok" }], usage: { input_tokens: inputTokens, output_tokens: 0 } } }),
+        JSON.stringify({ type: "assistant", isSidechain: true, timestamp: at.toISOString(), message: { id: `m-${id}`, model, role: "assistant", content: [{ type: "text", text: "ok" }], usage: { input_tokens: inputTokens, output_tokens: 0 } } }),
     ].join("\n") + "\n");
     return parent;
 }
@@ -135,6 +135,19 @@ test("medians are measured from the subagents' own transcripts and cached for a 
     assert.ok(first);
     writeFileSync(cache, JSON.stringify({ ...costs, computedAt: Date.now() - 1000 }));
     assert.equal(subagentCosts(Date.now(), cache)?.byType["general-purpose"].median, 4, "a fresh cache is used as is");
+});
+test("medians count each subagent by its own start: a run from before the period, in a file touched since, is left out", () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-fanout-old-"));
+    let parent = "";
+    for (const [i, tokens] of [100_000, 200_000, 300_000].entries())
+        parent = subagent(home, `n${i}`, "Explore", "claude-opus-5-5", tokens);
+    parent = subagent(home, "old", "Explore", "claude-opus-5-5", 900_000, new Date(Date.now() - 40 * 86_400_000));
+    const m = measureSubagentCosts(30, { sessions: [parent] });
+    assert.equal(m.n, 3, "the 40-day-old run is not one of the last 30 days'");
+    assert.equal(m.limited, undefined);
+    assert.equal(measureSubagentCosts(30, { sessions: [parent], limit: 2 }).limited, true, "read only the newest 2 files");
+    assert.match(describeCosts({ ...m, limited: true }), /^the newest 3 subagents of the last 30 days, median/);
+    assert.match(describeCosts(m), /^3 subagents in 30 days, median/);
 });
 test("the hook answers PreToolUse with a message and context only: no decision, exit 0", () => {
     const home = mkdtempSync(join(tmpdir(), "cd-fanout-h-"));

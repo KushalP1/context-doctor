@@ -40,6 +40,8 @@ export interface SubagentCosts {
     days: number;
     /** Subagents measured (each priced at list price, as `subagents` does). */
     n: number;
+    /** Only the newest files were read (the hook's bounded measure): not every subagent of the period. */
+    limited?: boolean;
     all?: CostStat;
     byType: Record<string, CostStat>;
     /** "<type>|<model>" */

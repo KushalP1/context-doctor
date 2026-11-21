@@ -52,6 +52,8 @@ export interface SubagentCosts {
   days: number;
   /** Subagents measured (each priced at list price, as `subagents` does). */
   n: number;
+  /** Only the newest files were read (the hook's bounded measure): not every subagent of the period. */
+  limited?: boolean;
   all?: CostStat;
   byType: Record<string, CostStat>;
   /** "<type>|<model>" */
@@ -130,11 +132,16 @@ export function measureSubagentCosts(days = 30, opts: { limit?: number; budgetMs
   }
   files.sort((a, b) => b.at - a.at);
   const runs: Array<{ type: string; model?: string; usd: number; tok: NonNullable<CostStat["tok"]> }> = [];
+  let limited = files.length > (opts.limit ?? Infinity);
   for (const f of files.slice(0, opts.limit ?? Infinity)) {
-    if (opts.budgetMs !== undefined && Date.now() - started > opts.budgetMs) break;
+    if (opts.budgetMs !== undefined && Date.now() - started > opts.budgetMs) { limited = true; break; }
     try {
       const s = scanSubagent(f.file);
       if (!(s.costUsd > 0)) continue;
+      // Each by its own start, as `subagents` counts them: a file touched in the
+      // window can hold a run from before it (131 of 300 here, so the medians
+      // said 300 subagents where `subagents` said 169 for the same 30 days).
+      if (Number.isFinite(s.start) && s.start < since) continue;
       let type = "unknown";
       try { type = String(JSON.parse(readFileSync(f.meta, "utf8"))?.agentType ?? "unknown").slice(0, 60); } catch { /* older Claude Code: no meta */ }
       runs.push({ type, model: s.model, usd: s.costUsd, tok: [s.tokens.input, s.tokens.read, s.tokens.write, s.tokens.output, s.steps] });
@@ -152,6 +159,7 @@ export function measureSubagentCosts(days = 30, opts: { limit?: number; budgetMs
     computedAt: now,
     days,
     n: runs.length,
+    ...(limited ? { limited: true } : {}),
     all: runs.length ? stat(runs) : undefined,
     byType: group((r) => r.type),
     byTypeModel: group((r) => (r.model ? `${r.type}|${r.model}` : undefined)),
@@ -364,7 +372,8 @@ export function fanoutHook(input: FanoutInput, costs: SubagentCosts | undefined,
 /** For `doctor` and the docs: where the medians come from. */
 export function describeCosts(c: SubagentCosts | undefined): string {
   if (!c || !c.all) return "no subagent runs measured yet";
-  return `${c.n} subagents in ${c.days} days, median ${formatUsd(c.all.median)} (${basename(subagentCostsPath())})`;
+  // The hook measures the newest 80 at most: "80 subagents in 30 days" read as a count, beside `subagents`' 169.
+  return `${c.limited ? `the newest ${c.n} subagents of the last ${c.days} days` : `${c.n} subagents in ${c.days} days`}, median ${formatUsd(c.all.median)} (${basename(subagentCostsPath())})`;
 }
 
 /** The medians the subagent price quotes, for `context-doctor subagents`. */
