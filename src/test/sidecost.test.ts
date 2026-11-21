@@ -149,7 +149,7 @@ test("the gap names the prompt suggestions (as many as Claude Code's extra input
     models: [{ model: "claude-opus-5-5", ccUsd: 1, cc: { input: 10 + 2 * 506, output: 0, read: 0, write: 0, searches: 0 }, ourUsd: 0.5, ours: { input: 10, output: 0, read: 0, write: 0, requests: 2 }, ccAtOurUsd: 1 }],
   };
   const text = gapText([g]).join("\n");
-  assert.match(text, /Claude Code counts \$0\.50 more in tokens on the same models, at our prices: requests no row records the usage of; about 2 of them Claude Code's prompt suggestions/);
+  assert.match(text, /Claude Code counts \$0\.50 more for requests no transcript records; about 2 of them prompt suggestions \(the next message Claude Code offers after a turn/);
   assert.match(text, /each adds\), about \$0\.20; 3 requests hung and were sent again/);
   // No room in its input: none named.
   assert.doesNotMatch(gapText([{ ...g, models: [{ ...g.models[0], cc: { ...g.models[0].cc, input: 10 } }] }]).join("\n"), /prompt suggestions/);

@@ -221,6 +221,9 @@ test("Claude Code's own figure beside ours, the gap taken apart: a declined requ
     const c = claudeCodeCostCheck(30, NOW)!;
     assert.equal(c.status, "warn");
     assert.match(c.detail, /\$8\.98 against Claude Code.s \$9\.33 \(-3\.8%\) on 1 session of the last 30 days/);
+    // The biggest part only, then where the others are: not every part run together.
+    assert.match(c.detail, /\. Most of the gap: Claude Code counts .*\. context-doctor spend lists the other \d+ parts?\.$/);
+    assert.ok(!c.detail.includes("; From Claude Code"), c.detail);
   });
 });
 

@@ -343,11 +343,12 @@ export function gapText(sessions) {
         nUns ? `the output of ${nUns.toLocaleString("en-US")} subagent repl${nUns === 1 ? "y" : "ies"} whose rows never settled it (${usd(uns)})` : "",
     ].filter(Boolean);
     const compText = ests.length ? `${ests.length > 1 ? `${ests.slice(0, -1).join(", ")} and ${ests[ests.length - 1]}` : ests[0]}, which we estimate` : "";
-    const sugText = nSug ? `; about ${nSug.toLocaleString("en-US")} of them Claude Code's prompt suggestions (the line it suggests after a turn, reading the conversation from the cache; counted by the ${SUGGESTION_PROMPT_TOKENS} input tokens each adds), about ${usd(sug)}` : "";
-    const hung = stalled ? `; ${stalled.toLocaleString("en-US")} request${stalled === 1 ? "" : "s"} hung and ${stalled === 1 ? "was" : "were"} sent again (no reply, retried a minute or more later, most while the network was down): Claude Code bills those the API had begun, and no file says which` : "";
+    // Plain words first, the method in brackets: the owner read the old run-on sentence as noise.
+    const sugText = nSug ? `; about ${nSug.toLocaleString("en-US")} of them prompt suggestions (the next message Claude Code offers after a turn; counted by the ${SUGGESTION_PROMPT_TOKENS} input tokens each adds), about ${usd(sug)}` : "";
+    const hung = stalled ? `; ${stalled.toLocaleString("en-US")} request${stalled === 1 ? "" : "s"} hung and ${stalled === 1 ? "was" : "were"} sent again (most while the network was down): Claude Code bills one if the API had begun it, and no file says which` : "";
     if (Math.abs(p.tokensUsd) >= 0.005) {
         parts.push([p.tokensUsd, p.tokensUsd > 0
-                ? `Claude Code counts ${more(p.tokensUsd)} in tokens on the same models, at our prices: requests no row records the usage of${compText ? `, beyond our ${compText}` : ""}${sugText}${hung}`
+                ? `Claude Code counts ${more(p.tokensUsd)} for requests no transcript records${compText ? ` (beyond our ${compText})` : ""}${sugText}${hung}`
                 : `Claude Code counts ${more(p.tokensUsd)} in tokens on the same models, at our prices: ${compText ? `our ${compText}, are above what it counted` : "requests we count that it does not"}`]);
     }
     if (Math.abs(p.priceUsd) >= 0.005)
@@ -396,5 +397,8 @@ export function comparisonCheck(sessions, days) {
     const head = `${usd(ours)} against Claude Code's ${usd(cc)} (${pct(gap)}) on ${worth.length} session${worth.length === 1 ? "" : "s"} of the last ${days} days (its cost-state records); ${within} within ${CC_GAP_TARGET * 100}%`;
     if (Math.abs(gap) <= CC_GAP_TARGET)
         return { label, status: "ok", detail: head };
-    return { label, status: "warn", detail: `${head}. The gap: ${gapText(worth).join("; ")}` };
+    // The biggest part only, and where the rest is: every part on one doctor line was a paragraph nobody could act on.
+    const parts = gapText(worth);
+    const rest = parts.length > 1 ? ` context-doctor spend lists the other ${parts.length - 1} part${parts.length === 2 ? "" : "s"}.` : "";
+    return { label, status: "warn", detail: `${head}. Most of the gap: ${parts[0] ?? "not taken apart"}.${rest}` };
 }
