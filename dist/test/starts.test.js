@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { deferrableApp, deferrableConfigured, entrypointName, measureStarts, mcpServerOf, renderStarts } from "../starts.js";
-import { applyFix, overlaps, parseFixIds, planFixes, readFixRecords, renderFixPlan, undoFixes } from "../fix.js";
+import { applyFix, fixOverrides, overlaps, parseFixIds, planFixes, readFixRecords, renderFixPlan, undoFixes } from "../fix.js";
 import { tokensForLength } from "../tokens.js";
 process.env.CONTEXT_DOCTOR_CACHE_DIR = mkdtempSync(join(tmpdir(), "cd-starts-cache-"));
 const near = (a, b, what = "") => assert.ok(Math.abs(a - b) < 1e-9, `${what} ${a} vs ${b}`);
@@ -246,4 +246,28 @@ test("audit: desktop-tools-defer saves part of the same start dollars as the cac
         assert.equal(overlaps([dt, other(id)]).length, 1, id);
     }
     assert.match(renderFixPlan(30, 500, [dt, other("subagent-model")], []), /Do not add them up/);
+});
+test("audit: desktop-tools-defer's 'counting the ones that did' is never below its own figure (both counted start by start)", () => {
+    // overhead's per-server share spreads a group's dollars by tokens: here it gives the browser $2, while its
+    // definitions cost $5 in the expensive starts that never called it and $1 in the ones that did.
+    const f = planFixes({ days: 30, billedUsd: 500, desktopTools: { days: 30, servers: [{ name: "Claude_Browser", tools: 19, tokens: 7_900, starts: 10, calledStarts: 2, usd: 2, unusedUsd: 5, calledUsd: 1 }] } }).find((x) => x.id === "desktop-tools-defer");
+    near(f.savedUsd, 5);
+    assert.match(f.basis, /never called them \(\$6\.00 counting the ones that did; those would/);
+    // measureStarts gives both parts.
+    const { home, cwd, paths } = fixture();
+    const sub = join(home, ".claude", "projects", "-work-app", "desk", "subagents", "agent-a1.jsonl");
+    writeFileSync(sub, readFileSync(sub, "utf8") + JSON.stringify({ type: "assistant", uuid: "call-2", isSidechain: true, timestamp: iso(t0 + 20_000), message: { id: "msg_call2", model: OPUS, content: [{ type: "tool_use", id: "t2", name: "mcp__Claude_Browser__navigate", input: {} }] } }) + "\n");
+    const [b] = deferrableApp(measureStarts({ days: 30, paths, home, cwd }));
+    assert.ok(b.calledUsd > 0 && b.unusedUsd > 0, JSON.stringify(b));
+});
+test("audit: with tool search off there is nothing to load a deferred tool: desktop-tools-defer says it would not take effect", () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-dtd-ts-"));
+    mkdirSync(join(home, ".claude"));
+    writeFileSync(join(home, ".claude", "settings.json"), '{"env": {"ENABLE_TOOL_SEARCH": "false"}}');
+    const over = fixOverrides("desktop-tools-defer", { home, cwd: home, env: { CONTEXT_DOCTOR_NO_MANAGED_SETTINGS: "1" } });
+    assert.equal(over.length, 1, over.join("; "));
+    assert.match(over[0], /ENABLE_TOOL_SEARCH=false in .*settings\.json env \(tool search is off\)/);
+    // On (the default, or a true value): nothing in the way.
+    writeFileSync(join(home, ".claude", "settings.json"), '{"env": {"ENABLE_TOOL_SEARCH": "true"}}');
+    assert.deepEqual(fixOverrides("desktop-tools-defer", { home, cwd: home, env: { CONTEXT_DOCTOR_NO_MANAGED_SETTINGS: "1" } }), []);
 });

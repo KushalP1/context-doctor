@@ -58,6 +58,8 @@ export interface StartServer {
     calledStarts: number;
     /** Its definitions' part of the starts that never called it, each start at its own rates: what keeping it behind tool search would have saved there. */
     unusedUsd: number;
+    /** The same in the starts that did call it: with `unusedUsd`, its definitions' whole part of its starts, counted alike. */
+    calledUsd: number;
 }
 export interface StartGroup {
     kind: "session" | "subagent";

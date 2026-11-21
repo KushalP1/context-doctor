@@ -187,7 +187,8 @@ export interface FixInputs {
      * The Desktop app's own MCP servers whose tools went whole into starts
      * (starts.ts deferrableApp): per server, its starts, the ones whose session
      * or subagent called it, its share of the starts' cost as `overhead` lists
-     * it, and the part from starts that never called it.
+     * it, the part from starts that never called it, and (counted the same way)
+     * the part from starts that did.
      */
     desktopTools?: {
         servers: Array<{
@@ -198,6 +199,7 @@ export interface FixInputs {
             calledStarts: number;
             usd: number;
             unusedUsd: number;
+            calledUsd?: number;
         }>;
         days: number;
     };

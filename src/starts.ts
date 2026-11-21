@@ -167,6 +167,8 @@ export interface StartServer {
   calledStarts: number;
   /** Its definitions' part of the starts that never called it, each start at its own rates: what keeping it behind tool search would have saved there. */
   unusedUsd: number;
+  /** The same in the starts that did call it: with `unusedUsd`, its definitions' whole part of its starts, counted alike. */
+  calledUsd: number;
 }
 
 export interface StartGroup {
@@ -337,12 +339,13 @@ export function measureStarts(opts: { days?: number; paths?: string[]; cwd?: str
     const med = (xs: number[]) => (xs.length ? xs.sort((a, b) => a - b)[Math.floor(xs.length / 2)] : undefined);
     const servers = new Map<string, StartServer>();
     for (const s of shaped) for (const [name, v] of s.shape!.servers) {
-      const cur = servers.get(name) ?? servers.set(name, { name, starts: 0, tools: 0, tokens: 0, calledStarts: 0, unusedUsd: 0, ...(configured.get(name) ? { configured: configured.get(name) } : {}) }).get(name)!;
+      const cur = servers.get(name) ?? servers.set(name, { name, starts: 0, tools: 0, tokens: 0, calledStarts: 0, unusedUsd: 0, calledUsd: 0, ...(configured.get(name) ? { configured: configured.get(name) } : {}) }).get(name)!;
       cur.starts++;
       cur.tools = Math.max(cur.tools, v.tools);
       cur.tokens += v.tokens;
-      if (s.called?.has(name)) cur.calledStarts++;
-      else cur.unusedUsd += s.usd * Math.min(1, v.tokens / s.tokens);
+      const part = s.usd * Math.min(1, v.tokens / s.tokens);
+      if (s.called?.has(name)) { cur.calledStarts++; cur.calledUsd += part; }
+      else cur.unusedUsd += part;
     }
     for (const s of servers.values()) s.tokens = Math.round(s.tokens / s.starts);
     const g: StartGroup = {
@@ -404,7 +407,7 @@ export function startServers(r: StartsReport): Array<StartServer & { usd: number
   for (const g of r.groups) for (const s of g.servers) {
     const share = g.deferrableUsd ? (g.deferrableUsd * s.tokens * s.starts) / (g.servers.reduce((t, x) => t + x.tokens * x.starts, 0) || 1) : 0;
     const cur = servers.get(s.name);
-    if (cur) { cur.usd += share; cur.starts += s.starts; cur.calledStarts += s.calledStarts; cur.unusedUsd += s.unusedUsd; cur.tokens = Math.max(cur.tokens, s.tokens); cur.tools = Math.max(cur.tools, s.tools); }
+    if (cur) { cur.usd += share; cur.starts += s.starts; cur.calledStarts += s.calledStarts; cur.unusedUsd += s.unusedUsd; cur.calledUsd += s.calledUsd; cur.tokens = Math.max(cur.tokens, s.tokens); cur.tools = Math.max(cur.tools, s.tools); }
     else servers.set(s.name, { ...s, usd: share });
   }
   return [...servers.values()].sort((a, b) => b.usd - a.usd);

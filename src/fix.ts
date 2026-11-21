@@ -157,9 +157,10 @@ export interface FixInputs {
    * The Desktop app's own MCP servers whose tools went whole into starts
    * (starts.ts deferrableApp): per server, its starts, the ones whose session
    * or subagent called it, its share of the starts' cost as `overhead` lists
-   * it, and the part from starts that never called it.
+   * it, the part from starts that never called it, and (counted the same way)
+   * the part from starts that did.
    */
-  desktopTools?: { servers: Array<{ name: string; tools: number; tokens: number; starts: number; calledStarts: number; usd: number; unusedUsd: number }>; days: number };
+  desktopTools?: { servers: Array<{ name: string; tools: number; tokens: number; starts: number; calledStarts: number; usd: number; unusedUsd: number; calledUsd?: number }>; days: number };
   /** CONTEXT_DOCTOR_DEFER_MCP where the user (or fix) set it: applied, never overwritten. */
   desktopToolsSet?: { value: string; where: string };
 }
@@ -401,13 +402,15 @@ export function planFixes(i: FixInputs): Fix[] {
     const kept = dt.servers.filter((s) => !pick.includes(s)).map((s) => s.name);
     const usd = pick.reduce((t, s) => t + s.unusedUsd, 0);
     if (pick.length && usd >= MIN_USD) {
-      const all = pick.reduce((t, s) => t + s.usd, 0);
+      // Counted as the headline is, start by start: overhead's per-server share is spread by tokens and can come out below it.
+      const exact = pick.every((s) => s.calledUsd !== undefined);
+      const all = pick.reduce((t, s) => t + (exact ? s.unusedUsd + s.calledUsd! : s.usd), 0);
       const value = pick.map((s) => s.name).join(",");
       fixes.push({
         id: "desktop-tools-defer",
         title: `Keep the Desktop app's own tools behind tool search (${pick.map((s) => s.name).join(", ")})`,
         savedUsd: usd,
-        basis: `the Desktop app sends these tools' definitions whole into every session and subagent start, and each step re-reads them: ${pick.map((s) => `${s.name} ~${s.tokens < 1000 ? s.tokens : k(s.tokens)} tokens, called in ${s.calledStarts} of ${s.starts} starts`).join("; ")}. The figure is what that cost in the ${i.desktopTools!.days} days' starts that never called them (${money(all)} counting the ones that did, as overhead lists it; those would load a tool through tool search instead)`,
+        basis: `the Desktop app sends these tools' definitions whole into every session and subagent start, and each step re-reads them: ${pick.map((s) => `${s.name} ~${s.tokens < 1000 ? s.tokens : k(s.tokens)} tokens, called in ${s.calledStarts} of ${s.starts} starts`).join("; ")}. The figure is what that cost in the ${i.desktopTools!.days} days' starts that never called them (${money(all)} counting the ones that did${exact ? "" : ", as overhead lists it"}; those would load a tool through tool search instead)`,
         quality: `Claude loads one of these tools through tool search the first time a conversation needs it: one more step then. Kept in front: ${[...KEEP_APP_SERVERS, ...kept.filter((n) => !KEEP_APP_SERVERS.includes(n))].join(", ")} (called in most sessions). It takes effect in new sessions only, so no running conversation's cache is written again. Not measured here: applied only when named`,
         change: `${where}: env.${DEFER_APP_TOOLS_ENV} = "${value}", read by context-doctor's mod (its plugin, Claude Code ${DESKTOP_TOOLS_DEFER_SINCE}+)`,
         state: "available",
@@ -571,6 +574,9 @@ export function fixOverrides(id: FixId, deps: { home?: string; cwd?: string; env
     const out = sources.filter((s) => s.name !== "user" && s.settings.env?.[DEFER_APP_TOOLS_ENV] !== undefined && s.settings.env[DEFER_APP_TOOLS_ENV] !== null).map((s) => `${DEFER_APP_TOOLS_ENV}=${s.settings.env[DEFER_APP_TOOLS_ENV]} in ${tilde(s.path)} env`);
     const off = effectiveEnv("CONTEXT_DOCTOR_NO_MOD", sources, env);
     if (off?.value === "1") out.push(`${off.where} (context-doctor's mod is off)`);
+    // A deferred tool is loaded through tool search: with it off, deferring cannot work as the lever says.
+    const ts = effectiveEnv("ENABLE_TOOL_SEARCH", sources, env);
+    if (ts && /^(false|0|no|off)$/i.test(ts.value.trim())) out.push(`${ts.where} (tool search is off)`);
     return out;
   }
   if (id === "tool-output") {

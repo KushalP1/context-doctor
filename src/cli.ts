@@ -529,7 +529,7 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
       mcpServers: toolSearchOff ? servers.length : 0,
       prune: prunePlan,
       ...(deferrable.length ? { mcpDefer: { servers: deferrable, days } } : {}),
-      ...(appTools.length ? { desktopTools: { servers: appTools.map((s) => ({ name: s.name, tools: s.tools, tokens: s.tokens, starts: s.starts, calledStarts: s.calledStarts, usd: s.usd, unusedUsd: s.unusedUsd })), days } } : {}),
+      ...(appTools.length ? { desktopTools: { servers: appTools.map((s) => ({ name: s.name, tools: s.tools, tokens: s.tokens, starts: s.starts, calledStarts: s.calledStarts, usd: s.usd, unusedUsd: s.unusedUsd, calledUsd: s.calledUsd })), days } } : {}),
       ...(desktopToolsSet ? { desktopToolsSet } : {}),
       subagentModel,
       subagentModelSet,

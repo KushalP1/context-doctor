@@ -308,14 +308,17 @@ export function measureStarts(opts = {}) {
         const servers = new Map();
         for (const s of shaped)
             for (const [name, v] of s.shape.servers) {
-                const cur = servers.get(name) ?? servers.set(name, { name, starts: 0, tools: 0, tokens: 0, calledStarts: 0, unusedUsd: 0, ...(configured.get(name) ? { configured: configured.get(name) } : {}) }).get(name);
+                const cur = servers.get(name) ?? servers.set(name, { name, starts: 0, tools: 0, tokens: 0, calledStarts: 0, unusedUsd: 0, calledUsd: 0, ...(configured.get(name) ? { configured: configured.get(name) } : {}) }).get(name);
                 cur.starts++;
                 cur.tools = Math.max(cur.tools, v.tools);
                 cur.tokens += v.tokens;
-                if (s.called?.has(name))
+                const part = s.usd * Math.min(1, v.tokens / s.tokens);
+                if (s.called?.has(name)) {
                     cur.calledStarts++;
+                    cur.calledUsd += part;
+                }
                 else
-                    cur.unusedUsd += s.usd * Math.min(1, v.tokens / s.tokens);
+                    cur.unusedUsd += part;
             }
         for (const s of servers.values())
             s.tokens = Math.round(s.tokens / s.starts);
@@ -383,6 +386,7 @@ export function startServers(r) {
                 cur.starts += s.starts;
                 cur.calledStarts += s.calledStarts;
                 cur.unusedUsd += s.unusedUsd;
+                cur.calledUsd += s.calledUsd;
                 cur.tokens = Math.max(cur.tokens, s.tokens);
                 cur.tools = Math.max(cur.tools, s.tools);
             }
