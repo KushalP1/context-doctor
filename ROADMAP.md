@@ -398,7 +398,7 @@ the estimator to noise. Calibration needs a real tokenizer, not this data.
 
 Each release with the measurements behind it. Dollar figures are as measured when the release shipped, with the prices and counting of the time; the 0.32 audit fixed both, and the README's headline figures are the re-measured ones.
 
-## Shipped on main, not yet released
+## Shipped in 0.50.0: The Desktop app's own tools, money past the limit, a Codex status line, and two audits
 
 - **`overhead` no longer offers a lever you applied.** After `fix --apply desktop-tools-defer` or `mcp-defer`, the starts still in its 30-day window kept the suggestion coming; it now says the lever is applied and how to undo it. `mcp-defer` is listed as overlapping the cache-lifetime and subagent-model levers, as `desktop-tools-defer` is.
 
