@@ -142,7 +142,7 @@ test("plan: offered over $1 and 2% with the preview said plainly, in --apply all
     assert.match(f.basis, /an estimate: a file the model opens again costs about \$0\.75 a time and is not counted, and the saving covers it opening up to 80% of them/);
     assert.match(f.change, /bashOutputMaxChars = 8000 \(Claude Code 2\.1\.261\+\)/);
     const text = renderFixPlan(30, 2000, fixes, []);
-    assert.match(text, /2\. Long Bash output to a file past 8k characters\s+\$300 \(30% of input, subagents included\)/);
+    assert.match(text, /2\. Long Bash output to a file past 8k characters\s+\$300 \(30% of \$[0-9,.]+ input, subagents included\)/);
     assert.match(text, /8k\s+100 of 1,000\s+\$300   over 80% of them  ←/);
     assert.match(text, /MCP results over 10k tokens: 2 of 50, \$0\.40 re-reading them; not offered/);
     // The content stays in a file the model can open: --apply all includes it.

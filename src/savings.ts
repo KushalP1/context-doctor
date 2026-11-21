@@ -422,7 +422,9 @@ export function renderSavings(r: SavingsReport, autopilotOn = false, cw?: Compac
   // The same count, said the same way, as compact-window's.
   lines.push(`Last ${r.days} days, ${sessionsLabel(n, r.transcripts ?? n)}, ${priceBasis()}`);
   lines.push("─".repeat(60));
-  lines.push(`Input you were billed for         ${usd(r.billedUsd).padStart(9)}   from your transcripts' usage`);
+  lines.push(`Input in your main conversations  ${usd(r.billedUsd).padStart(9)}   from your transcripts' usage`);
+  // spend's total is larger: it adds output and the subagents. Said here, so the two do not look like they disagree.
+  lines.push("   Not in it: output and subagents (context-doctor spend has the whole bill).");
   lines.push("");
   lines.push(`1. Compact when you come back     ${usd(Math.max(0, r.coldResumeNetUsd)).padStart(9)}${pct(Math.max(0, r.coldResumeNetUsd))}`);
   lines.push(`   ${r.coldResumes} return${r.coldResumes === 1 ? "" : "s"} to a session over 150k tokens after the prompt cache`);

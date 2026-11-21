@@ -60,7 +60,7 @@ test("savings: short sessions are skipped, and the report renders either way", (
     assert.equal(r.sessions.length, 2);
     assert.equal(r.worse, 0);
     const text = renderSavings(r);
-    assert.match(text, /Input you were billed for/);
+    assert.match(text, /Input in your main conversations[^\n]*\n   Not in it: output and subagents \(context-doctor spend has the whole bill\)/);
     assert.match(text, /2\. Autopilot/);
     assert.match(text, /autopilot on/);
     assert.doesNotMatch(renderSavings(r, true), /Turn it on/);

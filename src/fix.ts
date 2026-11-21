@@ -322,7 +322,8 @@ export function planFixes(i: FixInputs): Fix[] {
       savedUsd: best.savedUsd,
       savedShare: best.savedUsd / to.billedUsd,
       // Main conversations and subagents alike: the cap applies to both.
-      shareOf: "of input, subagents included",
+      // Its own base, named: the header's input leaves subagents out, this one counts them.
+      shareOf: `of ${money(to.billedUsd)} input, subagents included`,
       basis: `${best.moved.toLocaleString("en-US")} of ${best.results.toLocaleString("en-US")} Bash results were longer; the tokens past a 2,000-character preview priced at each later request that re-read them until a compaction (cache reads, one write); an estimate: a file the model opens again costs about ${money(each)} a time and is not counted, and the saving covers it opening up to ${pct(breakEven(best))} of them`,
       quality: "long output goes to a file the model can still open; it sees the first 2,000 characters and the path, as it already does past 30,000",
       // Nothing is lost, only moved (in `--apply all` for the same reason).
@@ -1038,7 +1039,7 @@ export function renderFixPlan(days: number, billedUsd: number, fixes: Fix[], sin
   // Codex's input named beside Claude Code's when there is some; alone on a machine with only Codex.
   if (codexBilledUsd > 0 && billedUsd > 0) out.push(`Last ${days} days of your sessions: Claude Code ${money(billedUsd)} of input, Codex ${money(codexBilledUsd)}, ${priceBasis()}`);
   else if (codexBilledUsd > 0) out.push(`Last ${days} days of your Codex sessions, ${money(codexBilledUsd)} of input ${priceBasis()}`);
-  else out.push(`Last ${days} days of your Claude Code sessions, ${money(billedUsd)} of input ${priceBasis()}`);
+  else out.push(`Last ${days} days of your Claude Code sessions, ${money(billedUsd)} of input in the main conversations (subagents not counted) ${priceBasis()}`);
   out.push("─".repeat(66));
   const avail = fixes.filter((f) => f.state === "available");
   // No input billed: there is no history to measure, which is not "all applied".
