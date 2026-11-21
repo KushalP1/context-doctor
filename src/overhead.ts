@@ -30,6 +30,7 @@ import { mcpjsonServerApproved } from "./prune.js";
 import { REQUEST_ROWS } from "./coldresume.js";
 import { rowsOf } from "./scan.js";
 import { measureStarts, renderStarts, type StartsReport } from "./starts.js";
+import { readFixRecords } from "./fix.js";
 
 export type Agent = "Claude Code" | "Codex" | "Cursor" | "Gemini CLI";
 
@@ -545,7 +546,7 @@ export function renderOverhead(r: OverheadReport, home = homedir()): string {
           : "")
     );
   }
-  if (r.starts) out.push(...renderStarts(r.starts));
+  if (r.starts) out.push(...renderStarts(r.starts, new Set(readFixRecords(home).map((f) => f.id))));
   out.push(...renderMcp(r));
   out.push("", "Memory files loaded in this directory", "─".repeat(56));
   if (r.files.length === 0) out.push("  none");

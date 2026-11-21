@@ -29,6 +29,7 @@ import { mcpjsonServerApproved } from "./prune.js";
 import { REQUEST_ROWS } from "./coldresume.js";
 import { rowsOf } from "./scan.js";
 import { measureStarts, renderStarts } from "./starts.js";
+import { readFixRecords } from "./fix.js";
 const TTL_MS = 3_600_000;
 const CLAUDE = "claude-opus-5"; // Claude's tokenizer ratios; the model only picks the provider here.
 function readText(path) {
@@ -489,7 +490,7 @@ export function renderOverhead(r, home = homedir()) {
                 : ""));
     }
     if (r.starts)
-        out.push(...renderStarts(r.starts));
+        out.push(...renderStarts(r.starts, new Set(readFixRecords(home).map((f) => f.id))));
     out.push(...renderMcp(r));
     out.push("", "Memory files loaded in this directory", "─".repeat(56));
     if (r.files.length === 0)

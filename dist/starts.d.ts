@@ -129,4 +129,4 @@ export declare function deferrableApp(r: StartsReport): Array<StartServer & {
     usd: number;
 }>;
 /** The starts section of `overhead`. */
-export declare function renderStarts(r: StartsReport): string[];
+export declare function renderStarts(r: StartsReport, applied?: ReadonlySet<string>): string[];

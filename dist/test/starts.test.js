@@ -191,6 +191,10 @@ test("desktop-tools-defer: the app's own servers, priced on the starts that neve
     near(app[0].unusedUsd, desk.usd * tokensOf(BROWSER) / 70_000, "only the Desktop session's start, which never called it");
     assert.ok(app[0].usd > app[0].unusedUsd, "overhead's figure counts the subagent's start too");
     assert.match(renderStarts(r).join("\n"), /fix --apply desktop-tools-defer` has context-doctor's mod keep Claude_Browser behind tool search in new sessions/);
+    // Applied already: said as applied, not offered again (older starts in the window still count the tools).
+    const done = renderStarts(r, new Set(["desktop-tools-defer"])).join("\n");
+    assert.match(done, /Applied \(`fix --apply desktop-tools-defer`\): context-doctor's mod keeps Claude_Browser behind tool search/);
+    assert.doesNotMatch(done, /`context-doctor fix --apply desktop-tools-defer` has/);
 });
 test("desktop-tools-defer: offered by name only, priced in plain words, ccd_turn and much-called servers kept; apply and undo in a throwaway HOME", async () => {
     const home = mkdtempSync(join(tmpdir(), "cd-dtd-"));

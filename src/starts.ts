@@ -425,7 +425,7 @@ export function deferrableApp(r: StartsReport): Array<StartServer & { usd: numbe
 const tok = (n: number) => `~${formatTokens(n)}`;
 
 /** The starts section of `overhead`. */
-export function renderStarts(r: StartsReport): string[] {
+export function renderStarts(r: StartsReport, applied: ReadonlySet<string> = new Set()): string[] {
   const out = ["", "Session and subagent starts (the first request, before the first message)", "─".repeat(56)];
   if (r.groups.length === 0) {
     out.push("  No Claude Code session in the period to measure.");
@@ -471,8 +471,11 @@ export function renderStarts(r: StartsReport): string[] {
       );
     }
     const own = app.filter((s) => APP_TOOL_SERVERS.includes(s.name));
-    if (own.length) out.push(`  \`context-doctor fix --apply desktop-tools-defer\` has context-doctor's mod keep ${own.map((s) => s.name).join(", ")} behind tool search in new sessions (Claude Code 2.1.326+ with the plugin; reversible with \`fix undo desktop-tools-defer\`); \`fix\` prices it on the starts that never called them.`);
-    if (list.some((s) => s.configured)) out.push("  `context-doctor fix --apply mcp-defer` sets `alwaysLoad: false` on the ones in your own config (reversible with `fix undo mcp-defer`).");
+    // Applied already: the starts in this window before it still count the tools, so say so rather than offer it again.
+    if (own.length && applied.has("desktop-tools-defer")) out.push(`  Applied (\`fix --apply desktop-tools-defer\`): context-doctor's mod keeps ${own.map((s) => s.name).join(", ")} behind tool search in sessions started since; the older starts above still count them. Undo with \`fix undo desktop-tools-defer\`.`);
+    else if (own.length) out.push(`  \`context-doctor fix --apply desktop-tools-defer\` has context-doctor's mod keep ${own.map((s) => s.name).join(", ")} behind tool search in new sessions (Claude Code 2.1.326+ with the plugin; reversible with \`fix undo desktop-tools-defer\`); \`fix\` prices it on the starts that never called them.`);
+    if (list.some((s) => s.configured) && applied.has("mcp-defer")) out.push("  Applied (`fix --apply mcp-defer`): your own servers are set to `alwaysLoad: false`; starts before that still count them. Undo with `fix undo mcp-defer`.");
+    else if (list.some((s) => s.configured)) out.push("  `context-doctor fix --apply mcp-defer` sets `alwaysLoad: false` on the ones in your own config (reversible with `fix undo mcp-defer`).");
   } else if (r.groups.some((g) => g.shaped > 0)) {
     out.push("  Every MCP tool definition was deferred behind tool search: nothing of the start to defer.");
   }
