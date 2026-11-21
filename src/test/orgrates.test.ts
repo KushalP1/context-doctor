@@ -313,7 +313,11 @@ test("server-managed settings or an MDM profile on this machine: reports say Cla
     assert.equal(managedSourcesLine(env, home, prefs), undefined, "none here: nothing said");
     // Claude Code's copy of the server-managed settings, in its own folder.
     mkdirSync(join(home, ".claude"), { recursive: true });
-    writeFileSync(join(home, ".claude", "remote-settings.json"), "{}");
+    // A copy that sets no rates (most claude.ai sign-ins have one) prices at list, as the reports do: nothing said.
+    writeFileSync(join(home, ".claude", "remote-settings.json"), JSON.stringify({ channelsEnabled: true }));
+    assert.deepEqual(managedSourcesAhead(env, home, prefs), []);
+    assert.equal(managedSourcesLine(env, home, prefs), undefined, "a server-managed copy with no modelPricing: nothing said");
+    writeFileSync(join(home, ".claude", "remote-settings.json"), JSON.stringify({ modelPricing: { multiplier: 0.8 } }));
     assert.deepEqual(managedSourcesAhead(env, home, prefs), [`server-managed settings (Claude Code's copy: ${join(home, ".claude", "remote-settings.json")})`]);
     if (process.platform === "darwin") {
       mkdirSync(prefs, { recursive: true });

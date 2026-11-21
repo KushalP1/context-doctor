@@ -191,9 +191,11 @@ export function orgRatesLine(env = process.env) {
  * managed-preferences plist, the Windows HKLM policy key), else the files,
  * and by default only the first source found counts ("first-wins"): with
  * either of the others present, Claude Code prices at their modelPricing,
- * or at list, never at the files'. context-doctor reads neither (the
+ * or at list, never at the files'. context-doctor reads neither's rates (the
  * server-managed copy, `remote-settings.json` in Claude Code's folder, is an
- * undocumented, signed cache); this only says that one is there. The
+ * undocumented, signed cache); this only says that one is there, and leaves
+ * out a copy that parses and never names modelPricing while the files set
+ * none either (both price at list then). The
  * Windows key is not looked up (it needs reg.exe).
  */
 export function managedSourcesAhead(env = process.env, home, prefs = "/Library/Managed Preferences") {
@@ -202,7 +204,12 @@ export function managedSourcesAhead(env = process.env, home, prefs = "/Library/M
     const out = [];
     try {
         const remote = join(claudeDir(home, env), "remote-settings.json");
-        if (existsSync(remote))
+        // Only whether it can set rates is looked at: a copy that parses and never
+        // names modelPricing prices at list, as these reports do, unless the files
+        // set rates (then it still matters: Claude Code reads it and not them).
+        // Every claude.ai sign-in can have one ({"channelsEnabled": …}): saying
+        // "its figures may use contracted rates" on each report there was noise.
+        if (existsSync(remote) && (mayPrice(remote) || orgRates(env)))
             out.push(`server-managed settings (Claude Code's copy: ${remote})`);
     }
     catch { /* no config folder */ }
@@ -220,6 +227,17 @@ export function managedSourcesAhead(env = process.env, home, prefs = "/Library/M
         }
     }
     return out;
+}
+/** False only for a file that parses as JSON and has no `modelPricing` key anywhere: unread or unparsed, it may. */
+function mayPrice(path) {
+    try {
+        const text = readFileSync(path, "utf8");
+        JSON.parse(text);
+        return text.includes("modelPricing");
+    }
+    catch {
+        return true;
+    }
 }
 /**
  * The line a report adds when Claude Code may take its rates from a source

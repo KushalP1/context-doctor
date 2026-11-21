@@ -87,9 +87,11 @@ export declare function orgRatesLine(env?: NodeJS.ProcessEnv): string | undefine
  * managed-preferences plist, the Windows HKLM policy key), else the files,
  * and by default only the first source found counts ("first-wins"): with
  * either of the others present, Claude Code prices at their modelPricing,
- * or at list, never at the files'. context-doctor reads neither (the
+ * or at list, never at the files'. context-doctor reads neither's rates (the
  * server-managed copy, `remote-settings.json` in Claude Code's folder, is an
- * undocumented, signed cache); this only says that one is there. The
+ * undocumented, signed cache); this only says that one is there, and leaves
+ * out a copy that parses and never names modelPricing while the files set
+ * none either (both price at list then). The
  * Windows key is not looked up (it needs reg.exe).
  */
 export declare function managedSourcesAhead(env?: NodeJS.ProcessEnv, home?: string, prefs?: string): string[];
