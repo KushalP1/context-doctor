@@ -128,5 +128,12 @@ export declare function startServers(r: StartsReport): Array<StartServer & {
 export declare function deferrableApp(r: StartsReport): Array<StartServer & {
     usd: number;
 }>;
+/** Every start's cost over the period as billed, and the subagents' part of it; `unpriced` when a start had a model with no price. */
+export declare function startsTotal(r: StartsReport): {
+    usd: number;
+    subagentUsd: number;
+    subagents: boolean;
+    unpriced: boolean;
+};
 /** The starts section of `overhead`. */
 export declare function renderStarts(r: StartsReport, applied?: ReadonlySet<string>): string[];

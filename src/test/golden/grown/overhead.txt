@@ -2,8 +2,8 @@ FIXED OVERHEAD: what every request re-reads before your message
 ════════════════════════════════════════════════════════
 Claude Code, last 30 days: 7 of 8 sessions (any length; the rest had no first request to measure) start at a median ~56k tokens (p90 ~75k) before the first message.
 Memory files loaded here are ~0 of that; the rest is Claude Code's system prompt, tools, skills and MCP schemas.
-At your usage (247 requests, 40 cold starts, claude-opus-5-5 list prices) every 1k tokens of it costs ~$0.337 a month;
-the whole overhead ~$18.74 a month.
+At your usage (247 requests, 40 cold starts, claude-opus-5-5 list prices) every 1k tokens added to it costs ~$0.337 a month (what the memory files below are priced at).
+The whole of it, every session and subagent start as billed: $29.43 over the last 30 days (subagents $3.65), itemised below.
 
 Session and subagent starts (the first request, before the first message)
 ────────────────────────────────────────────────────────

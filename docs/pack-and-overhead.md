@@ -35,11 +35,13 @@ context-doctor recall "which port did the test server use"
 **`overhead`: what every request re-reads before your message.** The system prompt, tool and MCP schemas, skills and your memory files ride on every request: cached, so each read is cheap, but read on every request of every session and written again at full price after each cold start. Transcripts never show them. `overhead` measures the fixed part from the first request of each recent Claude Code session (the API's own count, minus your first message), lists every memory file each agent loads in the current directory (Claude Code's CLAUDE.md with its `@imports`, rules and auto memory; Codex's AGENTS.md; Cursor's always-applied rules; GEMINI.md), and prices each per month from your own request and cold-start counts.
 
 ```
-Claude Code, last 30 days: 80 sessions start at a median ~57k tokens (p90 ~67k) before the first message.
-Memory files loaded here are ~3.6k of that; the rest is Claude Code's system prompt, tools, skills and MCP schemas.
-At your usage (12,023 requests, 238 cold starts, claude-opus-5-5 list prices) every 1k tokens of it costs ~$5.89 a month;
-the whole overhead ~$335.94 a month.
+Claude Code, last 30 days: 55 of 61 sessions (any length; the rest had no first request to measure) start at a median ~71k tokens (p90 ~75k) before the first message.
+Memory files loaded here are ~0 of that; the rest is Claude Code's system prompt, tools, skills and MCP schemas.
+At your usage (8,898 requests, 265 cold starts, claude-opus-5-5 list prices) every 1k tokens added to it costs ~$4.36 a month (what the memory files below are priced at).
+The whole of it, every session and subagent start as billed: $443.29 over the last 30 days (subagents $241.60), itemised below.
 ```
+
+Two figures, two questions. The rate per 1k tokens is what one more token at the start costs: every request of your main conversations reads it, and each cold start (over an hour idle) writes it again; the memory files are priced with it. The whole is one total, the same as the starts section's "Every start, re-read at each step": each session's and subagent's own start, at the rates each request paid. The median start times the rate is not shown beside it (it leaves out subagents and sessions begun before the period, and it read as a second, different total); with no start measured it is shown alone, said to be an estimate.
 
 Findings point at files over 2k tokens, paragraphs loaded twice from two files, and long code blocks that could live in a file the agent opens when it needs them.
 

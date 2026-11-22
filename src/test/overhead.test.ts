@@ -69,6 +69,8 @@ test("baseline: first request minus the first message, priced from requests and 
   assert.ok(Math.abs(b.usdPerKPerMonth! - expected) < 1e-9);
   const text = renderOverhead({ cwd: proj, baseline: b, files: findMemoryFiles(proj, home), findings: [], baselines: [b], mcp: { configs: [], usage: { calls: new Map(), names: new Map(), resources: new Map(), sessions: 0, toolSearchSessions: 0 } } }, home);
   assert.match(text, /median ~30k tokens/);
+  // No starts measured: the whole is the median at that rate, and said to be an estimate.
+  assert.match(text, /every 1k tokens added to it costs ~\$[\d.]+ a month \(what the memory files below are priced at\)\.\nThe whole of it ~\$[\d.]+ a month: the median start at that rate, an estimate\./);
 });
 
 test("baselines per agent: Codex rollouts and Gemini CLI chats, OpenAI/Google priced with no cache-write premium", () => {

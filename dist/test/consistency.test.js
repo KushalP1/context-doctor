@@ -86,6 +86,12 @@ test("overhead says it counts sessions of any length, out of the same transcript
     assert.equal(b.sessions, 4, "every transcript with a measurable first request, short ones included");
     const text = renderOverhead(overheadReport({ paths, cwd: dirname(paths[0]), home: dirname(paths[0]) }));
     assert.match(text, /4 sessions \(any length\)/);
+    // One total for the whole overhead: the headline's is the starts section's, not a second figure defined another way.
+    const head = text.match(/^The whole of it, every session and subagent start as billed: (\$[\d,]+(?:\.\d+)?)/m);
+    const starts = text.match(/Every start, re-read at each step over 30 days: (\$[\d,]+(?:\.\d+)?)/);
+    assert.ok(head && starts, text);
+    assert.equal(head[1], starts[1]);
+    assert.ok(!/a month;\nthe whole overhead/.test(text));
 });
 test("the long readers report progress per transcript, ending at the total", () => {
     const paths = fixture();

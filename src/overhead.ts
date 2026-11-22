@@ -29,7 +29,7 @@ import { claudeDir } from "./claudedir.js";
 import { mcpjsonServerApproved } from "./prune.js";
 import { REQUEST_ROWS } from "./coldresume.js";
 import { rowsOf } from "./scan.js";
-import { measureStarts, renderStarts, type StartsReport } from "./starts.js";
+import { measureStarts, renderStarts, startsTotal, type StartsReport } from "./starts.js";
 import { readFixRecords } from "./fix.js";
 
 export type Agent = "Claude Code" | "Codex" | "Cursor" | "Gemini CLI";
@@ -522,6 +522,7 @@ export function renderOverhead(r: OverheadReport, home = homedir()): string {
   out.push("FIXED OVERHEAD: what every request re-reads before your message", "═".repeat(56));
   const b = r.baseline;
   const claudeTokens = r.files.filter((f) => f.agent === "Claude Code").reduce((s, f) => s + f.tokens, 0);
+  const st = r.starts && r.starts.groups.length ? startsTotal(r.starts) : undefined;
   if (b) {
     out.push(
       `Claude Code, last ${b.days} days: ${sessionCount(b)} start at a median ~${formatTokens(b.median)} tokens (p90 ~${formatTokens(b.p90)}) before the first message.`,
@@ -529,8 +530,12 @@ export function renderOverhead(r: OverheadReport, home = homedir()): string {
     );
     if (b.usdPerKPerMonth !== undefined) {
       out.push(
-        `At your usage (${b.requests.toLocaleString("en-US")} requests, ${b.coldStarts.toLocaleString("en-US")} cold starts, ${b.model} ${priceBasis().replace(/^at /, "")}) every 1k tokens of it costs ~${formatUsd(b.usdPerKPerMonth)} a month;`,
-        `the whole overhead ~${formatUsd((b.median / 1000) * b.usdPerKPerMonth)} a month.`
+        `At your usage (${b.requests.toLocaleString("en-US")} requests, ${b.coldStarts.toLocaleString("en-US")} cold starts, ${b.model} ${priceBasis().replace(/^at /, "")}) every 1k tokens added to it costs ~${formatUsd(b.usdPerKPerMonth)} a month (what the memory files below are priced at).`,
+        // One figure for the whole: the starts below, each start as billed with subagents in, when measured. The
+        // median at the rate above leaves subagents and sessions begun before the period out, and read as a second total.
+        ...(st && st.usd > 0
+          ? [`The whole of it, every session and subagent start as billed: ${formatUsd(st.usd)}${st.unpriced ? "+" : ""} over the last ${r.starts!.days} days${st.subagents ? ` (subagents ${formatUsd(st.subagentUsd)})` : ""}, itemised below.`]
+          : [`The whole of it ~${formatUsd((b.median / 1000) * b.usdPerKPerMonth)} a month: the median start at that rate, an estimate.`])
       );
     }
   } else {

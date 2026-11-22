@@ -424,6 +424,12 @@ export function deferrableApp(r: StartsReport): Array<StartServer & { usd: numbe
 
 const tok = (n: number) => `~${formatTokens(n)}`;
 
+/** Every start's cost over the period as billed, and the subagents' part of it; `unpriced` when a start had a model with no price. */
+export function startsTotal(r: StartsReport): { usd: number; subagentUsd: number; subagents: boolean; unpriced: boolean } {
+  const subs = r.groups.filter((g) => g.kind === "subagent");
+  return { usd: r.groups.reduce((t, g) => t + g.usd, 0), subagentUsd: subs.reduce((t, g) => t + g.usd, 0), subagents: subs.length > 0, unpriced: r.groups.some((g) => g.unpriced) };
+}
+
 /** The starts section of `overhead`. */
 export function renderStarts(r: StartsReport, applied: ReadonlySet<string> = new Set()): string[] {
   const out = ["", "Session and subagent starts (the first request, before the first message)", "─".repeat(56)];
@@ -442,9 +448,8 @@ export function renderStarts(r: StartsReport, applied: ReadonlySet<string> = new
   const subs = r.groups.filter((g) => g.kind === "subagent");
   for (const g of sessions) line(`${entrypointName(g.entrypoint)} sessions`, g);
   for (const g of subs) line(`${g.agentType} (subagent)${new Set(subs.map((x) => x.entrypoint)).size > 1 ? ` (${entrypointName(g.entrypoint)})` : ""}`, g);
-  const total = r.groups.reduce((t, g) => t + g.usd, 0);
-  const subUsd = subs.reduce((t, g) => t + g.usd, 0);
-  out.push(`  Every start, re-read at each step over ${r.days} days: ${formatUsd(total)}${subs.length ? ` (subagents ${formatUsd(subUsd)})` : ""}. Token counts are the API's; tool sizes are estimates from their length.`);
+  const t = startsTotal(r);
+  out.push(`  Every start, re-read at each step over ${r.days} days: ${formatUsd(t.usd)}${t.subagents ? ` (subagents ${formatUsd(t.subagentUsd)})` : ""}. Token counts are the API's; tool sizes are estimates from their length.`);
 
   if (r.gap && r.gap.tokens > 0) {
     out.push(`  Desktop app vs terminal: a Desktop session starts ~${formatTokens(r.gap.tokens)} tokens larger (median ${tok(r.gap.desktop)} against ${tok(r.gap.terminal)}): ${formatUsd(r.gap.usd)} of its starts' cost in ${r.days} days.`);
