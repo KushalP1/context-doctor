@@ -201,6 +201,62 @@ test("evaluate: green on a full run; each missing piece turns its check red, and
         rmSync(dir, { recursive: true, force: true });
     }
 });
+test("progress summaries (G4): told apart by their prompts, the subagent held past the timer, recorded and checked as warnings", async () => {
+    const c = await load();
+    assert.equal(c.summaryKind({ system: [{ type: "text", text: `${c.SUMMARY_NOTES_HEAD}, from short notes` }], messages: [{ role: "user", content: "notes" }] }), "notes");
+    // 2.1.330 merges the fork's instruction into the subagent's first user message, with a system-role message after it.
+    const fork = { messages: [{ role: "user", content: [{ type: "text", text: `${c.SUB}: reply` }, { type: "text", text: `Describe your ${c.SUMMARY_FORK_HEAD} using present tense` }] }, { role: "system", content: "deferred tools" }] };
+    assert.equal(c.summaryKind(fork), "fork");
+    assert.equal(c.summaryKind({ messages: [{ role: "user", content: `${c.SUB}: reply` }] }), undefined);
+    assert.equal(c.atLeast("2.1.330 (Claude Code)", "2.1.328"), true);
+    assert.equal(c.atLeast("2.1.327 (Claude Code)", "2.1.328"), false);
+    assert.equal(c.atLeast("", "2.1.328"), false);
+    const mock = await c.startMock({ holdSubMs: 300 });
+    try {
+        const auth = { authorization: `Bearer ${c.dummyToken()}`, "content-type": "application/json" };
+        const sub = JSON.stringify({ model: "claude-opus-5-5", stream: true, messages: [{ role: "user", content: `${c.SUB}: reply with one word.` }] });
+        const t0 = Date.now();
+        const held = http(mock.url, { method: "POST", path: "/v1/messages", headers: auth, body: sub });
+        // The summary arrives while the subagent's reply is held, and is answered at once with a label.
+        const s = await http(mock.url, { method: "POST", path: "/v1/messages", headers: auth, body: JSON.stringify({ ...fork, model: "claude-opus-5-5" }) });
+        assert.match(JSON.parse(s.text).content[0].text, /canary/);
+        const r = await held;
+        assert.ok(Date.now() - t0 >= 280, "the subagent's reply was held");
+        assert.match(r.text, /CANARY-SUB-OK/);
+        // Only the first: the subagent's next request is answered at once.
+        const t1 = Date.now();
+        await http(mock.url, { method: "POST", path: "/v1/messages", headers: auth, body: sub });
+        assert.ok(Date.now() - t1 < 250);
+        assert.deepEqual(mock.requests.map((q) => [q.sub === true, q.summary ?? null]), [[true, null], [true, "fork"], [true, null]]);
+        assert.ok(mock.requests[1].inputTokens > 0);
+        assert.equal(mock.holdSubMs, 300);
+    }
+    finally {
+        await mock.close();
+    }
+    const dir = mkdtempSync(join(tmpdir(), "cd-canary-g4-"));
+    try {
+        const run = (sums, version = "2.1.330 (Claude Code)") => {
+            const r = greenRun(c, dir);
+            r.mock.holdSubMs = 40_000;
+            r.mock.requests[0].sub = true;
+            r.mock.requests[0].model = "claude-opus-5-5";
+            r.mock.requests.push(...sums.map((x) => ({ auth: "dummy", apiKey: "none", text: "", sub: true, ...x })));
+            return c.evaluate({ ...r, version }).checks.filter((x) => /progress summary|whole context/.test(x.name));
+        };
+        const forkOk = run([{ summary: "fork", model: "claude-opus-5-5", inputTokens: 8000 }]);
+        assert.deepEqual(forkOk.map((x) => [x.ok, x.soft]), [[true, true], [true, true]]);
+        const notes = run([{ summary: "notes", model: "claude-haiku-5-5", inputTokens: 1200 }]);
+        assert.deepEqual(notes.map((x) => x.ok), [true, false], "notes under -p is news: a warning");
+        assert.match(notes[1].detail, /short notes on claude-haiku-5-5, ~1,200 tokens/);
+        assert.deepEqual(run([]).map((x) => [x.ok, x.soft]), [[false, true]], "none: a warning, never red");
+        assert.deepEqual(run([], "2.1.327 (Claude Code)"), [], "before 2.1.328: not checked");
+        assert.ok(c.evaluate({ ...greenRun(c, dir), version: "2.1.330" }).checks.every((x) => !/progress summary/.test(x.name)), "no hold: not checked");
+    }
+    finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+});
 test("planted faults: each changes the copy, never the repository", async () => {
     const c = await load();
     const files = (d) => readFileSync(join(d, "hooks", "hooks.json"), "utf8") + readFileSync(join(d, "dist", "mod", "register.js"), "utf8") + readFileSync(join(d, "dist", "cli.js"), "utf8");

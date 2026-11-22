@@ -21,6 +21,8 @@
 //    draw it on under -p, answers with the pane's figures as text (the
 //    context, the two windows the mock reported, today's dollars from the
 //    session's own transcript);
+//  - (a warning, never red) on 2.1.328+, with the subagent's reply held 40 s,
+//    its progress summaries reach the mock, and which kind they are (ROADMAP G4);
 //  - `claude plugin validate --profile directory --strict` passes;
 //  - every request the mock got carried the dummy credential, and nothing
 //    tried to reach another host (HTTPS_PROXY points at the mock, which
@@ -64,7 +66,7 @@ export const MAIN = "CANARY-MAIN";
 export const SUB = "CANARY-SUB";
 /** The PreCompact hook's instructions start with this (src/precompact.ts compactInstructions). */
 export const PRECOMPACT_HEAD = "context-doctor, from this session's transcript";
-const SESSION_TIMEOUT_MS = 180_000;
+const SESSION_TIMEOUT_MS = 240_000;
 const IDLE_MS = 45_000;
 /** The session's steps, in order; a run that stops early names the one it stopped at. */
 const STEPS = ["the first prompt and its subagent", "the second prompt", "the usage pane (/context-doctor-usage)", "keep-warm armed (/context-doctor-keep-warm 1h $1)", "a keep-warm ping reaching the API", "keep-warm off", "the model switch (set_model)", "/compact", "done"];
@@ -77,6 +79,31 @@ export const KEEP_WARM_PING_MS = 3000;
 /** The ping's own message (src/mod/logic.ts PING_PROMPT), by which the mock knows it. */
 export const PING_HEAD = "context-doctor keep-warm: an automated cache refresh";
 const PING_WAIT_MS = 30_000;
+/**
+ * Subagent progress summaries (ROADMAP G4): the first one 30 s into a background
+ * subagent (Claude Code's timer). Under -p they are sent only with
+ * CLAUDE_CODE_AGENT_PROGRESS_SUMMARIES=1 (the SDK's agentProgressSummaries), so
+ * the canary sets it and, in its main run, holds the subagent's reply open past
+ * the timer (a ping every few seconds, as the API sends) and records what
+ * arrives. Read from the 2.1.330 binary and seen here: a host that asked (-p,
+ * the SDK) gets the subagent's whole context as a fork on its own model; only a
+ * terminal session (entrypoint "cli", which the canary cannot run headless)
+ * gets 2.1.328's short notes on the small fast model, which
+ * src/progresssummaries.ts prices (it counts no -p or SDK subagent).
+ */
+export const SUMMARY_TIMER_MS = 30_000;
+export const SUB_HOLD_MS = 40_000;
+/** The notes writer's system prompt starts so (2.1.328+); the older whole-context fork asks this in a user message. */
+export const SUMMARY_NOTES_HEAD = "You write a 3-5 word progress label for a background agent";
+export const SUMMARY_FORK_HEAD = "most recent action in 3-5 words";
+/** The fork's instruction is merged into the subagent's first user message (2.1.330), not sent as a message of its own. */
+/** Which kind of progress-summary request a body is: "notes" (2.1.328+), "fork" (the whole context), or undefined. */
+export function summaryKind(body) {
+  const system = Array.isArray(body?.system) ? body.system.map((s) => s?.text ?? "").join("\n") : String(body?.system ?? "");
+  if (system.includes(SUMMARY_NOTES_HEAD)) return "notes";
+  const msgs = Array.isArray(body?.messages) ? body.messages : [];
+  return msgs.some((m) => m?.role === "user" && textOf(m.content).includes(SUMMARY_FORK_HEAD)) ? "fork" : undefined;
+}
 const keepWarmAnswer = (e) => e?.type === "result" && /Keeping this session's prompt cache warm|Not started|Nothing was started|no \$\.model\.fork/.test(String(e.result ?? ""));
 const keepWarmOff = (e) => e?.type === "result" && /Stopped keeping the cache warm|Nothing to stop/.test(String(e.result ?? ""));
 const usageAnswer = (e) => e?.type === "result" && /context-doctor usage: /.test(String(e.result ?? ""));
@@ -135,10 +162,12 @@ export function rateLimitHeaders(nowS = Math.floor(Date.now() / 1000)) {
  * rate-limit headers on each reply, GET /__canary (its nonce, for checkEnv).
  * Any other request, a proxied one or a CONNECT, is refused and recorded.
  */
-export async function startMock() {
+export async function startMock({ holdSubMs = 0 } = {}) {
   const nonce = randomBytes(8).toString("hex");
   const requests = [];
   const refused = [];
+  let held = false;
+  const timers = new Set();
   const pingUsage = { input_tokens: 60, cache_creation_input_tokens: 0, cache_read_input_tokens: 20000, output_tokens: 2, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } };
   const usage = { input_tokens: 10, cache_creation_input_tokens: 20000, cache_read_input_tokens: 0, output_tokens: 40, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 20000 } };
   const server = createServer((req, res) => {
@@ -151,39 +180,49 @@ export async function startMock() {
       let body = null;
       try { body = raw ? JSON.parse(raw) : null; } catch { /* recorded as is */ }
       const auth = String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
-      const rec = { method: req.method, path, auth: isDummy(auth) ? "dummy" : auth ? "OTHER" : "none", apiKey: req.headers["x-api-key"] ? (isDummy(String(req.headers["x-api-key"])) ? "dummy" : "OTHER") : "none", model: body?.model, text: body ? JSON.stringify(body.messages ?? body).slice(-200_000) : "" };
+      const summary = path.startsWith("/v1/messages/count_tokens") ? undefined : summaryKind(body);
+      const rec = { method: req.method, path, auth: isDummy(auth) ? "dummy" : auth ? "OTHER" : "none", apiKey: req.headers["x-api-key"] ? (isDummy(String(req.headers["x-api-key"])) ? "dummy" : "OTHER") : "none", model: body?.model, text: body ? JSON.stringify(body.messages ?? body).slice(-200_000) : "", ...(textOf(body?.messages?.[0]?.content).includes(SUB) && { sub: true }), ...(summary && { summary, inputTokens: Math.round(JSON.stringify({ system: body.system, messages: body.messages, tools: body.tools }).length / 4) }) };
       requests.push(rec);
       if (req.method !== "POST" || !path.startsWith("/v1/messages")) { refused.push(`${req.method} ${path}`); res.writeHead(404, { "content-type": "application/json" }); return res.end(JSON.stringify({ type: "error", error: { type: "not_found_error", message: "context-doctor canary mock" } })); }
       if (path.startsWith("/v1/messages/count_tokens")) { res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ input_tokens: 1000 })); }
-      const content = scriptedReply(body);
+      // The subagent's first request is held open past Claude Code's progress-summary timer (main run only).
+      const hold = holdSubMs > 0 && !held && !summary && body?.stream && rec.sub;
+      if (hold) held = true;
+      const content = summary ? [{ type: "text", text: "Running the canary subagent" }] : scriptedReply(body);
       const stop = content.some((c) => c.type === "tool_use") ? "tool_use" : "end_turn";
       const ping = rec.text.includes(PING_HEAD);
       const msg = { id: `msg_canary_${requests.length}`, type: "message", role: "assistant", model: body?.model ?? "claude-sonnet-5-5", content, stop_reason: stop, stop_sequence: null, usage: ping ? pingUsage : usage };
       const headers = { ...rateLimitHeaders(), "request-id": `req_canary_${requests.length}` };
       if (!body?.stream) { res.writeHead(200, { "content-type": "application/json", ...headers }); return res.end(JSON.stringify(msg)); }
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", ...headers });
-      const ev = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
+      const ev = (type, data) => { if (!res.writableEnded) res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`); };
       ev("message_start", { message: { ...msg, content: [], stop_reason: null, usage: { ...usage, output_tokens: 1 } } });
-      content.forEach((c, index) => {
-        if (c.type === "text") {
-          ev("content_block_start", { index, content_block: { type: "text", text: "" } });
-          ev("content_block_delta", { index, delta: { type: "text_delta", text: c.text } });
-        } else {
-          ev("content_block_start", { index, content_block: { type: "tool_use", id: c.id, name: c.name, input: {} } });
-          ev("content_block_delta", { index, delta: { type: "input_json_delta", partial_json: JSON.stringify(c.input) } });
-        }
-        ev("content_block_stop", { index });
-      });
-      ev("message_delta", { delta: { stop_reason: stop, stop_sequence: null }, usage: { output_tokens: usage.output_tokens } });
-      ev("message_stop", {});
-      res.end();
+      const rest = () => {
+        content.forEach((c, index) => {
+          if (c.type === "text") {
+            ev("content_block_start", { index, content_block: { type: "text", text: "" } });
+            ev("content_block_delta", { index, delta: { type: "text_delta", text: c.text } });
+          } else {
+            ev("content_block_start", { index, content_block: { type: "tool_use", id: c.id, name: c.name, input: {} } });
+            ev("content_block_delta", { index, delta: { type: "input_json_delta", partial_json: JSON.stringify(c.input) } });
+          }
+          ev("content_block_stop", { index });
+        });
+        ev("message_delta", { delta: { stop_reason: stop, stop_sequence: null }, usage: { output_tokens: usage.output_tokens } });
+        ev("message_stop", {});
+        res.end();
+      };
+      if (!hold) return rest();
+      const pings = setInterval(() => ev("ping", {}), 5_000);
+      const t = setTimeout(() => { clearInterval(pings); timers.delete(pings); timers.delete(t); rest(); }, holdSubMs);
+      timers.add(pings).add(t);
     });
   });
   // HTTPS_PROXY points here: a CONNECT is an attempt to reach some other host. Refused, and named in the report.
   server.on("connect", (req, socket) => { refused.push(`CONNECT ${req.url}`); socket.end("HTTP/1.1 403 Forbidden\r\n\r\n"); });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const url = `http://127.0.0.1:${server.address().port}`;
-  return { url, nonce, requests, refused, close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(() => r()); }) };
+  return { url, nonce, requests, refused, holdSubMs, close: () => new Promise((r) => { for (const t of timers) clearTimeout(t); server.closeAllConnections?.(); server.close(() => r()); }) };
 }
 
 // -- The child's environment, and the guard -------------------------------------------
@@ -217,9 +256,20 @@ export function claudeEnv({ root, mockUrl, token }) {
     CONTEXT_DOCTOR_SESSION_PRICE: PRICE_THRESHOLD,
     CONTEXT_DOCTOR_KEEP_WARM_PING_MS: String(KEEP_WARM_PING_MS),
     CONTEXT_DOCTOR_NO_CALIBRATION: "1",
+    // Subagent progress summaries under -p (the SDK's agentProgressSummaries): the G4 check counts them.
+    CLAUDE_CODE_AGENT_PROGRESS_SUMMARIES: "1",
   };
   for (const d of [env.CLAUDE_CONFIG_DIR, env.TMPDIR]) mkdirSync(d, { recursive: true });
   return env;
+}
+
+/** Whether a `claude --version` line names `min` or later. */
+export function atLeast(version, min) {
+  const v = String(version).match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!v) return false;
+  const a = v.slice(1).map(Number), b = min.split(".").map(Number);
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+  return true;
 }
 
 const inside = (child, parent) => { const r = relative(parent, child); return r === "" || (!!r && !r.startsWith("..") && !isAbsolute(r)); };
@@ -374,7 +424,7 @@ function readJsonl(path) {
  * The checks on one run. `soft` ones are printed but never turn it red.
  * Pure: everything it reads is passed in, so tests can feed it a run.
  */
-export function evaluate({ run, mock, ledgers, validate, pluginDir }) {
+export function evaluate({ run, mock, ledgers, validate, pluginDir, version = "" }) {
   const checks = [];
   const check = (ok, name, detail = "", soft = false) => checks.push({ ok: !!ok, name, detail, soft });
   const ev = run.events;
@@ -407,6 +457,15 @@ export function evaluate({ run, mock, ledgers, validate, pluginDir }) {
   check(compaction, "the PreCompact hook's instructions reach the compaction request", compaction ? "" : `no request held "${PRECOMPACT_HEAD}"`);
   check(ledgers.main.some((l) => l.ev === "precompact"), "the PreCompact hook records itself in the ledger");
   check(mock.requests.some((r) => r.text.includes(SUB)), "the subagent ran (the mock got its request)");
+  // G4: with the subagent held past the timer, a -p host that asked gets progress summaries. Warnings, not failures:
+  // what they cost is Claude Code's choice, and the kind is recorded for progress-summaries' assumptions.
+  if (mock.holdSubMs > 0 && atLeast(version, "2.1.328")) {
+    const sums = mock.requests.filter((r) => r.summary);
+    const subModel = mock.requests.find((r) => r.sub && !r.summary)?.model;
+    const line = sums.map((r) => `${r.summary === "notes" ? "short notes" : "whole-context fork"} on ${r.model}, ~${r.inputTokens.toLocaleString("en-US")} tokens`).join("; ");
+    check(sums.length > 0, "a background subagent's progress summary reaches the API under -p (CLAUDE_CODE_AGENT_PROGRESS_SUMMARIES=1)", line || `none in ${Math.round(mock.holdSubMs / 1000)} s`, true);
+    if (sums.length) check(sums.every((r) => r.summary === "fork" && r.model === subModel), `as 2.1.330 sends them for a host that asked: the subagent's whole context on its own model (${subModel ?? "?"}), not notes on the small fast model (a terminal session's)`, line, true);
+  }
 
   // The mod: session.measure → `context-doctor mod measure` → the two ledgers.
   const now = Math.floor(Date.now() / 1000);
@@ -453,9 +512,9 @@ function validatePlugin(claude, env, pluginDir) {
   return { code: r.status ?? -1, out: (r.stdout ?? "") + (r.stderr ?? ""), args };
 }
 
-export async function canary({ claude, pluginDir = REPO, verbose = false, keep = false, mcpLegacy = false }) {
+export async function canary({ claude, pluginDir = REPO, verbose = false, keep = false, mcpLegacy = false, summaries = false }) {
   const root = mkdtempSync(join(tmpdir(), "cd-canary-"));
-  const mock = await startMock();
+  const mock = await startMock({ holdSubMs: summaries ? SUB_HOLD_MS : 0 });
   const log = verbose ? (s) => console.log(`  · ${s}`) : () => {};
   try {
     const env = claudeEnv({ root, mockUrl: mock.url, token: dummyToken() });
@@ -474,7 +533,7 @@ export async function canary({ claude, pluginDir = REPO, verbose = false, keep =
       cost: readJsonl(join(state, ".context-doctor-session-cost.jsonl")),
       main: readJsonl(join(state, ".context-doctor-ledger.jsonl")),
     };
-    const out = evaluate({ run, mock, ledgers, validate, pluginDir });
+    const out = evaluate({ run, mock, ledgers, validate, pluginDir, version });
     // Whether the mod's session.measure ran, in Claude Code's own words (its debug log): the diagnosis when the ledgers are empty.
     let debug = "";
     try { debug = readFileSync(join(root, "debug.log"), "utf8"); } catch { /* none */ }
@@ -556,15 +615,16 @@ async function main(argv) {
   const verbose = argv.includes("--verbose"), keep = argv.includes("--keep"), mcpLegacy = argv.includes("--mcp-legacy");
   const fault = opt("--plant");
   if (fault && !FAULTS[fault]) { console.error(`canary: no such fault ${fault} (one of ${Object.keys(FAULTS).join(", ")})`); return 2; }
-  const one = async (label, dir, planted = false) => {
-    const r = await canary({ claude, pluginDir: dir, verbose, keep, mcpLegacy });
+  // The progress-summary hold (40 s) runs once: in the main run, not in each planted fault's.
+  const one = async (label, dir, planted = false, summaries = false) => {
+    const r = await canary({ claude, pluginDir: dir, verbose, keep, mcpLegacy, summaries });
     report(label, r, planted && argv.includes("--self-test"));
     if (keep) console.log(`(kept: ${r.root})`);
     return r.ok;
   };
   if (argv.includes("--self-test")) {
     // Green on the plugin as it is, then red on each planted fault: a canary that cannot go red checks nothing.
-    let green = await one("plugin as committed", pluginDir);
+    let green = await one("plugin as committed", pluginDir, false, true);
     // The faults are planted in a copy: the copy with none must be green too, or a fault proves nothing.
     const clean = copyPlugin(pluginDir);
     try {
@@ -593,7 +653,7 @@ async function main(argv) {
       rmSync(dir, { recursive: true, force: true });
     }
   }
-  return (await one("canary", pluginDir)) ? 0 : 1;
+  return (await one("canary", pluginDir, false, true)) ? 0 : 1;
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
