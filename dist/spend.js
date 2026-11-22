@@ -45,7 +45,7 @@ import { codexDir } from "./codexdir.js";
 import { homedir } from "node:os";
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { claudeFileUsage, claudeUsageFiles, codexEventKey, codexSessionsRoot, rolloutFiles, USAGE_ROWS } from "./limits.js";
-import { estimateProgressSummaries, PROGRESS_ROWS, PROGRESS_SUMMARIES_ENV, SMALL_FAST_MODEL_NAME as SMALL_NAME, SMALL_NOTES_SINCE } from "./progresssummaries.js";
+import { estimateProgressSummaries, formWords, PROGRESS_ROWS, PROGRESS_SUMMARIES_ENV, SMALL_FAST_MODEL_NAME as SMALL_NAME, SMALL_NOTES_SINCE } from "./progresssummaries.js";
 import { listGeminiChats, readGeminiMessages } from "./gemini.js";
 import { cursorClaudeId, cursorUsage, SqliteUnavailableError } from "./cursor.js";
 import { copilotCalls } from "./copilotusage.js";
@@ -764,8 +764,8 @@ function claudeProgressSummaries(since, until, tops, o) {
     if (o?.set && o.offSince === undefined)
         return { set: o.set };
     const files = claudeUsageFiles(since, tops).filter((f) => f.subagent && !f.run).map((f) => f.file);
-    const e = estimateProgressSummaries(files, { since, until, forkGateOff: o?.forkGateOff, offSince: o?.offSince });
-    return e.calls ? { agents: e.summarized, calls: e.calls, ...(e.smallCalls ? { smallCalls: e.smallCalls } : {}), notesUsd: e.notesUsd, forkUsd: e.forkUsd } : undefined;
+    const e = estimateProgressSummaries(files, { since, until, forkGateOff: o?.forkGateOff, offSince: o?.offSince, route: o?.route });
+    return e.calls ? { agents: e.summarized, calls: e.calls, ...(e.smallCalls ? { smallCalls: e.smallCalls } : {}), ...(e.routes?.length ? { routes: e.routes } : {}), notesUsd: e.notesUsd, forkUsd: e.forkUsd } : undefined;
 }
 /**
  * The longest window: ten years, older than any history these tools keep.
@@ -870,6 +870,24 @@ export function spendReport(days = 30, opts = {}) {
 // ---------------------------------------------------------------------------
 /** What an iteration type is, in the report's words. */
 const ITERATION_NAME = { advisor_message: ["advisor call", "advisor calls"], message: ["attempt a fallback model replaced", "attempts a fallback model replaced"], fallback_message: ["fallback attempt replaced again", "fallback attempts replaced again"], compaction: ["server-side compaction", "server-side compactions"] };
+/** The summaries' low and high figures are one (every form known). */
+const oneFigure = (ps) => ps.forkUsd - ps.notesUsd < 0.005;
+/** `text` in lines of at most 80 characters: the first indented by `first`, the rest by `rest`. */
+function wrapLines(text, first, rest) {
+    const out = [];
+    let line = first;
+    for (const w of text.split(" ")) {
+        if (line.trim() && (line + " " + w).length > 80) {
+            out.push(line);
+            line = rest + w;
+        }
+        else
+            line = line.trim() ? `${line} ${w}` : line + w;
+    }
+    if (line.trim())
+        out.push(line);
+    return out;
+}
 export const usd = (n) => (n >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : n > 0 && n < 0.005 ? "<$0.01" : `$${n.toFixed(2)}`);
 const share = (part, whole) => (whole > 0 ? `${Math.round((part / whole) * 100)}%` : "");
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -981,6 +999,17 @@ export function renderSpend(r, top = 8) {
         lines.push(`  Not in it: ~${ps.calls.toLocaleString("en-US")} subagent progress summaries (${ps.agents} background ${ps.agents === 1 ? "agent" : "agents"}), an estimate:`);
         if (ps.smallCalls === ps.calls)
             lines.push(`  ${usd(ps.notesUsd)}, short notes on ${SMALL_NAME} (Claude Code ${SMALL_NOTES_SINCE}+); in no transcript`);
+        else if (ps.routes?.length) {
+            // 2.1.328+ off the Anthropic API: each form with its count and why, wrapped.
+            lines.push(`  ${oneFigure(ps) ? usd(ps.forkUsd) : `${usd(ps.notesUsd)} to ${usd(ps.forkUsd)}`}; no transcript records them. How each was sent:`);
+            if (ps.smallCalls)
+                lines.push(`  - ${ps.smallCalls.toLocaleString("en-US")}: ${formWords("haiku")} (Claude Code ${SMALL_NOTES_SINCE}+)`);
+            for (const g of ps.routes)
+                lines.push(...wrapLines(`- ${g.calls.toLocaleString("en-US")}: ${formWords(g.form)}${g.form === "range" ? `, ${usd(g.lowUsd)} to ${usd(g.highUsd)}: context-doctor cannot tell which` : `, ${usd(g.highUsd)}`}. Why: ${g.why}.`, "  ", "    "));
+            const old = ps.calls - (ps.smallCalls ?? 0) - ps.routes.reduce((n, g) => n + g.calls, 0);
+            if (old > 0)
+                lines.push(`  - ${old.toLocaleString("en-US")}: before Claude Code ${SMALL_NOTES_SINCE}, notes (low) or the whole context`);
+        }
         else {
             lines.push(`  ${usd(ps.notesUsd)} as notes, ${usd(ps.forkUsd)} at the whole context; no transcript records them`);
             if (ps.smallCalls)
@@ -1061,7 +1090,7 @@ export function renderSpendShare(r) {
         lines.push(`Billed above list rates: ${modifiersText(r.modifiers)}.`);
     const ps = r.progressSummaries;
     if (ps && "calls" in ps)
-        lines.push(`Not in it: Claude Code's subagent progress summaries, which no transcript records: ${ps.smallCalls === ps.calls ? usd(ps.notesUsd) : `${usd(ps.notesUsd)}-${usd(ps.forkUsd)}`}, an estimate.`);
+        lines.push(`Not in it: Claude Code's subagent progress summaries, which no transcript records: ${ps.smallCalls === ps.calls || oneFigure(ps) ? usd(ps.notesUsd) : `${usd(ps.notesUsd)}-${usd(ps.forkUsd)}`}, an estimate.`);
     const parts = [["cache writes", r.parts.writeUsd], ["cache reads", r.parts.readUsd], ["output", r.parts.outputUsd], ["uncached input", r.parts.inputUsd], ["web searches", r.parts.webSearchUsd ?? 0]];
     const [bigPart, bigUsd] = parts.sort((a, b) => b[1] - a[1])[0];
     const busiest = [...r.daily].sort((a, b) => b.usd - a.usd)[0];

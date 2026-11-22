@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { eligibility, estimateProgressSummaries, FORK_PROMPT_TOKENS, NOTES_TOKENS, simulateAgent, SMALL_FAST_MODEL, SUMMARY_OUTPUT_TOKENS } from "../progresssummaries.js";
+import { ANTHROPIC_API_ROUTE, eligibility, estimateProgressSummaries, FORK_PROMPT_TOKENS, NOTES_TOKENS, replyCloud, simulateAgent, SMALL_FAST_MODEL, summaryRoute, SUMMARY_OUTPUT_TOKENS } from "../progresssummaries.js";
 import { requestCost } from "../pricing.js";
 import { renderSpend, renderSpendShare, spendReport } from "../spend.js";
 import { costGaps } from "../modmeasure.js";
@@ -27,7 +27,7 @@ function agentRows(a, session) {
     for (let k = 0; k < a.steps; k++) {
         const at = a.start + (k + 1) * a.stepMs;
         const prompt = (a.prompt0 ?? 20_000) + k * (a.grow ?? 2_000);
-        rows.push({ ...head, type: "assistant", uuid: `${a.id}-a${k}`, timestamp: iso(at), message: { id: `msg_${a.id}_${k}`, role: "assistant", model: OPUS, content: [{ type: "tool_use", id: `t${k}`, name: "Bash", input: {} }], usage: { input_tokens: 10, cache_read_input_tokens: prompt - 510, cache_creation_input_tokens: 500, output_tokens: 100 } } });
+        rows.push({ ...head, type: "assistant", uuid: `${a.id}-a${k}`, timestamp: iso(at), message: { id: `${a.msgPrefix ?? "msg_"}${a.id}_${k}`, role: "assistant", model: a.model ?? OPUS, content: [{ type: "tool_use", id: `t${k}`, name: "Bash", input: {} }], usage: { input_tokens: 10, cache_read_input_tokens: prompt - 510, cache_creation_input_tokens: 500, output_tokens: 100 } } });
         rows.push({ ...head, type: "user", uuid: `${a.id}-r${k}`, timestamp: iso(at + 1000), message: { role: "user", content: [{ type: "tool_result", tool_use_id: `t${k}`, content: "ok" }] } });
     }
     return rows.map((r) => JSON.stringify(r)).join("\n") + "\n";
@@ -314,4 +314,128 @@ test("fix: a project, local or managed value that keeps them is named as an over
     const r = await applyFix(fix, { home, cwd, env });
     assert.equal(r.ok, false);
     assert.match(r.lines.join("\n"), /⚠ written, but it will not take effect while .*settings\.local\.json env overrides it/);
+});
+test("2.1.330: the transcript's cloud first (Bedrock, Vertex: notes on the agent's own model), whatever the settings say", () => {
+    assert.equal(replyCloud("us.anthropic.claude-opus-5-5-v1:0", "msg_01"), "bedrock");
+    assert.equal(replyCloud("anthropic.claude-haiku-5-5", undefined), "bedrock");
+    assert.equal(replyCloud("arn:aws:bedrock:us-east-1:123:application-inference-profile/abc", "x"), "bedrock");
+    assert.equal(replyCloud(OPUS, "msg_bdrk_01abc"), "bedrock");
+    assert.equal(replyCloud("claude-opus-5-5@20261101", "msg_01"), "vertex");
+    assert.equal(replyCloud(OPUS, "msg_vrtx_01abc"), "vertex");
+    assert.equal(replyCloud(OPUS, "msg_01abc"), undefined);
+    assert.equal(replyCloud("com.anthropic.claude-code", undefined), undefined);
+    const home = mkdtempSync(join(tmpdir(), "cd-ps-cloud-"));
+    const BR = "us.anthropic.claude-opus-5-5-v1:0";
+    const a = (id, version, over = {}) => ({ id, start: T0, steps: 10, stepMs: 10_000, version, prompt0: 80_000, ...over });
+    const { agents } = history(home, "s40", [a("brref", "2.1.327", { model: BR }), a("br", "2.1.330", { model: BR }), a("vxref", "2.1.327", { model: "claude-opus-5-5@20261101" }), a("vx", "2.1.330", { msgPrefix: "msg_vrtx_" })]);
+    const [brref, br, vxref, vx] = agents.map((f) => estimateProgressSummaries([f], { route: { form: "whole", why: "x" } }));
+    // 2.1.327 keeps its range; 2.1.330 on Bedrock: its notes figure, one price, the settings' route not used.
+    assert.deepEqual([br.calls, br.smallCalls, br.routes?.map((g) => [g.form, g.calls])], [3, 0, [["own-notes", 3]]]);
+    near(br.notesUsd, brref.notesUsd, "Bedrock: notes on Opus");
+    near(br.forkUsd, br.notesUsd, "one price");
+    near(br.valueUsd, br.notesUsd, "fix's value");
+    assert.match(br.routes[0].why, /Amazon Bedrock \(their model ids say so\)/);
+    near(vx.notesUsd, vxref.notesUsd, "Vertex: notes on Opus");
+    assert.match(vx.routes[0].why, /Google Vertex AI/);
+});
+test("2.1.330: the settings now decide the rest: overrides and an address not Anthropic's send the whole context; a range where it cannot be told", () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-ps-route-"));
+    mkdirSync(join(home, ".claude"));
+    const settings = join(home, ".claude", "settings.json");
+    const route = (env = {}, file = {}) => {
+        writeFileSync(settings, JSON.stringify(file));
+        return summaryRoute({ home, cwd: home, env: { CONTEXT_DOCTOR_NO_MANAGED_SETTINGS: "1", ...env } });
+    };
+    // The Anthropic API: notes by Haiku, as before.
+    assert.deepEqual(route(), ANTHROPIC_API_ROUTE);
+    assert.deepEqual(route({ ANTHROPIC_BASE_URL: "https://api.anthropic.com" }), ANTHROPIC_API_ROUTE);
+    assert.deepEqual(route({ CLAUDE_CODE_USE_BEDROCK: "0" }), ANTHROPIC_API_ROUTE);
+    // Bedrock, Vertex, Foundry, the gateway: notes on the agent's own model.
+    for (const [name, words] of [["CLAUDE_CODE_USE_BEDROCK", "Amazon Bedrock"], ["CLAUDE_CODE_USE_VERTEX", "Google Vertex AI"], ["CLAUDE_CODE_USE_FOUNDRY", "Microsoft Foundry"], ["CLAUDE_CODE_USE_GATEWAY", "its gateway"]]) {
+        const r = route({ [name]: "1" });
+        assert.equal(r.form, "own-notes", name);
+        assert.match(r.why, new RegExp(words));
+    }
+    // The small model replaced, or Anthropic on AWS: no writer, the whole context.
+    assert.equal(route({ CLAUDE_CODE_USE_ANTHROPIC_AWS: "1" }).form, "whole");
+    assert.match(route({}, { env: { ANTHROPIC_SMALL_FAST_MODEL: "claude-haiku-5-5" } }).why, /ANTHROPIC_SMALL_FAST_MODEL=claude-haiku-5-5 in .*settings\.json env replaces the small model/);
+    assert.equal(route({ ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5" }).form, "whole");
+    // An address not Anthropic's: the whole context on a Claude sign-in, a token or another key; a range with an Anthropic API key.
+    const gw = route({ ANTHROPIC_BASE_URL: "https://llm.example.com" });
+    assert.equal(gw.form, "whole");
+    assert.match(gw.why, /^Claude Code talks to an address that is not Anthropic's \(ANTHROPIC_BASE_URL=https:\/\/llm\.example\.com in the environment\) and you sign in with a Claude account/);
+    assert.match(route({ ANTHROPIC_BASE_URL: "https://llm.example.com", ANTHROPIC_AUTH_TOKEN: "t" }).why, /ANTHROPIC_AUTH_TOKEN/);
+    assert.equal(route({ ANTHROPIC_BASE_URL: "https://llm.example.com", ANTHROPIC_API_KEY: "gw-123" }).form, "whole");
+    assert.equal(route({ ANTHROPIC_BASE_URL: "https://llm.example.com", ANTHROPIC_API_KEY: "sk-ant-api03-x" }).form, "range");
+    assert.equal(route({ ANTHROPIC_BASE_URL: "https://llm.example.com" }, { apiKeyHelper: "get-key" }).form, "range");
+    assert.deepEqual(route({ ANTHROPIC_BASE_URL: "https://llm.example.com", _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL: "1" }), ANTHROPIC_API_ROUTE);
+    // Autopilot's proxy (in settings, over the shell's address): from when autopilot was turned on; before it, the address it replaced.
+    const cfg = join(home, ".claude", ".context-doctor-autopilot.json");
+    const on = T0 + 3_600_000;
+    writeFileSync(cfg, JSON.stringify({ port: 8787, previousBaseUrl: null, node: "n", cli: "c" }));
+    utimesSync(cfg, new Date(on), new Date(on));
+    const ap = route({ ANTHROPIC_BASE_URL: "https://api.anthropic.com" }, { env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8787" } });
+    assert.equal(ap.form, "whole");
+    assert.match(ap.why, /^Claude Code talks to context-doctor's autopilot proxy, not Anthropic's address \(ANTHROPIC_BASE_URL=http:\/\/127\.0\.0\.1:8787 in .*settings\.json env\) and you sign in with a Claude account, not an Anthropic API key$/);
+    near(ap.since, on, "since autopilot was turned on");
+    assert.deepEqual(ap.before, ANTHROPIC_API_ROUTE);
+    writeFileSync(cfg, JSON.stringify({ port: 8787, previousBaseUrl: "https://llm.example.com", node: "n", cli: "c" }));
+    assert.equal(route({}, { env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8787" } }).before?.form, "whole");
+    // Priced: the whole context is the 2.1.327 high figure; a range is Haiku low, that high; before autopilot, Haiku.
+    const hist = mkdtempSync(join(tmpdir(), "cd-ps-route-h-"));
+    const { agents } = history(hist, "s41", [
+        { id: "ref", start: T0, steps: 10, stepMs: 10_000, version: "2.1.327", prompt0: 80_000 },
+        { id: "cur", start: T0, steps: 10, stepMs: 10_000, version: "2.1.330", prompt0: 80_000 },
+    ]);
+    const ref = estimateProgressSummaries([agents[0]]);
+    const haiku = estimateProgressSummaries([agents[1]]);
+    // The Anthropic API case is exactly as before.
+    assert.deepEqual(estimateProgressSummaries([agents[1]], { route: ANTHROPIC_API_ROUTE }), haiku);
+    assert.equal(haiku.routes, undefined);
+    const before = estimateProgressSummaries([agents[1]], { route: ap });
+    assert.deepEqual([before.calls, before.smallCalls], [3, 3], "before autopilot was turned on: Haiku");
+    const after = estimateProgressSummaries([agents[1]], { route: { ...ap, since: T0 - 1 } });
+    assert.deepEqual([after.calls, after.smallCalls, after.routes?.[0].form], [3, 0, "whole"]);
+    near(after.notesUsd, ref.forkUsd, "the whole context, both figures");
+    near(after.forkUsd, ref.forkUsd);
+    near(after.valueUsd, ref.forkUsd);
+    assert.ok(after.valueUsd > haiku.notesUsd * 10, `${after.valueUsd} vs ${haiku.notesUsd}`);
+    const range = estimateProgressSummaries([agents[1]], { route: { form: "range", why: "x" } });
+    near(range.notesUsd, haiku.notesUsd, "range low: Haiku notes");
+    near(range.forkUsd, ref.forkUsd, "range high: the whole context");
+    near(range.valueUsd, range.forkUsd, "fix counts a range at its high end");
+    assert.deepEqual(range.routes?.map((g) => [g.form, g.calls, g.agents]), [["range", 3, 1]]);
+});
+test("2.1.330 in spend and fix: each form with its count and why, in plain words; fix never values them below the form", () => {
+    const home = mkdtempSync(join(tmpdir(), "cd-ps-route-s-"));
+    const { main } = history(home, "s42", [{ id: "z1", start: T0, steps: 30, stepMs: 10_000, version: "2.1.330", prompt0: 80_000 }]);
+    const why = "Claude Code talks to context-doctor's autopilot proxy, not Anthropic's address (ANTHROPIC_BASE_URL=http://127.0.0.1:8787 in ~/.claude/settings.json env) and you sign in with a Claude account, not an Anthropic API key";
+    const r = spendReport(3, { claudePaths: [main], now: NOW, progress: { route: { form: "whole", why } } });
+    const ps = r.progressSummaries;
+    assert.ok(ps && "calls" in ps && ps.routes?.length === 1 && !ps.smallCalls);
+    near(ps.notesUsd, ps.forkUsd, "one figure");
+    const text = renderSpend(r);
+    assert.match(text, /Not in it: ~10 subagent progress summaries \(1 background agent\), an estimate:\n {2}\$\d\.\d\d; no transcript records them\. How each was sent:\n {2}- 10: the subagent's whole context, on its own model, \$\d\.\d\d\. Why:/);
+    assert.match(text.replace(/\n {4}/g, " "), /Why: Claude Code talks to context-doctor's autopilot proxy, not Anthropic's address \(ANTHROPIC_BASE_URL=http:\/\/127\.0\.0\.1:8787 in ~\/\.claude\/settings\.json env\) and you sign in with a Claude account, not an Anthropic API key\./);
+    const block = text.slice(text.indexOf("Not in it: ~"), text.indexOf("Biggest sessions"));
+    for (const l of block.split("\n"))
+        assert.ok(l.length <= 80, l);
+    assert.match(renderSpendShare(r), /which no transcript records: \$\d\.\d\d, an estimate\./);
+    // Could not be told: a range, said so.
+    const rr = spendReport(3, { claudePaths: [main], now: NOW, progress: { route: { form: "range", why: "ANTHROPIC_BASE_URL=https://llm.example.com in the environment, not Anthropic's address" } } });
+    const rt = renderSpend(rr);
+    assert.match(rt.replace(/\n {4}/g, " "), /\n {2}(<\$0\.01|\$0\.\d\d) to \$\d\.\d\d; no transcript records them\. How each was sent:\n {2}- 10: short notes by Haiku 5\.5 \(low\) or the whole context \(high\), (<\$0\.01|\$0\.\d\d) to \$\d\.\d\d: context-doctor cannot tell which\./);
+    assert.match(renderSpendShare(rr), /which no transcript records: (<\$0\.01|\$0\.\d\d)-\$\d\.\d\d, an estimate\./);
+    // fix: the form's figure (a range's high end), and why, in the basis.
+    const known = planFixes({ ...base, progressSummaries: estimate(12, 12, { smallCalls: 1_000, routes: [{ form: "whole", why, calls: 3_000, agents: 20, lowUsd: 11.5, highUsd: 11.5 }], valueUsd: 12 }) })[0];
+    assert.equal(known.savedUsd, 12);
+    assert.match(known.basis, /1,000 as short notes, written by Haiku 5\.5; 3,000 as the subagent's whole context, on its own model, \$11\.50, because Claude Code talks to context-doctor's autopilot proxy/);
+    const unsure = planFixes({ ...base, progressSummaries: estimate(2, 10, { routes: [{ form: "range", why: "x", calls: 4_000, agents: 30, lowUsd: 2, highUsd: 10 }], valueUsd: 10 }) })[0];
+    assert.equal(unsure.savedUsd, 10, "a range is valued at its high end, not the cheapest form");
+    assert.match(unsure.basis, /4,000 as short notes by Haiku 5\.5 \(low\) or the whole context \(high\), counted at the high end \(\$2\.00 at the low end: context-doctor cannot tell which\), because x/);
+    // A real estimate: fix's value is the form's figure.
+    const e = estimateProgressSummaries(history(mkdtempSync(join(tmpdir(), "cd-ps-route-f-")), "s43", [{ id: "z2", start: T0, steps: 360, stepMs: 10_000, version: "2.1.330", prompt0: 400_000, grow: 500 }]).agents, { route: { form: "whole", why } });
+    const f = planFixes({ ...base, progressSummaries: e })[0];
+    near(f.savedUsd, e.forkUsd, "the whole context's figure");
+    assert.ok(f.savedUsd > 1);
 });

@@ -47,6 +47,30 @@
  * subagent whose transcript says `version` 2.1.328 or later is priced once,
  * at Haiku 5.5's rates (low and high the same); an older one as before.
  *
+ * Read again from the 2.1.330 binary: that is a terminal session on the
+ * Anthropic API's only. Per subagent, Claude Code reads its provider (from
+ * CLAUDE_CODE_USE_*: the Claude Code gateway, Bedrock, Foundry, Anthropic on
+ * AWS or Google Cloud, Mantle, Vertex, else the Anthropic API):
+ *  - Bedrock, Vertex, Foundry or the gateway (CLAUDE_CODE_USE_GATEWAY): the
+ *    notes, written by the subagent's OWN model ("release" mode).
+ *  - Any other: a served flag (notes unless it says otherwise), and the
+ *    writer is the small fast model only when ANTHROPIC_SMALL_FAST_MODEL and
+ *    ANTHROPIC_DEFAULT_HAIKU_MODEL are both unset, the provider is the
+ *    Anthropic API, and the API counts as Anthropic's: ANTHROPIC_BASE_URL
+ *    unset or api.anthropic.com (or _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL),
+ *    or the key is an Anthropic API key (sk-ant-api..., not
+ *    ANTHROPIC_AUTH_TOKEN, a claude.ai sign-in or /login's managed key).
+ *    With no writer, the summary is the whole context on the agent's own
+ *    model, the pre-2.1.328 form. A plain ANTHROPIC_BASE_URL is not the
+ *    "gateway": a proxy on 127.0.0.1 (context-doctor's autopilot) leaves the
+ *    provider the Anthropic API and fails the base-URL test, so on a Claude
+ *    sign-in it gets the whole context.
+ * Which applied is told from the transcript where it can be (Bedrock and
+ * Vertex model and message ids), else from the settings and environment
+ * now (summaryRoute), autopilot's proxy counted from when autopilot was
+ * turned on. Where neither tells (an API key that may or may not be used
+ * behind a proxy), a range: Haiku notes low, the whole context high.
+ *
  * Estimated per subagent from what its transcript does record: the time of
  * each message (the ticks and whether the transcript changed), each reply's
  * prompt size and model (the context a fork would read, the rates). Each
@@ -55,6 +79,7 @@
  * later, not more often), and the thinking a summary may do.
  */
 import { type Extractor } from "./scan.js";
+import { type SettingsSource } from "./effective.js";
 /** The variable the lever writes, and the value: Claude Code passes only "1" on to the sessions it starts in the background. */
 export declare const PROGRESS_SUMMARIES_ENV = "CLAUDE_CODE_DISABLE_AGENT_PROGRESS_SUMMARIES";
 export declare const PROGRESS_SUMMARIES_OFF = "1";
@@ -73,6 +98,36 @@ export declare const SMALL_FAST_MODEL_NAME = "Haiku 5.5";
 export declare const FORK_PROMPT_TOKENS = 150;
 /** Each summary's output: #86879's measured mean (21,966 tokens over 339 summaries). */
 export declare const SUMMARY_OUTPUT_TOKENS = 65;
+/**
+ * How a terminal subagent's summaries were written on Claude Code 2.1.328+:
+ * notes by Haiku ("haiku"), notes by the subagent's own model ("own-notes"),
+ * its whole context on its own model ("whole"), or one of the first and
+ * the last, which could not be told ("range").
+ */
+export type SummaryForm = "haiku" | "own-notes" | "whole" | "range";
+/** The form, why in plain words, and (autopilot's proxy) from when: before `since`, `before`. */
+export interface SummaryRoute {
+    form: SummaryForm;
+    why: string;
+    since?: number;
+    before?: SummaryRoute;
+}
+/** Nothing set: the Anthropic API, notes by Haiku. */
+export declare const ANTHROPIC_API_ROUTE: SummaryRoute;
+/** The cloud a reply's ids name: Bedrock's (`anthropic.`, region-prefixed, an ARN; `msg_bdrk_`), Vertex's (`@date`; `msg_vrtx_`). */
+export declare function replyCloud(model: unknown, id: unknown): "bedrock" | "vertex" | undefined;
+/**
+ * Which form Claude Code 2.1.330 uses for a terminal subagent on a
+ * first-party model id, from the settings and environment as they are now
+ * (read only). Autopilot's proxy counts from when autopilot was turned on
+ * (its config file, written then); before it, the address it replaced.
+ */
+export declare function summaryRoute(deps?: {
+    home?: string;
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    sources?: SettingsSource[];
+}): SummaryRoute;
 /** How Claude Code reads the variable (a boolean: "1", "true", "yes", "on"). */
 export declare const disablesSummaries: (v: unknown) => boolean;
 /**
@@ -123,22 +178,46 @@ type Rec = {
     p: number;
     speed?: string;
     geo?: string;
+    cloud?: "bedrock" | "vertex";
 };
+/** How one agent's summaries were written: its transcript's cloud, else the route at its start. */
+export declare function agentRoute(recs: Rec[], route?: SummaryRoute): SummaryRoute;
+/** Priced how: "old" (before 2.1.328: notes low, whole context high) or a 2.1.328+ form. */
+export type PriceMode = "old" | SummaryForm;
 /**
  * The ticks a running agent's timer made and the summaries they sent, from
  * its timeline: every 30 s from its first row to its last, a summary when
  * it has 3+ messages and more than at the last summary. Only ticks in
  * [since, until] are counted.
  */
-export declare function simulateAgent(recs: Rec[], since?: number, until?: number, smallNotes?: boolean): AgentSummaries;
+export declare function simulateAgent(recs: Rec[], since?: number, until?: number, mode?: boolean | PriceMode): AgentSummaries;
 export interface ProgressSummaryEstimate {
     /** Subagent transcripts read (workflow agents included). */
     agents: number;
     /** Agents Claude Code wrote summaries for in the window, by the rules above. */
     summarized: number;
     calls: number;
-    /** Of `calls`, those by agents on Claude Code 2.1.328+: notes on the small fast model, the same in both figures. */
+    /** Of `calls`, those by agents on Claude Code 2.1.328+ on the Anthropic API: notes on the small fast model, the same in both figures. */
     smallCalls: number;
+    /**
+     * The other 2.1.328+ summaries, by form and why (summaryRoute, agentRoute):
+     * notes on the agent's own model, its whole context, or a range. Absent
+     * or empty when all were on the Anthropic API.
+     */
+    routes?: Array<{
+        form: Exclude<SummaryForm, "haiku">;
+        why: string;
+        calls: number;
+        agents: number;
+        lowUsd: number;
+        highUsd: number;
+    }>;
+    /**
+     * What turning them off saves, for fix: before 2.1.328 the notes (the low
+     * figure, as before), from it the form's figure, a range at its high end
+     * (what could not be told is not counted at the cheapest).
+     */
+    valueUsd?: number;
     /** The summaries as short notes (what Anthropic serves since November 2026): the low figure. */
     notesUsd: number;
     /** As a fork of the whole context (before): the high figure. */
@@ -159,9 +238,13 @@ export interface ProgressOptions {
     interactive?: (entrypoint: string | undefined) => boolean;
     /** Only agents on this Claude Code or newer (what the variable would have stopped: 2.1.318+). */
     minVersion?: string;
+    /** How 2.1.328+ agents on a first-party model id were served (summaryRoute); default the Anthropic API. */
+    route?: SummaryRoute;
 }
 /** The summaries of the subagents in `files` (their `.jsonl` transcripts), estimated. */
 export declare function estimateProgressSummaries(files: string[], opts?: ProgressOptions): ProgressSummaryEstimate;
+/** A 2.1.328+ form in words: what each summary sent, and on what. */
+export declare function formWords(form: SummaryForm): string;
 /** "the Desktop app", "the SDK or -p": a host as a person knows it. */
 export declare function hostName(entrypoint: string): string;
 export {};

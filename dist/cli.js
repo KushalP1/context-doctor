@@ -483,7 +483,7 @@ async function measureFixInputs(days) {
     // The subagents' progress summaries: estimated from their transcripts; a value of the variable the user set is theirs.
     const psState = progressSummariesState({ cwd });
     const psSince = Date.now() - days * 86_400_000;
-    const progressSummaries = estimateProgressSummaries(subagentTranscripts(psSince), { since: psSince, forkGateOff: psState.forkGateOff, offSince: psState.offSince });
+    const progressSummaries = estimateProgressSummaries(subagentTranscripts(psSince), { since: psSince, forkGateOff: psState.forkGateOff, offSince: psState.offSince, route: psState.route });
     // Codex's auto-compact limit: its rollouts replayed at earlier limits; a limit the user set is theirs.
     const codexCompact = replayCodexCompact({ days });
     const cxSet = currentCodexCompact();
@@ -1456,7 +1456,7 @@ async function main() {
             usageError("--apply and --share do not go together: --share only prints totals.");
         const { inputs, prunePlan } = await measureFixInputs(args.days ?? 30);
         const fixes = planFixes(inputs);
-        const since = savedSince(readFixRecords());
+        const since = savedSince(readFixRecords(), { progressRoute: progressSummariesState({ cwd: process.cwd() }).route });
         if (args.share) {
             const text = renderFixShare(inputs.days, inputs.billedUsd, fixes, inputs.codexCompact?.billedUsd);
             console.log(text);
@@ -1649,7 +1649,7 @@ async function main() {
         const reading = progressLine("Reading your usage across tools");
         // The progress summaries' estimate: none after the variable turned them off (fix's record), none at all when set with no record.
         const ps = progressSummariesState({ cwd: process.cwd() });
-        const report = spendReport(args.days ?? 30, { onProgress: reading.tick, ...(by ? { by } : {}), progress: { forkGateOff: ps.forkGateOff, offSince: ps.offSince, ...(ps.set && disablesSummaries(ps.set.value) ? { set: ps.set.where } : {}) } });
+        const report = spendReport(args.days ?? 30, { onProgress: reading.tick, ...(by ? { by } : {}), progress: { forkGateOff: ps.forkGateOff, offSince: ps.offSince, route: ps.route, ...(ps.set && disablesSummaries(ps.set.value) ? { set: ps.set.where } : {}) } });
         reading.clear();
         if (args.json)
             console.log(JSON.stringify(report, null, 2));

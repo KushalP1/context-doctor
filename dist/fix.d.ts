@@ -46,7 +46,7 @@ import { readLedger } from "./ledger.js";
 import { type AbStoredResult } from "./abstore.js";
 import { type SubagentModelReplay } from "./subagentmodel.js";
 import { type ToolOutputReplay } from "./tooloutput.js";
-import { type ProgressSummaryEstimate } from "./progresssummaries.js";
+import { type ProgressSummaryEstimate, type SummaryRoute } from "./progresssummaries.js";
 import { type CodexCompactReport } from "./codexcompact.js";
 export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model" | "tool-output" | "codex-compact" | "progress-summaries" | "mcp-defer" | "desktop-tools-defer";
 export interface Fix {
@@ -306,9 +306,10 @@ export declare function progressSummariesState(deps?: {
     };
     offSince?: number;
     forkGateOff: boolean;
+    route: SummaryRoute;
 };
 /** The summaries fix's variable stopped since `at`: the background subagents on Claude Code 2.1.318+ since, estimated as if it were not set. */
-export declare function progressSummariesSavedSince(at: number, subagentPaths?: string[], forkGateOff?: boolean): ProgressSummaryEstimate;
+export declare function progressSummariesSavedSince(at: number, subagentPaths?: string[], forkGateOff?: boolean, route?: SummaryRoute): ProgressSummaryEstimate;
 export interface SinceResult {
     id: FixId;
     at: number;
@@ -331,6 +332,7 @@ export declare function savedSince(records: FixRecord[], opts?: {
     subagentPaths?: string[];
     codexPaths?: string[];
     ledger?: ReturnType<typeof readLedger>;
+    progressRoute?: SummaryRoute;
 }): SinceResult[];
 /** The overlap lines for the priced fixes in a plan, "a and b: why;" each. */
 export declare function overlaps(fixes: Fix[]): string[];

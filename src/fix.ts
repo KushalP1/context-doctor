@@ -59,7 +59,7 @@ import { claudeDir } from "./claudedir.js";
 import { comparisonLine, type AbStoredResult } from "./abstore.js";
 import { movedFromNames, renderSubagentTypes, subagentModelSavedSince, SUBAGENT_CANDIDATE, SUBAGENT_CANDIDATE_NAME, SUBAGENT_MODEL_ENV, type SubagentModelReplay } from "./subagentmodel.js";
 import { BASH_OUTPUT_DEFAULT, BASH_OUTPUT_KEY, BASH_OUTPUT_SINCE, breakEven, renderToolOutputCaps, toolOutputSavedSince, type ToolOutputReplay } from "./tooloutput.js";
-import { disablesSummaries, estimateProgressSummaries, hostName, PROGRESS_SUMMARIES_ENV, PROGRESS_SUMMARIES_OFF, PROGRESS_SUMMARIES_SINCE, SMALL_FAST_MODEL_NAME, SMALL_NOTES_SINCE, type ProgressSummaryEstimate } from "./progresssummaries.js";
+import { disablesSummaries, estimateProgressSummaries, formWords, hostName, PROGRESS_SUMMARIES_ENV, PROGRESS_SUMMARIES_OFF, PROGRESS_SUMMARIES_SINCE, SMALL_FAST_MODEL_NAME, SMALL_NOTES_SINCE, summaryRoute, type ProgressSummaryEstimate, type SummaryRoute } from "./progresssummaries.js";
 import { CODEX_COMPACT_KEY, CODEX_COMPACT_LIMIT, codexCompactOverrides, codexCompactSavedSince, codexConfigPath, renderCodexLimits, setTopLevelInt, topLevelValue, type CodexCompactReport } from "./codexcompact.js";
 
 export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model" | "tool-output" | "codex-compact" | "progress-summaries" | "mcp-defer" | "desktop-tools-defer";
@@ -358,17 +358,19 @@ export function planFixes(i: FixInputs): Fix[] {
   const psSet = i.progressSummariesSet;
   if (psSet) {
     const off = disablesSummaries(psSet.value);
-    const less = !off && ps && ps.notesUsd >= MIN_USD ? ` (turning them off would have saved about ${money(ps.notesUsd)})` : "";
+    const worth = ps ? psValue(ps) : 0;
+    const less = !off && ps && worth >= MIN_USD ? ` (turning them off would have saved about ${money(worth)})` : "";
     fixes.push({ id: "progress-summaries", title: "Subagent progress summaries", basis: "set", quality: "", change: `env.${PROGRESS_SUMMARIES_ENV}`, state: off ? "applied" : "not-here", note: `${PROGRESS_SUMMARIES_ENV}=${psSet.value} in ${psSet.where}${off ? "" : `: left as you set it${less}`}`, value: psSet.value });
-  } else if (ps && ps.summarized > 0 && ps.notesUsd >= MIN_USD) {
+  } else if (ps && ps.summarized > 0 && psValue(ps) >= MIN_USD) {
     const billed = i.subagentModel?.billedUsd ?? 0;
+    const value = psValue(ps);
     fixes.push({
       id: "progress-summaries",
       title: "Subagent progress summaries off",
-      savedUsd: ps.notesUsd,
-      savedShare: billed > 0 ? ps.notesUsd / billed : undefined,
+      savedUsd: value,
+      savedShare: billed > 0 ? value / billed : undefined,
       shareOf: "of subagents",
-      basis: `${ps.calls.toLocaleString("en-US")} summaries for ${ps.summarized} background subagent${ps.summarized === 1 ? "" : "s"}, one each 30 s while one ran and its transcript changed; no transcript records them, so an estimate: ${ps.smallCalls === ps.calls ? `~1,850 tokens of notes each, written by ${SMALL_FAST_MODEL_NAME} (Claude Code ${SMALL_NOTES_SINCE}+)` : `~1,850 tokens of notes each (what Anthropic serves since November 2026)${ps.smallCalls ? `, by ${SMALL_FAST_MODEL_NAME} for the ${ps.smallCalls.toLocaleString("en-US")} on Claude Code ${SMALL_NOTES_SINCE}+` : ""}, ${money(ps.forkUsd)} if each sent the whole context, as before`}`,
+      basis: `${ps.calls.toLocaleString("en-US")} summaries for ${ps.summarized} background subagent${ps.summarized === 1 ? "" : "s"}, one each 30 s while one ran and its transcript changed; no transcript records them, so an estimate: ${psBasis(ps)}`,
       quality: "none to the work: a summary never enters the subagent's context; you lose the 3-5 word progress line on a running subagent's task row",
       qualityFree: true,
       change: `${where}: env.${PROGRESS_SUMMARIES_ENV} = "${PROGRESS_SUMMARIES_OFF}" (Claude Code ${PROGRESS_SUMMARIES_SINCE}+)`,
@@ -585,6 +587,22 @@ export function fixOverrides(id: FixId, deps: { home?: string; cwd?: string; env
     return sources.filter((s) => s.name !== "user" && s.settings[BASH_OUTPUT_KEY] !== undefined).map((s) => `${BASH_OUTPUT_KEY} ${JSON.stringify(s.settings[BASH_OUTPUT_KEY])} in ${tilde(s.path)}`);
   }
   return [];
+}
+
+/** What turning the summaries off saves: the notes before 2.1.328, the form's figure from it, a range's high end. */
+function psValue(ps: ProgressSummaryEstimate): number {
+  return ps.routes?.length && ps.valueUsd !== undefined ? ps.valueUsd : ps.notesUsd;
+}
+
+/** How the summaries were priced, in words: each 2.1.328+ form with its count and why, then the older ones. */
+function psBasis(ps: ProgressSummaryEstimate): string {
+  if (!ps.routes?.length) return ps.smallCalls === ps.calls ? `~1,850 tokens of notes each, written by ${SMALL_FAST_MODEL_NAME} (Claude Code ${SMALL_NOTES_SINCE}+)` : `~1,850 tokens of notes each (what Anthropic serves since November 2026)${ps.smallCalls ? `, by ${SMALL_FAST_MODEL_NAME} for the ${ps.smallCalls.toLocaleString("en-US")} on Claude Code ${SMALL_NOTES_SINCE}+` : ""}, ${money(ps.forkUsd)} if each sent the whole context, as before`;
+  const parts: string[] = [];
+  if (ps.smallCalls) parts.push(`${ps.smallCalls.toLocaleString("en-US")} as ${formWords("haiku")}`);
+  for (const g of ps.routes) parts.push(`${g.calls.toLocaleString("en-US")} as ${formWords(g.form)}, ${g.form === "range" ? `counted at the high end (${money(g.lowUsd)} at the low end: context-doctor cannot tell which)` : money(g.highUsd)}, because ${g.why}`);
+  const old = ps.calls - ps.smallCalls - ps.routes.reduce((n, g) => n + g.calls, 0);
+  if (old > 0) parts.push(`${old.toLocaleString("en-US")} before Claude Code ${SMALL_NOTES_SINCE} as ~1,850 tokens of notes each, more if they sent the whole context`);
+  return parts.join("; ");
 }
 
 /** Set one key of the user's settings.json, under the lock, and record it (the first record's previous value is kept). */
@@ -859,27 +877,29 @@ export async function undoFixes(ids: FixId[] | undefined, deps: FixDeps = {}): P
  * `forkGateOff`: CLAUDE_CODE_FORK_SUBAGENT off, which in a terminal session
  * also keeps ordinary background subagents from getting summaries.
  */
-export function progressSummariesState(deps: { home?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {}): { set?: { value: string; where: string }; offSince?: number; forkGateOff: boolean } {
+export function progressSummariesState(deps: { home?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {}): { set?: { value: string; where: string }; offSince?: number; forkGateOff: boolean; route: SummaryRoute } {
   const env = deps.env ?? process.env;
   const sources = settingsSources({ home: deps.home, cwd: deps.cwd, env });
   const fork = effectiveEnv("CLAUDE_CODE_FORK_SUBAGENT", sources, env);
   const forkGateOff = !!fork && ["0", "false", "no", "off"].includes(fork.value.trim().toLowerCase());
+  // How 2.1.328+ wrote them where the transcript does not say: the provider, model overrides and API address set now.
+  const route = summaryRoute({ home: deps.home, env, sources });
   const rec = readFixRecords(deps.home).find((r) => r.id === "progress-summaries");
-  const off = (value: string, where: string) => ({ set: { value, where }, ...(disablesSummaries(value) && rec ? { offSince: rec.at } : {}), forkGateOff });
+  const off = (value: string, where: string) => ({ set: { value, where }, ...(disablesSummaries(value) && rec ? { offSince: rec.at } : {}), forkGateOff, route });
   for (const s of sources) {
     const v = s.settings.env?.[PROGRESS_SUMMARIES_ENV];
     if (v === undefined || v === null || String(v).trim() === "") continue;
     if (disablesSummaries(v) || s.name === "user") return off(String(v), `${tilde(s.path)} env`);
-    return { forkGateOff };
+    return { forkGateOff, route };
   }
   // The shell's value, unless it is fix's own copied into a session started before an undo.
   if (shellSet(PROGRESS_SUMMARIES_ENV, sources, env, PROGRESS_SUMMARIES_OFF)) return off(env[PROGRESS_SUMMARIES_ENV]!, underClaudeCode(env) ? "this Claude Code session's environment" : "the environment");
-  return { forkGateOff };
+  return { forkGateOff, route };
 }
 
 /** The summaries fix's variable stopped since `at`: the background subagents on Claude Code 2.1.318+ since, estimated as if it were not set. */
-export function progressSummariesSavedSince(at: number, subagentPaths?: string[], forkGateOff = false): ProgressSummaryEstimate {
-  return estimateProgressSummaries(subagentPaths ?? subagentTranscripts(at), { since: at, minVersion: PROGRESS_SUMMARIES_SINCE, forkGateOff });
+export function progressSummariesSavedSince(at: number, subagentPaths?: string[], forkGateOff = false, route?: SummaryRoute): ProgressSummaryEstimate {
+  return estimateProgressSummaries(subagentPaths ?? subagentTranscripts(at), { since: at, minVersion: PROGRESS_SUMMARIES_SINCE, forkGateOff, route });
 }
 
 export interface SinceResult {
@@ -951,7 +971,7 @@ export function compactWindowSavingsSince(since: number, previousWindow: number 
   return { usd, compactions };
 }
 
-export function savedSince(records: FixRecord[], opts: { paths?: string[]; subagentPaths?: string[]; codexPaths?: string[]; ledger?: ReturnType<typeof readLedger> } = {}): SinceResult[] {
+export function savedSince(records: FixRecord[], opts: { paths?: string[]; subagentPaths?: string[]; codexPaths?: string[]; ledger?: ReturnType<typeof readLedger>; progressRoute?: SummaryRoute } = {}): SinceResult[] {
   const out: SinceResult[] = [];
   for (const r of records) {
     if (r.id === "cache-ttl" || r.id === "cache-ttl-subagents") {
@@ -975,8 +995,8 @@ export function savedSince(records: FixRecord[], opts: { paths?: string[]; subag
       const s = toolOutputSavedSince(r.at, typeof r.previous === "number" ? r.previous : BASH_OUTPUT_DEFAULT, paths);
       out.push({ id: r.id, at: r.at, savedUsd: s.moved ? s.savedUsd : undefined, detail: s.moved ? `estimated: ${s.moved.toLocaleString("en-US")} Bash results moved to a file that were inline before, priced at the requests that would have re-read them; files the model opened again not counted` : "no Bash output over the cap since" });
     } else if (r.id === "progress-summaries") {
-      const s = progressSummariesSavedSince(r.at, opts.subagentPaths);
-      out.push({ id: r.id, at: r.at, savedUsd: s.summarized ? s.notesUsd : undefined, detail: s.summarized ? `estimated: ${s.calls.toLocaleString("en-US")} summaries it stopped for ${s.summarized} background subagent${s.summarized === 1 ? "" : "s"} on Claude Code ${PROGRESS_SUMMARIES_SINCE}+, as notes${s.smallCalls === s.calls ? ` by ${SMALL_FAST_MODEL_NAME} (${SMALL_NOTES_SINCE}+)` : ` (${money(s.forkUsd)} at the whole context)`}` : "no background subagent in a terminal session since" });
+      const s = progressSummariesSavedSince(r.at, opts.subagentPaths, false, opts.progressRoute);
+      out.push({ id: r.id, at: r.at, savedUsd: s.summarized ? psValue(s) : undefined, detail: s.summarized ? `estimated: ${s.calls.toLocaleString("en-US")} summaries it stopped for ${s.summarized} background subagent${s.summarized === 1 ? "" : "s"} on Claude Code ${PROGRESS_SUMMARIES_SINCE}+, ${s.routes?.length ? psBasis(s) : `as notes${s.smallCalls === s.calls ? ` by ${SMALL_FAST_MODEL_NAME} (${SMALL_NOTES_SINCE}+)` : ` (${money(s.forkUsd)} at the whole context)`}`}` : "no background subagent in a terminal session since" });
     } else if (r.id === "autopilot") {
       const ledger = opts.ledger ?? readLedger();
       const ev = ledger.filter((e) => e.ev === "proxy" && e.ts >= r.at);

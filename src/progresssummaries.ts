@@ -47,6 +47,30 @@
  * subagent whose transcript says `version` 2.1.328 or later is priced once,
  * at Haiku 5.5's rates (low and high the same); an older one as before.
  *
+ * Read again from the 2.1.330 binary: that is a terminal session on the
+ * Anthropic API's only. Per subagent, Claude Code reads its provider (from
+ * CLAUDE_CODE_USE_*: the Claude Code gateway, Bedrock, Foundry, Anthropic on
+ * AWS or Google Cloud, Mantle, Vertex, else the Anthropic API):
+ *  - Bedrock, Vertex, Foundry or the gateway (CLAUDE_CODE_USE_GATEWAY): the
+ *    notes, written by the subagent's OWN model ("release" mode).
+ *  - Any other: a served flag (notes unless it says otherwise), and the
+ *    writer is the small fast model only when ANTHROPIC_SMALL_FAST_MODEL and
+ *    ANTHROPIC_DEFAULT_HAIKU_MODEL are both unset, the provider is the
+ *    Anthropic API, and the API counts as Anthropic's: ANTHROPIC_BASE_URL
+ *    unset or api.anthropic.com (or _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL),
+ *    or the key is an Anthropic API key (sk-ant-api..., not
+ *    ANTHROPIC_AUTH_TOKEN, a claude.ai sign-in or /login's managed key).
+ *    With no writer, the summary is the whole context on the agent's own
+ *    model, the pre-2.1.328 form. A plain ANTHROPIC_BASE_URL is not the
+ *    "gateway": a proxy on 127.0.0.1 (context-doctor's autopilot) leaves the
+ *    provider the Anthropic API and fails the base-URL test, so on a Claude
+ *    sign-in it gets the whole context.
+ * Which applied is told from the transcript where it can be (Bedrock and
+ * Vertex model and message ids), else from the settings and environment
+ * now (summaryRoute), autopilot's proxy counted from when autopilot was
+ * turned on. Where neither tells (an API key that may or may not be used
+ * behind a proxy), a range: Haiku notes low, the whole context high.
+ *
  * Estimated per subagent from what its transcript does record: the time of
  * each message (the ticks and whether the transcript changed), each reply's
  * prompt size and model (the context a fork would read, the rates). Each
@@ -55,8 +79,11 @@
  * later, not more often), and the thinking a summary may do.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { pick, rowsOf, type Extractor } from "./scan.js";
+import { claudeDir } from "./claudedir.js";
+import { effectiveEnv, settingsSources, type SettingsSource } from "./effective.js";
 import { requestCost, type RecordedUsage } from "./pricing.js";
 import { realModel } from "./tokens.js";
 import { workflowRunOf } from "./subagents.js";
@@ -81,6 +108,95 @@ export const FORK_PROMPT_TOKENS = 150;
 /** Each summary's output: #86879's measured mean (21,966 tokens over 339 summaries). */
 export const SUMMARY_OUTPUT_TOKENS = 65;
 
+/**
+ * How a terminal subagent's summaries were written on Claude Code 2.1.328+:
+ * notes by Haiku ("haiku"), notes by the subagent's own model ("own-notes"),
+ * its whole context on its own model ("whole"), or one of the first and
+ * the last, which could not be told ("range").
+ */
+export type SummaryForm = "haiku" | "own-notes" | "whole" | "range";
+
+/** The form, why in plain words, and (autopilot's proxy) from when: before `since`, `before`. */
+export interface SummaryRoute { form: SummaryForm; why: string; since?: number; before?: SummaryRoute }
+
+/** Nothing set: the Anthropic API, notes by Haiku. */
+export const ANTHROPIC_API_ROUTE: SummaryRoute = { form: "haiku", why: "Claude Code on the Anthropic API" };
+
+/** The cloud a reply's ids name: Bedrock's (`anthropic.`, region-prefixed, an ARN; `msg_bdrk_`), Vertex's (`@date`; `msg_vrtx_`). */
+export function replyCloud(model: unknown, id: unknown): "bedrock" | "vertex" | undefined {
+  const m = typeof model === "string" ? model : "";
+  const i = typeof id === "string" ? id : "";
+  if (/^(?:[a-z]{2,7}\.)?anthropic\.claude-[\w.-]*\d|^arn:aws[\w-]*:bedrock:/.test(m) || i.startsWith("msg_bdrk_")) return "bedrock";
+  if (/^claude-[\w.-]+@/.test(m) || i.startsWith("msg_vrtx_")) return "vertex";
+  return undefined;
+}
+
+const on = (v: string | undefined): boolean => v !== undefined && !["", "0", "false", "no", "off"].includes(v.trim().toLowerCase());
+/** Autopilot's own file and address (autopilot.ts autopilotPaths, proxyUrl), read here without its imports. */
+const AUTOPILOT_CONFIG = ".context-doctor-autopilot.json";
+
+/**
+ * Which form Claude Code 2.1.330 uses for a terminal subagent on a
+ * first-party model id, from the settings and environment as they are now
+ * (read only). Autopilot's proxy counts from when autopilot was turned on
+ * (its config file, written then); before it, the address it replaced.
+ */
+export function summaryRoute(deps: { home?: string; cwd?: string; env?: NodeJS.ProcessEnv; sources?: SettingsSource[] } = {}): SummaryRoute {
+  const env = deps.env ?? process.env;
+  const sources = deps.sources ?? settingsSources({ home: deps.home, cwd: deps.cwd, env });
+  const get = (n: string) => effectiveEnv(n, sources, env);
+  const provider: Array<[string, SummaryForm, string]> = [
+    ["CLAUDE_CODE_USE_GATEWAY", "own-notes", "Claude Code is set to its gateway"],
+    ["CLAUDE_CODE_USE_BEDROCK", "own-notes", "Claude Code is set to Amazon Bedrock"],
+    ["CLAUDE_CODE_USE_FOUNDRY", "own-notes", "Claude Code is set to Microsoft Foundry"],
+    ["CLAUDE_CODE_USE_ANTHROPIC_AWS", "whole", "Claude Code is set to Anthropic on AWS"],
+    ["CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD", "whole", "Claude Code is set to Anthropic on Google Cloud"],
+    ["CLAUDE_CODE_USE_MANTLE", "whole", "Claude Code is set to Mantle"],
+    ["CLAUDE_CODE_USE_VERTEX", "own-notes", "Claude Code is set to Google Vertex AI"],
+  ];
+  for (const [name, form, why] of provider) {
+    const v = get(name);
+    if (v && on(v.value)) return { form, why: `${why} (${v.where})` };
+  }
+  for (const name of ["ANTHROPIC_SMALL_FAST_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"]) {
+    const v = get(name);
+    if (v) return { form: "whole", why: `${v.where} replaces the small model that writes them` };
+  }
+  const base = get("ANTHROPIC_BASE_URL");
+  const route = byBaseUrl(base?.value, base?.where ?? "", sources, env, "an address that is not Anthropic's");
+  if (!base) return route;
+  // Autopilot's proxy: from when autopilot was turned on; before it, the address it replaced (none: the Anthropic API).
+  const cfgPath = join(claudeDir(deps.home, env), AUTOPILOT_CONFIG);
+  try {
+    const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
+    if (typeof cfg?.port === "number" && base.value.replace(/\/+$/, "") === `http://127.0.0.1:${cfg.port}`) {
+      const prev = typeof cfg.previousBaseUrl === "string" && cfg.previousBaseUrl ? cfg.previousBaseUrl : undefined;
+      return { ...byBaseUrl(base.value, base.where, sources, env, "context-doctor's autopilot proxy, not Anthropic's address"), since: statSync(cfgPath).mtimeMs, before: byBaseUrl(prev, `ANTHROPIC_BASE_URL=${prev} before autopilot`, sources, env, "an address that is not Anthropic's") };
+    }
+  } catch {
+    /* no autopilot */
+  }
+  return route;
+}
+
+/** The form for an ANTHROPIC_BASE_URL: Anthropic's own host (or none) is the Anthropic API; any other needs an Anthropic API key for Haiku. */
+function byBaseUrl(url: string | undefined, where: string, sources: SettingsSource[], env: NodeJS.ProcessEnv, label: string): SummaryRoute {
+  if (!url) return ANTHROPIC_API_ROUTE;
+  let host = "";
+  try { host = new URL(url).host; } catch { /* not a URL: not Anthropic's */ }
+  const assume = effectiveEnv("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL", sources, env);
+  if (host === "api.anthropic.com" || (assume && on(assume.value))) return ANTHROPIC_API_ROUTE;
+  const to = `Claude Code talks to ${label} (${where})`;
+  if (effectiveEnv("ANTHROPIC_AUTH_TOKEN", sources, env)) return { form: "whole", why: `${to} with ANTHROPIC_AUTH_TOKEN, not an Anthropic API key` };
+  const key = effectiveEnv("ANTHROPIC_API_KEY", sources, env);
+  const helper = sources.find((s) => typeof s.settings.apiKeyHelper === "string" && s.settings.apiKeyHelper.trim());
+  if ((key && key.value.startsWith("sk-ant-api")) || helper) {
+    return { form: "range", why: `${to}; they are notes by Haiku only if it uses your Anthropic API key (${key ? "ANTHROPIC_API_KEY" : "apiKeyHelper"}), and context-doctor cannot tell whether it does` };
+  }
+  if (key) return { form: "whole", why: `${to} with an ANTHROPIC_API_KEY that is not an Anthropic API key` };
+  return { form: "whole", why: `${to} and you sign in with a Claude account, not an Anthropic API key` };
+}
+
 /** How Claude Code reads the variable (a boolean: "1", "true", "yes", "on"). */
 export const disablesSummaries = (v: unknown): boolean => ["1", "true", "yes", "on"].includes(String(v ?? "").trim().toLowerCase());
 
@@ -90,7 +206,7 @@ export const disablesSummaries = (v: unknown): boolean => ["1", "true", "yes", "
  * reply; its output is in the next prompt).
  */
 export const PROGRESS_ROWS: Extractor<{ head: boolean; ids: Record<string, 1> }> = {
-  id: "progress-summaries.1",
+  id: "progress-summaries.2",
   init: () => ({ head: false, ids: {} }),
   line(raw, row, out, st) {
     if (!raw.includes('"timestamp"')) return;
@@ -115,7 +231,8 @@ export const PROGRESS_ROWS: Extractor<{ head: boolean; ids: Record<string, 1> }>
     const u = m.usage;
     const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
     const prompt = n(u.input_tokens) + n(u.cache_read_input_tokens) + n(u.cache_creation_input_tokens);
-    out.push({ t: "r", ts, model: realModel(m.model), p: prompt, ...(u.speed === "fast" ? { speed: "fast" } : {}), ...(u.inference_geo === "us" ? { geo: "us" } : {}) });
+    const cloud = replyCloud(m.model, id);
+    out.push({ t: "r", ts, model: realModel(m.model), p: prompt, ...(u.speed === "fast" ? { speed: "fast" } : {}), ...(u.inference_geo === "us" ? { geo: "us" } : {}), ...(cloud ? { cloud } : {}) });
   },
 };
 
@@ -155,7 +272,20 @@ export function eligibility(meta: AgentMeta | undefined, entrypoint: string | un
 /** One subagent's summaries: how many, and their price both ways. */
 export interface AgentSummaries { calls: number; notesUsd: number; forkUsd: number }
 
-type Rec = { t: "h"; entrypoint?: string; version?: string } | { t: "m"; ts: number } | { t: "r"; ts: number; model?: string; p: number; speed?: string; geo?: string };
+type Rec = { t: "h"; entrypoint?: string; version?: string } | { t: "m"; ts: number } | { t: "r"; ts: number; model?: string; p: number; speed?: string; geo?: string; cloud?: "bedrock" | "vertex" };
+
+/** How one agent's summaries were written: its transcript's cloud, else the route at its start. */
+export function agentRoute(recs: Rec[], route: SummaryRoute = ANTHROPIC_API_ROUTE): SummaryRoute {
+  const cloud = recs.find((x): x is Extract<Rec, { t: "r" }> => x.t === "r" && !!x.cloud)?.cloud;
+  if (cloud) return { form: "own-notes", why: `the subagents ran on ${cloud === "bedrock" ? "Amazon Bedrock" : "Google Vertex AI"} (their model ids say so)` };
+  const first = recs.reduce((m, x) => (x.t === "m" && x.ts < m ? x.ts : m), Infinity);
+  let r = route;
+  while (r.since !== undefined && r.before && first < r.since) r = r.before;
+  return r;
+}
+
+/** Priced how: "old" (before 2.1.328: notes low, whole context high) or a 2.1.328+ form. */
+export type PriceMode = "old" | SummaryForm;
 
 /**
  * The ticks a running agent's timer made and the summaries they sent, from
@@ -163,7 +293,8 @@ type Rec = { t: "h"; entrypoint?: string; version?: string } | { t: "m"; ts: num
  * it has 3+ messages and more than at the last summary. Only ticks in
  * [since, until] are counted.
  */
-export function simulateAgent(recs: Rec[], since = -Infinity, until = Infinity, smallNotes = false): AgentSummaries {
+export function simulateAgent(recs: Rec[], since = -Infinity, until = Infinity, mode: boolean | PriceMode = "old"): AgentSummaries {
+  const form: PriceMode = mode === true ? "haiku" : mode === false ? "old" : mode;
   const msgs = recs.filter((r): r is Extract<Rec, { t: "m" }> => r.t === "m").map((r) => r.ts).sort((a, b) => a - b);
   const replies = recs.filter((r): r is Extract<Rec, { t: "r" }> => r.t === "r").sort((a, b) => a.ts - b.ts);
   const out: AgentSummaries = { calls: 0, notesUsd: 0, forkUsd: 0 };
@@ -187,21 +318,15 @@ export function simulateAgent(recs: Rec[], since = -Infinity, until = Infinity, 
     const read = cur ? cur.p : 0;
     const fresh = (next ? Math.max(0, next.p - read) : 0) + FORK_PROMPT_TOKENS;
     const b: Pick<RecordedUsage, "speed" | "inference_geo"> = { ...(ref.speed ? { speed: ref.speed } : {}), ...(ref.geo ? { inference_geo: ref.geo } : {}) };
-    if (smallNotes) {
-      // 2.1.328+: the notes on the small fast model, the one way it sends them (the agent's fast mode is not the writer's).
-      const small = requestCost(SMALL_FAST_MODEL, { input_tokens: NOTES_TOKENS, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: SUMMARY_OUTPUT_TOKENS, ...(ref.geo ? { inference_geo: ref.geo } : {}) }, at);
-      if (!small) continue;
-      out.calls++;
-      out.forkUsd += small.totalUsd;
-      out.notesUsd += small.totalUsd;
-      continue;
-    }
-    const fork = requestCost(model, { input_tokens: fresh, cache_read_input_tokens: read, cache_creation_input_tokens: 0, output_tokens: SUMMARY_OUTPUT_TOKENS, ...b }, at);
-    const notes = requestCost(model, { input_tokens: NOTES_TOKENS, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: SUMMARY_OUTPUT_TOKENS, ...b }, at);
-    if (!fork || !notes) continue;
+    // 2.1.328+ on the Anthropic API: the notes on the small fast model, the one way it sends them (the agent's fast mode is not the writer's).
+    const small = form === "haiku" || form === "range" ? requestCost(SMALL_FAST_MODEL, { input_tokens: NOTES_TOKENS, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: SUMMARY_OUTPUT_TOKENS, ...(ref.geo ? { inference_geo: ref.geo } : {}) }, at) : undefined;
+    const fork = form === "old" || form === "whole" || form === "range" ? requestCost(model, { input_tokens: fresh, cache_read_input_tokens: read, cache_creation_input_tokens: 0, output_tokens: SUMMARY_OUTPUT_TOKENS, ...b }, at) : undefined;
+    const notes = form === "old" || form === "own-notes" ? requestCost(model, { input_tokens: NOTES_TOKENS, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: SUMMARY_OUTPUT_TOKENS, ...b }, at) : undefined;
+    const [low, high] = form === "haiku" ? [small, small] : form === "own-notes" ? [notes, notes] : form === "whole" ? [fork, fork] : form === "range" ? [small, fork] : [notes, fork];
+    if (!low || !high) continue;
     out.calls++;
-    out.forkUsd += fork.totalUsd;
-    out.notesUsd += notes.totalUsd;
+    out.forkUsd += high.totalUsd;
+    out.notesUsd += low.totalUsd;
   }
   return out;
 }
@@ -212,8 +337,20 @@ export interface ProgressSummaryEstimate {
   /** Agents Claude Code wrote summaries for in the window, by the rules above. */
   summarized: number;
   calls: number;
-  /** Of `calls`, those by agents on Claude Code 2.1.328+: notes on the small fast model, the same in both figures. */
+  /** Of `calls`, those by agents on Claude Code 2.1.328+ on the Anthropic API: notes on the small fast model, the same in both figures. */
   smallCalls: number;
+  /**
+   * The other 2.1.328+ summaries, by form and why (summaryRoute, agentRoute):
+   * notes on the agent's own model, its whole context, or a range. Absent
+   * or empty when all were on the Anthropic API.
+   */
+  routes?: Array<{ form: Exclude<SummaryForm, "haiku">; why: string; calls: number; agents: number; lowUsd: number; highUsd: number }>;
+  /**
+   * What turning them off saves, for fix: before 2.1.328 the notes (the low
+   * figure, as before), from it the form's figure, a range at its high end
+   * (what could not be told is not counted at the cheapest).
+   */
+  valueUsd?: number;
   /** The summaries as short notes (what Anthropic serves since November 2026): the low figure. */
   notesUsd: number;
   /** As a fork of the whole context (before): the high figure. */
@@ -235,11 +372,15 @@ export interface ProgressOptions {
   interactive?: (entrypoint: string | undefined) => boolean;
   /** Only agents on this Claude Code or newer (what the variable would have stopped: 2.1.318+). */
   minVersion?: string;
+  /** How 2.1.328+ agents on a first-party model id were served (summaryRoute); default the Anthropic API. */
+  route?: SummaryRoute;
 }
 
 /** The summaries of the subagents in `files` (their `.jsonl` transcripts), estimated. */
 export function estimateProgressSummaries(files: string[], opts: ProgressOptions = {}): ProgressSummaryEstimate {
   const r: ProgressSummaryEstimate = { agents: 0, summarized: 0, calls: 0, smallCalls: 0, notesUsd: 0, forkUsd: 0, none: {}, hosts: [] };
+  const routes = new Map<string, NonNullable<ProgressSummaryEstimate["routes"]>[number]>();
+  let value = 0;
   const hosts = new Set<string>();
   for (const file of files) {
     let recs: Rec[];
@@ -258,14 +399,25 @@ export function estimateProgressSummaries(files: string[], opts: ProgressOptions
       // An agent that started after the variable was set got none.
       if (first > until) why = "off";
       else {
-        const small = !!head?.version && compareVersions(head.version, SMALL_NOTES_SINCE) >= 0;
-        const s = simulateAgent(recs, opts.since, until, small);
+        const recent = !!head?.version && compareVersions(head.version, SMALL_NOTES_SINCE) >= 0;
+        const route = recent ? agentRoute(recs, opts.route) : undefined;
+        const s = simulateAgent(recs, opts.since, until, route?.form ?? "old");
         // One that ran under 30 s, or outside the window, sent none.
         if (s.calls) r.summarized++;
         r.calls += s.calls;
-        if (small) r.smallCalls += s.calls;
         r.notesUsd += s.notesUsd;
         r.forkUsd += s.forkUsd;
+        value += route ? s.forkUsd : s.notesUsd;
+        if (route?.form === "haiku") r.smallCalls += s.calls;
+        else if (route && s.calls) {
+          const k = `${route.form}\n${route.why}`;
+          const g = routes.get(k) ?? { form: route.form, why: route.why, calls: 0, agents: 0, lowUsd: 0, highUsd: 0 };
+          g.calls += s.calls;
+          g.agents++;
+          g.lowUsd += s.notesUsd;
+          g.highUsd += s.forkUsd;
+          routes.set(k, g);
+        }
         continue;
       }
     }
@@ -273,7 +425,19 @@ export function estimateProgressSummaries(files: string[], opts: ProgressOptions
     r.none[why] = (r.none[why] ?? 0) + 1;
   }
   r.hosts = [...hosts].sort();
+  if (routes.size) {
+    r.routes = [...routes.values()].sort((a, b) => b.highUsd - a.highUsd);
+    r.valueUsd = value;
+  }
   return r;
+}
+
+/** A 2.1.328+ form in words: what each summary sent, and on what. */
+export function formWords(form: SummaryForm): string {
+  if (form === "haiku") return `short notes, written by ${SMALL_FAST_MODEL_NAME}`;
+  if (form === "own-notes") return "short notes, written by the subagent's own model";
+  if (form === "whole") return "the subagent's whole context, on its own model";
+  return `short notes by ${SMALL_FAST_MODEL_NAME} (low) or the whole context (high)`;
 }
 
 /** "the Desktop app", "the SDK or -p": a host as a person knows it. */

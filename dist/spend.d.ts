@@ -40,7 +40,7 @@
  * sessions with 10+ requests. `spend` counts every request, its output and
  * subagents too; on the requests both count, the dollars are the same.
  */
-import { type ProgressOptions } from "./progresssummaries.js";
+import { type ProgressOptions, type ProgressSummaryEstimate } from "./progresssummaries.js";
 import { type Modifiers } from "./pricing.js";
 import { type SessionGap } from "./ccost.js";
 import type { ExtraUsage } from "./claudedir.js";
@@ -298,6 +298,7 @@ export interface SpendReport {
      * Claude Code's subagent progress summaries, estimated (no transcript records them): NOT in `usd`.
      * `notesUsd` as short notes (served since November 2026), `forkUsd` as the whole context (before).
      * `smallCalls`: of `calls`, those on Claude Code 2.1.328+, notes on the small fast model in both figures (absent when none).
+     * `routes`: the 2.1.328+ ones not on the Anthropic API, by form and why (absent when none): their figures are in both.
      * `set`: CLAUDE_CODE_DISABLE_AGENT_PROGRESS_SUMMARIES is set there, since when unknown: not estimated.
      * Absent when no subagent got any.
      */
@@ -305,6 +306,7 @@ export interface SpendReport {
         agents: number;
         calls: number;
         smallCalls?: number;
+        routes?: ProgressSummaryEstimate["routes"];
         notesUsd: number;
         forkUsd: number;
     } | {
@@ -356,7 +358,7 @@ export interface SpendOptions {
      * The progress summaries' estimate: the fork gate, when the variable turned them off
      * (fix's record), or where it is set with no record (then not estimated); false: none.
      */
-    progress?: false | (Pick<ProgressOptions, "forkGateOff" | "offSince"> & {
+    progress?: false | (Pick<ProgressOptions, "forkGateOff" | "offSince" | "route"> & {
         set?: string;
     });
     /** The limits ledger to read for requests past the plan's limit (tests); default ~/.claude's. */
