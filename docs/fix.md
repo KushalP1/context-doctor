@@ -88,6 +88,7 @@ The Desktop app's Code tab is testing an offer of a lower auto-compact window of
 - leave that model alone: a session most of whose requests ran on it is billed in "as now" and saves nothing at any window; only the rest are replayed, so the lever's dollars never come from a model whose window you just answered for ("mostly on Fable 5.1 (1 here) are left as they ran");
 - under the `fix` lever, say that applying writes one window for every model and that whether it or the app's choice wins for that model is not recorded here; when the rest would save under $1, `fix` says why the lever is not offered instead of dropping it silently;
 - `compact-window --json` adds `leftAlone` and `desktopApp` (the answers as read).
+- `doctor` says it in one line, "Desktop compact offer: on 2026-09-25 the Desktop app offered a 300k auto-compact window for Fable 5.1 and you accepted it" (each model's answer, `; ` apart), and says nothing when no answer is on file.
 
 Also read: `autoCompactWindowsCache` in `~/.claude.json`, the per-model windows Anthropic's server sends with the account (Anthropic API only), which Claude Code uses for that model when no environment variable or settings file sets a window ("Anthropic's server sets an auto-compact window on your account: 600k for Opus 5.5"); and `autoCompactRaisedForLoad` in a settings file, named as doing nothing there, since Claude Code reads it from the app's own settings only. An `autoCompactOfferAnswer` found in a settings file counts as an answer too.
 

@@ -11,7 +11,8 @@ import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { appWindowLines, hasAppWindows, modelKey, readAppWindows, sameModel } from "../appwindow.js";
+import { appAnswerText, appWindowLines, hasAppWindows, modelKey, readAppWindows, sameModel } from "../appwindow.js";
+import { appWindowCheck } from "../doctor.js";
 import { estimateCompactWindows, renderCompactWindows } from "../compactwindow.js";
 import { planFixes, renderFixPlan } from "../fix.js";
 import { buildHistory } from "./history-fixture.js";
@@ -167,4 +168,28 @@ test("audit: with a window the server sets and none in settings, compact-window'
   assert.match(text, /Now: not set in your settings: Claude Code compacts at the window Anthropic's server sets \(below\), else near the model's full window/);
   // No server window: as before.
   assert.match(renderCompactWindows(empty), /Now: not set: Claude Code compacts near the model's full window/);
+});
+
+test("doctor: one line saying what the Desktop app offered and what you answered, only when an answer is on file", () => {
+  const ans = (choice: "accept" | "keep" | "undo") => appAnswerText({ answers: [{ model: "claude-fable-5-1", choice, tokens: 300_000, at: AT, where: "~/.claude.json" }], served: [] });
+  assert.equal(ans("accept"), "on 2026-09-25 the Desktop app offered a 300k auto-compact window for Fable 5.1 and you accepted it");
+  assert.equal(ans("keep"), "on 2026-09-25 the Desktop app offered a lower auto-compact window for Fable 5.1 and you kept yours (300k)");
+  assert.equal(ans("undo"), "on 2026-09-25 you undid the lower auto-compact window the Desktop app had set for Fable 5.1 (on record: 300k)");
+  // A server window alone is no answer: nothing for doctor.
+  assert.equal(appAnswerText({ answers: [], served: [{ model: "claude-opus-5-5", window: 600_000 }] }), undefined);
+
+  const home = mkdtempSync(join(tmpdir(), "cd-appwin-doctor-"));
+  writeFileSync(join(home, ".claude.json"), JSON.stringify({ autoCompactOfferCodeTab: { aaa: { "claude-fable-5-1": { choice: "accept", tokens: 300_000, at: AT } } } }));
+  assert.deepEqual(appWindowCheck(home), { label: "Desktop compact offer", status: "ok", detail: "on 2026-09-25 the Desktop app offered a 300k auto-compact window for Fable 5.1 and you accepted it" });
+  const bare = mkdtempSync(join(tmpdir(), "cd-appwin-doctor-bare-"));
+  writeFileSync(join(bare, ".claude.json"), JSON.stringify({ autoCompactWindowsCache: { "claude-opus-5-5": 600_000 } }));
+  assert.equal(appWindowCheck(bare), undefined);
+  // Through the CLI: the line in doctor, and nothing on the fixture history with no answer.
+  const env = { CONTEXT_DOCTOR_CACHE_DIR: mkdtempSync(join(tmpdir(), "cd-appwin-cache-")) };
+  const fixture = mkdtempSync(join(tmpdir(), "cd-appwin-doctor-cli-"));
+  buildHistory(fixture);
+  assert.ok(!/Desktop compact offer/.test(runReport(cli, fixture, ["doctor"], env)));
+  const cj = join(fixture, ".claude.json");
+  writeFileSync(cj, JSON.stringify({ ...JSON.parse(readFileSync(cj, "utf8")), autoCompactOfferCodeTab: { aaa: { "claude-fable-5-1": { choice: "keep", tokens: 300_000, at: AT } } } }));
+  assert.match(runReport(cli, fixture, ["doctor"], env), /Desktop compact offer +on 2026-09-25 the Desktop app offered a lower auto-compact window for Fable 5\.1 and you kept yours \(300k\)/);
 });

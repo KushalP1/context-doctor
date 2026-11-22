@@ -63,6 +63,12 @@ export declare function modelKey(model: string): string;
 /** Whether a transcript's model is the one an answer names ("opus" and the like match their family). */
 export declare function sameModel(answer: string, model: string): boolean;
 /**
+ * `doctor`'s one line: each answer on file, in plain words ("on 2026-11-18
+ * the Desktop app offered a 400k auto-compact window for Opus 5.5 and you
+ * accepted it"). Undefined when there is none.
+ */
+export declare function appAnswerText(a: AppWindows): string | undefined;
+/**
  * The lines `compact-window` and `fix` say about it (none when nothing is on
  * file). `left`: the sessions the replay left as they ran, when known.
  */

@@ -131,6 +131,20 @@ const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const nameOf = (m: string) => modelName(m) === m ? m : modelName(m);
 
 /**
+ * `doctor`'s one line: each answer on file, in plain words ("on 2026-11-18
+ * the Desktop app offered a 400k auto-compact window for Opus 5.5 and you
+ * accepted it"). Undefined when there is none.
+ */
+export function appAnswerText(a: AppWindows): string | undefined {
+  if (!a.answers.length) return undefined;
+  const one = (x: AppWindowAnswer) =>
+    x.choice === "accept" ? `on ${day(x.at)} the Desktop app offered a ${k(x.tokens)} auto-compact window for ${nameOf(x.model)} and you accepted it`
+      : x.choice === "keep" ? `on ${day(x.at)} the Desktop app offered a lower auto-compact window for ${nameOf(x.model)} and you kept yours (${k(x.tokens)})`
+        : `on ${day(x.at)} you undid the lower auto-compact window the Desktop app had set for ${nameOf(x.model)} (on record: ${k(x.tokens)})`;
+  return a.answers.map(one).join("; ");
+}
+
+/**
  * The lines `compact-window` and `fix` say about it (none when nothing is on
  * file). `left`: the sessions the replay left as they ran, when known.
  */

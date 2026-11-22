@@ -52,6 +52,12 @@ export declare function unpricedModelsCheck(days?: number, now?: number, home?: 
  * rather than nothing or a false "ok".
  */
 /**
+ * The Desktop app's answer to its own auto-compact offer (appwindow.ts),
+ * only when one is on file: what it offered and what you chose. A fact, not
+ * a fault.
+ */
+export declare function appWindowCheck(home?: string): Check | undefined;
+/**
  * Extra usage (usage credits past a plan's limit), as Claude Code cached it
  * in `~/.claude.json`: on or off, and when on but held back, why. A fact,
  * not a fault: "ok" either way. Undefined when the file says nothing.

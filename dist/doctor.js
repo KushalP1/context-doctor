@@ -29,6 +29,7 @@ import { describeInstalls, modelSwitchReadiness, PRE_MODEL_SWITCH_SINCE } from "
 import { describeCosts, subagentCostsPath } from "./fanout.js";
 import { claudeCodePresent, claudeDir, claudeJsonPath, readExtraUsage } from "./claudedir.js";
 import { extraUsageText } from "./credits.js";
+import { appAnswerText, readAppWindows } from "./appwindow.js";
 import { codexDir } from "./codexdir.js";
 import { periodSpend, readBudget } from "./budget.js";
 import { sessionPriceThresholds } from "./sessionprice.js";
@@ -424,6 +425,21 @@ export function unpricedModelsCheck(days = 30, now = Date.now(), home = homedir(
  * rather than nothing or a false "ok".
  */
 /**
+ * The Desktop app's answer to its own auto-compact offer (appwindow.ts),
+ * only when one is on file: what it offered and what you chose. A fact, not
+ * a fault.
+ */
+export function appWindowCheck(home) {
+    let text;
+    try {
+        text = appAnswerText(readAppWindows({ home }));
+    }
+    catch {
+        return undefined;
+    }
+    return text ? { label: "Desktop compact offer", status: "ok", detail: text } : undefined;
+}
+/**
  * Extra usage (usage credits past a plan's limit), as Claude Code cached it
  * in `~/.claude.json`: on or off, and when on but held back, why. A fact,
  * not a fault: "ok" either way. Undefined when the file says nothing.
@@ -685,6 +701,10 @@ export async function runDoctor() {
     const xu = extraUsageCheck();
     if (xu)
         checks.push(xu);
+    // What the Desktop app offered for auto-compact and what you answered, only when an answer is on file.
+    const aw = appWindowCheck();
+    if (aw)
+        checks.push(aw);
     // Codex (OpenAI): MCP table in config.toml, hook in hooks.json, skill.
     const codexHome = codexDir();
     if (existsSync(codexHome)) {
