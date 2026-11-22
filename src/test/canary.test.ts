@@ -263,6 +263,48 @@ test("progress summaries (G4): told apart by their prompts, the subagent held pa
   }
 });
 
+test("in-process MCP servers (G1): the canary answers as an SDK host, and the mod's move behind ToolSearch is checked on 2.1.326+", async () => {
+  const c = await load();
+  const init = c.sdkMcpReply(c.SDK_DEFER, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2026-07-28" } });
+  assert.deepEqual([init.id, init.result.protocolVersion, init.result.serverInfo.name], [1, "2026-07-28", c.SDK_DEFER]);
+  const list = c.sdkMcpReply(c.SDK_KEEP, { jsonrpc: "2.0", id: 2, method: "tools/list" });
+  assert.equal(list.result.tools[0].name, c.SDK_TOOL);
+  assert.equal(list.result.tools[0]._meta["anthropic/alwaysLoad"], true, "always loaded, as the app marks the tools it sends whole");
+  assert.deepEqual(c.sdkMcpReply(c.SDK_KEEP, { jsonrpc: "2.0", method: "notifications/initialized" }), { jsonrpc: "2.0", id: 0, result: {} });
+  assert.equal(c.sdkMcpReply(c.SDK_KEEP, { jsonrpc: "2.0", id: 3, method: "resources/list" }).error.code, -32601);
+  assert.equal(c.sdkToolName(c.SDK_DEFER), "mcp__canary_defer__probe");
+
+  const dir = mkdtempSync(join(tmpdir(), "cd-canary-g1-"));
+  try {
+    const keep = c.sdkToolName(c.SDK_KEEP), defer = c.sdkToolName(c.SDK_DEFER);
+    const run = (reqs: any[], version = "2.1.330 (Claude Code)") => {
+      const r: any = greenRun(c, dir);
+      r.mock.requests.unshift(...reqs.map((x) => ({ auth: "dummy", apiKey: "none", text: `${c.MAIN}: always keep this canary note`, ...x })));
+      const out = c.evaluate({ ...r, version });
+      return { checks: out.checks.filter((x: any) => /in-process|SDK-hosted/.test(x.name)), red: out.checks.filter((x: any) => !x.ok && !x.soft).map((x: any) => x.name) };
+    };
+    // 2.1.330: the first request neither sends nor names the moved tool; the second names it.
+    const green = run([{ tools: ["Bash", "ToolSearch", keep], named: [keep] }, { tools: ["Bash", "ToolSearch", keep], named: [keep, defer] }]);
+    assert.deepEqual(green.checks.map((x: any) => x.ok), [true, true]);
+    assert.match(green.checks[1].detail, /named from request 2/);
+    assert.deepEqual(green.red, []);
+    // The mod did not answer: the tool went whole. Red.
+    const whole = run([{ tools: ["Bash", keep, defer], named: [keep, defer] }]);
+    assert.match(whole.red.join(" | "), /behind ToolSearch/);
+    assert.match(whole.checks[1].detail, /went whole in 1 request/);
+    // Neither sent nor named anywhere: red too (the tool would be lost).
+    assert.match(run([{ tools: ["Bash", keep], named: [keep] }]).red.join(" | "), /behind ToolSearch/);
+    // The in-process servers never reached the request: a warning, and the move is not judged.
+    const none = run([{ tools: ["Bash"], named: [] }]);
+    assert.deepEqual(none.checks.map((x: any) => [x.ok, x.soft]), [[false, true]]);
+    assert.deepEqual(none.red, []);
+    // Before 2.1.326 (no mcpServer on tool.describe): not checked.
+    assert.deepEqual(run([{ tools: ["Bash", keep, defer] }], "2.1.325 (Claude Code)").checks, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("planted faults: each changes the copy, never the repository", async () => {
   const c = await load();
   const files = (d: string) => readFileSync(join(d, "hooks", "hooks.json"), "utf8") + readFileSync(join(d, "dist", "mod", "register.js"), "utf8") + readFileSync(join(d, "dist", "cli.js"), "utf8");

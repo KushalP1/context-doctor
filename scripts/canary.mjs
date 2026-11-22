@@ -21,6 +21,9 @@
 //    draw it on under -p, answers with the pane's figures as text (the
 //    context, the two windows the mock reported, today's dollars from the
 //    session's own transcript);
+//  - on 2.1.326+, two in-process (`sdk`) MCP servers the canary hosts as an SDK
+//    host does: the one CONTEXT_DOCTOR_DEFER_MCP names is moved behind ToolSearch
+//    by the mod's tool.describe answer, the other goes whole (ROADMAP G1);
 //  - (a warning, never red) on 2.1.328+, with the subagent's reply held 40 s,
 //    its progress summaries reach the mock, and which kind they are (ROADMAP G4);
 //  - `claude plugin validate --profile directory --strict` passes;
@@ -104,6 +107,34 @@ export function summaryKind(body) {
   const msgs = Array.isArray(body?.messages) ? body.messages : [];
   return msgs.some((m) => m?.role === "user" && textOf(m.content).includes(SUMMARY_FORK_HEAD)) ? "fork" : undefined;
 }
+/**
+ * The Desktop app's own tools behind tool search (ROADMAP G1): the app's servers
+ * are in-process (`sdk`) MCP servers, so the canary hosts two of its own the way
+ * an SDK host does (initialize's sdkMcpServers, then each JSON-RPC message as an
+ * mcp_message control request), each listing one tool marked
+ * `_meta["anthropic/alwaysLoad"]: true`, as the app marks the tools it sends
+ * whole. CONTEXT_DOCTOR_DEFER_MCP names one of them: on 2.1.326+ the mod's
+ * tool.describe answer must put its tool behind ToolSearch (named in the
+ * request, its schema not in `tools`), while the other's goes whole.
+ */
+export const SDK_DEFER = "canary_defer";
+export const SDK_KEEP = "canary_keep";
+export const SDK_TOOL = "probe";
+export const sdkToolName = (server) => `mcp__${server}__${SDK_TOOL}`;
+/** The JSON-RPC reply of one of the canary's in-process servers; a notification gets an empty result. */
+export function sdkMcpReply(server, msg) {
+  const id = msg?.id ?? 0;
+  switch (msg?.method) {
+    case "initialize":
+      return { jsonrpc: "2.0", id, result: { protocolVersion: msg.params?.protocolVersion ?? "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: server, version: "1.0.0" } } };
+    case "tools/list":
+      return { jsonrpc: "2.0", id, result: { tools: [{ name: SDK_TOOL, description: `The canary's ${server} probe: replies ok.`, inputSchema: { type: "object", properties: {} }, _meta: { "anthropic/alwaysLoad": true } }] } };
+    case "tools/call":
+      return { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "ok" }] } };
+    default:
+      return msg?.id === undefined ? { jsonrpc: "2.0", id: 0, result: {} } : { jsonrpc: "2.0", id, error: { code: -32601, message: `the canary's ${server} has no ${msg?.method}` } };
+  }
+}
 const keepWarmAnswer = (e) => e?.type === "result" && /Keeping this session's prompt cache warm|Not started|Nothing was started|no \$\.model\.fork/.test(String(e.result ?? ""));
 const keepWarmOff = (e) => e?.type === "result" && /Stopped keeping the cache warm|Nothing to stop/.test(String(e.result ?? ""));
 const usageAnswer = (e) => e?.type === "result" && /context-doctor usage: /.test(String(e.result ?? ""));
@@ -181,7 +212,7 @@ export async function startMock({ holdSubMs = 0 } = {}) {
       try { body = raw ? JSON.parse(raw) : null; } catch { /* recorded as is */ }
       const auth = String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
       const summary = path.startsWith("/v1/messages/count_tokens") ? undefined : summaryKind(body);
-      const rec = { method: req.method, path, auth: isDummy(auth) ? "dummy" : auth ? "OTHER" : "none", apiKey: req.headers["x-api-key"] ? (isDummy(String(req.headers["x-api-key"])) ? "dummy" : "OTHER") : "none", model: body?.model, text: body ? JSON.stringify(body.messages ?? body).slice(-200_000) : "", ...(textOf(body?.messages?.[0]?.content).includes(SUB) && { sub: true }), ...(summary && { summary, inputTokens: Math.round(JSON.stringify({ system: body.system, messages: body.messages, tools: body.tools }).length / 4) }) };
+      const rec = { method: req.method, path, auth: isDummy(auth) ? "dummy" : auth ? "OTHER" : "none", apiKey: req.headers["x-api-key"] ? (isDummy(String(req.headers["x-api-key"])) ? "dummy" : "OTHER") : "none", model: body?.model, text: body ? JSON.stringify(body.messages ?? body).slice(-200_000) : "", ...(textOf(body?.messages?.[0]?.content).includes(SUB) && { sub: true }), ...(Array.isArray(body?.tools) && { tools: body.tools.map((t) => t?.name), named: [SDK_DEFER, SDK_KEEP].map(sdkToolName).filter((n) => raw.includes(n)) }), ...(summary && { summary, inputTokens: Math.round(JSON.stringify({ system: body.system, messages: body.messages, tools: body.tools }).length / 4) }) };
       requests.push(rec);
       if (req.method !== "POST" || !path.startsWith("/v1/messages")) { refused.push(`${req.method} ${path}`); res.writeHead(404, { "content-type": "application/json" }); return res.end(JSON.stringify({ type: "error", error: { type: "not_found_error", message: "context-doctor canary mock" } })); }
       if (path.startsWith("/v1/messages/count_tokens")) { res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ input_tokens: 1000 })); }
@@ -258,6 +289,8 @@ export function claudeEnv({ root, mockUrl, token }) {
     CONTEXT_DOCTOR_NO_CALIBRATION: "1",
     // Subagent progress summaries under -p (the SDK's agentProgressSummaries): the G4 check counts them.
     CLAUDE_CODE_AGENT_PROGRESS_SUMMARIES: "1",
+    // G1: the mod defers this in-process server's tools (fix --apply desktop-tools-defer writes the same variable).
+    CONTEXT_DOCTOR_DEFER_MCP: SDK_DEFER,
   };
   for (const d of [env.CLAUDE_CONFIG_DIR, env.TMPDIR]) mkdirSync(d, { recursive: true });
   return env;
@@ -368,6 +401,11 @@ async function runSession({ claude, pluginDir, env, cwd, debugFile, log, mock })
       let e;
       try { e = JSON.parse(line); } catch { log(`non-JSON line: ${line.slice(0, 200)}`); continue; }
       events.push(e);
+      // The canary's in-process MCP servers: answer each message Claude Code sends them.
+      if (e.type === "control_request" && e.request?.subtype === "mcp_message") {
+        send({ type: "control_response", response: { subtype: "success", request_id: e.request_id, response: { mcp_response: sdkMcpReply(e.request.server_name, e.request.message) } } });
+        continue;
+      }
       log(`event ${e.type}${e.subtype ? "/" + e.subtype : ""}${e.hook_event ? " " + e.hook_event : ""}${e.type === "result" ? ` ${JSON.stringify(String(e.result ?? "").slice(0, 80))} turns ${e.num_turns}` : ""}${e.type === "user" || e.type === "assistant" ? " " + JSON.stringify(e.message?.content).slice(0, 100) : ""}`);
       if (e.type === "system" && e.subtype === "task_started") subagent = true;
       if (e.type === "system" && e.subtype === "compact_boundary") compacted = true;
@@ -401,6 +439,7 @@ async function runSession({ claude, pluginDir, env, cwd, debugFile, log, mock })
   };
   child.stdout.on("data", quiet);
   quiet();
+  send({ type: "control_request", request_id: "canary-initialize", request: { subtype: "initialize", sdkMcpServers: [SDK_DEFER, SDK_KEEP] } });
   user(`${MAIN}: always keep this canary note. Run one subagent.`);
   let timer;
   const code = await new Promise((r) => {
@@ -457,6 +496,19 @@ export function evaluate({ run, mock, ledgers, validate, pluginDir, version = ""
   check(compaction, "the PreCompact hook's instructions reach the compaction request", compaction ? "" : `no request held "${PRECOMPACT_HEAD}"`);
   check(ledgers.main.some((l) => l.ev === "precompact"), "the PreCompact hook records itself in the ledger");
   check(mock.requests.some((r) => r.text.includes(SUB)), "the subagent ran (the mock got its request)");
+  // G1: the mod's tool.describe answer moves a named in-process server's tools behind ToolSearch (2.1.326+).
+  if (atLeast(version, "2.1.326")) {
+    const first = mock.requests.find((r) => Array.isArray(r.tools) && r.text.includes(MAIN));
+    const sent = new Set(first?.tools ?? []);
+    const keep = sdkToolName(SDK_KEEP), defer = sdkToolName(SDK_DEFER);
+    const reached = sent.has(keep);
+    check(reached, "an SDK-hosted (in-process) MCP server's always-loaded tool goes whole into the first request", reached ? "" : first ? `not in its ${sent.size} tools` : "no first request", true);
+    // 2.1.330 names a tool a hook deferred from the session's second request on (the first lists the
+    // deferred tools before the hooks have answered), so any request of the session may name it.
+    const whole = mock.requests.filter((r) => r.tools?.includes(defer)).length;
+    const named = mock.requests.findIndex((r) => r.named?.includes(defer) && !r.tools?.includes(defer));
+    if (reached) check(!sent.has(defer) && !whole && named >= 0, "the mod puts a server named in CONTEXT_DOCTOR_DEFER_MCP behind ToolSearch (tool.describe, an in-process server)", whole ? `${defer} went whole in ${whole} request(s)` : named >= 0 ? `named from request ${named + 1}` : `${defer} is neither sent nor named`);
+  }
   // G4: with the subagent held past the timer, a -p host that asked gets progress summaries. Warnings, not failures:
   // what they cost is Claude Code's choice, and the kind is recorded for progress-summaries' assumptions.
   if (mock.holdSubMs > 0 && atLeast(version, "2.1.328")) {

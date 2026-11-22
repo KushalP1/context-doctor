@@ -78,7 +78,14 @@ Off until you apply it. The Desktop app gives every session and subagent its own
 
 The mod reads that variable at Claude Code's `tool.describe` event, which fires once per tool and session, and for a tool of a named server answers `isDeferred: true`: Claude then sees its name and loads it through tool search when it needs it. `ccd_turn` is never moved, whatever the variable says; a tool already behind tool search, a built-in, and every other server's tools come back as Claude Code gave them. The move waits for the next new conversation or `/clear`: the mod never sets `breakPromptCache`, so no running conversation's cache is written again. Unset (the default, and after `fix undo desktop-tools-defer`), with `CONTEXT_DOCTOR_NO_MOD=1`, or on a Claude Code before 2.1.326 (its `tool.describe` has no `mcpServer`, and an answer cannot place a tool), the mod changes nothing.
 
-Not yet seen on a live Desktop session: it follows Claude Code 2.1.329's mods declarations and is tested against a stand-in for the engine, but whether the app's in-process (`sdk`) servers raise `tool.describe` is still to be checked. After applying, start a new session and run `context-doctor overhead`: the servers should no longer be listed as sent whole.
+What is known without the app (Claude Code 2.1.330, read from its binary and run in the weekly canary):
+
+- **In-process servers raise `tool.describe`.** Every tool Claude Code describes goes through the event, an MCP tool with `mcpServer.type` taken from its server's config, `sdk` for an in-process server like the app's. The one exception is a server that stands in for Claude Code's own built-in tools, which is described as a built-in (no `mcpServer`), and the mod leaves alone. The canary hosts two in-process servers the way an app does, each tool marked always-loaded as the app marks the ones it sends whole: the one named in `CONTEXT_DOCTOR_DEFER_MCP` goes behind tool search, the other goes whole.
+- **The answer beats always-loaded.** A hook's `isDeferred` is read before the server's `alwaysLoad` and the app's list of tools never to defer.
+- **Only where tool search is on.** With tool search off (`ENABLE_TOOL_SEARCH=false`, or a model or provider without it), Claude Code defers nothing that turn and the answer is ignored: the tools go whole as before, with no error (seen in a canary run with the variable off).
+- **The first request of a session does not name it.** Claude Code lists the deferred tools before the hooks answer, so a moved tool is neither sent nor listed in a session's first request and is named from the second on. Tool search can still find it by keyword in the first.
+
+Not yet seen on a live Desktop session: whether the app's tools reach Claude Code as in-process servers of their own (the binary treats `ccd_*` servers as in-process ones, but the app may also forward tools another way), and the saving itself. After applying, start a new session and run `context-doctor overhead`: the servers should no longer be listed as sent whole.
 
 ## Turning it off
 
