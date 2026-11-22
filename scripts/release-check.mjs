@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // Go or no-go for the weekly release (CONTRIBUTING.md, "Releasing"). Runs, in
 // order, and stops at nothing: the checkout (clean, on main, level with
-// origin/main), npm test, CI on this commit, the latest weekly canary and
-// model-price runs on GitHub, check-models against the hosts and price pages
-// (the list in .github/workflows/models.yml) and the dated rows, the Claude
-// Code surface report, and scripts/verify-local.sh (which runs the canary on
+// origin/main), npm test (under caffeinate -i on macOS; a test that timed
+// out minutes past its own limit is said to be the machine sleeping), CI on
+// this commit, the latest weekly canary and model-price runs on GitHub,
+// check-models against the hosts and price pages (the list in
+// .github/workflows/models.yml) and the dated rows, the Claude Code surface
+// report, and scripts/verify-local.sh (which runs the canary on
 // the newest Claude Code here). Then the train: how long since the last
 // release, and the release notes for the next one. Read-only: it changes no
 // file it did not build, bumps nothing, tags nothing, publishes nothing.
@@ -69,6 +71,35 @@ export function trainChecks({ today, lastTag, lastTagDate, version, roadmap, com
   return out;
 }
 
+/**
+ * The tests that timed out long after their own timeout: node's timer fires
+ * late only when the process was stopped, so the machine (a closed lid) most
+ * likely slept mid-run and the test itself is not at fault. From the spec
+ * reporter's failure list: "✖ name (Xms)" then "'test timed out after Nms'".
+ */
+export function sleptTimeouts(out) {
+  const lines = out.split("\n");
+  const found = [];
+  lines.forEach((line, i) => {
+    const t = line.match(/test timed out after (\d+)ms/);
+    if (!t) return;
+    for (let j = i - 1; j >= Math.max(0, i - 3); j--) {
+      const m = lines[j].match(/^\s*✖ (.+) \(([\d.]+)ms\)\s*$/);
+      if (!m) continue;
+      const took = Number(m[2]), limit = Number(t[1]);
+      // Twice the timeout and a minute over it: a slow machine is late by seconds, a sleeping one by minutes.
+      if (took >= 2 * limit && took - limit >= 60_000 && !found.some((f) => f.name === m[1])) found.push({ name: m[1], took, limit });
+      break;
+    }
+  });
+  return found;
+}
+
+/** npm test, kept awake on macOS: `caffeinate -i` holds off idle sleep for the run (a closed lid on battery still sleeps). */
+export function testCommand(platform = process.platform) {
+  return platform === "darwin" ? ["caffeinate", ["-i", "npm", "test"]] : ["npm", ["test"]];
+}
+
 function sh(cmd, args, opts = {}) {
   const r = spawnSync(cmd, args, { cwd: repo, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...opts });
   return { status: r.error ? -1 : r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}`, error: r.error };
@@ -85,7 +116,7 @@ function ghRun(workflow, sha) {
 
 const CHECKS = [
   ["checkout", "clean, on main, level with origin/main"],
-  ["npm test", "the whole suite (builds first)"],
+  ["npm test", "the whole suite (builds first; under caffeinate -i on macOS, and a timeout far past its limit is said to be the machine sleeping)"],
   ["dist", "committed dist/ matches src/"],
   ["CI", "ci.yml green on this commit (3 OSes x Node 20/22/24)"],
   ["canary (weekly)", "the newest canary.yml run on main is green"],
@@ -125,9 +156,15 @@ async function main() {
   else if (sha !== remote) add("checkout", "fail", `HEAD ${sha.slice(0, 7)} (${branch}) is not origin/main ${remote.slice(0, 7)}: release what CI tested`);
   else add("checkout", "ok", `${sha.slice(0, 7)} = origin/main`);
 
-  const test = sh("npm", ["test"], { shell: process.platform === "win32" });
+  const [testCmd, testArgs] = testCommand();
+  let test = sh(testCmd, testArgs, { shell: process.platform === "win32" });
+  // No caffeinate on this Mac: the plain run.
+  if (test.status === -1 && testCmd === "caffeinate") test = sh("npm", ["test"]);
   const passLine = test.out.match(/^ℹ pass \d+$/m)?.[0].slice(2);
-  add("npm test", test.status === 0 && /^ℹ fail 0$/m.test(test.out) ? "ok" : "fail", test.status === 0 ? passLine : `exit ${test.status}\n${tail(test.out.split("\n").filter((l) => /^✖|^ℹ (pass|fail)/.test(l)).join("\n"))}`);
+  const testOk = test.status === 0 && /^ℹ fail 0$/m.test(test.out);
+  const slept = testOk ? [] : sleptTimeouts(test.out);
+  const sleptNote = slept.length ? `\n    the machine probably slept mid-run: ${slept.map((t) => `"${t.name}" took ${Math.round(t.took / 1000)} s against its ${Math.round(t.limit / 1000)} s timeout`).join("; ")}. Keep it awake (lid open, on power) and run again` : "";
+  add("npm test", testOk ? "ok" : "fail", testOk ? passLine : `exit ${test.status}\n${tail(test.out.split("\n").filter((l) => /^✖|^ℹ (pass|fail|cancelled)/.test(l)).join("\n"))}${sleptNote}`);
   const dist = sh("git", ["diff", "--quiet", "--", "dist"]);
   add("dist", dist.status === 0 ? "ok" : "fail", dist.status === 0 ? "" : "the build changed dist/: commit it");
 

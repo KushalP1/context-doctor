@@ -400,6 +400,7 @@ Each release with the measurements behind it. Dollar figures are as measured whe
 
 ## Shipped on main, not yet released
 
+- **`release-check` keeps the Mac awake for `npm test`.** On macOS the suite runs under `caffeinate -i`; a test that timed out at least twice its own limit and a minute over it is reported as "the machine probably slept mid-run" with its time against its timeout (a closed lid made two doctor tests time out on 2026-11-21). `caffeinate -i` does not stop a closed lid on battery from sleeping; the message covers that case.
 - **ROADMAP's G1 row names the lever as shipped**: `desktop-tools-defer` (it said `mcp-defer`, which is the lever for servers in your own config).
 
 ## Shipped in 0.50.0: The Desktop app's own tools, money past the limit, a Codex status line, and two audits

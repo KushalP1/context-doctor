@@ -54,3 +54,33 @@ test("--plan lists the checks and runs none; an unknown flag is exit 2", () => {
         assert.match(plan.stdout, new RegExp(`^- ${name.replace(/[()]/g, "\\$&")}: `, "m"));
     assert.equal(spawnSync(process.execPath, [SCRIPT, "--nope"], { encoding: "utf8" }).status, 2);
 });
+test("npm test runs under caffeinate -i on macOS only; a timeout far past its own limit is said to be the machine sleeping", async () => {
+    const { testCommand, sleptTimeouts } = await load();
+    assert.deepEqual(testCommand("darwin"), ["caffeinate", ["-i", "npm", "test"]]);
+    assert.deepEqual(testCommand("linux"), ["npm", ["test"]]);
+    assert.deepEqual(testCommand("win32"), ["npm", ["test"]]);
+    // Node's spec reporter's failure list: a lid closed mid-run (31 minutes against 60 s), a merely slow test (75 s against 60 s), and a plain failure.
+    const out = [
+        "✖ failing tests:",
+        "",
+        "test at dist/test/doctor.test.js:120:1",
+        "✖ doctor reads the plugin (1873212.5ms)",
+        "  'test timed out after 60000ms'",
+        "",
+        "test at dist/test/doctor.test.js:300:1",
+        "✖ doctor times the handshake (75012.1ms)",
+        "  'test timed out after 60000ms'",
+        "",
+        "test at dist/test/fix.test.js:9:3",
+        "  ✖ nested and asleep (400000ms)",
+        "  'test timed out after 30000ms'",
+        "",
+        "✖ an assertion (12.3ms)",
+        "  AssertionError: nope",
+    ].join("\n");
+    assert.deepEqual(sleptTimeouts(out), [
+        { name: "doctor reads the plugin", took: 1873212.5, limit: 60000 },
+        { name: "nested and asleep", took: 400000, limit: 30000 },
+    ]);
+    assert.deepEqual(sleptTimeouts("ℹ pass 3\nℹ fail 0\n"), []);
+});
