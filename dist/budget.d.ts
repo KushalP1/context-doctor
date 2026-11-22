@@ -23,6 +23,7 @@
  * replies count once. Measured on the author's history: docs/spend.md.
  */
 import { type Tool } from "./spend.js";
+import { type CreditsSummary } from "./credits.js";
 import { type CompactTrack } from "./compactcost.js";
 export type Period = "day" | "week";
 export interface Budget {
@@ -155,6 +156,19 @@ export declare function periodSpend(period: Period, now?: number, home?: string,
 export declare const THRESHOLDS: readonly [50, 80, 100];
 /** The highest threshold `usd` has reached of `budget` (0 below the first). */
 export declare function levelOf(usd: number, budget: number): number;
+/**
+ * Claude Code's part of the period that ran past the plan's limit, paid from
+ * usage credits (credits.ts): already in the period's dollars, said apart.
+ * Reads the limits ledger, and the transcripts only when the ledger says a
+ * limit ran out or credits were in use. Undefined when nothing was; never
+ * throws (a damaged ledger must not cost the budget its line).
+ */
+export declare function periodCredits(start: number, now?: number, home?: string): CreditsSummary | undefined;
+/**
+ * "$4.20 of this was paid from usage credits, past your plan's limit (37
+ * requests, at API list prices, an estimate)." Inferred ones say so.
+ */
+export declare function creditsLine(c: CreditsSummary | undefined): string | undefined;
 export interface BudgetVerdict {
     /** A line for the user, once per threshold per period. */
     message?: string;
@@ -171,6 +185,6 @@ export declare function budgetVerdict(now?: number, home?: string): BudgetVerdic
 /** The status line's part: "$12/$50 today", or undefined with no budget set. */
 export declare function budgetStatus(now?: number, home?: string): string | undefined;
 /** `budget` with no argument, and after setting one: the budget and where the period stands. */
-export declare function renderBudgetStatus(b: Budget | undefined, s: PeriodSpend | undefined, hookInstalled: boolean): string;
+export declare function renderBudgetStatus(b: Budget | undefined, s: PeriodSpend | undefined, hookInstalled: boolean, credits?: CreditsSummary): string;
 /** Our every-prompt hook in Claude Code, Codex or Gemini CLI, or the plugin's. */
 export declare function promptHookInstalled(home?: string): boolean;

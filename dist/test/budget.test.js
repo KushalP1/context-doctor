@@ -12,7 +12,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renam
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { budgetStatePath, levelOf, parseBudget, periodEnd, periodSpend, periodStart, renderBudgetStatus } from "../budget.js";
+import { budgetStatePath, creditsLine, levelOf, parseBudget, periodEnd, periodSpend, periodStart, renderBudgetStatus } from "../budget.js";
 import { claudeSpend } from "../spend.js";
 import { renderStatusLine } from "../statusline.js";
 import { clearScanMemo } from "../scan.js";
@@ -136,6 +136,44 @@ test("the hook says each threshold once a period, then holds prompts over it wit
         rmSync(home, { recursive: true, force: true });
         rmSync(cache, { recursive: true, force: true });
     }
+});
+test("past the plan's limit: the budget's status and its warning say how much of the period was paid from usage credits; nothing when no limit ran out", () => {
+    const { home, cache, transcript, env } = setup();
+    try {
+        // Five $0.20 replies, an hour apart, from 10:00 to 14:00.
+        writeFileSync(transcript, [5, 4, 3, 2, 1].flatMap((h) => reply(NOW - h * HOUR)).join("\n") + "\n");
+        writeFileSync(join(home, ".claude.json"), JSON.stringify({ oauthAccount: { hasExtraUsageEnabled: true }, cachedExtraUsageDisabledReason: null }));
+        assert.equal(run(env, ["budget", "2/day"]).status, 0);
+        const before = run(env, ["budget"]);
+        assert.match(before.out, /Today: \$1\.00 so far, 50%/);
+        assert.ok(!/usage credits/.test(before.out), before.out);
+        assert.equal(JSON.parse(run(env, ["budget", "--json"]).out).credits, null);
+        // The 5-hour limit read 100% at 11:30 and resets at 16:00: the replies at 12:00, 13:00 and 14:00 went through past it ($0.60).
+        const reset = (NOW + HOUR) / 1000;
+        writeFileSync(join(home, ".claude", ".context-doctor-limits.jsonl"), [[NOW - 4 * HOUR, 90], [NOW - 3.5 * HOUR, 100], [NOW - 2 * HOUR, 100], [NOW - 30 * 60_000, 100]]
+            .map(([ts, pct]) => JSON.stringify({ ts, app: "claude", w: "five_hour", pct, reset, src: "mod" })).join("\n") + "\n");
+        const status = run(env, ["budget"]);
+        assert.equal(status.status, 0, status.err);
+        assert.match(status.out, /Today: \$1\.00 so far, 50%/, "how the budget is counted does not change");
+        assert.match(status.out, /^\$0\.60 of this was most likely paid from usage credits, past your plan's limit \(3 requests, at API list prices, an estimate; inferred: they went through after a limit read 100%\)\.$/m);
+        const json = JSON.parse(run(env, ["budget", "--json"]).out);
+        assert.equal(json.spent.toFixed(2), "1.00");
+        assert.deepEqual({ ...json.credits, usd: json.credits.usd.toFixed(2) }, { usd: "0.60", requests: 3, fromHeaders: 0, inferred: 3 });
+        // The hook's 50% warning says it too.
+        const warn = JSON.parse(run(env, ["hook"], prompt()).out).systemMessage;
+        assert.match(warn, /\$1\.00 spent today: 50% of your \$2\/day budget\. \$0\.60 of this was most likely paid from usage credits, past your plan's limit/);
+    }
+    finally {
+        rmSync(home, { recursive: true, force: true });
+        rmSync(cache, { recursive: true, force: true });
+    }
+});
+test("the credits line: paid as the API's replies said, or inferred, and nothing for none", () => {
+    const c = (fromHeaders, inferred) => ({ episodes: [], requests: fromHeaders + inferred, usd: 41.2, fromHeaders, inferred });
+    assert.equal(creditsLine(c(37, 0)), "$41.20 of this was paid from usage credits, past your plan's limit (37 requests, at API list prices, an estimate).");
+    assert.equal(creditsLine(c(1, 2)), "$41.20 of this was paid from usage credits, past your plan's limit (3 requests, at API list prices, an estimate; 2 of them inferred from a limit at 100%).");
+    assert.equal(creditsLine(c(0, 0)), undefined);
+    assert.equal(creditsLine(undefined), undefined);
 });
 test("a week's budget counts from Monday, and Codex's spend counts with Claude Code's", () => {
     const { home, cache, transcript, env } = setup();

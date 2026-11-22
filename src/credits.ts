@@ -21,7 +21,8 @@
  * Dollars are each request at API list prices, as `spend` prices it.
  * Whether usage credits are billed at exactly those prices is not verified
  * here, so every figure is said to be an estimate. Read only by commands
- * the user runs (`limits`, `spend`, `doctor`): nothing is drawn or sent.
+ * the user runs (`limits`, `spend`, `doctor`, `budget`), and by the
+ * budget's hook at a threshold it already speaks at: nothing is drawn or sent.
  */
 
 import { readExtraUsage, type ExtraUsage } from "./claudedir.js";
@@ -235,7 +236,12 @@ export function nothingPast(inp: CreditsInputs): boolean {
  */
 export function creditsReport(days = 30, opts: CreditsOptions = {}): (CreditsSummary & { extraUsage?: ExtraUsage }) | undefined {
   const now = opts.now ?? Date.now();
-  const since = now - days * DAY;
+  return creditsSince(now - days * DAY, { ...opts, now });
+}
+
+/** The same from `since` to now (`budget`'s day or week). Undefined when nothing was past the limit. */
+export function creditsSince(since: number, opts: CreditsOptions = {}): (CreditsSummary & { extraUsage?: ExtraUsage }) | undefined {
+  const now = opts.now ?? Date.now();
   const inp = creditsInputs(since, { ...opts, now });
   if (nothingPast(inp)) return undefined;
   const starts = [...spentSpans(inp.readings).map((s) => s.from), ...inp.overage.filter((o) => o.inUse).map((o) => o.ts - HEADER_STALE_MS)];

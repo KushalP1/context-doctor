@@ -87,7 +87,7 @@ import { claudeCodeSession, collectSpend, renderSpend, renderSpendShare, session
 import { buildExport, defaultDeveloper, exportFileName, mergeExports, readExports, renderExportDone, renderMerge } from "./spendteam.js";
 import { renderSessionComparison } from "./ccost.js";
 import { withOrgRatesHeld } from "./orgrates.js";
-import { clearBudget, parseBudget, periodSpend, promptHookInstalled, readBudget, renderBudgetStatus, writeBudget } from "./budget.js";
+import { clearBudget, parseBudget, periodCredits, periodSpend, promptHookInstalled, readBudget, renderBudgetStatus, writeBudget } from "./budget.js";
 /**
  * The commands that print JSON with --json. Any other command refuses the
  * flag: it used to print its text report anyway and exit 0, so a script
@@ -1690,10 +1690,12 @@ async function main() {
         }
         const b = readBudget();
         const s = b ? periodSpend(b.period) : undefined;
+        // Claude Code's part past the plan's limit, on usage credits: in `spent` already, said apart.
+        const c = s ? periodCredits(s.start) : undefined;
         if (args.json)
-            console.log(JSON.stringify(b && s ? { ...b, spent: s.usd, byTool: s.byTool, periodStart: s.start, periodEnd: s.end, unpriced: s.unpriced ?? null } : null, null, 2));
+            console.log(JSON.stringify(b && s ? { ...b, spent: s.usd, byTool: s.byTool, periodStart: s.start, periodEnd: s.end, unpriced: s.unpriced ?? null, credits: c ? { usd: c.usd, requests: c.requests, fromHeaders: c.fromHeaders, inferred: c.inferred } : null } : null, null, 2));
         else
-            console.log(withInvocation(renderBudgetStatus(b, s, promptHookInstalled())));
+            console.log(withInvocation(renderBudgetStatus(b, s, promptHookInstalled(), c)));
         return;
     }
     if (args.command === "compactions") {

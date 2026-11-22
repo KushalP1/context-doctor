@@ -34,6 +34,7 @@ import { subagentFiles } from "./subagents.js";
 import { codexFileSpend, codexFiles, geminiFileSpend, geminiFiles, TOOL_NAME } from "./spend.js";
 import { billedCost, isUnbilledModel, priceChangedText, priceTableKey, requestCost } from "./pricing.js";
 import { orgRates, orgRatesLine } from "./orgrates.js";
+import { creditsSince } from "./credits.js";
 import { anchorOf, rowsOf } from "./scan.js";
 import { realModel } from "./tokens.js";
 import { isCompactionRow, isTrack, newTrack, trackCompaction } from "./compactcost.js";
@@ -684,6 +685,33 @@ function raised(b, spent) {
     return Math.ceil(Math.max(b.usd * 1.5, spent * 1.2) / 5) * 5;
 }
 /**
+ * Claude Code's part of the period that ran past the plan's limit, paid from
+ * usage credits (credits.ts): already in the period's dollars, said apart.
+ * Reads the limits ledger, and the transcripts only when the ledger says a
+ * limit ran out or credits were in use. Undefined when nothing was; never
+ * throws (a damaged ledger must not cost the budget its line).
+ */
+export function periodCredits(start, now = Date.now(), home) {
+    try {
+        return creditsSince(start, { now, ...(home ? { home } : {}) });
+    }
+    catch {
+        return undefined;
+    }
+}
+/**
+ * "$4.20 of this was paid from usage credits, past your plan's limit (37
+ * requests, at API list prices, an estimate)." Inferred ones say so.
+ */
+export function creditsLine(c) {
+    if (!c || !c.requests)
+        return undefined;
+    const n = `${c.requests.toLocaleString("en-US")} request${c.requests === 1 ? "" : "s"}`;
+    const how = c.inferred && !c.fromHeaders ? "was most likely paid" : "was paid";
+    const why = !c.inferred ? "" : !c.fromHeaders ? "; inferred: they went through after a limit read 100%" : `; ${c.inferred.toLocaleString("en-US")} of them inferred from a limit at 100%`;
+    return `${money(c.usd)} of this ${how} from usage credits, past your plan's limit (${n}, at API list prices, an estimate${why}).`;
+}
+/**
  * The hook's check: undefined with no budget set (one failed read: the hot
  * path stays a stat), otherwise the spend so far and what to say or do.
  */
@@ -704,9 +732,12 @@ export function budgetVerdict(now = Date.now(), home = homedir()) {
     const unpriced = spend.unpricedNew && spend.unpriced ? unpricedText(spend.unpriced) : undefined;
     if (!spend.warn)
         return unpriced ? { spend, budget: b, message: `context-doctor: ${unpriced}` } : { spend, budget: b };
-    const message = spend.warn >= 100
+    const base = spend.warn >= 100
         ? `${head}${byToolText(spend.byTool)}: over your ${amount(b.usd)}/${per(b.period)} budget (${pct}%). Raise it with context-doctor budget ${raised(b, spend.usd)}/${per(b.period)}, or add --block to hold prompts over it.`
         : `${head}${byToolText(spend.byTool)}: ${pct}% of your ${amount(b.usd)}/${per(b.period)} budget.`;
+    // Once per threshold, so the ledger (and the transcripts only past a limit) is read only then.
+    const credits = creditsLine(periodCredits(spend.start, now, home));
+    const message = credits ? `${base} ${credits}` : base;
     return { spend, budget: b, message: unpriced ? `${message} ${unpriced}` : message };
 }
 /** The status line's part: "$12/$50 today", or undefined with no budget set. */
@@ -719,13 +750,16 @@ export function budgetStatus(now = Date.now(), home = homedir()) {
     return `${short(s.usd)}/${amount(b.usd)} ${span(b.period)}${s.usd >= b.usd ? " ⚠" : ""}`;
 }
 /** `budget` with no argument, and after setting one: the budget and where the period stands. */
-export function renderBudgetStatus(b, s, hookInstalled) {
+export function renderBudgetStatus(b, s, hookInstalled, credits) {
     if (!b || !s)
         return "No spend budget set. Set one: context-doctor budget 50/day (or 200/week; --block to hold prompts over it).";
     const lines = [
         `Budget: ${amount(b.usd)} a ${per(b.period)}, across Claude Code, Codex and Gemini CLI${b.block ? "; prompts over it are held" : ""}.`,
         `${span(b.period) === "today" ? "Today" : "This week"}: ${money(s.usd)} so far, ${Math.round((s.usd / b.usd) * 100)}%${byToolText(s.byTool)}. ${resets(b.period)}`,
     ];
+    const paid = creditsLine(credits);
+    if (paid)
+        lines.push(paid);
     const org = orgRatesLine();
     if (org)
         lines.push(org);

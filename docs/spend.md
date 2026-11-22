@@ -119,6 +119,14 @@ What you see, once per threshold per period:
 context-doctor: $41.20 spent today (Claude Code $40.10, Codex $1.10): 82% of your $50/day budget.
 ```
 
+**Past the plan's limit.** With extra usage on, Claude Code keeps working when a 5-hour or weekly limit runs out, and those requests are paid from usage credits, real money. They are already in the budget's dollars (every request is priced the same way); the warning at a threshold and `budget` say how much of it ran past the limit, when the limits ledger says a limit ran out or the API's replies said credits were in use:
+
+```
+context-doctor: $41.20 spent today: 82% of your $50/day budget. $12.40 of this was paid from usage credits, past your plan's limit (37 requests, at API list prices, an estimate).
+```
+
+Found only from 100% readings (the Desktop app, where the proxy does not run), it says "was most likely paid" and that it was inferred, as `limits` does. `budget --json` adds `credits` (`usd`, `requests`, `fromHeaders`, `inferred`; `null` when nothing ran past a limit). How a budget is set does not change, and the status line's `$12/$50 today` stays as it is.
+
 Requests on a model with no list price cannot count toward a dollar budget: the hook says so once a period (`3 requests are on gpt-7, with no list price, so the budget does not count them.`), and `budget` on every run.
 
 **Holding prompts.** With `--block`, over the budget every prompt is held, with the reason and how to lift it: `context-doctor budget off`, or a higher budget (`context-doctor budget 75/day --block`; without `--block` a new budget only warns); it lifts by itself at midnight (Monday for a week). Each host's documented way:
