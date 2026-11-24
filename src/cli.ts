@@ -28,7 +28,8 @@ import { latestModelComparison } from "./abstore.js";
 import { buildImpactReport } from "./impact.js";
 import { measureTokenizer, renderTokenizer } from "./tokenizer-measure.js";
 import { autopilotOff, autopilotOn, autopilotPauseResult, autopilotPaths, autopilotStatus, DEFAULT_AUTOPILOT_PORT } from "./autopilot.js";
-import { estimateSavings, renderSavings, renderShare, savingsRows } from "./savings.js";
+import { estimateSavings, renderSampleSavings, renderSavings, renderShare, savingsRows } from "./savings.js";
+import { writeSampleHistory } from "./sample.js";
 import { prescan } from "./scan.js";
 import { REQUEST_ROWS } from "./coldresume.js";
 import { coldReturns } from "./coldreturns.js";
@@ -127,7 +128,7 @@ Start here:
                                                 Cursor's postToolUse), Claude Code's PreCompact
                                                 hook, which tells each compaction what to keep,
                                                 and Copilot's sessionStart (the standing rules)
-  context-doctor savings [--days n] [--share [--copy]]
+  context-doctor savings [--days n] [--share [--copy]] [--sample]
                                                 What your recent Claude Code sessions cost, and what
                                                 /compact at cold resumes, autopilot and an earlier
                                                 auto-compact window would save, replayed and priced
@@ -597,6 +598,8 @@ interface Args {
   dryRun: boolean;
   copy?: boolean;
   share?: boolean;
+  /** savings: show the demonstration report on generated sessions. */
+  sample?: boolean;
   /** limits: a block to paste into a bug report. */
   report?: boolean;
   /** spend: group by project, repository or branch; --export (a file, or the default name), --anonymize, --as. */
@@ -709,6 +712,7 @@ const FLAGS: FlagSpec[] = [
   { names: ["--dry-run"], set: (a) => { a.dryRun = true; } },
   { names: ["--copy"], set: (a) => { a.copy = true; } },
   { names: ["--share"], set: (a) => { a.share = true; } },
+  { names: ["--sample"], set: (a) => { a.sample = true; } },
   { names: ["--report"], set: (a) => { a.report = true; } },
   { names: ["--by"], value: "text", set: (a, v) => { a.by = v; } },
   { names: ["--export"], set: (a) => { a.exportSpend = true; } },
@@ -1286,6 +1290,7 @@ async function main(): Promise<void> {
   if (args.command === "savings" || (!args.command && process.stdout.isTTY && hasClaudeSessions())) {
     // `savings`, and a bare `context-doctor --json` or `--share` in a terminal
     // with Claude Code history (what a bare run printed before the one-question screen).
+    if (args.sample && (args.json || args.share)) usageError("--sample is a demonstration for the terminal; it does not go with --json or --share.");
     const replaying = progressLine("Replaying your Claude Code sessions through autopilot");
     // Each transcript read once for every report below; what an earlier run kept is not read again (scan.ts).
     prescan([
@@ -1294,6 +1299,18 @@ async function main(): Promise<void> {
     ], replaying.tick);
     const report = estimateSavings(args.days ?? 30, {}, undefined, replaying.tick);
     replaying.clear();
+    // --sample: the real report on a generated history, said to be a sample.
+    // Never substituted for the real one: with no history the empty report
+    // says so and offers this flag (renderSavings' empty branch).
+    if (args.sample) {
+      const demo = writeSampleHistory();
+      try {
+        console.log(renderSampleSavings(estimateSavings(30, {}, demo.paths)));
+      } finally {
+        demo.cleanup();
+      }
+      return;
+    }
     const setWindow = currentCompactWindow();
     const measuring = progressLine("Measuring your compactions");
     const reread = compactionQuality(60, undefined, measuring.tick).extraRereadTokensPerCompaction;
