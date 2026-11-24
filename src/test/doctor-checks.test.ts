@@ -212,3 +212,27 @@ test("models with no list price of their own in the last 30 days are named, <syn
   const both = await doctor(home);
   assert.match(both.out, /claude-opus-97 \(2 requests\), gpt-97-max \(1 request\)/, both.out);
 });
+
+test("doctor on an empty machine says nothing is protected, never 'All good'", async () => {
+  const home = mkdtempSync(join(tmpdir(), "ctxdoc-doc-empty-"));
+  const r = await doctor(home);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /no supported AI app was found on this machine/);
+  assert.match(r.out, /nothing is being measured or protected yet/);
+  assert.ok(!/All good/.test(r.out), r.out);
+});
+
+test("doctor with Claude Code present but nothing wired says so, never 'All good'", async () => {
+  // A ~/.claude folder without settings.json is Claude Code present (pinned
+  // above), so the verdict is the wiring gap, not "no app".
+  const r = await doctor(claudeHome());
+  assert.match(r.out, /not actively protecting any workflow/);
+  assert.ok(!/All good|no supported AI app/.test(r.out), r.out);
+});
+
+test("doctor with the every-prompt hook wired still ends well", async () => {
+  const home = claudeHome({ hooks: { UserPromptSubmit: [ourHook], PreCompact: [ourHook] } });
+  const r = await doctor(home);
+  assert.match(r.out, /All good\.|No problems; \d+ note\(s\) marked ! above/);
+  assert.ok(!/not actively protecting|no supported AI app/.test(r.out), r.out);
+});
