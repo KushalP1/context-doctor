@@ -1092,12 +1092,35 @@ export async function runDoctor() {
     const warns = checks.filter((c) => c.status === "warn");
     if (fails.length > 0)
         process.exitCode = 1;
+    // "All good" must mean something is actually protected. A clean bill on an
+    // empty machine is not that: say what is missing instead of reassuring.
+    // Presence is what each section above already decides: the app's config or
+    // home folder, its binary. (The app rows cannot be re-read for this — the
+    // Claude Code row watches ~/.claude.json while the app lives in ~/.claude.)
+    const home = homedir();
+    const appsDetected = existsSync(claudeDesktopConfigPath()) ||
+        claudeCodePresent() ||
+        existsSync(join(claudeDir(), "settings.json")) ||
+        existsSync(join(home, ".cursor")) ||
+        existsSync(codexDir()) ||
+        geminiCliPresent() ||
+        antigravityPresent() ||
+        copilotPresent() ||
+        devinCheck(home).status !== "skip";
+    // An ok that means a workflow is protected, not internal plumbing (the
+    // ledger, the MCP handshake with itself, optional config files existing).
+    const INTERNAL_OK = new Set(["Ledger", "MCP server handshake", "Project config", "Spend budget", "Desktop chat tool use", "Extra usage", "Desktop app tools", "Desktop compact offer", "Autopilot port"]);
+    const protecting = checks.filter((c) => c.status === "ok" && !INTERNAL_OK.has(c.label));
     console.log("");
     console.log(fails.length > 0
         ? `${fails.length} issue(s) found — fixes suggested above.`
-        : warns.length > 0
-            ? `No problems; ${warns.length} note(s) marked ! above.`
-            : "All good.");
+        : protecting.length === 0
+            ? !appsDetected
+                ? withInvocation("Installed and healthy, but no supported AI app was found on this machine: nothing is being measured or protected yet. On a machine with Claude Code, Cursor, Codex or Gemini CLI, `context-doctor install` wires it (`context-doctor uninstall` removes it).")
+                : withInvocation("Installed and healthy, but nothing is wired up yet: context-doctor is not actively protecting any workflow. `context-doctor install` wires the apps on this machine (`context-doctor uninstall` removes it).")
+            : warns.length > 0
+                ? `No problems; ${warns.length} note(s) marked ! above.`
+                : "All good.");
 }
 /** "3.18.25" >= major.minor. */
 function versionAtLeast(v, major, minor) {

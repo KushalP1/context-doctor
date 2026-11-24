@@ -94,7 +94,14 @@ export declare function renderSavings(r: SavingsReport, autopilotOn?: boolean, c
     hours: number;
     netUsd: number;
     pingUsd: number;
-}): string;
+}, sample?: boolean): string;
+/**
+ * The demonstration report: the real replay over the synthetic history from
+ * sample.ts, said to be a sample in its first and last lines. Shown only by
+ * `savings --sample`; without it, no history stays an honest empty report
+ * that offers the flag.
+ */
+export declare function renderSampleSavings(r: SavingsReport): string;
 /**
  * `savings --share`: a few lines people can paste or screenshot. Totals only:
  * no project names, paths or session ids, so sharing it leaks nothing.

@@ -354,10 +354,11 @@ export function estimateSavings(days = 30, options = {}, paths, onProgress, repl
 }
 const tokens = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : formatTokens(n));
 const usd = (n) => (n >= 100 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
-export function renderSavings(r, autopilotOn = false, cw, missLines, limitLines, lensLines, keepWarm) {
+export function renderSavings(r, autopilotOn = false, cw, missLines, limitLines, lensLines, keepWarm, sample = false) {
     const lines = [];
     if (r.sessions.length === 0) {
-        lines.push(`No Claude Code sessions with 10+ requests in the last ${r.days} days to replay.`);
+        lines.push(`No Claude Code sessions with 10+ requests in the last ${r.days} days to replay: nothing of yours was measured.`);
+        lines.push("See the same report on generated example sessions: `context-doctor savings --sample`.");
         lines.push("Use Claude Code for a while, then run this again: `context-doctor savings`.");
         return withInvocation(lines.join("\n"));
     }
@@ -365,9 +366,11 @@ export function renderSavings(r, autopilotOn = false, cw, missLines, limitLines,
     const allDesktop = r.unreachableSessions === n;
     const pct = (x) => (r.billedUsd > 0 ? ` (${Math.round((x / r.billedUsd) * 100)}%)` : "");
     // Kept within 80 columns: this is most people's first screen of the tool.
-    lines.push("What context-doctor finds in your Claude Code sessions");
+    lines.push(sample ? "SAMPLE: what context-doctor finds in Claude Code sessions" : "What context-doctor finds in your Claude Code sessions");
     // The same count, said the same way, as compact-window's.
-    lines.push(`Last ${r.days} days, ${sessionsLabel(n, r.transcripts ?? n)}, ${priceBasis()}`);
+    lines.push(sample
+        ? `Generated example sessions (no real history here), ${priceBasis()}`
+        : `Last ${r.days} days, ${sessionsLabel(n, r.transcripts ?? n)}, ${priceBasis()}`);
     lines.push("─".repeat(60));
     lines.push(`Input in your main conversations  ${usd(r.billedUsd).padStart(9)}   from your transcripts' usage`);
     // spend's total is larger: it adds output and the subagents. Said here, so the two do not look like they disagree.
@@ -424,11 +427,31 @@ export function renderSavings(r, autopilotOn = false, cw, missLines, limitLines,
         lines.push(...missLines);
     }
     lines.push("");
-    lines.push("Replayed request by request through the shipped code and priced as the");
-    lines.push("prompt cache bills. On a subscription the same tokens come out of your");
-    lines.push("usage limit instead. Share yours: context-doctor savings --share");
+    if (sample) {
+        lines.push("Replayed request by request through the shipped code, on sessions");
+        lines.push("generated for this demonstration. Nothing was measured on this machine.");
+    }
+    else {
+        lines.push("Replayed request by request through the shipped code and priced as the");
+        lines.push("prompt cache bills. On a subscription the same tokens come out of your");
+        lines.push("usage limit instead. Share yours: context-doctor savings --share");
+    }
     // Hints as the user can type them: `npx context-doctor …` after an npx run.
     return withInvocation(lines.join("\n"));
+}
+/**
+ * The demonstration report: the real replay over the synthetic history from
+ * sample.ts, said to be a sample in its first and last lines. Shown only by
+ * `savings --sample`; without it, no history stays an honest empty report
+ * that offers the flag.
+ */
+export function renderSampleSavings(r) {
+    const body = renderSavings(r, false, undefined, undefined, undefined, undefined, undefined, true);
+    if (r.sessions.length === 0)
+        return body;
+    return body + "\n\n" + withInvocation("This is a demonstration on generated data, not your usage. Once this\n" +
+        "machine has real Claude Code sessions, `context-doctor savings` replays\n" +
+        "them the same way. See this sample again: `context-doctor savings --sample`.");
 }
 /**
  * `savings --share`: a few lines people can paste or screenshot. Totals only:
