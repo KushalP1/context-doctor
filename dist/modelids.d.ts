@@ -44,6 +44,21 @@ export declare function openaiPageIds(markdown: string): string[];
  */
 export declare function googlePageIds(markdown: string): string[];
 /**
+ * The models Claude Code's signed model catalog offers
+ * (downloads.claude.ai/model-catalog/v1/catalog.json, read from 2.1.331 on;
+ * `modelCatalogUrl` can point elsewhere): every
+ * `surfaces.<surface>.model_selector_config[].models[].id`, across the
+ * terminal (`cc`), the Desktop app's Code tab (`ccd`) and the rest. It
+ * changes between Claude Code releases (version 5883 was issued 2026-11-24
+ * and expires a week later), so a model can reach the picker before any
+ * binary or CHANGELOG names it. `about` says which catalog was read.
+ * Throws on a catalog in another shape.
+ */
+export declare function catalogModelIds(json: string): {
+    ids: string[];
+    about: string;
+};
+/**
  * The models Codex offers (its models catalog, codex-rs/models-manager/
  * models.json): `listed` are the ones its picker shows, `hidden` the rest
  * (internal and trusted-access ids, which the price page may not name).

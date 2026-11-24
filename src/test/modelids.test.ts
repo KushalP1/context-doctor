@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { claudeModelIds, unpricedClaudeIds } from "../modelids.js";
+import { catalogModelIds, claudeModelIds, unpricedClaudeIds } from "../modelids.js";
 
 /** The checkout: the suite runs from a folder of its own (scripts/test.mjs), so nothing is relative to the working folder. */
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -70,6 +70,48 @@ test("scripts/check-models.mjs: exit 0 when every model is priced, 1 naming the 
     assert.match(down.stdout, /all 2 Claude models priced/);
     assert.equal(run("--url", "http://127.0.0.1:1/x", "--binary", fresh).status, 1);
     assert.equal(run("--nope").status, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** A model catalog in the shape Claude Code 2.1.331 reads (downloads.claude.ai/model-catalog/v1/catalog.json, version 5883, read 2026-11-24). */
+function catalog(cc: string[], ccd: string[]): string {
+  const surface = (ids: string[]) => ({ model_selector_state: {}, model_selector_config: [{ id: "default", models: ids.map((id) => ({ id, display_name: id })), settings_vocabulary: {}, provider_alias_targets: {} }] });
+  return JSON.stringify({ schema_version: 1, version: 5883, issued_at: "2026-11-24T11:23:05Z", expires_at: "2026-12-01T11:23:05Z", key_id: "k", surfaces: { cc: surface(cc), ccd: surface(ccd), chat: {} } });
+}
+
+test("H6: Claude Code's model catalog: every surface's picker ids, with the catalog's version; another shape throws", () => {
+  const c = catalogModelIds(catalog(["claude-opus-5-5", "claude-haiku-4-5-20251001"], ["claude-opus-5-5", "claude-fable-5-2"]));
+  assert.deepEqual(c.ids, ["claude-fable-5-2", "claude-haiku-4-5-20251001", "claude-opus-5-5"]);
+  assert.equal(c.about, "catalog version 5883, issued 2026-11-24, expires 2026-12-01; surfaces cc, ccd, chat");
+  assert.throws(() => catalogModelIds(JSON.stringify({ models: [] })), /no surfaces/);
+  assert.throws(() => catalogModelIds("<html>"));
+});
+
+test("H6: check-models.mjs --catalog passes when every catalog id is priced and fails naming one that is not (the Desktop app's surface too)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cd-catalog-"));
+  try {
+    const run = (...args: string[]) => spawnSync(process.execPath, [join(repoRoot, "scripts", "check-models.mjs"), ...args], { encoding: "utf8" });
+    // The 14 ids in catalog 5883's cc surface (2026-11-24): all priced.
+    const today = ["claude-fable-5", "claude-fable-5-1", "claude-fable-5-2", "claude-haiku-4-5-20251001", "claude-haiku-5-5", "claude-opus-4-1-20250805", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-opus-5-5", "claude-sonnet-4-6", "claude-sonnet-5", "claude-sonnet-5-5"];
+    const good = join(dir, "good.json");
+    writeFileSync(good, catalog(today, today));
+    const ok = run("--catalog", good);
+    assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+    assert.match(ok.stdout, /\(catalog version 5883, issued 2026-11-24, expires 2026-12-01; surfaces cc, ccd, chat\): all 14 Claude models priced/);
+    const bad = join(dir, "bad.json");
+    writeFileSync(bad, catalog(today, [...today, "claude-quill-6"]));
+    const no = run("--catalog", bad);
+    assert.equal(no.status, 1, no.stdout + no.stderr);
+    assert.match(no.stdout, /1 of 15 Claude models have no price of their own in src\/pricing\.ts: claude-quill-6/);
+    // Another shape is a warning, as for a page whose layout changed; an unreadable file is exit 2.
+    const odd = join(dir, "odd.json");
+    writeFileSync(odd, "{}");
+    const w = run("--catalog", odd);
+    assert.equal(w.status, 0, w.stdout + w.stderr);
+    assert.match(w.stdout, /^::warning title=check-models::.*could not be parsed \(no surfaces object\)/m);
+    assert.equal(run("--catalog", join(dir, "missing.json")).status, 2);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

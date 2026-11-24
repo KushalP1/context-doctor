@@ -4,7 +4,7 @@
 // origin/main), npm test (under caffeinate -i on macOS; a test that timed
 // out minutes past its own limit is said to be the machine sleeping), CI on
 // this commit, the latest weekly canary and model-price runs on GitHub,
-// check-models against the hosts and price pages (the list in
+// check-models against the hosts, price pages and Claude Code's model catalog (the list in
 // .github/workflows/models.yml) and the dated rows, the Claude Code surface
 // report, and scripts/verify-local.sh (which runs the canary on
 // the newest Claude Code here). Then the train: how long since the last
@@ -121,7 +121,7 @@ const CHECKS = [
   ["CI", "ci.yml green on this commit (3 OSes x Node 20/22/24)"],
   ["canary (weekly)", "the newest canary.yml run on main is green"],
   ["model prices (weekly)", "the newest models.yml run on main is green"],
-  ["check-models", "every model the hosts and price pages name has a price (models.yml's list, read now)"],
+  ["check-models", "every model the hosts, price pages and Claude Code's model catalog name has a price (models.yml's list, read now)"],
   ["dated prices", "no row's price ends within 14 days without a successor (a warning)"],
   ["Claude Code surface", "what the newest Claude Code here adds since docs/hosts-reviewed.json (a report)"],
   ["verify-local", "scripts/verify-local.sh: smokes, the published package, Python, real history, the canary, install round trip (skipped by --quick)"],

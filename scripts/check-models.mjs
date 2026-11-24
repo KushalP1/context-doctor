@@ -5,6 +5,9 @@
 // know what follows. Read-only.
 //   Claude:  --binary <claude binary>   the model catalog of an installed Claude Code
 //            --url <url> / --file <path> Claude Code's CHANGELOG, Anthropic's price page
+//            --catalog <url|path>        Claude Code's signed model catalog (2.1.331+,
+//                                        downloads.claude.ai/model-catalog/v1/catalog.json): every
+//                                        surface's picker; its version is printed
 //   OpenAI:  --openai <url|path>         the price page (developers.openai.com/api/docs/pricing.md)
 //            --codex <url|path>          Codex's model catalog (codex-rs/models-manager/models.json):
 //                                        the models its picker lists; hidden ones are named, not failed
@@ -18,17 +21,18 @@
 import { readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { claudeModelIds, codexModelIds, datedRows, dueRows, geminiCliIds, googlePageIds, openaiPageIds, unpriced, UNPRICED_ON_PURPOSE } from "../dist/modelids.js";
+import { catalogModelIds, claudeModelIds, codexModelIds, datedRows, dueRows, geminiCliIds, googlePageIds, openaiPageIds, unpriced, UNPRICED_ON_PURPOSE } from "../dist/modelids.js";
 import { priceChange } from "../dist/pricing.js";
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..");
-const USAGE = "usage: check-models.mjs [--binary <path> | --url <url> | --file <path> | --openai <url|path> | --codex <url|path> | --google <url|path> | --gemini-cli <url|path>]... [--dated [--today YYYY-MM-DD]]";
+const USAGE = "usage: check-models.mjs [--binary <path> | --url <url> | --file <path> | --catalog <url|path> | --openai <url|path> | --codex <url|path> | --google <url|path> | --gemini-cli <url|path>]... [--dated [--today YYYY-MM-DD]]";
 
 /** What each source flag reads, and the models it names. */
 const READERS = {
   "--binary": { label: "Claude", ids: claudeModelIds },
   "--url": { label: "Claude", ids: claudeModelIds },
   "--file": { label: "Claude", ids: claudeModelIds },
+  "--catalog": { label: "Claude", ids: (t) => catalogModelIds(t).ids, about: (t) => catalogModelIds(t).about },
   "--openai": { label: "OpenAI", ids: openaiPageIds },
   "--google": { label: "Gemini", ids: googlePageIds },
   "--gemini-cli": { label: "Gemini", ids: geminiCliIds },
@@ -81,9 +85,12 @@ for (const { flag, value } of sources) {
   }
   let ids;
   let hidden = [];
+  let about = "";
   try {
     ids = reader.ids(text);
     hidden = reader.hidden?.(text) ?? [];
+    // Which version of a source that changes between releases was read (the model catalog's).
+    about = reader.about ? ` (${reader.about(text)})` : "";
   } catch (e) {
     // A page or catalog in a shape this check does not know: a warning, as for a page that is down.
     console.log(`::warning title=check-models::${value} could not be parsed (${e.message}); its models were not checked`);
@@ -98,10 +105,10 @@ for (const { flag, value } of sources) {
   const missing = unpriced(ids);
   if (missing.length) {
     failed = true;
-    console.log(`✗ ${value}: ${missing.length} of ${ids.length} ${reader.label} models have no price of their own in src/pricing.ts: ${missing.join(", ")}`);
+    console.log(`✗ ${value}${about}: ${missing.length} of ${ids.length} ${reader.label} models have no price of their own in src/pricing.ts: ${missing.join(", ")}`);
   } else {
     const estimates = ids.filter((id) => id in UNPRICED_ON_PURPOSE);
-    console.log(`✓ ${value}: all ${ids.length} ${reader.label} models priced (${ids.join(", ")})${estimates.length ? `; by a family row on purpose, no price of their own on the page: ${estimates.join(", ")}` : ""}`);
+    console.log(`✓ ${value}${about}: all ${ids.length} ${reader.label} models priced (${ids.join(", ")})${estimates.length ? `; by a family row on purpose, no price of their own on the page: ${estimates.join(", ")}` : ""}`);
   }
   const hiddenMissing = unpriced(hidden);
   if (hiddenMissing.length) console.log(`  (not in its picker, not checked: ${hiddenMissing.join(", ")})`);

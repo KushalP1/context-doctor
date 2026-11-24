@@ -131,6 +131,35 @@ export function googlePageIds(markdown: string): string[] {
 }
 
 /**
+ * The models Claude Code's signed model catalog offers
+ * (downloads.claude.ai/model-catalog/v1/catalog.json, read from 2.1.331 on;
+ * `modelCatalogUrl` can point elsewhere): every
+ * `surfaces.<surface>.model_selector_config[].models[].id`, across the
+ * terminal (`cc`), the Desktop app's Code tab (`ccd`) and the rest. It
+ * changes between Claude Code releases (version 5883 was issued 2026-11-24
+ * and expires a week later), so a model can reach the picker before any
+ * binary or CHANGELOG names it. `about` says which catalog was read.
+ * Throws on a catalog in another shape.
+ */
+export function catalogModelIds(json: string): { ids: string[]; about: string } {
+  const catalog = JSON.parse(json);
+  const surfaces = catalog?.surfaces;
+  if (!surfaces || typeof surfaces !== "object" || Array.isArray(surfaces)) throw new Error("no surfaces object");
+  const out = new Set<string>();
+  for (const surface of Object.values(surfaces) as any[]) {
+    const configs = surface?.model_selector_config;
+    if (!Array.isArray(configs)) continue;
+    for (const config of configs) {
+      if (!Array.isArray(config?.models)) continue;
+      for (const m of config.models) if (typeof m?.id === "string" && m.id) out.add(m.id);
+    }
+  }
+  const version = catalog.version !== undefined ? `version ${catalog.version}` : "no version";
+  const dates = [catalog.issued_at && `issued ${String(catalog.issued_at).slice(0, 10)}`, catalog.expires_at && `expires ${String(catalog.expires_at).slice(0, 10)}`].filter(Boolean).join(", ");
+  return { ids: [...out].sort(), about: `catalog ${version}${dates ? `, ${dates}` : ""}; surfaces ${Object.keys(surfaces).join(", ")}` };
+}
+
+/**
  * The models Codex offers (its models catalog, codex-rs/models-manager/
  * models.json): `listed` are the ones its picker shows, `hidden` the rest
  * (internal and trusted-access ids, which the price page may not name).

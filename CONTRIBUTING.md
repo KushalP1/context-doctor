@@ -88,14 +88,15 @@ It cannot reach the real API. Claude Code gets an environment built from nothing
 **Prices and hosts that change under us.** `scripts/check-models.mjs` fails when a model a host or a price page names has no price of its own in `src/pricing.ts` (a family row's estimate, or no price at all):
 
 ```bash
-node scripts/check-models.mjs --binary <claude binary>                        # Claude Code's model catalog
+node scripts/check-models.mjs --binary <claude binary>                        # the models built into a Claude Code binary
+node scripts/check-models.mjs --catalog https://downloads.claude.ai/model-catalog/v1/catalog.json  # the signed catalog Claude Code 2.1.331+ reads
 node scripts/check-models.mjs --url https://platform.claude.com/docs/en/about-claude/pricing.md
 node scripts/check-models.mjs --openai https://developers.openai.com/api/docs/pricing.md --codex <models.json>
 node scripts/check-models.mjs --google https://ai.google.dev/gemini-api/docs/pricing.md.txt --gemini-cli <models.ts>
 node scripts/check-models.mjs --dated [--today 2026-11-16]                    # rows whose price ends within 14 days
 ```
 
-`--dated` fails when a row's price ends within 14 days (or has ended) and the table has no successor price (`then`, or `routes` for a model billed as another): re-read the provider's page, and add the price once it is published; never guess one. A model a page names that has no price of its own on purpose (it is not on its provider's page) goes in `UNPRICED_ON_PURPOSE` in `src/modelids.ts`, with the reason. A page that is down is a warning, not a failure. `.github/workflows/models.yml` runs all of it every Monday.
+`--dated` fails when a row's price ends within 14 days (or has ended) and the table has no successor price (`then`, or `routes` for a model billed as another): re-read the provider's page, and add the price once it is published; never guess one. A model a page names that has no price of its own on purpose (it is not on its provider's page) goes in `UNPRICED_ON_PURPOSE` in `src/modelids.ts`, with the reason. `--catalog` reads every surface's picker (`surfaces.*.model_selector_config[].models[].id`: the terminal, the Desktop app's Code tab and the rest) and prints the catalog's version and dates: Claude Code 2.1.331 and later fetch that list between releases, so a model can reach the picker before any binary or CHANGELOG names it. A page that is down, or a catalog in another shape, is a warning, not a failure. `.github/workflows/models.yml` runs all of it every Monday, and `scripts/release-check.mjs` reads the same list.
 
 `scripts/claude-surface.mjs` reads the environment variables, settings keys, `plugin.json` keys, hook events and mod events of the newest Claude Code (the Desktop app's here, npm's in CI) and prints what is new or removed against `docs/hosts-reviewed.json`, with the CHANGELOG entries that add, remove or rename any of them since then (`--changelog <url|file>`). It is a list to read, never a failure; models.yml puts it in the job summary every week. Once the new names are reviewed (does any change what context-doctor measures or offers?), `node scripts/claude-surface.mjs --claude <binary> --write` takes that binary's surface as the reviewed list; prefer the linux-x64 package's binary (`npm pack @anthropic-ai/claude-code-linux-x64@<version>`), which is what CI reads.
 
