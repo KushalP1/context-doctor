@@ -455,6 +455,41 @@ export interface SlopeChange {
     sigma: number;
     versionsBefore: string[];
     versionsAfter: string[];
+    /** The model mix on each side, when the transcripts carry models (mixOf). */
+    mix?: MixShift;
+    /**
+     * What the mix alone predicts: the after side's dollars per 1% over the
+     * before side's, at fixed per-model rates. Undefined when the mix moved
+     * and no per-model rates were good enough to say.
+     */
+    mixFactor?: number;
+    /** factor / mixFactor: the part of the move the mix does not explain (under 1: per model, 1% buys less). */
+    residual?: number;
+    /** How many standard errors the residual is (log scale, the two sides' errors). */
+    residualSigma?: number;
+    /**
+     * In words: "limit", the move is the limit's own (the mix held, or what is
+     * left past it is 1.5x or more beyond its error); "mix", the mix explains
+     * it; "both", a mix move and a residual move; "unclear", the mix moved and
+     * per-model rates are too thin to split the two.
+     */
+    cause?: "limit" | "mix" | "both" | "unclear";
+}
+/** Dollar shares by model on each side of a move, and the model whose share moved most. */
+export interface MixShift {
+    /** reportModel keys, 0-1 of each side's dollars. */
+    before: Record<string, number>;
+    after: Record<string, number>;
+    /** The model whose share grew most, and the one whose share shrank most. */
+    grew: string;
+    shrank?: string;
+    /** Half the summed share changes, 0-1: 0 when the mix held. */
+    moved: number;
+    /** % of the limit per list-price dollar by model, as used for the prediction. */
+    pctPerUsd?: Record<string, number>;
+    /** The mix alone, at those rates: dollars per 1% on each side. */
+    predictedBefore?: number;
+    predictedAfter?: number;
 }
 /**
  * Each reset window of one weekly window's readings: % used, dollars and
@@ -476,7 +511,9 @@ export declare function reportModel(model: string | undefined): string;
  * figure (dated at the reset), and inside a window at the one split of its
  * stretches that separates two rates best (dated at that stretch). Reported
  * from a 1.5x move either way, beyond 3 standard errors between windows and
- * 4 inside one (the split is searched for).
+ * 4 inside one (the split is searched for). Each move is checked against
+ * the model mix on its two sides (explainMove; needs `readings` to find the
+ * stretches): `cause` says whether the limit moved or the mix did.
  */
 export declare function slopeChanges(windows: ResetWindow[], usage?: UsagePoint[], readings?: LimitReading[], stretchMs?: number): SlopeChange[];
 export interface LimitsReport {

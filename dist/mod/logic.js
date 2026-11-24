@@ -458,8 +458,10 @@ export function usageView(v) {
         if (w.usdPerPct !== undefined)
             subs.push(`≈ ${money(w.usdPerPct)} of list-price use per 1%${w.relSe !== undefined ? ` (±${Math.round(w.relSe * 100)}%)` : ""}, ${w.fitFromEarlier ? "in the last window with enough readings" : "this window"}`);
         const mv = data?.history?.limitMove;
-        if (mv && mv.window === w.window && mv.at <= now)
-            subs.push(`1% moved from ${money(mv.before)} to ${money(mv.after)} ${duration(now - mv.at)} ago (${mv.factor < 1 ? `${per(1 / mv.factor)}x less use per 1%` : `${per(mv.factor)}x more use per 1%`})`);
+        if (mv && mv.window === w.window && mv.at <= now) {
+            const why = mv.cause === "mix" ? `: your model mix (more ${shortModel(mv.model)}), not the limit` : mv.cause === "both" ? `, partly your model mix (more ${shortModel(mv.model)})` : "";
+            subs.push(`1% moved from ${money(mv.before)} to ${money(mv.after)} ${duration(now - mv.at)} ago (${mv.factor < 1 ? `${per(1 / mv.factor)}x less use per 1%` : `${per(mv.factor)}x more use per 1%`}${why})`);
+        }
         return { key: w.window, label: w.label, pct: w.pct, text: `${pctText(w.pct)}${parts.length ? ` · ${parts.join(" · ")}` : ""}`, ...(subs.length ? { sub: subs.join("; ") } : {}) };
     });
     // A plan with no 5-hour window (Ultra): `limits` says so from the ledger (F4); with no history yet, the windows Claude Code reported say it.

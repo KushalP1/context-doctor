@@ -1372,6 +1372,42 @@ export interface SlopeChange {
   sigma: number;
   versionsBefore: string[];
   versionsAfter: string[];
+  /** The model mix on each side, when the transcripts carry models (mixOf). */
+  mix?: MixShift;
+  /**
+   * What the mix alone predicts: the after side's dollars per 1% over the
+   * before side's, at fixed per-model rates. Undefined when the mix moved
+   * and no per-model rates were good enough to say.
+   */
+  mixFactor?: number;
+  /** factor / mixFactor: the part of the move the mix does not explain (under 1: per model, 1% buys less). */
+  residual?: number;
+  /** How many standard errors the residual is (log scale, the two sides' errors). */
+  residualSigma?: number;
+  /**
+   * In words: "limit", the move is the limit's own (the mix held, or what is
+   * left past it is 1.5x or more beyond its error); "mix", the mix explains
+   * it; "both", a mix move and a residual move; "unclear", the mix moved and
+   * per-model rates are too thin to split the two.
+   */
+  cause?: "limit" | "mix" | "both" | "unclear";
+}
+
+/** Dollar shares by model on each side of a move, and the model whose share moved most. */
+export interface MixShift {
+  /** reportModel keys, 0-1 of each side's dollars. */
+  before: Record<string, number>;
+  after: Record<string, number>;
+  /** The model whose share grew most, and the one whose share shrank most. */
+  grew: string;
+  shrank?: string;
+  /** Half the summed share changes, 0-1: 0 when the mix held. */
+  moved: number;
+  /** % of the limit per list-price dollar by model, as used for the prediction. */
+  pctPerUsd?: Record<string, number>;
+  /** The mix alone, at those rates: dollars per 1% on each side. */
+  predictedBefore?: number;
+  predictedAfter?: number;
 }
 
 /** A window's figure is quoted from this many stretches and this many points matched by usage here. */
@@ -1391,6 +1427,12 @@ const MIN_KEY_SHARE = 0.05;
 const MAX_KEY_REL_SE = 0.3;
 /** Windows this long or longer are fitted per reset (Claude's weekly; Codex's weekly and monthly). */
 const PER_RESET_MIN_MS = 7 * DAY - HOUR;
+/** A mix that moved less than this (half the summed share changes) held. */
+const MIX_HELD = 0.1;
+/** The mix's prediction must cover this share of each side's dollars with per-model rates. */
+const MIX_COVER = 0.9;
+/** A mix prediction within this factor of 1 is no mix move worth naming beside a limit move. */
+const MIX_NAMED = 1.2;
 
 /** Ratio of sums, sum(u) / sum(d), and its relative standard error (the ratio estimator's, across stretches). */
 function ratio(u: number[], d: number[]): { r: number; relSe: number } | undefined {
@@ -1482,6 +1524,18 @@ function splitBy(segments: Segment[], inSeg: UsagePoint[][], keyOf: (p: UsagePoi
   return list;
 }
 
+/** The requests of each stretch: both lists are in time order. */
+function usageBySegment(segments: Segment[], usage: UsagePoint[]): UsagePoint[][] {
+  const inSeg: UsagePoint[][] = segments.map(() => []);
+  let g = 0;
+  for (const p of usage) {
+    while (g < segments.length && segments[g].to < p.ts) g++;
+    if (g >= segments.length) break;
+    if (p.ts > segments[g].from) inSeg[g].push(p);
+  }
+  return inSeg;
+}
+
 /** One window's readings cut at each reset: the periods, oldest first. */
 function periodsOf(readings: LimitReading[]): LimitReading[][] {
   const clean = cleanReadings(readings);
@@ -1509,14 +1563,7 @@ export function resetWindowsOf(readings: LimitReading[], usage: UsagePoint[], op
     const windowMs = last.windowMs ?? 7 * DAY;
     const resetsAt = last.resetsAt ?? first.ts + windowMs;
     const { segments, elsewherePct } = segmentsOf(period, usage, opts.stretchMs);
-    // The requests of each stretch: both lists are in time order.
-    const inSeg: UsagePoint[][] = segments.map(() => []);
-    let g = 0;
-    for (const p of usage) {
-      while (g < segments.length && segments[g].to < p.ts) g++;
-      if (g >= segments.length) break;
-      if (p.ts > segments[g].from) inSeg[g].push(p);
-    }
+    const inSeg = usageBySegment(segments, usage);
     const usd = segments.reduce((a, s) => a + s.usd, 0);
     const tokens = inSeg.reduce((a, pts) => a + pts.reduce((b, p) => b + tokensOf(p), 0), 0);
     const pctMatched = segments.reduce((a, s) => a + s.dpct, 0);
@@ -1586,15 +1633,165 @@ function sigmaOf(a: { relSe: number }, b: { relSe: number }, factor: number): nu
   return se > 0 ? Math.abs(Math.log(factor)) / se : Infinity;
 }
 
+// ---------------------------------------------------------------------------
+// A move the model mix explains (H1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Models do not drain a limit alike per list-price dollar (the author's
+ * Fable 5.2 drained ~3x per dollar against Opus 5.5), so a week that moves
+ * from one model to another moves what 1% buys with no change in the limit
+ * at all. Each move is checked against its model mix: the dollar shares by
+ * model on each side, per-model rates, and what the mix alone predicts.
+ */
+
+/** One stretch for the mix: its rise, its dollars by model, and which side of the move it is on. */
+interface MixRow {
+  dpct: number;
+  byModel: Map<string, number>;
+  after: boolean;
+}
+
+function mixRows(segs: Segment[], usage: UsagePoint[], after: boolean): MixRow[] {
+  const inSeg = usageBySegment(segs, usage);
+  return segs.map((s, i) => {
+    const byModel = new Map<string, number>();
+    for (const p of inSeg[i]) {
+      const k = reportModel(p.model);
+      byModel.set(k, (byModel.get(k) ?? 0) + p.usd);
+    }
+    return { dpct: s.dpct, byModel, after };
+  });
+}
+
+function sharesOf(rows: MixRow[]): Record<string, number> {
+  const t = new Map<string, number>();
+  let all = 0;
+  for (const r of rows) for (const [k, v] of r.byModel) {
+    t.set(k, (t.get(k) ?? 0) + v);
+    all += v;
+  }
+  return all > 0 ? Object.fromEntries([...t].sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, v / all])) : {};
+}
+
+/**
+ * Per-model % of the limit per dollar, fitted on both sides' stretches at
+ * once with one factor f for the after side (dpct = Σ β_m·usd_m, times f
+ * after the move): f searched for, the rates least squares at each. β is
+ * each model's rate before the move, and a move of the limit itself goes to
+ * f instead of bending the rates. Fitting the rates over both sides with no
+ * f would credit a model used mostly after a real move with that move. Undefined when the stretches cannot tell the
+ * models apart (a rate at or below zero, or known worse than ±30%).
+ */
+function jointRates(rows: MixRow[], keys: string[]): Map<string, number> | undefined {
+  if (keys.length < 2 || rows.length <= keys.length + 2) return undefined;
+  const y = rows.map((r) => r.dpct);
+  // For a given after-side factor the rates are plain least squares: search
+  // the factor (on the log scale, 1/10x to 10x) for the least squared error.
+  const at = (logF: number) => {
+    const f = Math.exp(logF);
+    const fit = olsSe(rows.map((r) => keys.map((k) => (r.byModel.get(k) ?? 0) * (r.after ? f : 1))), y);
+    const sse = fit ? rows.reduce((a, r, i) => a + (y[i] - keys.reduce((b, k, j) => b + fit.coef[j] * (r.byModel.get(k) ?? 0) * (r.after ? f : 1), 0)) ** 2, 0) : Infinity;
+    return { fit, sse };
+  };
+  let lo = -Math.log(10), hi = Math.log(10);
+  const g = (Math.sqrt(5) - 1) / 2;
+  let x1 = hi - g * (hi - lo), x2 = lo + g * (hi - lo);
+  let f1 = at(x1).sse, f2 = at(x2).sse;
+  for (let it = 0; it < 60 && hi - lo > 1e-5; it++) {
+    if (f1 <= f2) { hi = x2; x2 = x1; f2 = f1; x1 = hi - g * (hi - lo); f1 = at(x1).sse; }
+    else { lo = x1; x1 = x2; f1 = f2; x2 = lo + g * (hi - lo); f2 = at(x2).sse; }
+  }
+  const { fit } = at((lo + hi) / 2);
+  if (!fit || fit.coef.some((b, j) => !(b > 0) || fit.se[j] / b > MAX_KEY_REL_SE)) return undefined;
+  return new Map(keys.map((k, j) => [k, fit.coef[j]]));
+}
+
+/** A window's own per-model rates (splitBy's), as % per dollar: none for the pooled "other". */
+function windowRates(w: ResetWindow): Map<string, number> {
+  return new Map(w.byModel.filter((t) => t.usdPerPct !== undefined && t.usdPerPct > 0 && t.key !== "other").map((t) => [t.key, 1 / t.usdPerPct!]));
+}
+
+/** Dollars per 1% a mix gives at per-model rates, over the dollars those rates cover; undefined under MIX_COVER. */
+function predicted(shares: Record<string, number>, rates: Map<string, number>): number | undefined {
+  let cover = 0, pctPerUsd = 0;
+  for (const [k, s] of Object.entries(shares)) {
+    const b = rates.get(k);
+    if (b === undefined) continue;
+    cover += s;
+    pctPerUsd += s * b;
+  }
+  return cover >= MIX_COVER && pctPerUsd > 0 ? cover / pctPerUsd : undefined;
+}
+
+/**
+ * The mix on each side of a move and what it alone predicts: rates from the
+ * joint fit on the two sides' stretches, else the first of `fallback` (the
+ * windows' own per-model figures, nearest first) that covers both sides.
+ */
+function mixOf(before: MixRow[], after: MixRow[], fallback: Array<Map<string, number>>): { mix: MixShift; mixFactor?: number } | undefined {
+  const sb = sharesOf(before), sa = sharesOf(after);
+  const keys = [...new Set([...Object.keys(sb), ...Object.keys(sa)])];
+  if (!keys.length || keys.every((k) => k === "unknown")) return undefined;
+  const delta = keys.map((k) => [k, (sa[k] ?? 0) - (sb[k] ?? 0)] as const).sort((a, b) => b[1] - a[1]);
+  const mix: MixShift = {
+    before: sb, after: sa, grew: delta[0][0],
+    ...(delta.length > 1 && delta[delta.length - 1][1] < 0 ? { shrank: delta[delta.length - 1][0] } : {}),
+    moved: delta.reduce((a, [, d]) => a + Math.abs(d), 0) / 2,
+  };
+  const named = keys.filter((k) => k !== "unknown" && k !== "other" && Math.max(sb[k] ?? 0, sa[k] ?? 0) >= MIN_KEY_SHARE);
+  // The joint fit tells a model's own rate from a move only for a model used on both sides: one used on one side alone carries the move in its rate.
+  const both = named.every((k) => (sb[k] ?? 0) >= MIN_KEY_SHARE && (sa[k] ?? 0) >= MIN_KEY_SHARE);
+  const tries = [both ? jointRates([...before, ...after], named) : undefined, ...fallback].filter((r): r is Map<string, number> => !!r && r.size > 0);
+  for (const rates of tries) {
+    const pb = predicted(sb, rates), pa = predicted(sa, rates);
+    if (pb === undefined || pa === undefined) continue;
+    mix.pctPerUsd = Object.fromEntries([...rates].filter(([k]) => k in sb || k in sa));
+    mix.predictedBefore = pb;
+    mix.predictedAfter = pa;
+    return { mix, mixFactor: pa / pb };
+  }
+  return { mix };
+}
+
+/** Set a move's mix fields and its cause (SlopeChange.cause). `minSigma`: the bar the move itself had to clear. */
+function explainMove(c: SlopeChange, before: MixRow[], after: MixRow[], fallback: Array<Map<string, number>>, se: { before: number; after: number }, minSigma: number): void {
+  const got = mixOf(before, after, fallback);
+  if (!got) return;
+  c.mix = got.mix;
+  // A mix that held explains nothing, whatever the rates say.
+  const mixFactor = got.mix.moved < MIX_HELD ? 1 : got.mixFactor;
+  if (mixFactor === undefined) {
+    c.cause = "unclear";
+    return;
+  }
+  c.mixFactor = mixFactor;
+  c.residual = c.factor / mixFactor;
+  c.residualSigma = sigmaOf({ relSe: se.before }, { relSe: se.after }, c.residual);
+  const limitMoved = Math.max(c.residual, 1 / c.residual) >= MIN_FACTOR && c.residualSigma >= minSigma;
+  c.cause = !limitMoved ? "mix" : Math.max(mixFactor, 1 / mixFactor) >= MIX_NAMED ? "both" : "limit";
+}
+
 /**
  * Where what 1% costs moved: between consecutive windows that each have a
  * figure (dated at the reset), and inside a window at the one split of its
  * stretches that separates two rates best (dated at that stretch). Reported
  * from a 1.5x move either way, beyond 3 standard errors between windows and
- * 4 inside one (the split is searched for).
+ * 4 inside one (the split is searched for). Each move is checked against
+ * the model mix on its two sides (explainMove; needs `readings` to find the
+ * stretches): `cause` says whether the limit moved or the mix did.
  */
 export function slopeChanges(windows: ResetWindow[], usage: UsagePoint[] = [], readings: LimitReading[] = [], stretchMs?: number): SlopeChange[] {
   const out: SlopeChange[] = [];
+  const periods = readings.length ? periodsOf(readings) : [];
+  const periodOf = (w: ResetWindow) => periods.find((p) => p[0].ts === w.firstReading && p[p.length - 1].ts === w.lastReading);
+  /**
+   * The mix's fallback rates: `first`'s own per-model figures, then the other
+   * windows', nearest to `around` first, never `skip`'s (a window that holds
+   * a move inside it fits its rates across that move: a model used mostly
+   * after it would carry the move as its own rate).
+   */
+  const ratesNear = (around: ResetWindow, first: ResetWindow[], skip?: ResetWindow) => [...first, ...windows.filter((x) => !first.includes(x) && x !== skip && x.window === around.window).sort((x, y) => Math.abs(x.start - around.start) - Math.abs(y.start - around.start))].map(windowRates);
   const quoted = windows.filter((w) => w.usdPerPct !== undefined && w.relSe !== undefined && Number.isFinite(w.relSe) && !w.why);
   for (let i = 1; i < quoted.length; i++) {
     const a = quoted[i - 1], b = quoted[i];
@@ -1602,17 +1799,19 @@ export function slopeChanges(windows: ResetWindow[], usage: UsagePoint[] = [], r
     const factor = b.usdPerPct! / a.usdPerPct!;
     const sigma = sigmaOf({ relSe: a.relSe! }, { relSe: b.relSe! }, factor);
     if (Math.max(factor, 1 / factor) < MIN_FACTOR || sigma < RESET_SIGMA) continue;
-    out.push({
+    const c: SlopeChange = {
       window: b.window, label: b.label, kind: "reset", at: b.start, prevEnd: a.resetsAt,
       usdPerPctBefore: a.usdPerPct!, usdPerPctAfter: b.usdPerPct!, tokensPerPctBefore: a.tokensPerPct, tokensPerPctAfter: b.tokensPerPct,
       factor, sigma, versionsBefore: a.versions, versionsAfter: b.versions,
-    });
+    };
+    const pa = periodOf(a), pb = periodOf(b);
+    if (pa && pb) explainMove(c, mixRows(segmentsOf(pa, usage, stretchMs).segments, usage, false), mixRows(segmentsOf(pb, usage, stretchMs).segments, usage, true), ratesNear(a, [a, b]), { before: a.relSe!, after: b.relSe! }, RESET_SIGMA);
+    out.push(c);
   }
   // Inside a window: its own stretches again, split once where two rates fit best.
-  const periods = readings.length ? periodsOf(readings) : [];
   // Every window with a figure, loose ones too: a move inside a window is what makes its figure loose.
   for (const w of windows.filter((x) => x.usdPerPct !== undefined)) {
-    const period = periods.find((p) => p[0].ts === w.firstReading && p[p.length - 1].ts === w.lastReading);
+    const period = periodOf(w);
     if (!period) continue;
     const segs = segmentsOf(period, usage, stretchMs).segments;
     if (segs.length < 2 * MIN_SIDE) continue;
@@ -1638,11 +1837,13 @@ export function slopeChanges(windows: ResetWindow[], usage: UsagePoint[] = [], r
       return pct > 0 ? t / pct : undefined;
     };
     const vers = (from: number, to: number) => [...new Set(usage.filter((p) => p.ts > segs[from].from && p.ts <= segs[to - 1].to).map((p) => p.version).filter((v): v is string => !!v))].sort(compareVersions);
-    out.push({
+    const c: SlopeChange = {
       window: w.window, label: w.label, kind: "within", at: segs[best.at].from,
       usdPerPctBefore: before.r, usdPerPctAfter: after.r, tokensPerPctBefore: tok(0, best.at), tokensPerPctAfter: tok(best.at, segs.length),
       factor, sigma, versionsBefore: vers(0, best.at), versionsAfter: vers(best.at, segs.length),
-    });
+    };
+    explainMove(c, mixRows(segs.slice(0, best.at), usage, false), mixRows(segs.slice(best.at), usage, true), ratesNear(w, [], w), { before: before.relSe, after: after.relSe }, WITHIN_SIGMA);
+    out.push(c);
   }
   return out.sort((a, b) => a.at - b.at);
 }
@@ -1860,10 +2061,36 @@ function changeLine(c: SlopeChange): string {
       ? `between the reset of ${utcMinute(c.prevEnd)} and the window from ${utcMinute(c.at)}`
       : `at the reset of ${utcMinute(c.at)}`
     : `within the window, around ${utcMinute(c.at)}`;
-  const times = c.factor < 1 ? `${(1 / c.factor).toFixed(1)}x less use per 1%: the limit drains faster` : `${c.factor.toFixed(1)}x more use per 1%: the limit drains slower`;
+  const move = (f: number) => (f < 1 ? `${(1 / f).toFixed(1)}x less use per 1%` : `${f.toFixed(1)}x more use per 1%`);
+  const drains = (f: number) => (f < 1 ? "the limit drains faster" : "the limit drains slower");
   const tok = c.tokensPerPctBefore !== undefined && c.tokensPerPctAfter !== undefined ? `; tokens per 1% ${tokenCount(c.tokensPerPctBefore)} to ${tokenCount(c.tokensPerPctAfter)}` : "";
   const ver = versionSpan(c.versionsBefore) !== versionSpan(c.versionsAfter) ? `; Claude Code ${versionSpan(c.versionsBefore)} before, ${versionSpan(c.versionsAfter)} after` : "";
-  return `${c.label}, ${when}: 1% went from ${dollars(c.usdPerPctBefore)} to ${dollars(c.usdPerPctAfter)} of API-equivalent use (${times})${tok}${ver}.`;
+  const head = `${c.label}, ${when}: 1% went from ${dollars(c.usdPerPctBefore)} to ${dollars(c.usdPerPctAfter)} of API-equivalent use`;
+  if (!c.cause || c.cause === "limit" || !c.mix) return `${head} (${move(c.factor)}: ${drains(c.factor)})${tok}${ver}.`;
+  const m = c.mix;
+  const pct = (v: number | undefined) => `${Math.round((v ?? 0) * 100)}%`;
+  const used = `you used ${modelLabel(m.grew)} for ${pct(m.after[m.grew])} of your dollars after it (${pct(m.before[m.grew])} before)`;
+  const rate = m.pctPerUsd?.[m.grew], other = m.shrank ? m.pctPerUsd?.[m.shrank] : undefined;
+  const ratio = rate !== undefined && other !== undefined && other > 0 ? rate / other : undefined;
+  const per = ratio === undefined || (ratio < 1.1 && ratio > 1 / 1.1) ? ""
+    : ratio > 1 ? `, which uses your limit ${ratio.toFixed(1)}x faster per dollar than ${modelLabel(m.shrank)}`
+    : `, which uses your limit ${(1 / ratio).toFixed(1)}x slower per dollar than ${modelLabel(m.shrank)}`;
+  const predicted = m.predictedBefore !== undefined && m.predictedAfter !== undefined ? `; the mix alone predicts ${dollars(m.predictedBefore)} to ${dollars(m.predictedAfter)}` : "";
+  if (c.cause === "unclear") {
+    return `${head} (${move(c.factor)}), and your model mix changed too: ${used}. Per-model figures are too thin yet to say how much of the move that explains${tok}${ver}.`;
+  }
+  const r = c.residual!;
+  if (c.cause === "mix") {
+    const left = Math.max(r, 1 / r) < 1.15 ? "per model, 1% buys about the same" : `per model, 1% buys ${move(r).replace(" per 1%", "")}, under the 1.5x this report calls a move`;
+    return `${head} (${move(c.factor)}). This comes from your model mix, not the limit: ${used}${per}${predicted}; ${left}${tok}${ver}.`;
+  }
+  return `${head} (${move(c.factor)}). Part of it is your model mix: ${used}${per}${predicted}. Beyond the mix, per model, 1% buys ${move(r).replace(" per 1%", "")}: ${drains(r)}${tok}${ver}.`;
+}
+
+/** "claude-fable-5-2" as "Fable 5.2"; any other id as it is. */
+function modelLabel(key: string | undefined): string {
+  const m = /^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d{1,2}))?(?!\d)/i.exec(key ?? "");
+  return m ? `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? `.${m[3]}` : ""}` : key ?? "another model";
 }
 
 /** Each key's own dollars per 1%, where the fit told them apart: "sdk-cli $13.90 ±9%, cli $25.00 ±7% (sdk-cli drains 1.8x per dollar)". */

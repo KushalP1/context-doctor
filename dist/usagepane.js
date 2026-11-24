@@ -112,7 +112,7 @@ export function limitFitsOf(r) {
     const move = r.changes.filter((c) => c.window === "five_hour" || c.window === "seven_day").sort((a, b) => b.at - a.at)[0];
     return {
         ...(Object.keys(fits).length ? { limitFits: fits } : {}),
-        ...(move ? { limitMove: { window: move.window, at: move.at, before: round(move.usdPerPctBefore), after: round(move.usdPerPctAfter), factor: round(move.factor) } } : {}),
+        ...(move ? { limitMove: { window: move.window, at: move.at, before: round(move.usdPerPctBefore), after: round(move.usdPerPctAfter), factor: round(move.factor), ...(move.cause && move.cause !== "limit" ? { cause: move.cause } : {}), ...(move.mix && (move.cause === "mix" || move.cause === "both") ? { model: move.mix.grew } : {}) } } : {}),
         ...(r.noFiveHour ? { noFiveHour: true } : {}),
     };
 }

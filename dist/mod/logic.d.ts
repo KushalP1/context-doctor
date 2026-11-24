@@ -274,13 +274,15 @@ export interface HistoryUse {
         current: boolean;
         resetsAt: number;
     }>>;
-    /** The latest move in that figure: before and after, after / before, when. */
+    /** The latest move in that figure: before and after, after / before, when; `cause` "mix" when the model mix explains it (`model`: the one that grew), "both" when the limit moved beyond the mix. */
     limitMove?: {
         window: string;
         at: number;
         before: number;
         after: number;
         factor: number;
+        cause?: "limit" | "mix" | "both" | "unclear";
+        model?: string;
     };
     /** Weekly readings and no 5-hour ones: a plan without that window (Ultra). */
     noFiveHour?: boolean;
