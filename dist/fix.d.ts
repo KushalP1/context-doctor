@@ -42,6 +42,7 @@ import { type CacheTtlReport, type CurrentTtl } from "./cachettl.js";
 import { type ClaudeCodeInstall } from "./modelswitch.js";
 import { type ProjectPlan } from "./prune.js";
 import { type DeferEntry } from "./mcpdefer.js";
+import { type ToolsLine } from "./apptools.js";
 import { readLedger } from "./ledger.js";
 import { type AbStoredResult } from "./abstore.js";
 import { type SubagentModelReplay } from "./subagentmodel.js";
@@ -208,6 +209,12 @@ export interface FixInputs {
         value: string;
         where: string;
     };
+    /**
+     * The MCP servers context-doctor's mod saw Claude Code hand over, one line
+     * per session (apptools.ts): whether the lever reaches the app's servers
+     * here, and after applying, the sessions it moved them in.
+     */
+    appToolsSeen?: ToolsLine[];
 }
 /** The Claude Code version whose `tool.describe` names a tool's MCP server and lets a mod answer `isDeferred`. */
 export declare const DESKTOP_TOOLS_DEFER_SINCE = "2.1.326";

@@ -18,6 +18,9 @@
  *  - appends Claude Code's cost beside our own price of the same session
  *    (sessionTotal: the transcript and its subagents, as the every-prompt
  *    hook prices it) to a small capped ledger, for `doctor`'s comparison;
+ *  - appends the MCP servers the mod's `tool.describe` saw this session
+ *    (their type, tool count, whether already behind tool search), when
+ *    they changed, to the tools ledger (apptools.ts), for `fix` and `doctor`;
  *  - prints what the band needs, as JSON: the cache clock read from the
  *    transcript's tail (coldresume.ts), the re-write's price, the price.
  *
@@ -43,6 +46,10 @@ export interface ModMeasureInput {
         tokens?: unknown;
         window?: unknown;
     };
+    /** `session.start`'s surface (desktop, terminal, vscode), for the tools ledger. */
+    surface?: unknown;
+    /** The MCP servers `tool.describe` showed the mod this session, when they changed since it last sent them (apptools.ts). */
+    tools?: unknown;
 }
 /**
  * The mod's windows in the status line's shape, `{ five_hour: { used_percentage,

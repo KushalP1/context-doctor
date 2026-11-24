@@ -40,6 +40,7 @@ import { compareSessions, comparisonCheck } from "./ccost.js";
 import { hasKnownPrice, isUnbilledModel, priceChangedText } from "./pricing.js";
 import { managedSourcesLine, orgRatesLine } from "./orgrates.js";
 import { uncachedCheck } from "./cachemisses.js";
+import { appToolsCheckText, recentToolLines } from "./apptools.js";
 
 function claudeDesktopConfigPath(): string {
   switch (platform()) {
@@ -427,6 +428,16 @@ export function extraUsageCheck(home?: string): Check | undefined {
 }
 
 /**
+ * The MCP servers the newest Desktop session handed context-doctor's mod
+ * (apptools.ts), their type and placement, and what desktop-tools-defer
+ * would do with them. A fact, not a fault: only when one is on file.
+ */
+export function appToolsCheck(path?: string, now = Date.now()): Check | undefined {
+  const text = appToolsCheckText(recentToolLines(30, now, path));
+  return text ? { label: "Desktop app tools", status: "ok", detail: text } : undefined;
+}
+
+/**
  * Devin (Cognition): the Devin CLI, and Devin Desktop (formerly Windsurf).
  * Checked against docs.devin.ai (2026-10-20): the CLI runs hooks from
  * ~/.claude/settings.json in Claude Code's format while its
@@ -689,6 +700,9 @@ export async function runDoctor(): Promise<void> {
   // What the Desktop app offered for auto-compact and what you answered, only when an answer is on file.
   const aw = appWindowCheck();
   if (aw) checks.push(aw);
+  // Which servers the Desktop app hands context-doctor's mod, and whether desktop-tools-defer reaches them.
+  const at = appToolsCheck();
+  if (at) checks.push(at);
 
   // Codex (OpenAI): MCP table in config.toml, hook in hooks.json, skill.
   const codexHome = codexDir();

@@ -53,6 +53,12 @@ export declare function appWindowCheck(home?: string): Check | undefined;
  */
 export declare function extraUsageCheck(home?: string): Check | undefined;
 /**
+ * The MCP servers the newest Desktop session handed context-doctor's mod
+ * (apptools.ts), their type and placement, and what desktop-tools-defer
+ * would do with them. A fact, not a fault: only when one is on file.
+ */
+export declare function appToolsCheck(path?: string, now?: number): Check | undefined;
+/**
  * Devin (Cognition): the Devin CLI, and Devin Desktop (formerly Windsurf).
  * Checked against docs.devin.ai (2026-10-20): the CLI runs hooks from
  * ~/.claude/settings.json in Claude Code's format while its

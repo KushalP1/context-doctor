@@ -46,6 +46,7 @@ import { renderDiff } from "./diff.js";
 import { renderExperiment, runExperiment } from "./experiment.js";
 import { runStatusLine } from "./statusline.js";
 import { runMod } from "./modmeasure.js";
+import { recentToolLines } from "./apptools.js";
 import { renderSubagents, subagentFiles, subagentReport } from "./subagents.js";
 import { findPreset, PRESETS, RC_FILENAME } from "./config.js";
 import { runWatch } from "./watch.js";
@@ -516,6 +517,7 @@ async function measureFixInputs(days) {
         : !underClaudeCode() && shellSet(DEFER_APP_TOOLS_ENV, sources, process.env)
             ? { value: process.env[DEFER_APP_TOOLS_ENV], where: "the environment" }
             : undefined;
+    const appToolsSeen = recentToolLines(days);
     let recordProblem;
     try {
         loadFixRecords();
@@ -544,6 +546,8 @@ async function measureFixInputs(days) {
             ...(deferrable.length ? { mcpDefer: { servers: deferrable, days } } : {}),
             ...(appTools.length ? { desktopTools: { servers: appTools.map((s) => ({ name: s.name, tools: s.tools, tokens: s.tokens, starts: s.starts, calledStarts: s.calledStarts, usd: s.usd, unusedUsd: s.unusedUsd, calledUsd: s.calledUsd })), days } } : {}),
             ...(desktopToolsSet ? { desktopToolsSet } : {}),
+            // What context-doctor's mod saw Claude Code hand over (apptools.ts): proof the lever reaches the app, or why not.
+            ...(appToolsSeen.length ? { appToolsSeen } : {}),
             subagentModel,
             subagentModelSet,
             // The newest ab --via claude-code comparison of Sonnet 5.5 with another model: the subagent-model line quotes it.

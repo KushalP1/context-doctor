@@ -202,7 +202,15 @@ No setting reaches them, but a mod can: from Claude Code 2.1.326 the mods event 
 
 **Quality.** As `mcp-defer`: Claude sees the names and loads a tool through tool search the first time a conversation needs it, one more step then. Not measured here, so `--apply all` leaves it out.
 
-**What it needs, and what is not checked yet.** The context-doctor plugin enabled (its mod is what reads the variable; the plan says so when it is not), tool search on (a deferred tool is loaded through it; the plan says so when `ENABLE_TOOL_SEARCH` turns it off) and Claude Code 2.1.326 or later; an older one sees no `mcpServer` on the event and the mod changes nothing. A session already running keeps its tools as they are: the mod never asks Claude Code to re-write the prompt cache (`breakPromptCache`). Built from Claude Code 2.1.329's mods declarations and tested against a stand-in for the engine; whether the Desktop app's in-process (`sdk`) servers raise `tool.describe` has not been seen on a live Desktop session yet. To check after applying: start a new session and run `context-doctor overhead`; these servers should no longer be listed as sent whole.
+**What it needs.** The context-doctor plugin enabled (its mod is what reads the variable; the plan says so when it is not), tool search on (a deferred tool is loaded through it; the plan says so when `ENABLE_TOOL_SEARCH` turns it off) and Claude Code 2.1.326 or later; an older one sees no `mcpServer` on the event and the mod changes nothing. A session already running keeps its tools as they are: the mod never asks Claude Code to re-write the prompt cache (`breakPromptCache`).
+
+**Proof before you apply it.** Whether or not the lever is applied, the mod notes at `tool.describe` which MCP servers Claude Code hands it in each session, with their type (`sdk` for an in-process server like the app's), their tool count and whether Claude Code already keeps them behind tool search, and keeps them in `~/.claude/.context-doctor-tools.jsonl` ([Desktop](desktop.md#the-desktop-apps-own-tools-behind-tool-search)). `fix` reads the newest Desktop session there before offering the lever:
+
+- servers that arrive whole, with their server named, are offered and said so: `Seen in your Desktop session of 2026-11-24: Claude_Browser (sdk, 12 tools) and ccd_session (sdk, 8 tools) arrive whole as in-process (sdk) servers, and Claude Code tells context-doctor's mod which server each tool is from, so this setting reaches them.`;
+- a server Claude Code already keeps behind tool search, or one the mod was not shown, is dropped from the lever (and from its dollars), with the reason; when that leaves none, the lever is withdrawn: `not offered: Claude Code already keeps Claude_Browser and ccd_session behind tool search (your Desktop session of 2026-11-24): nothing to move there.`;
+- with no Desktop session on record yet, the plan says it is not yet confirmed on this machine, and to run `fix` again after the first reply of a new Desktop session.
+
+Once applied, the applied line counts the sessions the mod moved them in (`moved behind tool search in 12 sessions since 2026-11-25`), and `context-doctor doctor`'s `Desktop app tools` line names the servers of the newest Desktop session, their type and where each went.
 
 ## The prompt cache's lifetime: `context-doctor cache-ttl`
 

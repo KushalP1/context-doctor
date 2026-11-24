@@ -759,3 +759,48 @@ export function shouldDefer(e: DescribeInput, servers: readonly string[]): boole
   if (!e || typeof e.tool !== "string" || !e.mcpServer || typeof e.mcpServer !== "object" || e.isDeferred === true) return false;
   return servers.some((n) => !KEEP_APP_SERVERS.includes(n) && e.tool.startsWith(`mcp__${n}__`));
 }
+
+// -- Which servers the engine hands the mod (H3: the tools ledger) -----------------------
+
+/** `mcp__<server>__<tool>`'s server, or undefined for any other name. */
+export function mcpServerOf(tool: string): string | undefined {
+  const m = /^mcp__(.+?)__./.exec(typeof tool === "string" ? tool : "");
+  return m && /^[A-Za-z0-9_.-]{1,80}$/.test(m[1]) ? m[1] : undefined;
+}
+
+/** One server's tools as `tool.describe` showed them this session: each tool once, at its first description. */
+export interface SeenServer { type: string; tools: Set<string>; deferred: number; moved: number }
+
+/** What `mod measure` keeps per server (apptools.ts reads the same shape). */
+export interface SeenServerLine { server: string; type: string; tools: number; deferredByHost: boolean; movedByUs: boolean }
+
+/**
+ * Note one description: its server, its transport, whether the engine
+ * already had it behind tool search and whether the mod moved it. Only an
+ * MCP tool with `mcpServer` (2.1.326+) counts; a tool seen again (its
+ * loaded description, after tool search found it) is not counted twice.
+ */
+export function noteDescribe(seen: Map<string, SeenServer>, e: DescribeInput, moved: boolean): void {
+  if (!e || !e.mcpServer || typeof e.mcpServer !== "object") return;
+  const server = mcpServerOf(e.tool);
+  if (!server) return;
+  const type = typeof e.mcpServer.type === "string" && /^[a-z-]{1,20}$/.test(e.mcpServer.type) ? e.mcpServer.type : "unknown";
+  let s = seen.get(server);
+  if (!s) {
+    // A runaway list (hundreds of servers) is not worth keeping whole.
+    if (seen.size >= 60) return;
+    s = { type, tools: new Set(), deferred: 0, moved: 0 };
+    seen.set(server, s);
+  }
+  if (s.tools.has(e.tool)) return;
+  s.tools.add(e.tool);
+  if (e.isDeferred === true) s.deferred++;
+  if (moved) s.moved++;
+}
+
+/** The servers as `mod measure` takes them, sorted by name: what changes the ledger line. */
+export function seenServers(seen: Map<string, SeenServer>): SeenServerLine[] {
+  return [...seen.entries()]
+    .map(([server, s]) => ({ server, type: s.type, tools: s.tools.size, deferredByHost: s.tools.size > 0 && s.deferred === s.tools.size, movedByUs: s.moved > 0 }))
+    .sort((a, b) => (a.server < b.server ? -1 : a.server > b.server ? 1 : 0));
+}

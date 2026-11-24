@@ -34,7 +34,10 @@
  *  - `tool.describe` (2.1.326+): once `fix --apply desktop-tools-defer`
  *    named the Desktop app's own MCP servers in CONTEXT_DOCTOR_DEFER_MCP,
  *    their tools go behind tool search from the next new conversation; never
- *    ccd_turn, never with `breakPromptCache`. Unset, nothing moves.
+ *    ccd_turn, never with `breakPromptCache`. Unset, nothing moves. Set or
+ *    not, it notes each MCP server's transport, tool count and placement,
+ *    and the next `mod measure` keeps them (changes only) for `fix` and
+ *    `doctor`: proof the lever reaches the app before anyone applies it.
  *
  * Nothing happens without a press or a command: no auto-compaction, no auto-apply, no ping. The
  * mod writes no file itself; the CLI writes ours. Off: CONTEXT_DOCTOR_NO_MOD=1.
@@ -44,7 +47,7 @@
  * reads which calls a module makes from its source: `$` is passed only to
  * functions declared at the top of this file.
  */
-import { type AgentLike, type BandData, type KeepWarm, type LiveUsage, type PeriodUse, type PlanJson, type UsagePaneData } from "./logic.js";
+import { type AgentLike, type BandData, type KeepWarm, type LiveUsage, type PeriodUse, type PlanJson, type SeenServer, type UsagePaneData } from "./logic.js";
 import type { On } from "./api.js";
 export declare const COMMAND = "context-doctor-fix";
 export declare const PANE = "context-doctor-fix";
@@ -92,6 +95,11 @@ interface State {
     period: PeriodUse["key"];
     /** What the pane last said, so the timer redraws only when its words change. */
     usageDrawn: string;
+    /** `session.start`'s surface, for the tools ledger. */
+    surface?: string;
+    /** The MCP servers `tool.describe` showed this session, and what `mod measure` was last handed of them. */
+    tools: Map<string, SeenServer>;
+    toolsSent: string;
 }
 /** For tests: the state the hooks share. */
 export declare const state: () => State;

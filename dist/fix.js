@@ -53,6 +53,7 @@ import { claudeJsonPath, tilde } from "./claudedir.js";
 import { applyPrune, undoPrune } from "./prune.js";
 import { applyMcpDefer, MCP_DEFER_SINCE, undoMcpDefer } from "./mcpdefer.js";
 import { DEFER_APP_TOOLS_ENV, deferredServers, KEEP_APP_SERVERS } from "./mod/logic.js";
+import { appToolsVerdict, movedSessions, verdictLines } from "./apptools.js";
 import { fallbackStateDir, readLedger } from "./ledger.js";
 import { claudeDir } from "./claudedir.js";
 import { comparisonLine } from "./abstore.js";
@@ -299,14 +300,24 @@ export function planFixes(i) {
     const dt = i.desktopTools;
     if (i.desktopToolsSet) {
         const named = deferredServers(i.desktopToolsSet.value);
-        fixes.push({ id: "desktop-tools-defer", title: "The Desktop app's own tools behind tool search", basis: "set", quality: "", change: `env.${DEFER_APP_TOOLS_ENV}`, state: named.length ? "applied" : "not-here", note: named.length ? `context-doctor's mod keeps ${named.join(", ")} behind tool search (${i.desktopToolsSet.where})` : `${i.desktopToolsSet.where} names no server: left as you set it`, value: i.desktopToolsSet.value });
+        // What the mod recorded since: the sessions it moved them in, or that none has yet.
+        const moved = movedSessions(i.appToolsSeen ?? []);
+        const seen = moved.sessions ? `; moved behind tool search in ${moved.sessions} session${moved.sessions === 1 ? "" : "s"} since ${new Date(moved.since).toISOString().slice(0, 10)}` : named.length && i.appToolsSeen?.length ? "; no session moved them yet (it takes a new Desktop session)" : "";
+        fixes.push({ id: "desktop-tools-defer", title: "The Desktop app's own tools behind tool search", basis: "set", quality: "", change: `env.${DEFER_APP_TOOLS_ENV}`, state: named.length ? "applied" : "not-here", note: named.length ? `context-doctor's mod keeps ${named.join(", ")} behind tool search (${i.desktopToolsSet.where})${seen}` : `${i.desktopToolsSet.where} names no server: left as you set it`, value: i.desktopToolsSet.value });
     }
     else if (dt) {
         // A server called in at least half the starts it went into would cost a tool-search step in most of them: kept in front.
-        const pick = dt.servers.filter((s) => !KEEP_APP_SERVERS.includes(s.name) && s.calledStarts * 2 < s.starts && s.unusedUsd > 0).sort((a, b) => b.unusedUsd - a.unusedUsd);
+        const candidates = dt.servers.filter((s) => !KEEP_APP_SERVERS.includes(s.name) && s.calledStarts * 2 < s.starts && s.unusedUsd > 0).sort((a, b) => b.unusedUsd - a.unusedUsd);
+        // What the mod saw in the newest Desktop session: only the servers that arrive whole, with their server named, are offered.
+        const verdict = i.appToolsSeen ? appToolsVerdict(i.appToolsSeen, candidates.map((s) => s.name)) : undefined;
+        const pick = verdict ? candidates.filter((s) => verdict.reach.some((r) => r.server === s.name)) : candidates;
         const kept = dt.servers.filter((s) => !pick.includes(s)).map((s) => s.name);
         const usd = pick.reduce((t, s) => t + s.unusedUsd, 0);
-        if (pick.length && usd >= MIN_USD) {
+        if (verdict && candidates.length && !pick.length) {
+            // Withdrawn before anyone applies it, with the reason the mod saw.
+            fixes.push({ id: "desktop-tools-defer", title: "The Desktop app's own tools behind tool search", basis: "", quality: "", change: "", state: "not-here", note: `not offered: ${verdictLines(verdict).join(" ")}` });
+        }
+        else if (pick.length && usd >= MIN_USD) {
             // Counted as the headline is, start by start: overhead's per-server share is spread by tokens and can come out below it.
             const exact = pick.every((s) => s.calledUsd !== undefined);
             const all = pick.reduce((t, s) => t + (exact ? s.unusedUsd + s.calledUsd : s.usd), 0);
@@ -320,8 +331,10 @@ export function planFixes(i) {
                 change: `${where}: env.${DEFER_APP_TOOLS_ENV} = "${value}", read by context-doctor's mod (its plugin, Claude Code ${DESKTOP_TOOLS_DEFER_SINCE}+)`,
                 state: "available",
                 value,
-                // Built from Claude Code's mods declarations; whether the app's in-process servers raise tool.describe is not yet seen on a live session.
-                detail: ["Not yet confirmed on a live Desktop session: after applying, start a new session and run context-doctor overhead; these servers should no longer be listed as sent whole."],
+                // Confirmed (or narrowed) by what the mod saw in the newest Desktop session; with none on record, said so.
+                detail: verdict
+                    ? verdictLines(verdict)
+                    : [`Not yet confirmed on this machine: context-doctor's mod notes which servers the Desktop app hands it after the first reply of a new Desktop session (Claude Code ${DESKTOP_TOOLS_DEFER_SINCE}+, with the plugin); run fix again after one.`],
             });
         }
     }

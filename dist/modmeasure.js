@@ -18,6 +18,9 @@
  *  - appends Claude Code's cost beside our own price of the same session
  *    (sessionTotal: the transcript and its subagents, as the every-prompt
  *    hook prices it) to a small capped ledger, for `doctor`'s comparison;
+ *  - appends the MCP servers the mod's `tool.describe` saw this session
+ *    (their type, tool count, whether already behind tool search), when
+ *    they changed, to the tools ledger (apptools.ts), for `fix` and `doctor`;
  *  - prints what the band needs, as JSON: the cache clock read from the
  *    transcript's tail (coldresume.ts), the re-write's price, the price.
  *
@@ -34,6 +37,7 @@ import { claudeDir } from "./claudedir.js";
 import { saveIfWorthIt, sessionPriceThresholds, sessionTotal } from "./sessionprice.js";
 import { AFTER_COMPACT_TOKENS, autoCompactsAt, COLD_MARGIN_MS, COLD_MIN_TOKENS, detectColdResume } from "./coldresume.js";
 import { rateCard, ratesAt } from "./pricing.js";
+import { recordToolServers } from "./apptools.js";
 /**
  * The mod's windows in the status line's shape, `{ five_hour: { used_percentage,
  * resets_at } }`, resets in epoch seconds: the one shape recordLimits reads.
@@ -245,6 +249,11 @@ export function modMeasure(input, now = Date.now(), env = process.env) {
     if (ccUsd !== undefined)
         out.ccUsd = ccUsd;
     const sid = typeof input?.sessionId === "string" ? input.sessionId : undefined;
+    try {
+        if (sid && input?.tools !== undefined && env.CONTEXT_DOCTOR_NO_COST_LOG !== "1")
+            recordToolServers({ ts: now, sid, ...(typeof input.surface === "string" ? { surface: input.surface } : {}), servers: input.tools });
+    }
+    catch { /* the rest still runs */ }
     const transcript = findTranscript(sid, typeof input?.cwd === "string" ? input.cwd : undefined);
     if (!sid || !transcript)
         return out;

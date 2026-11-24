@@ -207,7 +207,7 @@ export interface On {
 }
 /**
  * `tool.describe` (2.1.323+; `mcpServer` and an answer's `isDeferred` from
- * 2.1.326, read in 2.1.329's declarations): one tool's description the first
+ * 2.1.326, read in 2.1.329's declarations and again in 2.1.331's, unchanged): one tool's description the first
  * time the engine renders its schema in a session. `isDeferred: true` on the
  * answer puts the tool behind ToolSearch from the next new thread or `/clear`;
  * `breakPromptCache` would send it at the next turn by re-writing the whole

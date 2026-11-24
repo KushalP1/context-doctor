@@ -24,6 +24,8 @@ import type { SpendItem } from "../spend.js";
 import { sessionPriceThresholds } from "../sessionprice.js";
 import { register, state, COMMAND, PANE, USAGE_COMMAND, USAGE_PANE } from "../mod/register.js";
 import { costCheck, costGaps, readCostLines, recordModEvent, recordSessionCost, statusLineRateLimits } from "../modmeasure.js";
+import { appToolsCheckText, appToolsVerdict, movedSessions, readToolLines, recordToolServers, verdictLines } from "../apptools.js";
+import { appToolsCheck } from "../doctor.js";
 import { sandboxEnv } from "./sandbox.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -1068,4 +1070,147 @@ test("desktop-tools-defer end to end: fix prices it from the history, --apply wr
   assert.equal(u.status, 0, u.stdout + u.stderr);
   assert.equal(readFileSync(join(home, ".claude", "settings.json"), "utf8"), before);
   assert.equal(existsSync(join(home, ".claude", ".context-doctor-fixes.json")), false);
+});
+
+// -- Which servers the app hands the mod (H3: the tools ledger) ---------------------------
+
+const toolsLedger = (home: string) => join(home, ".claude", ".context-doctor-tools.jsonl");
+const ledgerLines = (home: string) => (existsSync(toolsLedger(home)) ? readFileSync(toolsLedger(home), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
+
+test("tool.describe notes each server's type, tool count and placement; the next turn's mod measure keeps it, changes only; nothing drawn, never breakPromptCache", async () => {
+  const now = Date.now();
+  const { home, cwd } = sessionHome(10, now);
+  const s = engine(home, { cwd, now, env: { CONTEXT_DOCTOR_DEFER_MCP: "Claude_Browser" } });
+  await fire(s, "session.start", { cwd, surface: "desktop", isInteractive: true });
+  const answers = [
+    await describe(s, "mcp__Claude_Browser__navigate"),
+    await describe(s, "mcp__Claude_Browser__computer"),
+    await describe(s, "mcp__ccd_session__start_session"),
+    await describe(s, "mcp__ccd_turn__report"),
+    await describe(s, "mcp__github__search", { mcpServer: { type: "http", origin: "https://api.example.com" }, isDeferred: true }),
+    await describe(s, "Bash", {}),
+    // Its loaded description, once tool search found it: not a second tool.
+    await describe(s, "mcp__Claude_Browser__navigate", { mcpServer: { type: "sdk" }, isDeferred: true }),
+  ];
+  for (const a of answers) assert.ok(!("breakPromptCache" in a), JSON.stringify(a));
+  assert.equal(answers[0].isDeferred, true);
+  assert.equal(answers[2].isDeferred, undefined);
+  assert.equal(ledgerLines(home).length, 0, "the hook itself writes nothing and runs nothing");
+  assert.equal(s.runs.length, 0);
+
+  const measure = () => fire(s, "session.measure", { context: { tokens: 520_010, window: 1_000_000 }, rateLimits: [], changed: ["context"] }, () => ({ changed: ["context"] }));
+  await measure();
+  assert.deepEqual(ledgerLines(home).map((l) => [l.sid, l.surface, l.servers]), [["sess-1", "desktop", [
+    { server: "Claude_Browser", type: "sdk", tools: 2, deferredByHost: false, movedByUs: true },
+    { server: "ccd_session", type: "sdk", tools: 1, deferredByHost: false, movedByUs: false },
+    { server: "ccd_turn", type: "sdk", tools: 1, deferredByHost: false, movedByUs: false },
+    { server: "github", type: "http", tools: 1, deferredByHost: true, movedByUs: false },
+  ]]]);
+  // The next turn, nothing new: nothing sent, nothing written.
+  await measure();
+  assert.equal(ledgerLines(home).length, 1);
+  // A server that connects later: one more line, the session's newest.
+  await describe(s, "mcp__visualize__show_widget");
+  await measure();
+  assert.equal(ledgerLines(home).length, 2);
+  assert.deepEqual(readToolLines(0, toolsLedger(home)).map((l) => l.servers.length), [5], "a session's last line only");
+  // Nothing drawn for it: the band stays off.
+  assert.equal(await render(s, "AbovePrompt", "desktop"), "ENGINE");
+
+  // A new session is described again and recorded as its own.
+  await fire(s, "session.end", { reason: "clear", sessionId: "sess-1" });
+  assert.equal(state().tools.size, 0);
+
+  // Off, or an engine with no mcpServer (2.1.323-2.1.325): nothing noted.
+  const off = engine(home, { env: { CONTEXT_DOCTOR_NO_MOD: "1" } });
+  await describe(off, "mcp__Claude_Browser__navigate");
+  assert.equal(state().tools.size, 0);
+  const old = engine(home);
+  await describe(old, "mcp__Claude_Browser__navigate", {});
+  assert.equal(state().tools.size, 0);
+});
+
+test("the tools ledger: cleaned, changes only per session, capped like the session-cost ledger", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cd-tools-ledger-"));
+  const path = join(dir, "tools.jsonl");
+  const browser = { server: "Claude_Browser", type: "sdk", tools: 12, deferredByHost: false, movedByUs: false };
+  assert.equal(recordToolServers({ ts: T, sid: "s1", surface: "desktop", servers: [browser, { server: "bad name $(x)", type: "sdk", tools: 1 }, { server: "x", type: "NOT A TYPE" }] }, path), true);
+  assert.deepEqual(readToolLines(0, path)[0].servers, [browser]);
+  assert.equal(recordToolServers({ ts: T + 1, sid: "s1", surface: "desktop", servers: [browser] }, path), false, "the same servers again");
+  assert.equal(recordToolServers({ ts: T + 1, sid: "s1", servers: [] }, path), false, "nothing to keep");
+  assert.equal(recordToolServers({ ts: T + 1, sid: "../x", servers: [browser] }, path), false);
+  // Thousands of sessions: the file stays under its cap, the newest kept.
+  for (let i = 0; i < 2000; i++) recordToolServers({ ts: T + i, sid: `s-${i}`, surface: "desktop", servers: [browser, { ...browser, server: "ccd_session", tools: 8 }] }, path);
+  assert.ok(statSync(path).size <= 128 * 1024 + 400, `${statSync(path).size} bytes`);
+  const kept = readToolLines(0, path);
+  assert.equal(kept[kept.length - 1].sid, "s-1999");
+  assert.ok(kept.length < 2000 && kept.length > 200, `${kept.length} lines kept`);
+});
+
+test("the verdict: which of the lever's servers the newest Desktop session shows arriving whole, already deferred, or not at all; doctor's line", () => {
+  const line = (ts: number, servers: Array<Partial<{ server: string; type: string; tools: number; deferredByHost: boolean; movedByUs: boolean }>>, surface?: string) => ({ ts, sid: `s${ts}`, ...(surface ? { surface } : {}), servers: servers.map((s) => ({ type: "sdk", tools: 1, deferredByHost: false, movedByUs: false, server: "x", ...s })) });
+  const lines = [
+    line(T - 864e5, [{ server: "Claude_Browser", deferredByHost: true }], "desktop"),
+    line(T, [{ server: "Claude_Browser", tools: 12 }, { server: "ccd_session", tools: 8, deferredByHost: true }, { server: "ccd_turn", tools: 1 }], "desktop"),
+    line(T + 1000, [{ server: "github", type: "stdio" }], "terminal"),
+  ];
+  const v = appToolsVerdict(lines, ["Claude_Browser", "ccd_session", "visualize"])!;
+  assert.deepEqual([v.at, v.reach.map((s) => s.server), v.hostDefers.map((s) => s.server), v.unseen], [T, ["Claude_Browser"], ["ccd_session"], ["visualize"]]);
+  assert.deepEqual(verdictLines(v), [
+    "Seen in your Desktop session of 2026-11-10: Claude_Browser (sdk, 12 tools) arrives whole as in-process (sdk) servers, and Claude Code tells context-doctor's mod which server each tool is from, so this setting reaches it.",
+    "Claude Code already keeps ccd_session behind tool search (your Desktop session of 2026-11-10): nothing to move there.",
+    "Claude Code did not show context-doctor's mod visualize's tools in your Desktop session of 2026-11-10, so the setting would not reach it there.",
+  ]);
+  assert.equal(appToolsVerdict([lines[2]], ["Claude_Browser"]), undefined, "a terminal session says nothing about the app");
+  // No surface given (an engine that names none): the app's own servers mark it.
+  assert.equal(appToolsVerdict([line(T, [{ server: "terminal" }])], ["terminal"])!.reach.length, 1);
+  assert.equal(appToolsCheckText(lines), "your Desktop session of 2026-11-10 handed context-doctor's mod Claude_Browser (sdk, 12 tools), sent whole; ccd_session (sdk, 8 tools), behind tool search already; ccd_turn (sdk, 1 tool), sent whole; context-doctor fix --apply desktop-tools-defer would move Claude_Browser (it reaches them)");
+  const moved = [...lines, line(T + 2000, [{ server: "Claude_Browser", tools: 12, movedByUs: true }], "desktop")];
+  assert.match(appToolsCheckText(moved)!, /Claude_Browser \(sdk, 12 tools\), moved behind tool search by context-doctor; moved behind tool search in 1 session since 2026-11-10$/);
+  assert.deepEqual(movedSessions(moved), { sessions: 1, since: T + 2000, servers: ["Claude_Browser"] });
+  assert.equal(appToolsCheckText([lines[2]]), undefined);
+});
+
+test("desktop-tools-defer with a tools ledger: fix confirms the servers that arrive whole, withdraws the lever when Claude Code already defers them, and counts the sessions it moved them in; doctor names them", async () => {
+  const now = Date.now();
+  const home = desktopHome();
+  const write = (servers: Array<Record<string, unknown>>) => writeFileSync(toolsLedger(home), JSON.stringify({ ts: now - 3600e3, sid: "d1", surface: "desktop", servers }) + "\n");
+  const lever = () => {
+    const r = runCli(home, "fix", "--json");
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout).fixes.find((x: { id: string }) => x.id === "desktop-tools-defer");
+  };
+  const today = new Date(now - 3600e3).toISOString().slice(0, 10);
+  // Both arrive whole: confirmed, "not yet confirmed" gone.
+  write([{ server: "Claude_Browser", type: "sdk", tools: 12, deferredByHost: false, movedByUs: false }, { server: "ccd_session", type: "sdk", tools: 8, deferredByHost: false, movedByUs: false }, { server: "ccd_turn", type: "sdk", tools: 1, deferredByHost: false, movedByUs: false }]);
+  let f = lever();
+  assert.equal(f.state, "available");
+  assert.equal(f.value, "Claude_Browser,ccd_session");
+  assert.deepEqual(f.detail, [`Seen in your Desktop session of ${today}: Claude_Browser (sdk, 12 tools) and ccd_session (sdk, 8 tools) arrive whole as in-process (sdk) servers, and Claude Code tells context-doctor's mod which server each tool is from, so this setting reaches them.`]);
+  assert.deepEqual(appToolsCheck(toolsLedger(home), now), { label: "Desktop app tools", status: "ok", detail: `your Desktop session of ${today} handed context-doctor's mod Claude_Browser (sdk, 12 tools), sent whole; ccd_session (sdk, 8 tools), sent whole; ccd_turn (sdk, 1 tool), sent whole; context-doctor fix --apply desktop-tools-defer would move Claude_Browser and ccd_session (it reaches them)` });
+  // One already deferred by Claude Code: offered for the other alone, at its own figure.
+  const both = f.savedUsd;
+  write([{ server: "Claude_Browser", type: "sdk", tools: 12, deferredByHost: false, movedByUs: false }, { server: "ccd_session", type: "sdk", tools: 8, deferredByHost: true, movedByUs: false }]);
+  f = lever();
+  assert.equal(f.value, "Claude_Browser");
+  assert.ok(f.savedUsd < both, `${f.savedUsd} < ${both}`);
+  assert.match(f.detail.join("\n"), /Claude Code already keeps ccd_session behind tool search/);
+  // Both already deferred: withdrawn, with the reason, before anyone applies it.
+  write([{ server: "Claude_Browser", type: "sdk", tools: 12, deferredByHost: true, movedByUs: false }, { server: "ccd_session", type: "sdk", tools: 8, deferredByHost: true, movedByUs: false }]);
+  f = lever();
+  assert.equal(f.state, "not-here");
+  assert.equal(f.note, `not offered: Claude Code already keeps Claude_Browser and ccd_session behind tool search (your Desktop session of ${today}): nothing to move there.`);
+  assert.equal(f.savedUsd, undefined);
+  // No ledger: as before, said not yet confirmed.
+  writeFileSync(toolsLedger(home), "");
+  f = lever();
+  assert.match(f.detail[0], /^Not yet confirmed on this machine: context-doctor's mod notes which servers/);
+  assert.equal(appToolsCheck(toolsLedger(home), now), undefined);
+  // Applied, then a new Desktop session in which the mod moved them: counted.
+  assert.equal(runCli(home, "fix", "--apply", "desktop-tools-defer").status, 0);
+  write([{ server: "Claude_Browser", type: "sdk", tools: 12, deferredByHost: false, movedByUs: true }, { server: "ccd_session", type: "sdk", tools: 8, deferredByHost: false, movedByUs: true }]);
+  f = lever();
+  assert.equal(f.state, "applied");
+  assert.match(f.note, new RegExp(`moved behind tool search in 1 session since ${today}$`));
+  assert.equal(runCli(home, "fix", "undo", "desktop-tools-defer").status, 0);
 });

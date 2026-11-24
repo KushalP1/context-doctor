@@ -34,7 +34,10 @@
  *  - `tool.describe` (2.1.326+): once `fix --apply desktop-tools-defer`
  *    named the Desktop app's own MCP servers in CONTEXT_DOCTOR_DEFER_MCP,
  *    their tools go behind tool search from the next new conversation; never
- *    ccd_turn, never with `breakPromptCache`. Unset, nothing moves.
+ *    ccd_turn, never with `breakPromptCache`. Unset, nothing moves. Set or
+ *    not, it notes each MCP server's transport, tool count and placement,
+ *    and the next `mod measure` keeps them (changes only) for `fix` and
+ *    `doctor`: proof the lever reaches the app before anyone applies it.
  *
  * Nothing happens without a press or a command: no auto-compaction, no auto-apply, no ping. The
  * mod writes no file itself; the CLI writes ours. Off: CONTEXT_DOCTOR_NO_MOD=1.
@@ -44,7 +47,7 @@
  * reads which calls a module makes from its source: `$` is passed only to
  * functions declared at the top of this file.
  */
-import { applyOutcome, band, bar, DEFAULT_THRESHOLDS, deferredServers, fixArgv, KEEP_WARM_COMMAND, keepWarmTestEvery, keepWarmArmedText, keepWarmRefusal, keepWarmStatusText, keepWarmStep, keepWarmText, MODEL_CHANGE, money, outcome, paneRows, parseKeepWarm, parsePlan, parseUsage, pctText, PING_PROMPT, pingOutcome, ringSvg, RUNNING, shouldDefer, thresholdsFrom, usageArgv, usageDue, usageText, usageView, withPresses } from "./logic.js";
+import { applyOutcome, band, bar, DEFAULT_THRESHOLDS, deferredServers, fixArgv, noteDescribe, seenServers, KEEP_WARM_COMMAND, keepWarmTestEvery, keepWarmArmedText, keepWarmRefusal, keepWarmStatusText, keepWarmStep, keepWarmText, MODEL_CHANGE, money, outcome, paneRows, parseKeepWarm, parsePlan, parseUsage, pctText, PING_PROMPT, pingOutcome, ringSvg, RUNNING, shouldDefer, thresholdsFrom, usageArgv, usageDue, usageText, usageView, withPresses } from "./logic.js";
 export const COMMAND = "context-doctor-fix";
 export const PANE = "context-doctor-fix";
 export const USAGE_COMMAND = "context-doctor-usage";
@@ -56,7 +59,7 @@ const FIX_TIMEOUT_MS = 10 * 60_000;
 const MEASURE_TIMEOUT_MS = 30_000;
 /** `mod usage` measures 30 days the first time (~3 s cold on 22,000 requests); later runs read its 5-minute cache. */
 const USAGE_TIMEOUT_MS = 2 * 60_000;
-const fresh = () => ({ off: false, cold: false, always: false, thresholds: DEFAULT_THRESHOLDS, hidden: new Set(), drawn: "", compacting: false, loading: false, presses: new Map(), pinging: false, usageOpen: false, usageLoading: false, period: "today", usageDrawn: "" });
+const fresh = () => ({ off: false, cold: false, always: false, thresholds: DEFAULT_THRESHOLDS, hidden: new Set(), drawn: "", compacting: false, loading: false, presses: new Map(), pinging: false, usageOpen: false, usageLoading: false, period: "today", usageDrawn: "", tools: new Map(), toolsSent: "" });
 let S = fresh();
 /** For tests: the state the hooks share. */
 export const state = () => S;
@@ -85,7 +88,13 @@ async function measure($, e) {
         catch { /* measured without it */ }
         if (S.live)
             S.live.model = model;
-        const run = await $.process.run(["node", cliOf($), "mod", "measure"], { stdin: JSON.stringify({ sessionId, cwd, model, rateLimits: e.rateLimits, cost: e.cost, context: e.context }), timeoutMs: MEASURE_TIMEOUT_MS });
+        // The servers the app handed over this session, only when they changed since the last measure (the CLI keeps them: apptools.ts).
+        const tools = seenServers(S.tools);
+        const toolsKey = tools.length ? JSON.stringify(tools) : "";
+        const send = toolsKey !== "" && toolsKey !== S.toolsSent;
+        const run = await $.process.run(["node", cliOf($), "mod", "measure"], { stdin: JSON.stringify({ sessionId, cwd, model, rateLimits: e.rateLimits, cost: e.cost, context: e.context, ...(send ? { tools, ...(S.surface ? { surface: S.surface } : {}) } : {}) }), timeoutMs: MEASURE_TIMEOUT_MS });
+        if (send && run.exitCode === 0)
+            S.toolsSent = toolsKey;
         const got = JSON.parse(run.stdout || "{}");
         S.data = got && typeof got.at === "number" ? got : fallback;
     }
@@ -352,6 +361,7 @@ export function register(on) {
     on("session.start", async ($, e, next) => {
         try {
             S.off = (await $.env.get("CONTEXT_DOCTOR_NO_MOD")) === "1";
+            S.surface = typeof e?.surface === "string" ? e.surface : undefined;
             const bandMode = (await $.env.get("CONTEXT_DOCTOR_MOD_BAND"))?.trim().toLowerCase();
             S.cold = bandMode === "cold";
             S.always = bandMode === "always";
@@ -390,6 +400,9 @@ export function register(on) {
         }
         catch { /* ending anyway */ }
         S.data = undefined;
+        // The next session's tools are described again, and recorded as its own.
+        S.tools = new Map();
+        S.toolsSent = "";
         // The next session's ring and subagents are its own; the history (every session's) stays.
         S.live = undefined;
         if (S.agents)
@@ -443,18 +456,30 @@ export function register(on) {
     // which the engine asks once per tool and session. The answer moves the tool for the next new
     // thread or /clear; no breakPromptCache, so a running conversation's cache is never re-written.
     // An engine older than 2.1.326 (no `mcpServer` on the input) gets its own answer back untouched.
+    // Set or not, each MCP tool's server, transport and placement is noted in memory (no file, no
+    // process: the next session.measure hands them to the CLI), so `fix` and `doctor` can say
+    // whether the lever reaches the app's servers before anyone applies it.
     try {
         on("tool.describe", async ($, e, next) => {
-            if (!e?.mcpServer || e.isDeferred === true)
+            if (!e?.mcpServer)
                 return next(e);
+            let off = false;
             let servers = [];
             try {
-                if ((await $.env.get("CONTEXT_DOCTOR_NO_MOD")) !== "1")
+                off = (await $.env.get("CONTEXT_DOCTOR_NO_MOD")) === "1";
+                if (!off && e.isDeferred !== true)
                     servers = deferredServers(await $.env.get("CONTEXT_DOCTOR_DEFER_MCP"));
             }
             catch { /* no variable: nothing moves */ }
             const r = await next(e);
-            return shouldDefer(e, servers) && r && typeof r === "object" ? { ...r, isDeferred: true } : r;
+            const move = shouldDefer(e, servers) && !!r && typeof r === "object";
+            if (!off) {
+                try {
+                    noteDescribe(S.tools, e, move);
+                }
+                catch { /* a note is a nicety */ }
+            }
+            return move ? { ...r, isDeferred: true } : r;
         });
     }
     catch { /* an engine without tool.describe: nothing to defer */ }

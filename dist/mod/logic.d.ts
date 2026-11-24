@@ -470,3 +470,29 @@ export interface DescribeInput {
  * them), never one of the servers always kept.
  */
 export declare function shouldDefer(e: DescribeInput, servers: readonly string[]): boolean;
+/** `mcp__<server>__<tool>`'s server, or undefined for any other name. */
+export declare function mcpServerOf(tool: string): string | undefined;
+/** One server's tools as `tool.describe` showed them this session: each tool once, at its first description. */
+export interface SeenServer {
+    type: string;
+    tools: Set<string>;
+    deferred: number;
+    moved: number;
+}
+/** What `mod measure` keeps per server (apptools.ts reads the same shape). */
+export interface SeenServerLine {
+    server: string;
+    type: string;
+    tools: number;
+    deferredByHost: boolean;
+    movedByUs: boolean;
+}
+/**
+ * Note one description: its server, its transport, whether the engine
+ * already had it behind tool search and whether the mod moved it. Only an
+ * MCP tool with `mcpServer` (2.1.326+) counts; a tool seen again (its
+ * loaded description, after tool search found it) is not counted twice.
+ */
+export declare function noteDescribe(seen: Map<string, SeenServer>, e: DescribeInput, moved: boolean): void;
+/** The servers as `mod measure` takes them, sorted by name: what changes the ledger line. */
+export declare function seenServers(seen: Map<string, SeenServer>): SeenServerLine[];
