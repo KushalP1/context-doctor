@@ -7,12 +7,13 @@
 AI agents re-send their whole context on every message: old tool output, pasted files, long instructions. A 500k-token session pays for all of it again each time, and at full price after a coffee break, when the prompt cache has expired. context-doctor measures that waste on your own sessions, in dollars, and removes it at the moments it pays: before it enters the context, while it sits there, and on every request. It runs on your machine, needs no API key, sends no telemetry, and works with **Claude Code** (terminal, IDE, desktop app), **Claude Desktop, ChatGPT, Codex, Cursor, Gemini CLI, GitHub Copilot**, any app on the **Anthropic, OpenAI or Gemini API**, and **CI**. MIT licensed, Node 20+, macOS, Linux and Windows.
 
 ```bash
-npx context-doctor savings     # what your recent sessions cost, and what each fix would have saved
-npx context-doctor fix         # the fixes ranked by dollars; applies only the ones you say yes to
-npx context-doctor spend       # one bill across Claude Code, Codex, Gemini CLI, Cursor, Copilot CLI, OpenCode and Cline
+npx context-doctor savings          # what your recent Claude Code sessions cost, and what each fix would have saved
+npx context-doctor savings --sample # nothing to measure on this machine yet? the same report on generated sessions
 ```
 
 <img src="https://raw.githubusercontent.com/KushalP1/context-doctor/main/assets/savings.svg" alt="npx context-doctor savings: input billed, what /compact at cold resumes, autopilot and an earlier auto-compact window would have saved" width="640">
+
+*Measured on the author's own sessions, priced the way the prompt cache billed them — `savings` replays yours the same way, and with no history here yet it says so and offers the sample instead of showing numbers.*
 
 > **Which context-doctor is this?** Several projects share the name. This one is [`context-doctor` on npm](https://www.npmjs.com/package/context-doctor) and `io.github.KushalP1/context-doctor` in the official MCP Registry ([see the entry](https://registry.modelcontextprotocol.io/v0/servers/io.github.KushalP1%2Fcontext-doctor/versions/latest)). The registry is a service, not a list in a GitHub repo: the `modelcontextprotocol/servers` repository holds only reference servers and points to the registry for the rest. Built and maintained by [gAI Ventures](https://gai.ventures).
 
@@ -20,12 +21,14 @@ npx context-doctor spend       # one bill across Claude Code, Codex, Gemini CLI,
 
 **See it first, nothing installed:** in a terminal, `npx context-doctor` reads your last 30 days of Claude Code sessions on this machine and shows what the fixes with no quality cost would have saved, as one total, then asks once: `y` applies them all, `npx context-doctor fix undo` puts them back. The fixes that trade something (compacting earlier, the subagents' model) are listed with their dollars and the command for each.
 
-Pick where you work. Each takes about a minute and is fully reversible.
+**Claude Code** (terminal, IDE, desktop app): inside Claude Code, `/plugin marketplace add KushalP1/context-doctor`, then `/plugin install context-doctor@context-doctor`. You get the every-prompt check, the compaction hook, the MCP tools and `/context-doctor:fix`, `:spend`, `:savings`, `:checkup`, `:overhead`, `:pack`, `:autopilot`, `:compact-window`.
+
+**Everything on this machine at once:** `npm install -g context-doctor && context-doctor install` wires Claude Code, Claude Desktop, Cursor, Codex, Gemini CLI, Google Antigravity and GitHub Copilot: MCP server, skill and hooks ([what it writes](./docs/install.md)). `context-doctor doctor` checks it; `context-doctor uninstall` removes it. Then, for Claude Code in a terminal or IDE, `context-doctor autopilot on`.
+
+Each takes about a minute and is fully reversible. Work somewhere else? Same idea, other surfaces:
 
 | You use | Do this |
 |---|---|
-| **Claude Code** (terminal, IDE, desktop app) | Inside Claude Code: `/plugin marketplace add KushalP1/context-doctor`, then `/plugin install context-doctor@context-doctor`. You get the every-prompt check, the compaction hook, the MCP tools and `/context-doctor:fix`, `:spend`, `:savings`, `:checkup`, `:overhead`, `:pack`, `:autopilot`, `:compact-window` |
-| **Everything on this machine at once** | `npm install -g context-doctor && context-doctor install` wires Claude Code, Claude Desktop, Cursor, Codex, Gemini CLI, Google Antigravity and GitHub Copilot: MCP server, skill and hooks ([what it writes](./docs/install.md)). `context-doctor doctor` checks it; `context-doctor uninstall` removes it. Then, for Claude Code in a terminal or IDE, `context-doctor autopilot on` |
 | **Claude Desktop, Cursor or any MCP client** | Add the server to the client's MCP config (or install the one-click `.mcpb` from the [latest release](https://github.com/KushalP1/context-doctor/releases/latest) in Claude Desktop):<br>`{"mcpServers": {"context-doctor": {"command": "npx", "args": ["-y", "context-doctor", "mcp"]}}}` |
 | **claude.ai, ChatGPT, phone apps** | `npx context-doctor instructions --copy`, then paste into the app's personal preferences (it tells you where). ChatGPT can also reach the MCP server at a URL ([how](./docs/chat-apps.md#chatgpt)) |
 | **Your own app on an LLM API** | Run `npx context-doctor proxy --autopilot` and point `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` (add `/v1`) or `GOOGLE_GEMINI_BASE_URL` at the proxy on `127.0.0.1:8787`, plain HTTP ([exact values](./docs/proxy.md)). No proxy possible? Wrap the SDK client: `withContextDoctor(new Anthropic())` ([library](./docs/library.md)) |
