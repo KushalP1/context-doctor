@@ -2088,7 +2088,7 @@ function changeLine(c: SlopeChange): string {
 }
 
 /** "claude-fable-5-2" as "Fable 5.2"; any other id as it is. */
-function modelLabel(key: string | undefined): string {
+export function modelLabel(key: string | undefined): string {
   const m = /^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d{1,2}))?(?!\d)/i.exec(key ?? "");
   return m ? `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? `.${m[3]}` : ""}` : key ?? "another model";
 }
@@ -2106,9 +2106,11 @@ function splitLine(list: UsageShare[]): string | undefined {
 /**
  * The full `limits` report. `pastLimit`: lines on requests paid from usage
  * credits past a limit (credits.ts creditsLines), placed under the windows;
- * none when nothing went past one.
+ * none when nothing went past one. `ahead`: the line on what running out
+ * before the weekly reset would cost on usage credits (credits.ts
+ * creditsAheadLine), under the weekly window's run-out.
  */
-export function renderLimits(r: LimitsReport, pastLimit: string[] = []): string {
+export function renderLimits(r: LimitsReport, pastLimit: string[] = [], ahead?: string): string {
   const out: string[] = ["USAGE LIMITS", "═".repeat(60)];
   if (!r.windows.length && !r.resets.length) {
     out.push(
@@ -2136,6 +2138,7 @@ export function renderLimits(r: LimitsReport, pastLimit: string[] = []): string 
         out.push(s.beforeReset
           ? `  At that pace it runs out ${clock(s.runsOutAt, r.now)} (in ${hm(s.runsOutAt - r.now)}), before the reset.`
           : "  At that pace it lasts until the reset.");
+        if (ahead && s.beforeReset && s.app === "claude" && s.window === "seven_day") out.push(`  ${ahead}`);
       }
     }
   }

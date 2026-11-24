@@ -72,7 +72,7 @@ import { renderPayback, subagentPayback, SUBAGENT_CANDIDATE } from "./subagentpa
 import { compactionQuality, renderCompactionQuality, QUALITY_ROWS } from "./compactquality.js";
 import { isHandoffId, listHandoffs, readHandoff, renderHandoffList, stripControls } from "./handoff.js";
 import { claudeLimitFit, limitSavingsLines, limitsReport, renderLimits, renderLimitsReport } from "./limits.js";
-import { creditsLines, creditsReport } from "./credits.js";
+import { creditsAheadLine, creditsAheadNow, creditsLines, creditsReport } from "./credits.js";
 import { currentTranscript, findSession, recall, renderRecall } from "./recall.js";
 import { measureSubagentCosts, renderCostMedians, saveSubagentCosts } from "./fanout.js";
 import { applyPrune, canonical, installedSkills, planPrune, renderPrune, undoPrune } from "./prune.js";
@@ -1653,7 +1653,11 @@ async function main(): Promise<void> {
     }
     // Requests paid from usage credits past a limit: read only when the ledger says a limit ran out.
     const credits = creditsReport(report.days, { now: report.now });
-    console.log(args.json ? JSON.stringify(credits ? { ...report, credits } : report, null, 2) : renderLimits(report, credits ? creditsLines(credits, report.now) : []));
+    // Running out before the weekly reset with extra usage on: what the hours past it would cost (the transcripts read only then).
+    const ahead = creditsAheadNow({ now: report.now, status: report.windows.find((w) => w.app === "claude" && w.window === "seven_day") });
+    console.log(args.json
+      ? JSON.stringify({ ...report, ...(credits ? { credits } : {}), ...(ahead ? { creditsAhead: ahead } : {}) }, null, 2)
+      : renderLimits(report, credits ? creditsLines(credits, report.now) : [], ahead ? creditsAheadLine(ahead, report.now) : undefined));
     return;
   }
 
@@ -1740,8 +1744,10 @@ async function main(): Promise<void> {
     const s = b ? periodSpend(b.period) : undefined;
     // Claude Code's part past the plan's limit, on usage credits: in `spent` already, said apart.
     const c = s ? periodCredits(s.start) : undefined;
-    if (args.json) console.log(JSON.stringify(b && s ? { ...b, spent: s.usd, byTool: s.byTool, periodStart: s.start, periodEnd: s.end, unpriced: s.unpriced ?? null, credits: c ? { usd: c.usd, requests: c.requests, fromHeaders: c.fromHeaders, inferred: c.inferred } : null } : null, null, 2));
-    else console.log(withInvocation(renderBudgetStatus(b, s, promptHookInstalled(), c)));
+    // With a budget set: running out before the weekly reset with extra usage on, and what that would cost.
+    const ahead = s ? creditsAheadNow() : undefined;
+    if (args.json) console.log(JSON.stringify(b && s ? { ...b, spent: s.usd, byTool: s.byTool, periodStart: s.start, periodEnd: s.end, unpriced: s.unpriced ?? null, credits: c ? { usd: c.usd, requests: c.requests, fromHeaders: c.fromHeaders, inferred: c.inferred } : null, creditsAhead: ahead ?? null } : null, null, 2));
+    else console.log(withInvocation(renderBudgetStatus(b, s, promptHookInstalled(), c, ahead)));
     return;
   }
 

@@ -1836,7 +1836,7 @@ function changeLine(c) {
     return `${head} (${move(c.factor)}). Part of it is your model mix: ${used}${per}${predicted}. Beyond the mix, per model, 1% buys ${move(r).replace(" per 1%", "")}: ${drains(r)}${tok}${ver}.`;
 }
 /** "claude-fable-5-2" as "Fable 5.2"; any other id as it is. */
-function modelLabel(key) {
+export function modelLabel(key) {
     const m = /^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d{1,2}))?(?!\d)/i.exec(key ?? "");
     return m ? `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? `.${m[3]}` : ""}` : key ?? "another model";
 }
@@ -1853,9 +1853,11 @@ function splitLine(list) {
 /**
  * The full `limits` report. `pastLimit`: lines on requests paid from usage
  * credits past a limit (credits.ts creditsLines), placed under the windows;
- * none when nothing went past one.
+ * none when nothing went past one. `ahead`: the line on what running out
+ * before the weekly reset would cost on usage credits (credits.ts
+ * creditsAheadLine), under the weekly window's run-out.
  */
-export function renderLimits(r, pastLimit = []) {
+export function renderLimits(r, pastLimit = [], ahead) {
     const out = ["USAGE LIMITS", "═".repeat(60)];
     if (!r.windows.length && !r.resets.length) {
         out.push(`No limit readings yet. ${HOW_TO_RECORD}`, "", `Claude readings are kept in ${r.claudeLog.replace(homedir(), "~")}; Codex's are read from ~/.codex/sessions (none in the period).`);
@@ -1883,6 +1885,8 @@ export function renderLimits(r, pastLimit = []) {
                 out.push(s.beforeReset
                     ? `  At that pace it runs out ${clock(s.runsOutAt, r.now)} (in ${hm(s.runsOutAt - r.now)}), before the reset.`
                     : "  At that pace it lasts until the reset.");
+                if (ahead && s.beforeReset && s.app === "claude" && s.window === "seven_day")
+                    out.push(`  ${ahead}`);
             }
         }
     }

@@ -34,7 +34,7 @@ import { subagentFiles } from "./subagents.js";
 import { codexFileSpend, codexFiles, geminiFileSpend, geminiFiles, TOOL_NAME } from "./spend.js";
 import { billedCost, isUnbilledModel, priceChangedText, priceTableKey, requestCost } from "./pricing.js";
 import { orgRates, orgRatesLine } from "./orgrates.js";
-import { creditsSince } from "./credits.js";
+import { creditsAheadLine, creditsSince } from "./credits.js";
 import { anchorOf, rowsOf } from "./scan.js";
 import { realModel } from "./tokens.js";
 import { isCompactionRow, isTrack, newTrack, trackCompaction } from "./compactcost.js";
@@ -749,8 +749,12 @@ export function budgetStatus(now = Date.now(), home = homedir()) {
     const short = (n) => (n >= 10 ? `$${Math.round(n).toLocaleString("en-US")}` : `$${n.toFixed(2)}`);
     return `${short(s.usd)}/${amount(b.usd)} ${span(b.period)}${s.usd >= b.usd ? " ⚠" : ""}`;
 }
-/** `budget` with no argument, and after setting one: the budget and where the period stands. */
-export function renderBudgetStatus(b, s, hookInstalled, credits) {
+/**
+ * `budget` with no argument, and after setting one: the budget and where the
+ * period stands. `ahead`: the weekly limit running out before its reset with
+ * extra usage on (credits.ts creditsAheadNow), said in one line.
+ */
+export function renderBudgetStatus(b, s, hookInstalled, credits, ahead, now = Date.now()) {
     if (!b || !s)
         return "No spend budget set. Set one: context-doctor budget 50/day (or 200/week; --block to hold prompts over it).";
     const lines = [
@@ -760,6 +764,8 @@ export function renderBudgetStatus(b, s, hookInstalled, credits) {
     const paid = creditsLine(credits);
     if (paid)
         lines.push(paid);
+    if (ahead)
+        lines.push(creditsAheadLine(ahead, now));
     const org = orgRatesLine();
     if (org)
         lines.push(org);

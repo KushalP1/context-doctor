@@ -25,7 +25,7 @@
  * budget's hook at a threshold it already speaks at: nothing is drawn or sent.
  */
 import { type ExtraUsage } from "./claudedir.js";
-import { type LimitReading, type OverageReading } from "./limits.js";
+import { type LimitReading, type OverageReading, type UsagePoint, type WindowStatus } from "./limits.js";
 /** A window that read 100%: from that reading until it reset. */
 export interface SpentSpan {
     window: "five_hour" | "seven_day";
@@ -112,6 +112,63 @@ export declare function creditsReport(days?: number, opts?: CreditsOptions): (Cr
 export declare function creditsSince(since: number, opts?: CreditsOptions): (CreditsSummary & {
     extraUsage?: ExtraUsage;
 }) | undefined;
+/**
+ * The weekly limit at the recent pace runs out before it resets, and extra
+ * usage is on: Claude Code would keep working on usage credits from then
+ * until the reset. About how much, at the last 24 hours' dollars an hour on
+ * this machine (list prices, an estimate).
+ */
+export interface CreditsAhead {
+    /** When the weekly limit runs out at the recent pace, and when it resets, ms. */
+    runsOutAt: number;
+    resetsAt: number;
+    /** Hours from the run-out (or now, if later) to the reset. */
+    hours: number;
+    /** Claude Code's list-price dollars an hour over the last 24 hours, on this machine, subagents included. */
+    usdPerHour: number;
+    /** hours times usdPerHour. */
+    usd: number;
+    /** The model most of those dollars went to, and its share, when it is most of them. */
+    model?: string;
+    modelShare?: number;
+    /** The window's average pace (% an hour), and whether the limit lasts to the reset at it. */
+    averagePerHour?: number;
+    averageLasts?: boolean;
+}
+/** Extra usage on, and nothing in `~/.claude.json` saying credits are not paying now. */
+export declare function extraUsageOn(x: ExtraUsage | undefined): boolean;
+/**
+ * The weekly window's run-out and what the hours past it would cost. Pure:
+ * `usage` is the last 24 hours' requests. Undefined unless extra usage is on
+ * and the weekly window, read recently, runs out before its reset at the
+ * recent pace, with dollars to price the hours at.
+ */
+export declare function creditsAhead(status: WindowStatus | undefined, extra: ExtraUsage | undefined, usage: Array<Pick<UsagePoint, "ts" | "usd" | "model">>, now: number): CreditsAhead | undefined;
+export interface CreditsAheadOptions {
+    now?: number;
+    logPath?: string;
+    /** Claude Code transcripts to read (tests); default every one touched in the last day. */
+    claudePaths?: string[];
+    /** `~/.claude.json`'s word (tests); default read from the home below. */
+    extraUsage?: ExtraUsage | null;
+    home?: string;
+    /** The weekly window's status when the caller has it (`limits`); default read from the ledger. */
+    status?: WindowStatus;
+}
+/**
+ * creditsAhead from this machine: `~/.claude.json` first, then the ledger's
+ * weekly window, and the transcripts of the last day only when both say it
+ * applies. Never throws: a command's own figures must not be lost to it.
+ */
+export declare function creditsAheadNow(opts?: CreditsAheadOptions): CreditsAhead | undefined;
+/**
+ * One line: "Extra usage is on: at this pace your weekly limit runs out on
+ * Thu, Nov 26 at 18:19, 46 hours before it resets, and Claude Code would
+ * keep working on usage credits until then: about $1,234 at API list prices
+ * (an estimate), at your last 24 hours' $26.80 an hour, mostly Fable 5.2.
+ * At this week's average pace (0.55% an hour) it lasts until the reset."
+ */
+export declare function creditsAheadLine(a: CreditsAhead, now: number): string;
 /** "at 14:05" within the day, else "on Tue, Nov 17 at 14:05": local time. */
 export declare function whenText(ms: number, now: number): string;
 /** The dollars, in the words every report uses: list prices, an estimate. */

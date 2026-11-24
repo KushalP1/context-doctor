@@ -586,12 +586,16 @@ export declare function limitSavingsLines(fit: LimitFit | undefined, items: Arra
  * Code), or the autopilot proxy (from the API's rate-limit headers).
  */
 export declare const HOW_TO_RECORD = "To record them: `context-doctor install` (the plugin's mod writes them after each turn, Claude Code 2.1.286+; `install --statusline` on older ones), or `context-doctor autopilot on` (its proxy reads them from the API's replies).";
+/** "claude-fable-5-2" as "Fable 5.2"; any other id as it is. */
+export declare function modelLabel(key: string | undefined): string;
 /**
  * The full `limits` report. `pastLimit`: lines on requests paid from usage
  * credits past a limit (credits.ts creditsLines), placed under the windows;
- * none when nothing went past one.
+ * none when nothing went past one. `ahead`: the line on what running out
+ * before the weekly reset would cost on usage credits (credits.ts
+ * creditsAheadLine), under the weekly window's run-out.
  */
-export declare function renderLimits(r: LimitsReport, pastLimit?: string[]): string;
+export declare function renderLimits(r: LimitsReport, pastLimit?: string[], ahead?: string): string;
 /**
  * `limits --report`: a block to paste into a GitHub issue. Per weekly
  * window: % used, dollars and tokens per 1%, the split by entrypoint and

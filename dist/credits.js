@@ -25,7 +25,7 @@
  * budget's hook at a threshold it already speaks at: nothing is drawn or sent.
  */
 import { readExtraUsage } from "./claudedir.js";
-import { claudeUsage, cleanReadings, CLAUDE_WINDOWS, limitsLogPath, readClaudeReadings, readOverageReadings } from "./limits.js";
+import { claudeUsage, cleanReadings, CLAUDE_WINDOWS, limitsLogPath, modelLabel, readClaudeReadings, readOverageReadings, windowStatus } from "./limits.js";
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
@@ -199,6 +199,86 @@ export function creditsSince(since, opts = {}) {
     const s = creditsOf(usage, inp);
     return s.requests ? { ...s, ...(inp.extraUsage ? { extraUsage: inp.extraUsage } : {}) } : undefined;
 }
+/** The look-back the dollars an hour are read over: the same day `limits`' recent pace is. */
+const AHEAD_LOOKBACK_MS = DAY;
+/** Extra usage on, and nothing in `~/.claude.json` saying credits are not paying now. */
+export function extraUsageOn(x) {
+    if (x?.enabled !== true)
+        return false;
+    return !(typeof x.disabledReason === "string" && x.disabledReason !== "fetch_error" && x.disabledReason !== "unknown");
+}
+/**
+ * The weekly window's run-out and what the hours past it would cost. Pure:
+ * `usage` is the last 24 hours' requests. Undefined unless extra usage is on
+ * and the weekly window, read recently, runs out before its reset at the
+ * recent pace, with dollars to price the hours at.
+ */
+export function creditsAhead(status, extra, usage, now) {
+    if (!status || status.app !== "claude" || status.window !== "seven_day" || status.resetSince || status.stale)
+        return undefined;
+    if (status.runsOutAt === undefined || !status.beforeReset || status.resetsAt === undefined || !extraUsageOn(extra))
+        return undefined;
+    const from = now - AHEAD_LOOKBACK_MS;
+    const recent = usage.filter((p) => p.ts > from && p.ts <= now);
+    const total = recent.reduce((a, p) => a + p.usd, 0);
+    if (!(total > 0))
+        return undefined;
+    const usdPerHour = total / (AHEAD_LOOKBACK_MS / HOUR);
+    const hours = Math.max(0, status.resetsAt - Math.max(status.runsOutAt, now)) / HOUR;
+    if (!(hours > 0))
+        return undefined;
+    const byModel = new Map();
+    for (const p of recent)
+        if (p.model)
+            byModel.set(p.model, (byModel.get(p.model) ?? 0) + p.usd);
+    const [top] = [...byModel].sort((a, b) => b[1] - a[1]);
+    const out = { runsOutAt: status.runsOutAt, resetsAt: status.resetsAt, hours, usdPerHour, usd: hours * usdPerHour };
+    if (top && top[1] / total >= 0.5) {
+        out.model = top[0];
+        out.modelShare = top[1] / total;
+    }
+    if (status.averagePerHour !== undefined && status.averagePerHour > 0) {
+        out.averagePerHour = status.averagePerHour;
+        out.averageLasts = status.at + ((100 - status.pct) / status.averagePerHour) * HOUR >= status.resetsAt;
+    }
+    return out;
+}
+/**
+ * creditsAhead from this machine: `~/.claude.json` first, then the ledger's
+ * weekly window, and the transcripts of the last day only when both say it
+ * applies. Never throws: a command's own figures must not be lost to it.
+ */
+export function creditsAheadNow(opts = {}) {
+    try {
+        const now = opts.now ?? Date.now();
+        const extra = opts.extraUsage === null ? undefined : opts.extraUsage ?? readExtraUsage(opts.home);
+        if (!extraUsageOn(extra))
+            return undefined;
+        const status = opts.status ?? windowStatus(cleanReadings(readClaudeReadings(now - 8 * DAY, opts.logPath ?? limitsLogPath()).filter((r) => r.window === "seven_day")), now);
+        if (!status?.beforeReset || status.runsOutAt === undefined || status.stale)
+            return undefined;
+        return creditsAhead(status, extra, claudeUsage(now - AHEAD_LOOKBACK_MS, now, opts.claudePaths), now);
+    }
+    catch {
+        return undefined;
+    }
+}
+/**
+ * One line: "Extra usage is on: at this pace your weekly limit runs out on
+ * Thu, Nov 26 at 18:19, 46 hours before it resets, and Claude Code would
+ * keep working on usage credits until then: about $1,234 at API list prices
+ * (an estimate), at your last 24 hours' $26.80 an hour, mostly Fable 5.2.
+ * At this week's average pace (0.55% an hour) it lasts until the reset."
+ */
+export function creditsAheadLine(a, now) {
+    const hours = a.hours >= 10 ? Math.round(a.hours) : Math.round(a.hours * 10) / 10;
+    const mostly = a.model ? `, mostly ${modelLabel(a.model)}` : "";
+    const avg = a.averagePerHour === undefined ? ""
+        : a.averageLasts ? ` At this week's average pace (${pace(a.averagePerHour)}% an hour) it lasts until the reset.`
+            : ` At this week's average pace (${pace(a.averagePerHour)}% an hour) it runs out before the reset too.`;
+    return `Extra usage is on: at this pace your weekly limit runs out ${whenText(a.runsOutAt, now)}, ${hours} hour${hours === 1 ? "" : "s"} before it resets, and Claude Code would keep working on usage credits until then: about ${dollars(a.usd)} ${AT_LIST_PRICES}, at your last 24 hours' ${dollars(a.usdPerHour)} an hour${mostly}.${avg}`;
+}
+const pace = (v) => (v >= 10 ? Math.round(v).toString() : v >= 1 ? v.toFixed(1) : v.toFixed(2));
 // ---------------------------------------------------------------------------
 // Words
 // ---------------------------------------------------------------------------

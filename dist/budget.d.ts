@@ -23,7 +23,7 @@
  * replies count once. Measured on the author's history: docs/spend.md.
  */
 import { type Tool } from "./spend.js";
-import { type CreditsSummary } from "./credits.js";
+import { type CreditsAhead, type CreditsSummary } from "./credits.js";
 import { type CompactTrack } from "./compactcost.js";
 export type Period = "day" | "week";
 export interface Budget {
@@ -184,7 +184,11 @@ export interface BudgetVerdict {
 export declare function budgetVerdict(now?: number, home?: string): BudgetVerdict | undefined;
 /** The status line's part: "$12/$50 today", or undefined with no budget set. */
 export declare function budgetStatus(now?: number, home?: string): string | undefined;
-/** `budget` with no argument, and after setting one: the budget and where the period stands. */
-export declare function renderBudgetStatus(b: Budget | undefined, s: PeriodSpend | undefined, hookInstalled: boolean, credits?: CreditsSummary): string;
+/**
+ * `budget` with no argument, and after setting one: the budget and where the
+ * period stands. `ahead`: the weekly limit running out before its reset with
+ * extra usage on (credits.ts creditsAheadNow), said in one line.
+ */
+export declare function renderBudgetStatus(b: Budget | undefined, s: PeriodSpend | undefined, hookInstalled: boolean, credits?: CreditsSummary, ahead?: CreditsAhead, now?: number): string;
 /** Our every-prompt hook in Claude Code, Codex or Gemini CLI, or the plugin's. */
 export declare function promptHookInstalled(home?: string): boolean;
