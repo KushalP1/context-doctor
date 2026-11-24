@@ -39,6 +39,7 @@ import { claudeUsageFiles } from "./limits.js";
 import { compareSessions, comparisonCheck } from "./ccost.js";
 import { hasKnownPrice, isUnbilledModel, priceChangedText } from "./pricing.js";
 import { managedSourcesLine, orgRatesLine } from "./orgrates.js";
+import { uncachedCheck } from "./cachemisses.js";
 
 function claudeDesktopConfigPath(): string {
   switch (platform()) {
@@ -927,6 +928,14 @@ export async function runDoctor(): Promise<void> {
     const hooked = checks.some((c) => ["Every-prompt hook", "Codex hook", "Gemini CLI hook"].includes(c.label) && c.status === "ok");
     if (!at.length) checks.push({ label: "Session price", status: "skip", detail: "off (CONTEXT_DOCTOR_NO_SESSION_PRICE=1)" });
     else if (hooked) checks.push({ label: "Session price", status: "ok", detail: `said once when a session passes ${at.map((t) => `$${t.toLocaleString("en-US")}`).join(", ").replace(/, ([^,]+)$/, " and $1")} (CONTEXT_DOCTOR_SESSION_PRICE to change; CONTEXT_DOCTOR_NO_SESSION_PRICE=1 for off)` });
+  }
+
+  // Requests the prompt cache never saw (anthropics/claude-code#111948), named by Claude Code version.
+  try {
+    const c = uncachedCheck();
+    if (c) checks.push(c);
+  } catch {
+    /* an unreadable transcript is no finding */
   }
 
   // Models in the last 30 days with no list price of their own: their dollars everywhere are a guess or missing.

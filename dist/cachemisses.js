@@ -262,6 +262,124 @@ runRows, onLate = () => { }) {
         blocks = 0;
     }
 }
+const CLAUDE_MODEL = /claude|opus|sonnet|haiku|fable|mythos/i;
+/** Requests in one transcript the cache never saw; `since` drops earlier ones. `seen`: uuids of rows already read (a fork's copied rows count once). */
+export function uncachedInTranscript(path, since = 0, seen) {
+    const found = [];
+    let cached = false;
+    let prev;
+    let compacted = false;
+    for (const r of rowsOf(path, MISS_ROWS)) {
+        if (r.k === "c") {
+            compacted = true;
+            continue;
+        }
+        if (r.k !== "r")
+            continue;
+        const { model, at, u } = r;
+        const write = num(u.cache_creation_input_tokens);
+        const read = num(u.cache_read_input_tokens);
+        const input = num(u.input_tokens);
+        const total = write + read + input;
+        if (write > 0 || read > 0)
+            cached = true;
+        const copied = r.uuid !== undefined && seen !== undefined && seen.has(r.uuid);
+        if (r.uuid !== undefined)
+            seen?.add(r.uuid);
+        if (at >= since && !copied && write === 0 && input > MIN_CONTEXT && input > total / 2 && CLAUDE_MODEL.test(model) &&
+            prev && !compacted && prev.model === model && at - prev.at < HOUR) {
+            const rates = requestCost(model, u, at)?.rates;
+            found.push({
+                path,
+                at: new Date(at).toISOString(),
+                ...(r.version ? { version: r.version } : {}),
+                model,
+                inputTokens: input,
+                promptTokens: total,
+                extraUsd: rates ? (Math.min(input, prev.total) * Math.max(0, rates.inputPerM - rates.cacheReadPerM)) / 1e6 : undefined,
+            });
+        }
+        prev = { at, total, model };
+        compacted = false;
+    }
+    return cached ? found : [];
+}
+/** The requests the cache never saw in the last `days`, by Claude Code version. */
+export function uncachedRequests(days = 30, paths, now = Date.now()) {
+    const since = now - days * 86_400_000;
+    const targets = paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= since).map((s) => s.path);
+    const seen = new Set();
+    const all = [];
+    for (const p of targets) {
+        try {
+            all.push(...uncachedInTranscript(p, since, seen));
+        }
+        catch {
+            /* one unreadable transcript must not sink the report */
+        }
+    }
+    const versions = new Map();
+    for (const q of all) {
+        const v = q.version ?? "unknown";
+        versions.set(v, [...(versions.get(v) ?? []), q]);
+    }
+    const usd = (qs) => qs.reduce((n, q) => n + (q.extraUsd ?? 0), 0);
+    return {
+        days,
+        requests: all.length,
+        sessions: new Set(all.map((q) => q.path)).size,
+        inputTokens: all.reduce((n, q) => n + q.inputTokens, 0),
+        extraUsd: usd(all),
+        unpriced: all.filter((q) => q.extraUsd === undefined).length,
+        byVersion: [...versions.entries()]
+            .map(([version, qs]) => ({
+            version,
+            requests: qs.length,
+            sessions: new Set(qs.map((q) => q.path)).size,
+            inputTokens: qs.reduce((n, q) => n + q.inputTokens, 0),
+            extraUsd: usd(qs),
+            models: [...new Set(qs.map((q) => q.model))],
+            from: qs.reduce((a, q) => (q.at < a ? q.at : a), qs[0].at),
+            to: qs.reduce((a, q) => (q.at > a ? q.at : a), qs[0].at),
+        }))
+            .sort((a, b) => b.extraUsd - a.extraUsd || b.requests - a.requests),
+        largest: [...all].sort((a, b) => (b.extraUsd ?? 0) - (a.extraUsd ?? 0) || b.inputTokens - a.inputTokens).slice(0, 10),
+    };
+}
+/** "Claude Code 2.1.329" or "Claude Code 2.1.329 and 2.1.330": the versions that sent them, most costly first. */
+function versionsText(u) {
+    const named = u.byVersion.filter((v) => v.version !== "unknown").map((v) => v.version);
+    const list = named.length > 3 ? `${named.slice(0, 3).join(", ")} and ${named.length - 3} more` : named.join(", ").replace(/, ([^,]+)$/, " and $1");
+    return named.length ? `Claude Code ${list}` : "Claude Code";
+}
+/** The section in `cache-misses`, or nothing when there are none. */
+export function renderUncached(u) {
+    if (!u || u.requests === 0)
+        return [];
+    const out = [
+        ...wrap(`Requests the cache never saw: ${versionsText(u)} sent ${u.requests} request${u.requests === 1 ? "" : "s"} that wrote nothing to the ` +
+            `prompt cache and billed ~${formatTokens(u.inputTokens)} tokens as new input. With the cache working they would have ` +
+            `cost ${money(u.extraUsd)} less${u.unpriced ? ` (${u.unpriced} on unpriced models not included)` : ""}. Claude Code 2.1.329 does this when hooks add text at session ` +
+            "start (anthropics/claude-code#111948): update Claude Code when a fixed version is out.", 82),
+        `  ${"version".padEnd(10)} ${"requests".padStart(8)} ${"sessions".padStart(8)} ${"new input".padStart(10)} ${"cost".padStart(9)}`,
+    ];
+    for (const v of u.byVersion.slice(0, 8)) {
+        out.push(`  ${v.version.padEnd(10)} ${String(v.requests).padStart(8)} ${String(v.sessions).padStart(8)} ${`~${formatTokens(v.inputTokens)}`.padStart(10)} ${money(v.extraUsd).padStart(9)}`);
+    }
+    out.push("  Not counted: contexts under 20k, a session's first request, the first after a", "  compaction, a model switch or an hour's pause, and sessions that never cached.");
+    return out;
+}
+/** `doctor`'s line when the last `days` hold any; undefined otherwise. */
+export function uncachedCheck(days = 30, paths) {
+    const u = uncachedRequests(days, paths);
+    if (u.requests === 0)
+        return undefined;
+    return {
+        label: "Prompt cache",
+        status: "warn",
+        detail: `${versionsText(u)} sent ${u.requests} request${u.requests === 1 ? "" : "s"} in the last ${days} days that the prompt cache never saw: ${money(u.extraUsd)} more than cached (anthropics/claude-code#111948). Update Claude Code when a fixed version is out; context-doctor cache-misses has the detail`,
+    };
+}
 /** Two rates differ beyond chance (two-proportion z-test, 99%). */
 function differs(a, b) {
     const p = (a.misses + b.misses) / (a.eligible + b.eligible);
@@ -397,6 +515,7 @@ export function cacheMisses(days = 30, paths, onProgress, missLog = missLogPath(
         }
     }
     onProgress?.(targets.length, targets.length);
+    const uncached = uncachedRequests(days, targets);
     const finish = (s) => ({ ...s, rate: s.eligible ? s.misses / s.eligible : 0 });
     const byModel = [...models.entries()].map(([model, s]) => ({ model, ...finish(s) })).sort((a, b) => b.rate - a.rate);
     const bySize = SIZE_BUCKETS.filter(([b]) => sizes.has(b)).map(([bucket]) => ({ bucket, ...finish(sizes.get(bucket)) }));
@@ -419,6 +538,7 @@ export function cacheMisses(days = 30, paths, onProgress, missLog = missLogPath(
         diagnosed: diagnosedMisses(since, missLog),
         late: lateReport(late),
         coldReturns: coldReturns(days, targets),
+        ...(uncached.requests ? { uncached } : {}),
     };
 }
 /**
@@ -662,6 +782,9 @@ export function renderCacheMisses(r, limitLines) {
     const out = ["CACHE MISSES WITHIN THE CACHE LIFETIME", "═".repeat(60)];
     if (r.eligible === 0) {
         out.push(`No Claude Code requests in the last ${r.days} days that could have read a warm cache (consecutive, within the cache lifetime, over 20k tokens).`);
+        const never = renderUncached(r.uncached);
+        if (never.length)
+            out.push("", ...never);
         const late = renderLate(r.late);
         if (late.length)
             out.push("", ...late);
@@ -691,6 +814,9 @@ export function renderCacheMisses(r, limitLines) {
             out.push("  \"Nothing visible\": no model switch, compaction, context edit, API error or", "  long tool run before it. The system prompt, tools or memory changing, or the", "  provider evicting the cache early, would look like this from the client.");
         }
     }
+    const never = renderUncached(r.uncached);
+    if (never.length)
+        out.push("", ...never);
     const late = renderLate(r.late);
     if (late.length)
         out.push("", ...late);

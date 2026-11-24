@@ -127,6 +127,8 @@ export interface CacheMissReport {
     };
     /** Returns after the cache expired, replayed as billed, compacted and kept warm (coldreturns.ts). */
     coldReturns: ColdReturnReport;
+    /** Requests the cache never saw (#111948); only when there are any. */
+    uncached?: UncachedReport;
 }
 /** One Claude Code version's requests (the `version` every transcript line carries). */
 export interface VersionStats {
@@ -196,6 +198,74 @@ export declare function missesInTranscript(path: string, since?: number, add?: (
 }, miss?: CacheMiss) => void, onRequest?: (writeUsd: number, info: RequestInfo) => void, 
 /** Shared by every transcript of one report: a fork's copied rows (same uuids) have no first request of their own. */
 runRows?: Set<string>, onLate?: (late: LateRewrite) => void): void;
+/**
+ * Requests the prompt cache never saw (anthropics/claude-code#111948): on
+ * Claude Code 2.1.329 a cache breakpoint can land on a `role:"system"`
+ * message inside `messages[]`, which writes nothing, so every turn bills the
+ * whole prompt as new input (~$80 a long session reported). They write and
+ * read (almost) nothing, so the misses above, re-writes, never count them.
+ *
+ * One counts when all of these hold:
+ *  - a Claude model, and a transcript that used the cache elsewhere (a
+ *    session that never wrote or read it had caching off, or a provider
+ *    that does not cache: uncached by choice, not by fault);
+ *  - it wrote nothing to the cache, sent over 20k tokens as new input, and
+ *    that input was over half the prompt (a tiny context, or a cache read
+ *    with a few new turns after it, is normal);
+ *  - not a session's first request, nor the first after a compaction, a
+ *    model switch or an hour's pause: a working cache would have had to
+ *    write those anyway.
+ * Priced as what a working cache would have read instead: the input, up to
+ * the previous request's prompt, at the input rate minus the cache-read
+ * rate. What it would have written (the new turns) is left out, so the
+ * figure is a floor.
+ */
+export interface UncachedRequest {
+    path: string;
+    at: string;
+    /** The Claude Code version on the transcript line, when recorded. */
+    version?: string;
+    model: string;
+    /** Billed as new input. */
+    inputTokens: number;
+    /** The whole prompt: input, cache read and cache write. */
+    promptTokens: number;
+    /** Above what a working cache would have charged; undefined when the model has no known price. */
+    extraUsd?: number;
+}
+export interface UncachedReport {
+    days: number;
+    requests: number;
+    sessions: number;
+    inputTokens: number;
+    extraUsd: number;
+    /** On models with no known price (not in extraUsd). */
+    unpriced: number;
+    /** Per Claude Code version, costliest first ("unknown" when the line carried none). */
+    byVersion: Array<{
+        version: string;
+        requests: number;
+        sessions: number;
+        inputTokens: number;
+        extraUsd: number;
+        models: string[];
+        from: string;
+        to: string;
+    }>;
+    largest: UncachedRequest[];
+}
+/** Requests in one transcript the cache never saw; `since` drops earlier ones. `seen`: uuids of rows already read (a fork's copied rows count once). */
+export declare function uncachedInTranscript(path: string, since?: number, seen?: Set<string>): UncachedRequest[];
+/** The requests the cache never saw in the last `days`, by Claude Code version. */
+export declare function uncachedRequests(days?: number, paths?: string[], now?: number): UncachedReport;
+/** The section in `cache-misses`, or nothing when there are none. */
+export declare function renderUncached(u: UncachedReport | undefined): string[];
+/** `doctor`'s line when the last `days` hold any; undefined otherwise. */
+export declare function uncachedCheck(days?: number, paths?: string[]): {
+    label: string;
+    status: "warn";
+    detail: string;
+} | undefined;
 export declare function cacheMisses(days?: number, paths?: string[], onProgress?: (done: number, total: number) => void, missLog?: string): CacheMissReport;
 /** The late re-writes section, or nothing when there are none. */
 export declare function renderLate(l: CacheMissReport["late"]): string[];

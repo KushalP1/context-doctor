@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cacheMisses, cacheMissesLine, cacheMissesSignificant, renderCacheMisses } from "../cachemisses.js";
+import { cacheMisses, cacheMissesLine, cacheMissesSignificant, renderCacheMisses, uncachedCheck, uncachedRequests } from "../cachemisses.js";
 
 // Three days back, on the hour: inside every 30-day window these tests ask for. A fixed day
 // (it was 2026-10-19) fell out of the window a month later and failed six tests.
@@ -260,4 +260,74 @@ test("QA: a person back at 61, 67 and 73 minutes is not a loop; a loop broken by
   const r = cacheMisses(30, [transcript(broken)]);
   assert.equal(r.late.rewrites, 4);
   assert.equal(r.late.loops.length, 0, "two runs of two, not one loop of four");
+});
+
+/** A reply row as #111948 shows it: `input` billed as new input, `read` from cache, `write` to it, on Claude Code `version`. */
+function sent(at: number, model: string, input: number, read: number, write: number, version = "2.1.329") {
+  return JSON.stringify({
+    type: "assistant",
+    timestamp: new Date(at).toISOString(),
+    isSidechain: false,
+    version,
+    message: { id: `msg_${n++}`, role: "assistant", model, content: [{ type: "text", text: "ok" }], usage: { input_tokens: input, cache_read_input_tokens: read, cache_creation_input_tokens: write, output_tokens: 5, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: write } } },
+  });
+}
+
+test("#111948: requests that wrote nothing and billed a 200k prompt as new input are counted by version and priced by hand", () => {
+  const M = "claude-opus-5-5";
+  const p = transcript([
+    sent(s(0), M, 3, 0, 200_000), // the first request wrote the cache: this session caches
+    sent(s(20), M, 200_000, 0, 0), // the cache never saw it
+    sent(s(40), M, 201_000, 0, 0),
+    sent(s(60), M, 180_000, 21_500, 0), // a 21.5k read on the system prompt, the rest new: still counted
+    sent(s(80), M, 1_500, 201_000, 500, "2.1.331"), // cached again on the next version: not counted
+    sent(s(100), M, 202_000, 0, 0, "2.1.331"), // and another one there
+  ]);
+  const u = uncachedRequests(30, [p]);
+  assert.equal(u.requests, 4);
+  assert.equal(u.sessions, 1);
+  assert.equal(u.inputTokens, 200_000 + 201_000 + 180_000 + 202_000);
+  // Opus 5.5, $4 in, $0.20 read: the input up to the previous prompt, at input minus read.
+  const by = (v: string) => u.byVersion.find((x) => x.version === v)!;
+  const v329 = ((200_000 + 200_000 + 180_000) * 3.8) / 1e6;
+  const v331 = (202_000 * 3.8) / 1e6;
+  assert.equal(by("2.1.329").requests, 3);
+  assert.ok(Math.abs(by("2.1.329").extraUsd - v329) < 1e-9, String(by("2.1.329").extraUsd));
+  assert.ok(Math.abs(by("2.1.331").extraUsd - v331) < 1e-9, String(by("2.1.331").extraUsd));
+  assert.ok(Math.abs(u.extraUsd - (v329 + v331)) < 1e-9);
+  assert.equal(u.byVersion[0].version, "2.1.329", "costliest first");
+  // In the report: the section and the JSON field.
+  const r = cacheMisses(30, [p]);
+  assert.equal(r.uncached?.requests, 4);
+  const text = renderCacheMisses(r);
+  assert.match(text, /Requests the cache never saw: Claude Code 2\.1\.329 and 2\.1\.331 sent 4 requests/);
+  assert.match(text.replace(/\n/g, " "), /cost \$2\.97 less/);
+  assert.match(text, /2\.1\.329 +3 +1 +~581k +\$2\.20/);
+  // doctor's one line.
+  const c = uncachedCheck(30, [p])!;
+  assert.equal(c.status, "warn");
+  assert.match(c.detail, /^Claude Code 2\.1\.329 and 2\.1\.331 sent 4 requests in the last 30 days that the prompt cache never saw: \$2\.97 more than cached/);
+});
+
+test("#111948: tiny contexts, a session's first request, after a compaction, a switch or a pause, sessions that never cache and other models are not counted", () => {
+  const M = "claude-opus-5-5";
+  const cachesNot = transcript([sent(s(0), M, 200_000, 0, 0), sent(s(20), M, 201_000, 0, 0), sent(s(40), M, 202_000, 0, 0)]); // caching off
+  const rest = transcript([
+    sent(s(0), M, 150_000, 0, 0), // the session's first request
+    sent(s(10), M, 5, 150_000, 1_000), // cached from here
+    sent(s(20), M, 15_000, 0, 0), // under 20k
+    sent(s(30), M, 30_000, 150_000, 0), // new input under half the prompt: a read with new turns after it
+    JSON.stringify({ type: "system", subtype: "compact_boundary" }),
+    sent(s(40), M, 40_000, 0, 0), // the first after a compaction
+    sent(s(50), "claude-sonnet-5-5", 41_000, 0, 0), // a model switch
+    sent(s(50 + 3_700), "claude-sonnet-5-5", 42_000, 0, 0), // over an hour later
+    sent(s(50 + 3_710), "gpt-5.5", 43_000, 0, 0), // a model switch again
+    sent(s(50 + 3_720), "gpt-5.5", 44_000, 0, 0), // not a Claude model
+  ]);
+  const u = uncachedRequests(30, [cachesNot, rest]);
+  assert.equal(u.requests, 0, JSON.stringify(u.largest));
+  const r = cacheMisses(30, [cachesNot, rest]);
+  assert.equal(r.uncached, undefined, "no field when there are none");
+  assert.doesNotMatch(renderCacheMisses(r), /never saw/);
+  assert.equal(uncachedCheck(30, [cachesNot, rest]), undefined);
 });
