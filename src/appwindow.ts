@@ -126,7 +126,8 @@ export function sameModel(answer: string, model: string): boolean {
   return a === m;
 }
 
-const k = (n: number) => `${Math.round(n / 1000)}k`;
+/** A window in tokens: "300k", "1M", "1.5M" (a 1M window read "1000k"). */
+const k = (n: number) => (n >= 999_500 ? `${Number((n / 1_000_000).toFixed(1))}M` : `${Math.round(n / 1000)}k`);
 const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const nameOf = (m: string) => modelName(m) === m ? m : modelName(m);
 

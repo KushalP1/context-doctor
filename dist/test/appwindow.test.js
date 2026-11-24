@@ -182,3 +182,10 @@ test("doctor: one line saying what the Desktop app offered and what you answered
     writeFileSync(cj, JSON.stringify({ ...JSON.parse(readFileSync(cj, "utf8")), autoCompactOfferCodeTab: { aaa: { "claude-fable-5-1": { choice: "keep", tokens: 300_000, at: AT } } } }));
     assert.match(runReport(cli, fixture, ["doctor"], env), /Desktop compact offer +on 2026-09-25 the Desktop app offered a lower auto-compact window for Fable 5\.1 and you kept yours \(300k\)/);
 });
+test("audit: a 1M window reads 1M, not 1000k, in doctor's line and compact-window's", () => {
+    const a = { answers: [{ model: "claude-opus-5-5", choice: "keep", tokens: 1_000_000, at: AT, where: "~/.claude.json" }], served: [{ model: "claude-fable-5-1", window: 1_500_000 }, { model: "claude-opus-5-5", window: 1_000_000 }] };
+    assert.equal(appAnswerText(a), "on 2026-09-25 the Desktop app offered a lower auto-compact window for Opus 5.5 and you kept yours (1M)");
+    const lines = appWindowLines(a).join("\n");
+    assert.match(lines, /1\.5M for Fable 5\.1, 1M for Opus 5\.5/);
+    assert.ok(!/\d000k/.test(lines), lines);
+});
