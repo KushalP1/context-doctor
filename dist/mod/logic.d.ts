@@ -358,6 +358,8 @@ export interface UsageView {
         pct?: number;
         text: string;
     };
+    /** How long the prompt cache stays warm, and the next message's price now and after (cacheLine). */
+    cache?: string;
     limits: Array<{
         key: string;
         label: string;
@@ -401,7 +403,22 @@ export interface UsageViewInput {
     loading?: boolean;
     error?: string;
     now: number;
+    /** `mod measure`'s figures after the last turn (the cache clock, the re-write's price), and keep-warm's last ping. */
+    band?: BandData;
+    lastPingAt?: number;
 }
+/**
+ * The usage pane's cache line (ROADMAP H5): how long the prompt cache stays
+ * warm and what the next message costs if sent now against after it
+ * expires. The clock is the transcript's last reply (`lastReplyAt`), or
+ * keep-warm's last ping when later, plus the lifetime that reply wrote
+ * (`ttlMs`: an hour when its `usage.cache_creation.ephemeral_1h_input_tokens`
+ * is above 0, else 5 minutes; coldresume.ts). The prices are `mod measure`'s
+ * (a cache read of the context now, a write of it after), scaled to Claude
+ * Code's own context figure when it has one. Shown only in the pane, which
+ * the person opens: never the band.
+ */
+export declare function cacheLine(d: BandData | undefined, live: LiveUsage | undefined, now: number, lastPingAt?: number): string | undefined;
 /** The limit windows to show: the ledger's, each overlaid by Claude Code's own newer reading; a window only Claude Code has, from it alone. */
 export declare function mergeLimits(ledger: LimitWindow[], live: LiveUsage | undefined): LimitWindow[];
 /** Everything the usage pane says, as words; register.ts lays it out. */

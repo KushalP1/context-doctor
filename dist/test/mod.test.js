@@ -15,7 +15,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyOutcome, band, bar, deferredServers, duration, fixArgv, KEEP_WARM_COMMAND, keepWarmRefusal, keepWarmStep, keepWarmTestEvery, mergeLimits, money, outcome, paneRows, parseKeepWarm, parsePlan, parseUsage, passedThreshold, pctText, PING_EVERY_1H_MS, PING_EVERY_5M_MS, PING_PROMPT, pingOutcome, ringSvg, shortModel, thresholdsFrom, tokens, usageDue, usageText, usageView, withPresses } from "../mod/logic.js";
+import { applyOutcome, band, bar, cacheLine, deferredServers, duration, fixArgv, KEEP_WARM_COMMAND, keepWarmRefusal, keepWarmStep, keepWarmTestEvery, mergeLimits, money, outcome, paneRows, parseKeepWarm, parsePlan, parseUsage, passedThreshold, pctText, PING_EVERY_1H_MS, PING_EVERY_5M_MS, PING_PROMPT, pingOutcome, ringSvg, shortModel, thresholdsFrom, tokens, usageDue, usageText, usageView, withPresses } from "../mod/logic.js";
 import { PING_EVERY_1H_MS as REPLAY_1H, PING_EVERY_5M_MS as REPLAY_5M } from "../coldreturns.js";
 import { limitFitsOf, limitWindows, summarizeHistory } from "../usagepane.js";
 import { sessionPriceThresholds } from "../sessionprice.js";
@@ -1131,4 +1131,60 @@ test("desktop-tools-defer with a tools ledger: fix confirms the servers that arr
     assert.equal(f.state, "applied");
     assert.match(f.note, new RegExp(`moved behind tool search in 1 session since ${today}$`));
     assert.equal(runCli(home, "fix", "undo", "desktop-tools-defer").status, 0);
+});
+// -- The cache's time left, in the usage pane (H5) -------------------------------------------
+test("the usage pane's cache line: warm with its minutes and both prices, expired with the re-write's, at a 1-hour and a 5-minute lifetime, priced by hand", () => {
+    // 520k tokens of Opus 5.5 context ($4/M input): a cache read $0.104 (520k x $0.20/M), a 1-hour write $4.16 (520k x $8/M).
+    const d = data({ perMessageUsd: 0.104, rewriteUsd: 4.16 });
+    assert.equal(cacheLine(d, undefined, T + 19 * MIN), "Cache warm for 41 min. Your next message: ~$0.10 now, ~$4.16 after it expires.");
+    assert.equal(cacheLine(d, undefined, T + 80 * MIN), "Cache expired 20 min ago. Your next message re-sends the 520k-token chat at full price: ~$4.16.");
+    // A 5-minute cache: its write at 1.25x input ($5/M), $2.60 for the same context.
+    const five = data({ ttlMs: 5 * MIN, perMessageUsd: 0.104, rewriteUsd: 2.6 });
+    assert.equal(cacheLine(five, undefined, T + 2 * MIN), "Cache warm for 3 min. Your next message: ~$0.10 now, ~$2.60 after it expires.");
+    assert.equal(cacheLine(five, undefined, T + 10 * MIN), "Cache expired 5 min ago. Your next message re-sends the 520k-token chat at full price: ~$2.60.");
+    // Claude Code's own context figure, when it has one: the same rates on its tokens (half here: half the prices).
+    assert.equal(cacheLine(d, { at: T, context: { tokens: 260_000, window: 1_000_000 } }, T + 19 * MIN), "Cache warm for 41 min. Your next message: ~$0.05 now, ~$2.08 after it expires.");
+    // Keep-warm's last ping refreshed it: the clock runs from the ping.
+    assert.equal(cacheLine(d, undefined, T + 80 * MIN, T + 55 * MIN), "Cache warm for 35 min. Your next message: ~$0.10 now, ~$4.16 after it expires.");
+    // A model with no price: the minutes and the tokens, no dollars.
+    assert.equal(cacheLine(data({ perMessageUsd: undefined, rewriteUsd: undefined }), undefined, T + 19 * MIN), "Cache warm for 41 min. After that, your next message re-sends the 520k-token chat at full price.");
+    assert.equal(cacheLine(undefined, undefined, T), undefined);
+    assert.equal(cacheLine(data({ lastReplyAt: undefined }), undefined, T), undefined, "nothing measured yet");
+    // In the view and its text form, under the context; the band says nothing of it.
+    const v = usageView({ now: T + 19 * MIN, band: d, live: { at: T, context: { tokens: 520_000, window: 1_000_000, percent: 52 } } });
+    assert.equal(v.cache, "Cache warm for 41 min. Your next message: ~$0.10 now, ~$4.16 after it expires.");
+    assert.deepEqual(usageText(v).split("\n").slice(1, 3), ["Context: 520k of 1.0M tokens (52%)", v.cache]);
+    assert.equal(usageView({ now: T }).cache, undefined);
+    assert.equal(band(d, T + 19 * MIN, "desktop").kind, "none");
+    // A draw's share of it is well under half a millisecond.
+    const t0 = performance.now();
+    for (let i = 0; i < 1000; i++)
+        cacheLine(d, undefined, T + i * 1000);
+    assert.ok((performance.now() - t0) / 1000 < 0.5, "under 0.5 ms a line");
+});
+test("the cache line through the mod: drawn in the pane the person opened, counting down on the clock, in the -p text; never in the band", { timeout: 60_000 }, async () => {
+    const now = Date.now();
+    const { home, cwd } = sessionHome(10, now);
+    const s = engine(home, { cwd, now });
+    await fire(s, "session.start", { cwd, surface: "desktop", isInteractive: true });
+    await fire(s, "session.measure", { context: { tokens: 520_010, window: 1_000_000, percent: 52 }, rateLimits: [], changed: ["context"] }, () => ({ changed: ["context"] }));
+    assert.equal(await render(s, "AbovePrompt", "desktop"), "ENGINE", "no band, unasked");
+    await fire(s, "command.run", { command: USAGE_COMMAND });
+    await settle();
+    const line = (tree) => texts(tree).find((t) => t.startsWith("Cache "));
+    const first = line(await render(s, "Pane", "desktop", { bodyColumns: 80 }, USAGE_PANE));
+    // The fixture's last reply wrote the 1-hour cache 10 minutes ago: 50 left; 520,010 tokens at Opus 5.5's read ($0.20/M) and 1-hour write ($8/M) rates.
+    assert.equal(first, "Cache warm for 50 min. Your next message: ~$0.10 now, ~$4.16 after it expires.");
+    assert.equal(line(await render(s, "Pane", "terminal", { bodyColumns: 70 }, USAGE_PANE)), first, "the terminal's pane too");
+    // An hour on, the clock's tick sees new words.
+    const drawn = state().usageDrawn;
+    await tickOnce(s, now + 60 * MIN);
+    await settle();
+    assert.notEqual(state().usageDrawn, drawn);
+    assert.equal(line(await render(s, "Pane", "desktop", { bodyColumns: 80 }, USAGE_PANE)), "Cache expired 10 min ago. Your next message re-sends the 520k-token chat at full price: ~$4.16.");
+    // Nothing to draw a pane on (claude -p): the command's text has it.
+    const p = engine(home, { cwd, now, isPlaced: false });
+    await fire(p, "session.start", { cwd, surface: null, isInteractive: false });
+    await fire(p, "session.measure", { context: { tokens: 520_010, window: 1_000_000, percent: 52 }, rateLimits: [], changed: ["context"] }, () => ({ changed: ["context"] }));
+    assert.match((await fire(p, "command.run", { command: USAGE_COMMAND })).text, /\nCache warm for 50 min\. Your next message: ~\$0\.10 now, ~\$4\.16 after it expires\.\n/);
 });

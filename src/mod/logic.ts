@@ -533,6 +533,8 @@ export function ringSvg(pct: number, size = 64): string {
 export interface UsageView {
   /** The context ring: its percent and its words. */
   context: { pct?: number; text: string };
+  /** How long the prompt cache stays warm, and the next message's price now and after (cacheLine). */
+  cache?: string;
   limits: Array<{ key: string; label: string; pct: number; text: string; sub?: string }>;
   limitsNote?: string;
   /** One line per period: "Today $42.10 · 3.1M tokens". */
@@ -557,6 +559,37 @@ export interface UsageViewInput {
   loading?: boolean;
   error?: string;
   now: number;
+  /** `mod measure`'s figures after the last turn (the cache clock, the re-write's price), and keep-warm's last ping. */
+  band?: BandData;
+  lastPingAt?: number;
+}
+
+/**
+ * The usage pane's cache line (ROADMAP H5): how long the prompt cache stays
+ * warm and what the next message costs if sent now against after it
+ * expires. The clock is the transcript's last reply (`lastReplyAt`), or
+ * keep-warm's last ping when later, plus the lifetime that reply wrote
+ * (`ttlMs`: an hour when its `usage.cache_creation.ephemeral_1h_input_tokens`
+ * is above 0, else 5 minutes; coldresume.ts). The prices are `mod measure`'s
+ * (a cache read of the context now, a write of it after), scaled to Claude
+ * Code's own context figure when it has one. Shown only in the pane, which
+ * the person opens: never the band.
+ */
+export function cacheLine(d: BandData | undefined, live: LiveUsage | undefined, now: number, lastPingAt?: number): string | undefined {
+  if (!d || d.lastReplyAt === undefined || d.ttlMs === undefined || d.tokens === undefined || !(d.tokens > 0)) return undefined;
+  const ctx = live?.context?.tokens;
+  const t = ctx !== undefined && Number.isFinite(ctx) && ctx > 0 ? ctx : d.tokens;
+  const scale = t / d.tokens;
+  const nowUsd = d.perMessageUsd !== undefined ? d.perMessageUsd * scale : undefined;
+  const coldUsd = d.rewriteUsd !== undefined ? d.rewriteUsd * scale : undefined;
+  const expiresAt = Math.max(d.lastReplyAt, lastPingAt ?? 0) + d.ttlMs;
+  if (now < expiresAt) {
+    const left = duration(expiresAt - now);
+    return nowUsd !== undefined && coldUsd !== undefined
+      ? `Cache warm for ${left}. Your next message: ${about(nowUsd)} now, ${about(coldUsd)} after it expires.`
+      : `Cache warm for ${left}. After that, your next message re-sends the ${tokens(t)}-token chat at full price.`;
+  }
+  return `Cache expired ${duration(now - expiresAt)} ago. Your next message re-sends the ${tokens(t)}-token chat at full price${coldUsd !== undefined ? `: ${about(coldUsd)}` : ""}.`;
 }
 
 /** The limit windows to show: the ledger's, each overlaid by Claude Code's own newer reading; a window only Claude Code has, from it alone. */
@@ -657,12 +690,13 @@ export function usageView(v: UsageViewInput): UsageView {
       : hist
         ? `Dollars at list price, as context-doctor spend prices them; measured ${now - hist.at < MIN ? "just now" : `${duration(now - hist.at)} ago`}${v.loading ? ", measuring again…" : ""}.`
         : "";
-  return { context, limits, ...(limitsNote ? { limitsNote } : {}), periods, ...(period ? { period } : {}), ...(historyNote ? { historyNote } : {}), agents, ...(agentsNote ? { agentsNote } : {}), glance, footer };
+  const cache = cacheLine(v.band, live, now, v.lastPingAt);
+  return { context, ...(cache ? { cache } : {}), limits, ...(limitsNote ? { limitsNote } : {}), periods, ...(period ? { period } : {}), ...(historyNote ? { historyNote } : {}), agents, ...(agentsNote ? { agentsNote } : {}), glance, footer };
 }
 
 /** The pane as lines of text: the command's answer where no surface draws the pane (`claude -p`, a headless host). */
 export function usageText(view: UsageView): string {
-  const lines = [`context-doctor usage: ${view.glance}`, `Context: ${view.context.text}`];
+  const lines = [`context-doctor usage: ${view.glance}`, `Context: ${view.context.text}`, ...(view.cache ? [view.cache] : [])];
   for (const l of view.limits) lines.push(`${l.label} limit: ${l.text}${l.sub ? ` (${l.sub})` : ""}`);
   if (view.limitsNote) lines.push(view.limitsNote);
   if (view.periods.length) lines.push(`Claude Code: ${view.periods.map((p) => p.text).join(" · ")}`);

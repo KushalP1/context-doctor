@@ -28,7 +28,9 @@
  *  - `/context-doctor-usage` opens the usage view the Desktop app dropped:
  *    the context ring and the limit windows from Claude Code's own figures,
  *    tokens and dollars by model for today, 7 and 30 days, and the running
- *    subagents with their model, context and cost so far. Drawing only reads
+ *    subagents with their model, context and cost so far, and under Context
+ *    how long the prompt cache stays warm with the next message's price now
+ *    and after it expires (the $.clock tick redraws it). Drawing only reads
  *    what the mod holds; `context-doctor mod usage` refreshes it on the
  *    timer, only while the pane is open (usageDue).
  *  - `tool.describe` (2.1.326+): once `fix --apply desktop-tools-defer`
@@ -329,7 +331,7 @@ async function liveNow($) {
     catch { /* the next turn measures */ }
 }
 function viewAt(now) {
-    return usageView({ data: S.usage, live: S.live, agents: S.agents, period: S.period, loading: S.usageLoading, error: S.usageError, now });
+    return usageView({ data: S.usage, live: S.live, agents: S.agents, period: S.period, loading: S.usageLoading, error: S.usageError, now, band: S.data, lastPingAt: S.kw?.lastPingAt });
 }
 /** While the pane is open: the subagents (one call), `mod usage` when it is due, and a redraw only when the words change. */
 async function usageTick($, now) {
@@ -514,6 +516,9 @@ export function register(on) {
         }
         else
             body.push(dim(v.context.text));
+        // The cache clock and the next message's price, now and after it expires: here only, never the band.
+        if (v.cache)
+            body.push(h(Text, null, v.cache));
         body.push(h(Box, { marginTop: 1 }, head("Limits")));
         for (const l of v.limits) {
             body.push(h(Box, { key: `limit:${l.key}`, flexDirection: "column" }, h(Box, { flexDirection: "row", columnGap: 1 }, h(Box, { width: 8 }, h(Text, null, l.label)), h(Text, null, bar(l.pct, barWidth)), h(Text, null, l.text)), ...(l.sub ? [dim(l.sub)] : [])));

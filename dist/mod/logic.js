@@ -408,6 +408,34 @@ export function ringSvg(pct, size = 64) {
         + `<text x="32" y="37" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" fill="currentColor">${pctText(p)}</text>`
         + `</svg>`;
 }
+/**
+ * The usage pane's cache line (ROADMAP H5): how long the prompt cache stays
+ * warm and what the next message costs if sent now against after it
+ * expires. The clock is the transcript's last reply (`lastReplyAt`), or
+ * keep-warm's last ping when later, plus the lifetime that reply wrote
+ * (`ttlMs`: an hour when its `usage.cache_creation.ephemeral_1h_input_tokens`
+ * is above 0, else 5 minutes; coldresume.ts). The prices are `mod measure`'s
+ * (a cache read of the context now, a write of it after), scaled to Claude
+ * Code's own context figure when it has one. Shown only in the pane, which
+ * the person opens: never the band.
+ */
+export function cacheLine(d, live, now, lastPingAt) {
+    if (!d || d.lastReplyAt === undefined || d.ttlMs === undefined || d.tokens === undefined || !(d.tokens > 0))
+        return undefined;
+    const ctx = live?.context?.tokens;
+    const t = ctx !== undefined && Number.isFinite(ctx) && ctx > 0 ? ctx : d.tokens;
+    const scale = t / d.tokens;
+    const nowUsd = d.perMessageUsd !== undefined ? d.perMessageUsd * scale : undefined;
+    const coldUsd = d.rewriteUsd !== undefined ? d.rewriteUsd * scale : undefined;
+    const expiresAt = Math.max(d.lastReplyAt, lastPingAt ?? 0) + d.ttlMs;
+    if (now < expiresAt) {
+        const left = duration(expiresAt - now);
+        return nowUsd !== undefined && coldUsd !== undefined
+            ? `Cache warm for ${left}. Your next message: ${about(nowUsd)} now, ${about(coldUsd)} after it expires.`
+            : `Cache warm for ${left}. After that, your next message re-sends the ${tokens(t)}-token chat at full price.`;
+    }
+    return `Cache expired ${duration(now - expiresAt)} ago. Your next message re-sends the ${tokens(t)}-token chat at full price${coldUsd !== undefined ? `: ${about(coldUsd)}` : ""}.`;
+}
 /** The limit windows to show: the ledger's, each overlaid by Claude Code's own newer reading; a window only Claude Code has, from it alone. */
 export function mergeLimits(ledger, live) {
     const out = ledger.map((w) => ({ ...w }));
@@ -511,11 +539,12 @@ export function usageView(v) {
             : hist
                 ? `Dollars at list price, as context-doctor spend prices them; measured ${now - hist.at < MIN ? "just now" : `${duration(now - hist.at)} ago`}${v.loading ? ", measuring again…" : ""}.`
                 : "";
-    return { context, limits, ...(limitsNote ? { limitsNote } : {}), periods, ...(period ? { period } : {}), ...(historyNote ? { historyNote } : {}), agents, ...(agentsNote ? { agentsNote } : {}), glance, footer };
+    const cache = cacheLine(v.band, live, now, v.lastPingAt);
+    return { context, ...(cache ? { cache } : {}), limits, ...(limitsNote ? { limitsNote } : {}), periods, ...(period ? { period } : {}), ...(historyNote ? { historyNote } : {}), agents, ...(agentsNote ? { agentsNote } : {}), glance, footer };
 }
 /** The pane as lines of text: the command's answer where no surface draws the pane (`claude -p`, a headless host). */
 export function usageText(view) {
-    const lines = [`context-doctor usage: ${view.glance}`, `Context: ${view.context.text}`];
+    const lines = [`context-doctor usage: ${view.glance}`, `Context: ${view.context.text}`, ...(view.cache ? [view.cache] : [])];
     for (const l of view.limits)
         lines.push(`${l.label} limit: ${l.text}${l.sub ? ` (${l.sub})` : ""}`);
     if (view.limitsNote)

@@ -44,6 +44,7 @@ The button calls Claude Code's own compaction (`/compact`), between turns only: 
 ```
 Context
  (ring 41%)  412k of 1.0M tokens (41%) · Opus 5.5
+Cache warm for 41 min. Your next message: ~$0.08 now, ~$3.30 after it expires.
 
 Limits
 5-hour   ███████░░░░░░░░░░░░░░░░░ 31% · resets in 2h 10m · +6.2% an hour lately, runs out in 1h 30m (before the reset)
@@ -65,6 +66,7 @@ general-purpose: Review the diff
 ```
 
 - **The context ring** is Claude Code's own figure (what `/context` and the status line count: the last reply's input, cache reads and writes against the model's window), handed to the mod after each turn. The Desktop app and VS Code draw it as a ring, amber past 80% and red past 95%; the terminal as a bar.
+- **The cache clock**, under the context: how long the prompt cache stays warm and what your next message costs if you send it now against after the cache expires (`Cache warm for 41 min. Your next message: ~$0.08 now, ~$3.30 after it expires.`), or, once it has, how long ago and what the next message re-writes (`Cache expired 12 min ago. Your next message re-sends the 412k-token chat at full price: ~$3.30.`). The clock starts at the transcript's last reply (or a `/context-doctor-keep-warm` ping, when later) and runs for the lifetime that reply wrote: an hour when its usage shows 1-hour cache writes (`cache_creation.ephemeral_1h_input_tokens`), else 5 minutes. "Now" is a cache read of the context, "after" a write of it at that lifetime's rate, at list price for the session's model, on Claude Code's own context figure. The pane's 30-second timer redraws it only when its words change. It is in this pane only, which you open: the band above the prompt stays off unless you turn it on.
 - **The limit windows** are your plan's 5-hour and weekly windows, as Claude Code last reported them, with the pace and when the window runs out at that pace from the readings the mod keeps ([limits](./profiling.md#your-plans-limits-context-doctor-limits)). A plan with no 5-hour window (Ultra) shows the weekly one alone and says so. Under the weekly window, `limits`' per-reset figures ([limits](./profiling.md#your-plans-limits-context-doctor-limits)): the list-price dollars of use per 1% in this window (or, early in a window, in the last one with enough readings, said as such), with its error, and the latest move in that figure, dated. A window with too few readings for a figure gets no line. Off a subscription (an API key) there are no windows, and the pane says why.
 - **Tokens and dollars by model** for today (since local midnight), the last 7 and the last 30 days, from the same requests [`spend`](./spend.md) reads, at list price; a button picks the period the by-model rows are for. Claude Code only: `spend` has Codex, Gemini CLI and Cursor.
 - **Running subagents**, each with its type and task, its model, its context on its last request, and what it has cost so far (its transcript, priced as the session's price is). A finished one leaves the list.
