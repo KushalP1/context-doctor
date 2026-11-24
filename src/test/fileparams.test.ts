@@ -302,3 +302,31 @@ test("the 20 MB total for a call is enforced while bytes arrive, and one time bu
     FILE_LIMITS.callMs = saved;
   }
 });
+
+test("audit: a timer that fires before the call's budget is spent (a busy runner) does not let a later file in", async () => {
+  // CI (ubuntu, Node 20, 2026-11-22): late.md was read after the two hung downloads "timed out"
+  // a few ms before the deadline. Here every timer fires at half its delay, as an extreme of that.
+  const saved = FILE_LIMITS.callMs;
+  const realSetTimeout = globalThis.setTimeout;
+  FILE_LIMITS.callMs = 400;
+  (globalThis as any).setTimeout = (fn: (...a: unknown[]) => void, ms?: number, ...a: unknown[]) => realSetTimeout(fn, Math.max(0, (ms ?? 0) / 2), ...a);
+  try {
+    const started = Date.now();
+    const slow = await sourcesFromOpenAiFiles(
+      [
+        { download_url: at("/hang"), file_id: "h1", file_name: "hang1.md" },
+        { download_url: at("/hang"), file_id: "h2", file_name: "hang2.md" },
+        { download_url: at("/doc.md"), file_id: "d", file_name: "late.md" },
+      ],
+      TEST_ENV
+    );
+    (globalThis as any).setTimeout = realSetTimeout;
+    assert.ok(Date.now() - started < 3000, `the call stopped at its budget (${Date.now() - started} ms)`);
+    assert.deepEqual(slow.sources.map((s) => s.name), [], slow.skipped.join("\n"));
+    assert.match(slow.skipped.join("\n"), /hang1\.md: timed out/);
+    assert.match(slow.skipped.join("\n"), /late\.md: not read, the 0\.4 s allowed for one call ran out/);
+  } finally {
+    (globalThis as any).setTimeout = realSetTimeout;
+    FILE_LIMITS.callMs = saved;
+  }
+});

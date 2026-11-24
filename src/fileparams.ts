@@ -170,11 +170,20 @@ function getOnce(url: URL, env: NodeJS.ProcessEnv, deadline: number, maxBytes: n
     };
     const timeout = Math.max(1, deadline - monotonicNow());
     // The socket timeout is an idle timeout; a server dripping a byte at a
-    // time would never trip it. This one bounds the whole download.
-    const overall = setTimeout(() => {
+    // time would never trip it. This one bounds the whole download. A timer
+    // can fire before the monotonic clock reaches the deadline (a busy loop):
+    // it waits out the rest, so a download gives up only at the deadline and
+    // the call's next file finds the budget spent (CI read one in those ms).
+    const expire = () => {
+      const left = deadline - monotonicNow();
+      if (left > 0) {
+        overall = setTimeout(expire, Math.ceil(left));
+        return;
+      }
       req.destroy();
       done({ status: 0, error: "timed out" });
-    }, timeout);
+    };
+    let overall = setTimeout(expire, timeout);
     const req = request(url, { method: "GET", lookup: guardedLookup(allowLoopback) as any, timeout, headers: { accept: "*/*", "user-agent": "context-doctor" } }, (res) => {
       const status = res.statusCode ?? 0;
       if (status >= 300 && status < 400) {
@@ -210,6 +219,8 @@ function getOnce(url: URL, env: NodeJS.ProcessEnv, deadline: number, maxBytes: n
       res.on("error", (e) => done({ status, error: e.message }));
     });
     req.on("timeout", () => {
+      // Idle as long as the whole budget, fired early: the overall timer ends it at the deadline.
+      if (deadline - monotonicNow() > 0) return;
       req.destroy();
       done({ status: 0, error: "timed out" });
     });
