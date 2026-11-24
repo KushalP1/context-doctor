@@ -435,6 +435,8 @@ export function renderSavings(r, autopilotOn = false, cw, missLines, limitLines,
         lines.push("Replayed request by request through the shipped code and priced as the");
         lines.push("prompt cache bills. On a subscription the same tokens come out of your");
         lines.push("usage limit instead. Share yours: context-doctor savings --share");
+        lines.push("Run it again after a week of use: the report re-measures on what");
+        lines.push("changed, and `fix` shows what each applied fix has saved since.");
     }
     // Hints as the user can type them: `npx context-doctor …` after an npx run.
     return withInvocation(lines.join("\n"));
