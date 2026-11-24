@@ -7,13 +7,14 @@
 AI agents re-send their whole context on every message: old tool output, pasted files, long instructions. A 500k-token session pays for all of it again each time, and at full price after a coffee break, when the prompt cache has expired. context-doctor measures that waste on your own sessions, in dollars, and removes it at the moments it pays: before it enters the context, while it sits there, and on every request. It runs on your machine, needs no API key, sends no telemetry, and works with **Claude Code** (terminal, IDE, desktop app), **Claude Desktop, ChatGPT, Codex, Cursor, Gemini CLI, GitHub Copilot**, any app on the **Anthropic, OpenAI or Gemini API**, and **CI**. MIT licensed, Node 20+, macOS, Linux and Windows.
 
 ```bash
-npx context-doctor savings          # what your recent Claude Code sessions cost, and what each fix would have saved
-npx context-doctor savings --sample # nothing to measure on this machine yet? the same report on generated sessions
+npx context-doctor savings
 ```
+
+What your recent Claude Code sessions cost, and what each fix would have saved: replayed request by request against what you were billed, never modelled, and with nothing to measure it says so. New on `main`, not yet on npm: `npx -y "github:KushalP1/context-doctor#main" savings --sample` runs the same report on generated example sessions, labelled SAMPLE.
 
 <img src="https://raw.githubusercontent.com/KushalP1/context-doctor/main/assets/savings.svg" alt="npx context-doctor savings: input billed, what /compact at cold resumes, autopilot and an earlier auto-compact window would have saved" width="640">
 
-*Measured on the author's own sessions, priced the way the prompt cache billed them — `savings` replays yours the same way, and with no history here yet it says so and offers the sample instead of showing numbers.*
+*Measured on the author's own sessions, priced the way the prompt cache billed them; `savings` replays yours the same way and, with nothing to measure, says so.*
 
 > **Which context-doctor is this?** Several projects share the name. This one is [`context-doctor` on npm](https://www.npmjs.com/package/context-doctor) and `io.github.KushalP1/context-doctor` in the official MCP Registry ([see the entry](https://registry.modelcontextprotocol.io/v0/servers/io.github.KushalP1%2Fcontext-doctor/versions/latest)). The registry is a service, not a list in a GitHub repo: the `modelcontextprotocol/servers` repository holds only reference servers and points to the registry for the rest. Built and maintained by [gAI Ventures](https://gai.ventures).
 
