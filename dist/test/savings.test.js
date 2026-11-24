@@ -63,6 +63,7 @@ test("savings: short sessions are skipped, and the report renders either way", (
     assert.match(text, /Input in your main conversations[^\n]*\n   Not in it: output and subagents \(context-doctor spend has the whole bill\)/);
     assert.match(text, /2\. Autopilot/);
     assert.match(text, /autopilot on/);
+    assert.match(text, /Run it again after a week of use/);
     assert.doesNotMatch(renderSavings(r, true), /Turn it on/);
 });
 test("savings: the compact-window lever renders within 80 columns, set or not", () => {
