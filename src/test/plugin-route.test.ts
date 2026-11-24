@@ -270,3 +270,17 @@ test("doctor: the plugin's stage, and whether the mod is recording, from its led
   assert.ok(!existsSync(cost));
   assert.match(un.out, /keeps its downloaded copy, disabled/);
 });
+
+test("audit: doctor names the mod's ledger where it is, not always ~/.claude", async () => {
+  const h = home();
+  assert.equal((await run(h.home, ["install"])).code, 0);
+  mkdirSync(join(h.home, ".claude", "plugins"), { recursive: true });
+  writeFileSync(join(h.home, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "context-doctor@context-doctor": [{ scope: "user", version: "0.46.0" }] } }));
+  // The state folder moved (CONTEXT_DOCTOR_HOOK_STATE): the mod writes its ledger beside it, and doctor reads it there.
+  const state = mkdtempSync(join(tmpdir(), "ctxdoc-e1-state-"));
+  writeFileSync(join(state, ".context-doctor-session-cost.jsonl"), JSON.stringify({ ts: Date.now(), sid: "s1", cc: 0.0001, cd: 0.0001 }) + "\n");
+  const d = await run(h.home, ["doctor"], NEW, { CONTEXT_DOCTOR_HOOK_STATE: join(state, ".context-doctor-hook-state.json") });
+  const line = d.out.split("\n").find((l) => /Mod\s+recording/.test(l)) ?? d.out;
+  assert.ok(line.includes(join(state, ".context-doctor-session-cost.jsonl")), line);
+  assert.ok(!line.includes("~/.claude/"), line);
+});
