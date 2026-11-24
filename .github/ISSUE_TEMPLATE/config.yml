@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://github.com/KushalP1/context-doctor#documentation
+    about: Install, autopilot, fixes, spend, proxy, chat apps, CI and more
+  - name: Security
+    url: https://github.com/KushalP1/context-doctor/security/advisories/new
+    about: Report a vulnerability privately, not in a public issue
