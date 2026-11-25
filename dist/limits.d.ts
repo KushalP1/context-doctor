@@ -516,6 +516,78 @@ export declare function reportModel(model: string | undefined): string;
  * stretches): `cause` says whether the limit moved or the mix did.
  */
 export declare function slopeChanges(windows: ResetWindow[], usage?: UsagePoint[], readings?: LimitReading[], stretchMs?: number): SlopeChange[];
+/**
+ * Both of a plan's windows count the same requests, so the ratio of their
+ * rises is the one limit figure the model mix cancels out of: a move in it
+ * is a move in one of the two limits, never in your models. People measured
+ * it moving on Pro from 10% to 12% of the week per full 5-hour window
+ * (claude-code#111886, #111759, #111593). Each 5-hour period is paired with
+ * the weekly reading taken at the same moment: the line the recorder wrote
+ * beside it, or, where the weekly % had not moved (the recorder writes a
+ * window only when it moves, and again every 15 minutes), the weekly line
+ * before it. The ratio is the sum of the weekly rises over the sum of the
+ * 5-hour rises, per weekly window and pooled; its error is the larger of the
+ * whole-percent steps' and the spread between 5-hour windows'.
+ */
+/** One 5-hour period's rise and the weekly limit's rise between the same two moments. */
+export interface ExchangeSample {
+    from: number;
+    to: number;
+    fivePct: number;
+    weekPct: number;
+}
+/** A ratio over some 5-hour windows, or why there is none worth quoting. */
+export interface ExchangeFigure {
+    /** 5-hour windows with weekly readings beside them, and the points each limit rose over them. */
+    windows: number;
+    fivePct: number;
+    weekPct: number;
+    /** % of the weekly limit a full 5-hour window (100 points) costs: 100 × weekly rise / 5-hour rise. */
+    pct?: number;
+    /** Its standard error, in points of the weekly limit. */
+    err?: number;
+    /** Why it is not quoted, when it is not (pct may still be there, too loose to say). */
+    why?: string;
+}
+/** One weekly window, reset to reset, and the ratio inside it. */
+export interface ExchangeWeek extends ExchangeFigure {
+    start: number;
+    resetsAt: number;
+    current: boolean;
+}
+/** A move in the ratio between two weekly windows that each have one. */
+export interface ExchangeMove {
+    /** The later window's start, and the earlier one's reset (equal unless a window is missing between them). */
+    at: number;
+    prevEnd: number;
+    pctBefore: number;
+    errBefore: number;
+    pctAfter: number;
+    errAfter: number;
+    /** How many standard errors apart. */
+    sigma: number;
+}
+/** One app's exchange: the figure since its last move (or since the first reading), each weekly window, and the moves. */
+export interface Exchange extends ExchangeFigure {
+    app: "claude" | "codex";
+    /** "Claude", "Codex (plus)". */
+    label: string;
+    /** The two windows paired ("five_hour" and "seven_day"; Codex's 300- and 10080-minute ones). */
+    short: string;
+    long: string;
+    /** The first moment the figure counts from. */
+    since: number;
+    /** Weekly windows with a figure of their own: two or more were compared. */
+    compared: number;
+    weeks: ExchangeWeek[];
+    moves: ExchangeMove[];
+}
+/** One app's exchange from its short (5-hour) and long (weekly) readings; undefined when either is missing (Ultra has no 5-hour window). */
+export declare function exchangeOf(short: LimitReading[], long: LimitReading[], opts: {
+    app: "claude" | "codex";
+    label: string;
+    now?: number;
+}): Exchange | undefined;
 export interface LimitsReport {
     days: number;
     now: number;
@@ -533,6 +605,8 @@ export interface LimitsReport {
     claudeWindows: string[];
     /** How many Claude readings each recorder wrote ("statusline", "mod", "proxy"; "earlier" for lines from before 0.49). */
     claudeSources: Record<string, number>;
+    /** What a full 5-hour window costs of the weekly limit, Claude's then Codex's (exchangeOf); none on a plan without a 5-hour window. */
+    exchange: Exchange[];
 }
 export interface LimitsOptions {
     now?: number;
@@ -586,6 +660,12 @@ export declare function limitSavingsLines(fit: LimitFit | undefined, items: Arra
  * Code), or the autopilot proxy (from the API's rate-limit headers).
  */
 export declare const HOW_TO_RECORD = "To record them: `context-doctor install` (the plugin's mod writes them after each turn, Claude Code 2.1.286+; `install --statusline` on older ones), or `context-doctor autopilot on` (its proxy reads them from the API's replies).";
+/**
+ * The exchange in one line: what a full 5-hour window costs of the weekly
+ * limit, its error, how many fit in a week, and whether it moved (from what
+ * to what, and when). Too thin: says so, with no figure.
+ */
+export declare function exchangeLine(e: Exchange): string;
 /** "claude-fable-5-2" as "Fable 5.2"; any other id as it is. */
 export declare function modelLabel(key: string | undefined): string;
 /**

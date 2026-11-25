@@ -127,7 +127,7 @@ test("pace and forecast: the recent rate, and whether it runs out before the res
     assert.equal(slow.beforeReset, false);
     const reset = windowStatus([r(0, 10, T0 + 30 * MIN)], T0 + HOUR);
     assert.equal(reset.resetSince, true);
-    assert.match(renderLimits({ days: 30, now: T0 + 61 * MIN, claudeLog: "/x", claudeReadings: 3, codexReadings: 0, windows: [fast], fits: [], resets: [], changes: [], claudeWindows: [], claudeSources: {} }), /runs out .* before the reset/);
+    assert.match(renderLimits({ days: 30, now: T0 + 61 * MIN, claudeLog: "/x", claudeReadings: 3, codexReadings: 0, windows: [fast], fits: [], resets: [], changes: [], claudeWindows: [], claudeSources: {}, exchange: [] }), /runs out .* before the reset/);
 });
 test("a weekly window first read hours after its reset paces from the reset (0%), not from a ten-minute burst", () => {
     // Reset 6 hours before the first reading of the new week; 0% then 2% ten minutes later.
@@ -136,7 +136,7 @@ test("a weekly window first read hours after its reset paces from the reset (0%)
     const s = windowStatus([r(0, 0), r(10, 2)], T0 + 11 * MIN);
     assert.ok(s.recentPerHour < 0.4, `2% over the 6 h 10 min since the reset, not 12 an hour: ${s.recentPerHour}`);
     assert.equal(s.beforeReset, false, "2% in six hours lasts the week");
-    const text = renderLimits({ days: 30, now: T0 + 11 * MIN, claudeLog: "/x", claudeReadings: 2, codexReadings: 0, windows: [s], fits: [], resets: [], changes: [], claudeWindows: ["seven_day"], claudeSources: {} });
+    const text = renderLimits({ days: 30, now: T0 + 11 * MIN, claudeLog: "/x", claudeReadings: 2, codexReadings: 0, windows: [s], fits: [], resets: [], changes: [], claudeWindows: ["seven_day"], claudeSources: {}, exchange: [] });
     assert.match(text, /% of the limit an hour lately; .*% an hour on average this window/);
     assert.match(text, /lasts until the reset/);
     // A window whose start is past the lookback paces from its readings, as before.
@@ -180,7 +180,7 @@ test("the fit recovers known weights per token type, and list price when the lim
     const lines = limitSavingsLines(fit, [["2. Autopilot", 100], ["nothing", 0]], 28);
     assert.equal(lines.length, 3, "a heading of two lines and the one lever with a saving");
     assert.ok(lines.every((l) => l.length <= 64), lines.join("\n"));
-    assert.match(renderLimits({ days: 30, now: T0, claudeLog: "/x", claudeReadings: readings.length, codexReadings: 0, windows: [windowStatus(readings, T0 + HOUR)], fits: [fit], resets: [], changes: [], claudeWindows: [], claudeSources: {} }), /Good enough to show savings/);
+    assert.match(renderLimits({ days: 30, now: T0, claudeLog: "/x", claudeReadings: readings.length, codexReadings: 0, windows: [windowStatus(readings, T0 + HOUR)], fits: [fit], resets: [], changes: [], claudeWindows: [], claudeSources: {}, exchange: [] }), /Good enough to show savings/);
 });
 test("thin or unexplained data is never quoted", () => {
     const { readings, usage } = synthetic([1, 0.1, 1.25, 5], 4);
@@ -189,7 +189,7 @@ test("thin or unexplained data is never quoted", () => {
     assert.match(thin.why, /stretch/);
     assert.equal(inLimit(thin, 100, 30), undefined);
     assert.deepEqual(limitSavingsLines(thin, [["x", 100]], 30), []);
-    assert.match(renderLimits({ days: 30, now: T0, claudeLog: "/x", claudeReadings: 5, codexReadings: 0, windows: [], fits: [thin], resets: [], changes: [], claudeWindows: [], claudeSources: {} }), /No limit readings yet|Too thin to quote/);
+    assert.match(renderLimits({ days: 30, now: T0, claudeLog: "/x", claudeReadings: 5, codexReadings: 0, windows: [], fits: [thin], resets: [], changes: [], claudeWindows: [], claudeSources: {}, exchange: [] }), /No limit readings yet|Too thin to quote/);
     // Rises that track nothing recorded here: the rate cannot be pinned down.
     const random = synthetic([1, 0.1, 1.25, 5], 30);
     let seed = 11;
@@ -280,7 +280,7 @@ test("a reading days old is said to be stale, with its age, and no run-out time 
     assert.equal(s.stale, true);
     assert.equal(s.runsOutAt, undefined);
     assert.equal(s.beforeReset, undefined);
-    const text = renderLimits({ days: 30, now, claudeLog: "/x", claudeReadings: 3, codexReadings: 0, windows: [s], fits: [], resets: [], changes: [], claudeWindows: ["seven_day"], claudeSources: {} });
+    const text = renderLimits({ days: 30, now, claudeLog: "/x", claudeReadings: 3, codexReadings: 0, windows: [s], fits: [], resets: [], changes: [], claudeWindows: ["seven_day"], claudeSources: {}, exchange: [] });
     assert.match(text, /The newest reading is 5 days old: no pace or run-out time from it/);
     assert.ok(!/runs out/.test(text), text);
     // The same readings read within the day still forecast.

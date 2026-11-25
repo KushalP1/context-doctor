@@ -93,7 +93,7 @@ test("a planted 5x move at a reset is found, dated at that reset and reported; t
   assert.ok(Math.abs(c.factor - 0.2) < 0.03, String(c.factor));
   assert.deepEqual([c.versionsBefore, c.versionsAfter], [["2.1.321"], ["2.1.325"]]);
 
-  const report = { days: 30, now, claudeLog: "x", claudeReadings: readings.length, codexReadings: 0, windows: [], fits: [], resets: ws, changes, claudeWindows: ["seven_day"], claudeSources: { mod: readings.length } };
+  const report = { days: 30, now, claudeLog: "x", claudeReadings: readings.length, codexReadings: 0, windows: [], fits: [], resets: ws, changes, claudeWindows: ["seven_day"], claudeSources: { mod: readings.length }, exchange: [] };
   const block = renderLimitsReport(report);
   assert.match(block, /at the reset of 2026-11-03 08:00 UTC: 1% went from \$2\d\.\d\d to \$[45]\.\d\d of API-equivalent use \(5\.\dx less use per 1%: the limit drains faster\)/);
   assert.match(block, /Claude Code 2\.1\.321 before, 2\.1\.325 after/);
@@ -107,7 +107,7 @@ test("steady windows with noise report no move; a 5x move inside a window is dat
   const steady = weeks([{ usdPerPct: 20 }, { usdPerPct: 21 }, { usdPerPct: 19 }], { noise: 0.3, seed: 3 });
   const sw = resetWindowsOf(steady.readings, steady.usage, { now: T0 + 3 * WEEK });
   assert.deepEqual(slopeChanges(sw, steady.usage, steady.readings), []);
-  assert.match(renderLimits({ days: 30, now: T0 + 3 * WEEK, claudeLog: "x", claudeReadings: 1, codexReadings: 0, windows: [], fits: [], resets: sw, changes: [], claudeWindows: ["seven_day"], claudeSources: {} }), /held steady/);
+  assert.match(renderLimits({ days: 30, now: T0 + 3 * WEEK, claudeLog: "x", claudeReadings: 1, codexReadings: 0, windows: [], fits: [], resets: sw, changes: [], claudeWindows: ["seven_day"], claudeSources: {}, exchange: [] }), /held steady/);
 
   // claude-code#108272: 1% from ~$30 to ~$6 within one week.
   const inside = weeks([{ usdPerPct: 30, changeAt: { stretch: 24, usdPerPct: 6 } }], { seed: 5 });
@@ -128,7 +128,7 @@ test("the split by entrypoint finds `claude -p` draining 1.8x per dollar, where 
   assert.ok(Math.abs(by.cli.usdPerPct! - 25) / 25 < 0.2, String(by.cli.usdPerPct));
   const ratio = by.cli.usdPerPct! / by["sdk-cli"].usdPerPct!;
   assert.ok(Math.abs(ratio - 1.8) < 0.4, String(ratio));
-  const block = renderLimitsReport({ days: 30, now: T0 + DAY, claudeLog: "x", claudeReadings: readings.length, codexReadings: 0, windows: [], fits: [], resets: [w], changes: [], claudeWindows: ["seven_day", "five_hour"], claudeSources: {} });
+  const block = renderLimitsReport({ days: 30, now: T0 + DAY, claudeLog: "x", claudeReadings: readings.length, codexReadings: 0, windows: [], fits: [], resets: [w], changes: [], claudeWindows: ["seven_day", "five_hour"], claudeSources: {}, exchange: [] });
   assert.match(block, /by entrypoint: sdk-cli \$1\d\.\d\d ±\d+%, cli \$2\d\.\d\d ±\d+% per 1% \(sdk-cli drains 1\.\dx per dollar against cli\)/);
   assert.match(block, /Claude windows read: weekly and 5-hour/);
   // A thin window gets no figure, and says why.

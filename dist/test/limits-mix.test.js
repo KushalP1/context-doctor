@@ -52,7 +52,7 @@ const HALF = { [OPUS]: 7.5, [FABLE]: 2.5 };
 function report(readings, usage, now) {
     const resets = resetWindowsOf(readings, usage, { now });
     const changes = slopeChanges(resets, usage, readings);
-    return { days: 30, now, claudeLog: "x", claudeReadings: readings.length, codexReadings: 0, windows: [], fits: [], resets, changes, claudeWindows: ["seven_day"], claudeSources: { mod: readings.length } };
+    return { days: 30, now, claudeLog: "x", claudeReadings: readings.length, codexReadings: 0, windows: [], fits: [], resets, changes, claudeWindows: ["seven_day"], claudeSources: { mod: readings.length }, exchange: [] };
 }
 test("a mix moving from 10% to 80% Fable 5.2 at fixed per-model rates is the mix, not the limit draining faster", () => {
     const { readings, usage } = mixed([{ before: { fable: 0.1, rates: RATES }, after: { fable: 0.8, rates: RATES } }]);

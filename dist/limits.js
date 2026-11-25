@@ -1654,6 +1654,159 @@ function perReset(readings, usage, now) {
     }
     return { resets, changes };
 }
+/** A weekly line this close before a 5-hour one still stands for that moment: the recorder would have written the weekly window again had it moved (a minute's throttle) or after 15 minutes unchanged. */
+const EXCHANGE_PAIR_MS = KEEPALIVE_MS + MIN;
+/** A figure is quoted from this many 5-hour windows... */
+const MIN_EXCHANGE_WINDOWS = 3;
+/** ...known to this relative error or better. */
+const MAX_EXCHANGE_REL_SE = 0.25;
+/**
+ * A move is reported beyond this many standard errors (1.5 times a
+ * two-standard-error band: the bar slopeChanges sets between windows) and
+ * of at least this factor either way.
+ */
+const EXCHANGE_SIGMA = 3;
+const MIN_EXCHANGE_FACTOR = 1.1;
+/** Each 5-hour period's rise and the weekly rise over the same moments, split where a weekly reset falls inside it; with the weekly period each belongs to. */
+function exchangeSamples(short, long) {
+    const weeks = periodsOf(long);
+    const flat = weeks.flatMap((p) => p.map((r) => ({ r, week: p }))).sort((a, b) => a.r.ts - b.r.ts);
+    /** The weekly reading standing at `ts`: the last one at or before it, within EXCHANGE_PAIR_MS, its period not reset by then. */
+    const at = (ts) => {
+        let lo = 0, hi = flat.length - 1, found = -1;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (flat[mid].r.ts <= ts) {
+                found = mid;
+                lo = mid + 1;
+            }
+            else
+                hi = mid - 1;
+        }
+        const e = found >= 0 ? flat[found] : undefined;
+        if (!e || ts - e.r.ts > EXCHANGE_PAIR_MS || (e.r.resetsAt !== undefined && e.r.resetsAt < ts))
+            return undefined;
+        return e;
+    };
+    const out = [];
+    for (const period of periodsOf(short)) {
+        let run = [];
+        let week;
+        const flush = () => {
+            if (week && run.length >= 2) {
+                const a = run[0], b = run[run.length - 1];
+                const fivePct = Math.max(0, b.f - a.f), weekPct = Math.max(0, b.w - a.w);
+                if (fivePct > 0 || weekPct > 0)
+                    out.push({ from: a.ts, to: b.ts, fivePct, weekPct, week });
+            }
+            run = [];
+        };
+        for (const r of period) {
+            const e = at(r.ts);
+            if (!e)
+                continue;
+            if (e.week !== week) {
+                flush();
+                week = e.week;
+            }
+            run.push({ ts: r.ts, f: r.pct, w: e.r.pct });
+        }
+        flush();
+    }
+    return out.sort((a, b) => a.from - b.from);
+}
+/** The ratio over some samples, with its error, or why it is not quoted. `res`: each window's reading step (1 for whole percents). */
+function exchangeFigure(samples, res) {
+    const n = samples.length;
+    const fivePct = samples.reduce((a, s) => a + s.fivePct, 0), weekPct = samples.reduce((a, s) => a + s.weekPct, 0);
+    const fig = { windows: n, fivePct, weekPct };
+    if (n < MIN_EXCHANGE_WINDOWS) {
+        fig.why = `${n} five-hour window${n === 1 ? "" : "s"} with weekly readings beside ${n === 1 ? "it" : "them"}; ${MIN_EXCHANGE_WINDOWS} make a figure`;
+        return fig;
+    }
+    if (!(fivePct > 0)) {
+        fig.why = "the 5-hour window has not risen beside weekly readings yet";
+        return fig;
+    }
+    if (!(weekPct > 0)) {
+        fig.why = `the weekly reading has not moved across ${pts(fivePct)} points of 5-hour windows yet`;
+        return fig;
+    }
+    const r = weekPct / fivePct;
+    // The spread between windows (the ratio estimator's error), and the whole-percent steps: each rise is a difference of two readings, each off by up to half a step.
+    const spread = ratio(samples.map((s) => s.weekPct), samples.map((s) => s.fivePct))?.relSe ?? Infinity;
+    const steps = Math.sqrt((n * ((res.long / weekPct) ** 2 + (res.short / fivePct) ** 2)) / 6);
+    const relSe = Math.max(spread, steps);
+    fig.pct = 100 * r;
+    fig.err = 100 * r * relSe;
+    if (!(relSe <= MAX_EXCHANGE_REL_SE))
+        fig.why = `known only to ±${Number.isFinite(relSe) ? Math.round(relSe * 100) : "∞"}% so far`;
+    return fig;
+}
+/** One app's exchange from its short (5-hour) and long (weekly) readings; undefined when either is missing (Ultra has no 5-hour window). */
+export function exchangeOf(short, long, opts) {
+    if (!short.length || !long.length)
+        return undefined;
+    const now = opts.now ?? Date.now();
+    const res = { short: resolutionOf(short), long: resolutionOf(long) };
+    const samples = exchangeSamples(short, long);
+    const byWeek = new Map();
+    for (const s of samples) {
+        const list = byWeek.get(s.week);
+        if (list)
+            list.push(s);
+        else
+            byWeek.set(s.week, [s]);
+    }
+    const weeks = [...byWeek].map(([period, list]) => {
+        const last = period[period.length - 1];
+        const windowMs = last.windowMs ?? 7 * DAY;
+        const resetsAt = last.resetsAt ?? period[0].ts + windowMs;
+        return { start: resetsAt - windowMs, resetsAt, current: resetsAt > now, ...exchangeFigure(list, res) };
+    }).sort((a, b) => a.start - b.start);
+    const quoted = weeks.filter((w) => w.pct !== undefined && w.err !== undefined && !w.why);
+    const moves = [];
+    for (let i = 1; i < quoted.length; i++) {
+        const a = quoted[i - 1], b = quoted[i];
+        const se = Math.hypot(a.err, b.err);
+        const sigma = se > 0 ? Math.abs(b.pct - a.pct) / se : Infinity;
+        const factor = b.pct / a.pct;
+        if (sigma < EXCHANGE_SIGMA || Math.max(factor, 1 / factor) < MIN_EXCHANGE_FACTOR)
+            continue;
+        moves.push({ at: b.start, prevEnd: a.resetsAt, pctBefore: a.pct, errBefore: a.err, pctAfter: b.pct, errAfter: b.err, sigma });
+    }
+    const lastMove = moves[moves.length - 1];
+    const pooled = lastMove ? samples.filter((s) => s.from >= lastMove.at) : samples;
+    const since = lastMove ? lastMove.at : samples[0]?.from ?? short[0].ts;
+    return {
+        app: opts.app, label: opts.label, short: short[short.length - 1].window, long: long[long.length - 1].window,
+        ...exchangeFigure(pooled, res),
+        since, compared: quoted.length, weeks, moves,
+    };
+}
+/** Codex's windows paired: per plan and limit id, the 5-hour one with the weekly one. */
+function codexExchanges(readings, now) {
+    const groups = new Map();
+    for (const [key, rs] of byWindow(readings)) {
+        const ms = rs[rs.length - 1]?.windowMs;
+        const kind = ms === 5 * HOUR ? "short" : ms === 7 * DAY ? "long" : undefined;
+        if (!kind)
+            continue;
+        const base = key.split(":").slice(0, -1).join(":");
+        const g = groups.get(base) ?? (groups.set(base, {}), groups.get(base));
+        g[kind] = rs;
+    }
+    const out = [];
+    for (const g of groups.values()) {
+        if (!g.short || !g.long)
+            continue;
+        const long = g.long[g.long.length - 1];
+        const e = exchangeOf(g.short, g.long, { app: "codex", label: windowLabel(long.window, long.windowMs).replace(" weekly", ""), now });
+        if (e)
+            out.push(e);
+    }
+    return out;
+}
 function byWindow(readings) {
     const m = new Map();
     for (const r of readings) {
@@ -1680,6 +1833,9 @@ export function limitsReport(days = 30, opts = {}) {
     const claudeUse = claude.length >= 2 ? claudeUsage(claude[0].ts - HOUR, claude[claude.length - 1].ts, opts.claudePaths) : [];
     const claudeReset = perReset(claude, claudeUse, now);
     const codexReset = perReset(codex.readings, codex.usage, now);
+    const claudeByWindow = byWindow(claude);
+    const claudeExchange = exchangeOf(claudeByWindow.get("five_hour") ?? [], claudeByWindow.get("seven_day") ?? [], { app: "claude", label: "Claude", now });
+    const exchange = [...(claudeExchange ? [claudeExchange] : []), ...codexExchanges(codex.readings, now)];
     const claudeSources = {};
     for (const r of claude)
         claudeSources[r.source ?? "earlier"] = (claudeSources[r.source ?? "earlier"] ?? 0) + 1;
@@ -1705,6 +1861,7 @@ export function limitsReport(days = 30, opts = {}) {
         changes: [...claudeReset.changes, ...codexReset.changes],
         claudeWindows: CLAUDE_WINDOWS.filter((w) => claude.some((r) => r.window === w)),
         claudeSources,
+        exchange,
     };
 }
 /**
@@ -1835,6 +1992,30 @@ function changeLine(c) {
     }
     return `${head} (${move(c.factor)}). Part of it is your model mix: ${used}${per}${predicted}. Beyond the mix, per model, 1% buys ${move(r).replace(" per 1%", "")}: ${drains(r)}${tok}${ver}.`;
 }
+/** "Nov 16", in UTC like the report's other dates. */
+const monthDay = (ms) => new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+const tenth = (v) => (Math.round(v * 10) / 10).toFixed(1);
+/**
+ * The exchange in one line: what a full 5-hour window costs of the weekly
+ * limit, its error, how many fit in a week, and whether it moved (from what
+ * to what, and when). Too thin: says so, with no figure.
+ */
+export function exchangeLine(e) {
+    const whose = e.app === "claude" ? "" : `${e.label}: `;
+    if (e.pct === undefined || e.err === undefined || e.why)
+        return `${whose}What a full 5-hour window costs of your weekly limit: too thin to quote yet (${e.why ?? "no figure"}).`;
+    const perWeek = Math.max(1, Math.round(100 / e.pct));
+    const head = `${whose}${whose ? "a" : "A"} full 5-hour window is ${tenth(e.pct)}% of your weekly limit (±${tenth(Math.max(0.1, e.err))}), about ${perWeek} a week`;
+    const m = e.moves[e.moves.length - 1];
+    if (m) {
+        const when = Math.abs(m.prevEnd - m.at) > SAME_RESET_MS ? `between ${monthDay(m.prevEnd)} and ${monthDay(m.at)}` : `at the weekly reset of ${monthDay(m.at)}`;
+        const earlier = e.moves.length > 1 ? ` (the latest of ${e.moves.length} moves since ${monthDay(e.weeks[0].start)})` : "";
+        return `${head}; it was ${tenth(m.pctBefore)}% (±${tenth(Math.max(0.1, m.errBefore))}) and moved ${when}${earlier}. Your model mix does not explain this: both limits count the same requests, so one of the two limits changed.`;
+    }
+    if (e.compared >= 2)
+        return `${head}; unchanged since ${monthDay(e.since)}.`;
+    return `${head} (since ${monthDay(e.since)}; one weekly window so far, nothing to compare yet).`;
+}
 /** "claude-fable-5-2" as "Fable 5.2"; any other id as it is. */
 export function modelLabel(key) {
     const m = /^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d{1,2}))?(?!\d)/i.exec(key ?? "");
@@ -1893,6 +2074,8 @@ export function renderLimits(r, pastLimit = [], ahead) {
     if (r.claudeWindows.length === 1 && r.claudeWindows[0] === "seven_day") {
         out.push("", "No 5-hour window in Claude's readings: a plan without one (Ultra), so the weekly window is the limit.");
     }
+    if (r.exchange.length)
+        out.push("", ...r.exchange.map(exchangeLine));
     if (pastLimit.length) {
         out.push("", "Past your plan's limit: usage credits", "─".repeat(60), ...pastLimit);
     }
@@ -2005,6 +2188,8 @@ export function renderLimitsReport(r) {
     const nowWeek = r.windows.find((w) => w.window === "seven_day");
     if (nowWeek || now5h)
         out.push("", `Now: ${[nowWeek ? `weekly ${pts(nowWeek.pct)}%` : "", now5h ? `5-hour ${pts(now5h.pct)}%` : ""].filter(Boolean).join(", ")}.`);
+    if (r.exchange.length)
+        out.push("", ...r.exchange.map(exchangeLine));
     out.push("", "No prompts, file paths, session or account ids are included.");
     return out.join("\n");
 }

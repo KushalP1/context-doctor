@@ -58,7 +58,8 @@
   ],
   "claudeSources": {
     "earlier": 40
-  }
+  },
+  "exchange": []
 }
 
 [exit 0]
