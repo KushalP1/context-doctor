@@ -98,6 +98,20 @@ export interface StartsReport {
         usd: number;
     };
 }
+/** A Claude Code that ran sessions in the period: the entrypoint and version their transcripts recorded, and how many. */
+export interface SessionHost {
+    /** "claude-desktop", "cli", "sdk-cli", "claude-vscode"... ("" when a transcript records none). */
+    entrypoint: string;
+    version?: string;
+    sessions: number;
+}
+/**
+ * Which Claude Code ran the sessions in the period: each entrypoint and
+ * version a main transcript recorded while it was in the period (limits.ts
+ * HOST_ROWS keeps a record where either changes), counted once per session.
+ * fix uses it to say when an install too old for a setting ran none of them.
+ */
+export declare function sessionHosts(paths: string[], since: number): SessionHost[];
 /**
  * Every session's and subagent's start in the period, grouped by entrypoint
  * and subagent type, each priced on every request that re-read it.

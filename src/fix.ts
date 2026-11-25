@@ -48,6 +48,7 @@ import { priceBasis } from "./orgrates.js";
 import { contextWindowFor, realModel } from "./tokens.js";
 import { adviseTtl, CACHE_TTL_SINCE, estimateCacheTtl, subagentTranscripts, type CacheTtlReport, type CurrentTtl, type TtlKind } from "./cachettl.js";
 import { compareVersions, describeInstalls, type ClaudeCodeInstall } from "./modelswitch.js";
+import type { SessionHost } from "./starts.js";
 import { ABSENT, getPath, parseSettingsText, readSettings, removeFile, sameJson, setJsonPath, SettingsError, settingsLockPath, withLock, withSettingsLock, writeAtomic } from "./settingsedit.js";
 import { compactWindowOverrides, effectiveEnv, processEnvWhere, settingsSources, shellSet, ttlOverrides, underClaudeCode } from "./effective.js";
 import { claudeJsonPath, tilde } from "./claudedir.js";
@@ -142,6 +143,12 @@ export interface FixInputs {
   codexCompact?: CodexCompactReport;
   /** The Claude Code installs found here (CLI and desktop app), to name the ones a setting is too new for. */
   claudeCodeInstalls?: ClaudeCodeInstall[];
+  /**
+   * The entrypoints and versions the period's sessions ran on (starts.ts
+   * sessionHosts): an install too old for a setting that ran none of them is
+   * still named, with "no session ran there".
+   */
+  sessionHosts?: SessionHost[];
   /** model_auto_compact_token_limit at the top of the user's config.toml, as written: never overwritten. */
   codexCompactSet?: { raw: string; where: string };
   /** The subagents' progress summaries Claude Code wrote, estimated (progresssummaries.ts). */
@@ -184,6 +191,38 @@ export const DESKTOP_TOOLS_DEFER_SINCE = "2.1.326";
  * is not in 2.1.62 and the changelog does not say when it came: not named.
  */
 const SINCE: Partial<Record<FixId, string>> = { "mcp-defer": MCP_DEFER_SINCE, "desktop-tools-defer": DESKTOP_TOOLS_DEFER_SINCE, "cache-ttl": CACHE_TTL_SINCE, "cache-ttl-subagents": CACHE_TTL_SINCE, "tool-output": BASH_OUTPUT_SINCE, "progress-summaries": PROGRESS_SUMMARIES_SINCE };
+
+/** Levers that act only in the Desktop app: an old CLI elsewhere on the machine never reads them. */
+const DESKTOP_ONLY = new Set<FixId>(["desktop-tools-defer"]);
+
+/**
+ * Whether any of the period's sessions could have run on this install: the
+ * app's own when a Desktop session ran; a CLI's when a session outside the
+ * app ran its version or an older one (the same binary before an update).
+ * Unknown (no sessions recorded) counts as ran.
+ */
+function ranThere(c: ClaudeCodeInstall, hosts: SessionHost[] | undefined): boolean {
+  if (!hosts?.length) return true;
+  if (c.source === "desktop app") return hosts.some((h) => h.entrypoint === "claude-desktop");
+  return hosts.some((h) => h.entrypoint !== "claude-desktop" && (h.version === undefined || compareVersions(h.version, c.version) <= 0));
+}
+
+/**
+ * "Claude Code 2.1.311 (…) predates this setting …: update it for it to take
+ * effect there", and, for an install none of the period's sessions ran on,
+ * that none did. Kept rather than dropped: the setting sits in the
+ * settings.json every Claude Code here reads, so a session started there
+ * tomorrow would still ignore it; it just did not cost the figure above.
+ */
+function tooOldLine(old: ClaudeCodeInstall[], since: string, hosts: SessionHost[] | undefined, days: number): string {
+  const one = (n: number, a: string, b: string) => (n === 1 ? a : b);
+  const ran = old.filter((c) => ranThere(c, hosts));
+  const idle = old.filter((c) => !ranThere(c, hosts));
+  const none = `no session ran there in the last ${days} days`;
+  if (!ran.length) return `${describeInstalls(idle)} ${one(idle.length, "predates", "predate")} this setting (Claude Code ${since}+) and ${one(idle.length, "ignores", "ignore")} it, but ${none}: update ${one(idle.length, "it", "them")} before you use ${one(idle.length, "it", "them")} again`;
+  const line = `${describeInstalls(ran)} ${one(ran.length, "predates", "predate")} this setting (Claude Code ${since}+) and ${one(ran.length, "ignores", "ignore")} it: update ${one(ran.length, "it", "them")} for it to take effect there`;
+  return idle.length ? `${line}; ${describeInstalls(idle)} ${one(idle.length, "is", "are")} older too, but ${none}` : line;
+}
 
 /** Below this a priced fix is not worth a setting. */
 const MIN_USD = 1;
@@ -445,8 +484,10 @@ export function planFixes(i: FixInputs): Fix[] {
     const o = i.overrides?.[f.id];
     if (o?.length && f.state === "available") f.overriddenBy = o;
     const since = SINCE[f.id];
-    const old = since && f.state === "available" ? (i.claudeCodeInstalls ?? []).filter((c) => compareVersions(c.version, since) < 0) : [];
-    if (old.length) f.tooOld = `${describeInstalls(old)} ${old.length === 1 ? "predates" : "predate"} this setting (Claude Code ${since}+) and ${old.length === 1 ? "ignores" : "ignore"} it: update ${old.length === 1 ? "it" : "them"} for it to take effect there`;
+    // A lever that acts only in the Desktop app is read only by the Claude Code the app bundles.
+    const installs = (i.claudeCodeInstalls ?? []).filter((c) => !DESKTOP_ONLY.has(f.id) || c.source === "desktop app");
+    const old = since && f.state === "available" ? installs.filter((c) => compareVersions(c.version, since) < 0) : [];
+    if (old.length) f.tooOld = tooOldLine(old, since!, i.sessionHosts, i.days);
   }
   const rank = (f: Fix) => (f.state === "available" ? 0 : f.state === "applied" ? 2 : 3) + (f.savedUsd === undefined ? 1 : 0);
   return fixes.sort((a, b) => rank(a) - rank(b) || (b.savedUsd ?? 0) - (a.savedUsd ?? 0));

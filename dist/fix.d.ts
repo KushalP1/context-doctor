@@ -40,6 +40,7 @@
  */
 import { type CacheTtlReport, type CurrentTtl } from "./cachettl.js";
 import { type ClaudeCodeInstall } from "./modelswitch.js";
+import type { SessionHost } from "./starts.js";
 import { type ProjectPlan } from "./prune.js";
 import { type DeferEntry } from "./mcpdefer.js";
 import { type ToolsLine } from "./apptools.js";
@@ -158,6 +159,12 @@ export interface FixInputs {
     codexCompact?: CodexCompactReport;
     /** The Claude Code installs found here (CLI and desktop app), to name the ones a setting is too new for. */
     claudeCodeInstalls?: ClaudeCodeInstall[];
+    /**
+     * The entrypoints and versions the period's sessions ran on (starts.ts
+     * sessionHosts): an install too old for a setting that ran none of them is
+     * still named, with "no session ran there".
+     */
+    sessionHosts?: SessionHost[];
     /** model_auto_compact_token_limit at the top of the user's config.toml, as written: never overwritten. */
     codexCompactSet?: {
         raw: string;

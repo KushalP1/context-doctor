@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { deferrableApp, deferrableConfigured, entrypointName, measureStarts, mcpServerOf, renderStarts } from "../starts.js";
+import { deferrableApp, deferrableConfigured, entrypointName, measureStarts, mcpServerOf, renderStarts, sessionHosts } from "../starts.js";
 import { applyFix, fixOverrides, overlaps, parseFixIds, planFixes, readFixRecords, renderFixPlan, undoFixes, type FixInputs } from "../fix.js";
 import { tokensForLength } from "../tokens.js";
 
@@ -299,4 +299,49 @@ test("audit: with tool search off there is nothing to load a deferred tool: desk
   // On (the default, or a true value): nothing in the way.
   writeFileSync(join(home, ".claude", "settings.json"), '{"env": {"ENABLE_TOOL_SEARCH": "true"}}');
   assert.deepEqual(fixOverrides("desktop-tools-defer", { home, cwd: home, env: { CONTEXT_DOCTOR_NO_MANAGED_SETTINGS: "1" } }), []);
+});
+
+test("I1: a version warning names only the Claude Code that runs the sessions: the Desktop lever ignores an old CLI; other levers keep it, saying when no session ran there", () => {
+  // The author's machine: the Desktop app bundles 2.1.330, Homebrew's CLI is 2.1.311, every session ran in the app.
+  const installs = [{ path: "/opt/homebrew/bin/claude", version: "2.1.311", source: "cli" as const }, { path: "app", version: "2.1.330", source: "desktop app" as const }];
+  const desktopOnly = [{ entrypoint: "claude-desktop", version: "2.1.330", sessions: 40 }];
+  const s = { name: "Claude_Browser", tools: 19, tokens: 8_000, starts: 100, calledStarts: 5, usd: 52, unusedUsd: 40, calledUsd: 3 };
+  const mine = { servers: [{ name: "mine", scope: "user", tokens: 4_000, usd: 12 }], days: 30 };
+  const base: FixInputs = { days: 30, billedUsd: 500, desktopTools: { days: 30, servers: [s] }, mcpDefer: mine, claudeCodeInstalls: installs };
+  const owner = planFixes({ ...base, sessionHosts: desktopOnly });
+  assert.equal(owner.find((x) => x.id === "desktop-tools-defer")!.tooOld, undefined, "the app's 2.1.330 is what reads it");
+  assert.doesNotMatch(renderFixPlan(30, 500, owner, []), /2\.1\.311 \(\/opt\/homebrew\/bin\/claude\) predates/);
+  // Terminal sessions on Homebrew's 2.1.311 change nothing for a lever only the app reads.
+  assert.equal(planFixes({ ...base, sessionHosts: [...desktopOnly, { entrypoint: "cli", version: "2.1.311", sessions: 3 }] }).find((x) => x.id === "desktop-tools-defer")!.tooOld, undefined);
+  // The Desktop app's own Claude Code too old: still named.
+  const oldApp = planFixes({ ...base, claudeCodeInstalls: [installs[0], { ...installs[1], version: "2.1.320" }], sessionHosts: desktopOnly });
+  assert.equal(oldApp.find((x) => x.id === "desktop-tools-defer")!.tooOld, "Claude Code 2.1.320 (desktop app) predates this setting (Claude Code 2.1.326+) and ignores it: update it for it to take effect there");
+  // A lever every Claude Code reads (mcp-defer, 2.1.287+), with an older CLI: named, and said when no session ran there.
+  const cliOld = [{ path: "/opt/homebrew/bin/claude", version: "2.1.250", source: "cli" as const }, installs[1]];
+  const md = (hosts: FixInputs["sessionHosts"], list = cliOld) => planFixes({ ...base, claudeCodeInstalls: list, sessionHosts: hosts }).find((x) => x.id === "mcp-defer")!.tooOld;
+  assert.equal(md(desktopOnly), "Claude Code 2.1.250 (/opt/homebrew/bin/claude) predates this setting (Claude Code 2.1.287+) and ignores it, but no session ran there in the last 30 days: update it before you use it again");
+  // Terminal sessions on that CLI: worded as before.
+  assert.equal(md([...desktopOnly, { entrypoint: "cli", version: "2.1.250", sessions: 3 }]), "Claude Code 2.1.250 (/opt/homebrew/bin/claude) predates this setting (Claude Code 2.1.287+) and ignores it: update it for it to take effect there");
+  // A terminal session on an older version is the same binary before an update; a newer one is some other Claude Code.
+  assert.doesNotMatch(md([{ entrypoint: "cli", version: "2.1.240", sessions: 1 }])!, /no session ran/);
+  assert.match(md([{ entrypoint: "claude-vscode", version: "2.1.300", sessions: 1 }])!, /no session ran there/);
+  // Two old CLIs, one used: the used one as before, the other after it.
+  const two = [cliOld[0], { path: "/usr/local/bin/claude", version: "2.1.240", source: "cli" as const }];
+  assert.equal(md([{ entrypoint: "cli", version: "2.1.250", sessions: 2 }], two), "Claude Code 2.1.250 (/opt/homebrew/bin/claude) predates this setting (Claude Code 2.1.287+) and ignores it: update it for it to take effect there; Claude Code 2.1.240 (/usr/local/bin/claude) is older too, but no session ran there in the last 30 days");
+  // No sessions on record: worded as before.
+  assert.match(md(undefined)!, /and ignores it: update it for it to take effect there$/);
+});
+
+test("I1: sessionHosts reads each session's entrypoint and version while it was in the period", () => {
+  const home = mkdtempSync(join(tmpdir(), "cd-hosts-"));
+  const proj = join(home, ".claude", "projects", "-p");
+  mkdirSync(proj, { recursive: true });
+  const old = Date.now() - 40 * 86_400_000;
+  const row = (at: number, ep: string, v: string) => JSON.stringify({ type: "user", uuid: `h${n++}`, timestamp: iso(at), entrypoint: ep, version: v, message: { role: "user", content: "hi" } });
+  const a = join(proj, "a.jsonl"), b = join(proj, "b.jsonl"), c = join(proj, "c.jsonl");
+  writeFileSync(a, [row(t0, "claude-desktop", "2.1.330"), row(t0 + 1000, "claude-desktop", "2.1.330")].join("\n") + "\n");
+  // Resumed in the period after updates: a version superseded before the period is not counted; the one in effect as it began is.
+  writeFileSync(b, [row(old, "claude-desktop", "2.1.300"), row(old + 1000, "claude-desktop", "2.1.310"), row(t0, "claude-desktop", "2.1.330")].join("\n") + "\n");
+  writeFileSync(c, [row(t0, "cli", "2.1.311")].join("\n") + "\n");
+  assert.deepEqual(sessionHosts([a, b, c], Date.now() - 30 * 86_400_000), [{ entrypoint: "claude-desktop", version: "2.1.330", sessions: 2 }, { entrypoint: "claude-desktop", version: "2.1.310", sessions: 1 }, { entrypoint: "cli", version: "2.1.311", sessions: 1 }]);
 });

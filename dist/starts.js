@@ -27,6 +27,7 @@ import { subagentFiles, workflowRunOf } from "./subagents.js";
 import { cacheWriteSplit, formatUsd, rateCard, ratesAt, usageCost } from "./pricing.js";
 import { formatTokens, isCodeLike, realModel, tokensForLength } from "./tokens.js";
 import { APP_TOOL_SERVERS } from "./mod/logic.js";
+import { HOST_ROWS } from "./limits.js";
 const CLAUDE = "claude-opus-5";
 /**
  * What a start's measurement takes from a transcript: the entrypoint, the
@@ -246,6 +247,38 @@ function measureStart(path, kind, since, runRows, parentEntry) {
             start.called = new Set(rowsOf(path, CALL_ROWS));
     }
     return start;
+}
+/**
+ * Which Claude Code ran the sessions in the period: each entrypoint and
+ * version a main transcript recorded while it was in the period (limits.ts
+ * HOST_ROWS keeps a record where either changes), counted once per session.
+ * fix uses it to say when an install too old for a setting ran none of them.
+ */
+export function sessionHosts(paths, since) {
+    const out = new Map();
+    for (const path of paths) {
+        let hosts;
+        try {
+            hosts = rowsOf(path, HOST_ROWS);
+        }
+        catch {
+            continue;
+        }
+        const seen = new Set();
+        hosts.forEach((h, j) => {
+            // Superseded before the period began (a session resumed after an update): not this period's.
+            const next = hosts[j + 1];
+            if (next && next.ts > 0 && next.ts < since)
+                return;
+            const k = `${h.ep ?? ""}\u0000${h.v ?? ""}`;
+            if (seen.has(k))
+                return;
+            seen.add(k);
+            const cur = out.get(k) ?? out.set(k, { entrypoint: h.ep ?? "", ...(h.v ? { version: h.v } : {}), sessions: 0 }).get(k);
+            cur.sessions++;
+        });
+    }
+    return [...out.values()].sort((a, b) => b.sessions - a.sessions);
 }
 /** Claude Code transcripts written in the last `days` days. */
 function claudeTranscripts(days) {

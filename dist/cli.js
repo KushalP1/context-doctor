@@ -60,7 +60,8 @@ import { analyzeCacheUsage, renderCacheReport } from "./cache.js";
 import { renderToolTimings } from "./timing.js";
 import { packContextSemantic, readSources, renderPack } from "./pack.js";
 import { measureBaselines, measureMcpSizes, overheadReport, renderOverhead } from "./overhead.js";
-import { CALL_ROWS, deferrableApp, deferrableConfigured, measureStarts, START_ROWS } from "./starts.js";
+import { CALL_ROWS, deferrableApp, deferrableConfigured, measureStarts, sessionHosts, START_ROWS } from "./starts.js";
+import { HOST_ROWS } from "./limits.js";
 import { DEFER_APP_TOOLS_ENV } from "./mod/logic.js";
 import { applySplit, planSplit, renderSplit } from "./split.js";
 import { ciReport, renderCiMarkdown, renderCiText } from "./ci.js";
@@ -428,7 +429,7 @@ async function measureFixInputs(days) {
     const configured = claudeMcpConfigs(cwd).some((c) => c.scope !== ".mcp.json");
     // Each transcript read once for every replay below; what an earlier run kept is not read again (scan.ts).
     prescan([
-        { paths: claudeTranscripts(days), extractors: [savingsRows(!autopilotOnNow), REQUEST_ROWS, TOOL_OUTPUT_ROWS, START_ROWS, CALL_ROWS] },
+        { paths: claudeTranscripts(days), extractors: [savingsRows(!autopilotOnNow), REQUEST_ROWS, TOOL_OUTPUT_ROWS, START_ROWS, CALL_ROWS, HOST_ROWS] },
         { paths: subagentTranscripts(Date.now() - days * 86_400_000), extractors: [REQUEST_ROWS, SUBAGENT_ROWS, TOOL_OUTPUT_ROWS, PROGRESS_ROWS, START_ROWS, CALL_ROWS] },
         ...(setWindow === undefined ? [{ paths: claudeTranscripts(60), extractors: [QUALITY_ROWS] }] : []),
         { paths: codexRollouts(Date.now() - days * 86_400_000), extractors: [CODEX_COMPACT_ROWS] },
@@ -563,6 +564,8 @@ async function measureFixInputs(days) {
             recordProblem,
             // The installs a setting is too new for are named on its fix.
             claudeCodeInstalls: claudeCodeInstallsFromEnv(),
+            // …and whether any of the period's sessions ran on them.
+            sessionHosts: sessionHosts(claudeTranscripts(days), Date.now() - days * 86_400_000),
             coldResume: { netUsd: Math.max(0, report.coldResumeNetUsd), returns: report.coldResumes, hooked: claudePluginEnabled() || /context-doctor|cli\.js"?\s+hook/.test(JSON.stringify(userSettings.hooks?.UserPromptSubmit ?? [])) },
             ...(keepWarm ? { keepWarm } : {}),
         },
