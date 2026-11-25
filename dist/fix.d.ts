@@ -82,6 +82,20 @@ export interface Fix {
     tooOld?: string;
     /** More lines under it in the plan (the subagents' model: per agent type). */
     detail?: string[];
+    /**
+     * desktop-tools-defer: the tool loads compactions would have cost with the
+     * servers behind tool search (#111915: loaded tools are deferred again after
+     * a compaction). `reloads` counts each server once per compaction, over
+     * `compactions` of the period's `ofCompactions`; `usd` is already taken off
+     * `savedUsd`.
+     */
+    reloadsAfterCompaction?: {
+        reloads: number;
+        compactions: number;
+        ofCompactions: number;
+        usd: number;
+        unpriced?: number;
+    };
 }
 /** The measurements a plan is made from (so the plan itself is testable without a machine's history). */
 export interface FixInputs {
@@ -210,6 +224,15 @@ export interface FixInputs {
             calledUsd?: number;
         }>;
         days: number;
+        /** The period's compactions and, per compaction, each server called after it with what loading it again would cost (starts.ts; #111915). */
+        compactions?: {
+            total: number;
+            after: Array<Array<{
+                server: string;
+                usd: number;
+                unpriced?: true;
+            }>>;
+        };
     };
     /** CONTEXT_DOCTOR_DEFER_MCP where the user (or fix) set it: applied, never overwritten. */
     desktopToolsSet?: {

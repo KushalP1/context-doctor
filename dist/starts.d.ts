@@ -97,7 +97,29 @@ export interface StartsReport {
         tokens: number;
         usd: number;
     };
+    /**
+     * The period's compactions, and the servers whose tools went whole into
+     * some start that each compaction was followed by a call to (#111915: a
+     * tool loaded through tool search is deferred again after a compaction,
+     * so with the server behind tool search each would load once more).
+     * Each load priced as one more request: the context at that call read
+     * from the cache, plus one of the server's tool definitions written.
+     */
+    compactions?: {
+        total: number;
+        after: Array<Array<{
+            server: string;
+            usd: number;
+            unpriced?: true;
+        }>>;
+    };
 }
+/**
+ * What the reload count reads from a transcript: each compaction boundary,
+ * and each assistant row that calls an MCP tool, with the request's usage
+ * (the context at that call). Read once with the other extractors (scan.ts).
+ */
+export declare const RELOAD_ROWS: Extractor<Record<string, never>>;
 /** A Claude Code that ran sessions in the period: the entrypoint and version their transcripts recorded, and how many. */
 export interface SessionHost {
     /** "claude-desktop", "cli", "sdk-cli", "claude-vscode"... ("" when a transcript records none). */
@@ -116,12 +138,15 @@ export declare function sessionHosts(paths: string[], since: number): SessionHos
  * Every session's and subagent's start in the period, grouped by entrypoint
  * and subagent type, each priced on every request that re-read it.
  * `paths`: the main transcripts (subagents are found beside each).
+ * `compactions`: also count the compactions followed by a call to a server
+ * sent whole (fix's desktop-tools-defer; `overhead` does not ask).
  */
 export declare function measureStarts(opts?: {
     days?: number;
     paths?: string[];
     cwd?: string;
     home?: string;
+    compactions?: boolean;
 }): StartsReport;
 /** The servers whose tools went whole into some start and that the user's own config holds: `alwaysLoad: false` defers them. */
 export declare function deferrableConfigured(r: StartsReport): Array<{

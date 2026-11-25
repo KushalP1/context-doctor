@@ -332,6 +332,71 @@ test("I1: a version warning names only the Claude Code that runs the sessions: t
   assert.match(md(undefined)!, /and ignores it: update it for it to take effect there$/);
 });
 
+test("I3: compactions followed by a call to a server sent whole, each server once per compaction, priced by hand; fix takes them off desktop-tools-defer", () => {
+  const home = mkdtempSync(join(tmpdir(), "cd-reload-"));
+  const proj = join(home, ".claude", "projects", "-p");
+  mkdirSync(proj, { recursive: true });
+  const SESSION = tool("mcp__ccd_session__start_session", 2000);
+  const boundary = (at: number, uuid: string) => JSON.stringify({ type: "system", subtype: "compact_boundary", uuid, timestamp: iso(at), compactMetadata: { trigger: "auto", preTokens: 150_000 } });
+  const call = (at: number, id: string, names: string[], u: { read: number; write1h?: number }) => JSON.stringify({
+    type: "assistant", uuid: `u-${id}`, timestamp: iso(at),
+    message: { id, model: OPUS, content: names.map((name, i) => ({ type: "tool_use", id: `${id}-${i}`, name, input: {} })), usage: { input_tokens: 0, cache_read_input_tokens: u.read, cache_creation_input_tokens: u.write1h ?? 0, output_tokens: 10, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: u.write1h ?? 0 } } },
+  });
+  const min = (m: number) => t0 + m * 60_000;
+  const desk = join(proj, "desk.jsonl");
+  writeFileSync(desk, [
+    user("hi", { entrypoint: "claude-desktop" }),
+    shape([BASH, BROWSER, SESSION]),
+    reply(t0, { input: 1, write1h: 70_000 }),
+    // Compaction 1: the browser twice (one load), and a server no start sent whole (not counted).
+    boundary(min(1), "cb-1"),
+    call(min(2), "msg_r1", ["mcp__Claude_Browser__navigate"], { read: 100_000 }),
+    call(min(3), "msg_r2", ["mcp__Claude_Browser__navigate", "mcp__other__x"], { read: 101_000 }),
+    // Compaction 2: the browser and ccd_session in one reply, written at 1 hour (two loads).
+    boundary(min(4), "cb-2"),
+    call(min(5), "msg_r3", ["mcp__Claude_Browser__navigate", "mcp__ccd_session__start_session"], { read: 50_000, write1h: 1_000 }),
+    // Compaction 3: nothing called after it.
+    boundary(min(6), "cb-3"),
+    reply(min(7), { input: 1, read: 30_000 }),
+  ].join("\n") + "\n");
+  // Before the period: not counted. A fork's copy of compaction 1 and the call after it: counted once, where first seen.
+  const old = join(proj, "old.jsonl");
+  writeFileSync(old, [boundary(Date.now() - 40 * 86_400_000, "cb-old"), call(Date.now() - 40 * 86_400_000 + 60_000, "msg_old", ["mcp__Claude_Browser__navigate"], { read: 90_000 })].join("\n") + "\n");
+  const fork = join(proj, "fork.jsonl");
+  writeFileSync(fork, [boundary(min(1), "cb-1"), call(min(2), "msg_r1", ["mcp__Claude_Browser__navigate"], { read: 100_000 })].join("\n") + "\n");
+
+  assert.equal(measureStarts({ days: 30, paths: [desk], home, cwd: home }).compactions, undefined, "overhead does not ask");
+  const r = measureStarts({ days: 30, paths: [desk, old, fork], home, cwd: home, compactions: true });
+  // By hand: Opus 5.5 reads at $0.20/M, writes at $5/M (5 minutes) or $8/M (1 hour); one tool's definition per load.
+  const dB = Math.round(tokensOf(BROWSER)), dS = Math.round(tokensOf(SESSION));
+  const load1 = (100_000 * 0.2 + dB * 5) / 1e6;
+  const load2 = (51_000 * 0.2 + dB * 8) / 1e6;
+  const load3 = (51_000 * 0.2 + dS * 8) / 1e6;
+  assert.equal(r.compactions!.total, 3);
+  assert.deepEqual(r.compactions!.after.map((c) => c.map((x) => x.server)), [["Claude_Browser"], ["Claude_Browser", "ccd_session"]]);
+  near(r.compactions!.after[0][0].usd, load1, "load 1");
+  near(r.compactions!.after[1][0].usd, load2, "load 2");
+  near(r.compactions!.after[1][1].usd, load3, "load 3");
+
+  // fix: each load of a server the lever moves comes off its figure.
+  const s = (name: string, starts: number, calledStarts: number, unusedUsd: number) => ({ name, tools: 1, tokens: 2_000, starts, calledStarts, usd: unusedUsd, unusedUsd, calledUsd: 1 });
+  const inputs: FixInputs = { days: 30, billedUsd: 500, desktopTools: { days: 30, servers: [s("Claude_Browser", 100, 10, 40), s("ccd_session", 100, 10, 15)], compactions: r.compactions } };
+  const f = planFixes(inputs).find((x) => x.id === "desktop-tools-defer")!;
+  assert.deepEqual({ ...f.reloadsAfterCompaction, usd: 0 }, { reloads: 3, compactions: 2, ofCompactions: 3, usd: 0 });
+  near(f.reloadsAfterCompaction!.usd, load1 + load2 + load3, "reload cost");
+  near(f.savedUsd!, 55 - (load1 + load2 + load3), "net figure");
+  assert.match(f.basis, /Less \$0\.\d\d for loading them again after compactions: a compaction puts loaded tools back behind tool search, and 2 of the 3 compactions in those days were followed by a call to one of them \(3 loads, a server once per compaction/);
+  assert.match(f.quality, /again after each compaction \(Claude Code issue #111915/);
+  // ccd_session called in most starts stays in front: only the browser's loads come off.
+  const kept = planFixes({ ...inputs, desktopTools: { ...inputs.desktopTools!, servers: [s("Claude_Browser", 100, 10, 40), s("ccd_session", 100, 80, 15)] } }).find((x) => x.id === "desktop-tools-defer")!;
+  assert.deepEqual({ ...kept.reloadsAfterCompaction, usd: 0 }, { reloads: 2, compactions: 2, ofCompactions: 3, usd: 0 });
+  near(kept.savedUsd!, 40 - (load1 + load2));
+  // No compactions measured: as before, no field and no line.
+  const none = planFixes({ ...inputs, desktopTools: { ...inputs.desktopTools!, compactions: undefined } }).find((x) => x.id === "desktop-tools-defer")!;
+  assert.equal(none.reloadsAfterCompaction, undefined);
+  near(none.savedUsd!, 55);
+});
+
 test("I1: sessionHosts reads each session's entrypoint and version while it was in the period", () => {
   const home = mkdtempSync(join(tmpdir(), "cd-hosts-"));
   const proj = join(home, ".claude", "projects", "-p");

@@ -61,7 +61,7 @@ import { analyzeCacheUsage, renderCacheReport } from "./cache.js";
 import { renderToolTimings } from "./timing.js";
 import { packContextSemantic, readSources, renderPack } from "./pack.js";
 import { measureBaselines, measureMcpSizes, overheadReport, renderOverhead } from "./overhead.js";
-import { CALL_ROWS, deferrableApp, deferrableConfigured, measureStarts, sessionHosts, START_ROWS } from "./starts.js";
+import { CALL_ROWS, deferrableApp, deferrableConfigured, measureStarts, RELOAD_ROWS, sessionHosts, START_ROWS } from "./starts.js";
 import { HOST_ROWS } from "./limits.js";
 import { DEFER_APP_TOOLS_ENV } from "./mod/logic.js";
 import { applySplit, planSplit, renderSplit } from "./split.js";
@@ -434,8 +434,8 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
   const configured = claudeMcpConfigs(cwd).some((c) => c.scope !== ".mcp.json");
   // Each transcript read once for every replay below; what an earlier run kept is not read again (scan.ts).
   prescan([
-    { paths: claudeTranscripts(days), extractors: [savingsRows(!autopilotOnNow), REQUEST_ROWS, TOOL_OUTPUT_ROWS, START_ROWS, CALL_ROWS, HOST_ROWS] },
-    { paths: subagentTranscripts(Date.now() - days * 86_400_000), extractors: [REQUEST_ROWS, SUBAGENT_ROWS, TOOL_OUTPUT_ROWS, PROGRESS_ROWS, START_ROWS, CALL_ROWS] },
+    { paths: claudeTranscripts(days), extractors: [savingsRows(!autopilotOnNow), REQUEST_ROWS, TOOL_OUTPUT_ROWS, START_ROWS, CALL_ROWS, HOST_ROWS, RELOAD_ROWS] },
+    { paths: subagentTranscripts(Date.now() - days * 86_400_000), extractors: [REQUEST_ROWS, SUBAGENT_ROWS, TOOL_OUTPUT_ROWS, PROGRESS_ROWS, START_ROWS, CALL_ROWS, RELOAD_ROWS] },
     ...(setWindow === undefined ? [{ paths: claudeTranscripts(60), extractors: [QUALITY_ROWS] }] : []),
     { paths: codexRollouts(Date.now() - days * 86_400_000), extractors: [CODEX_COMPACT_ROWS] },
   ], replaying.tick);
@@ -506,7 +506,7 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
   }
   let userSettings: Record<string, any> = {};
   try { userSettings = JSON.parse(readFileSync(join(claudeDir(), "settings.json"), "utf8")) ?? {}; } catch { /* none */ }
-  const starts = measureStarts({ days, cwd });
+  const starts = measureStarts({ days, cwd, compactions: true });
   const deferrable = configured ? deferrableConfigured(starts) : [];
   const appTools = deferrableApp(starts);
   // CONTEXT_DOCTOR_DEFER_MCP: the user's settings.json env (fix writes it there), else a shell's own value (not the session's copy of a settings value).
@@ -537,7 +537,7 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
       mcpServers: toolSearchOff ? servers.length : 0,
       prune: prunePlan,
       ...(deferrable.length ? { mcpDefer: { servers: deferrable, days } } : {}),
-      ...(appTools.length ? { desktopTools: { servers: appTools.map((s) => ({ name: s.name, tools: s.tools, tokens: s.tokens, starts: s.starts, calledStarts: s.calledStarts, usd: s.usd, unusedUsd: s.unusedUsd, calledUsd: s.calledUsd })), days } } : {}),
+      ...(appTools.length ? { desktopTools: { servers: appTools.map((s) => ({ name: s.name, tools: s.tools, tokens: s.tokens, starts: s.starts, calledStarts: s.calledStarts, usd: s.usd, unusedUsd: s.unusedUsd, calledUsd: s.calledUsd })), days, ...(starts.compactions ? { compactions: starts.compactions } : {}) } } : {}),
       ...(desktopToolsSet ? { desktopToolsSet } : {}),
       // What context-doctor's mod saw Claude Code hand over (apptools.ts): proof the lever reaches the app, or why not.
       ...(appToolsSeen.length ? { appToolsSeen } : {}),

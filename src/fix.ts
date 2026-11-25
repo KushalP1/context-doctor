@@ -97,6 +97,14 @@ export interface Fix {
   tooOld?: string;
   /** More lines under it in the plan (the subagents' model: per agent type). */
   detail?: string[];
+  /**
+   * desktop-tools-defer: the tool loads compactions would have cost with the
+   * servers behind tool search (#111915: loaded tools are deferred again after
+   * a compaction). `reloads` counts each server once per compaction, over
+   * `compactions` of the period's `ofCompactions`; `usd` is already taken off
+   * `savedUsd`.
+   */
+  reloadsAfterCompaction?: { reloads: number; compactions: number; ofCompactions: number; usd: number; unpriced?: number };
 }
 
 /** The measurements a plan is made from (so the plan itself is testable without a machine's history). */
@@ -168,7 +176,12 @@ export interface FixInputs {
    * it, the part from starts that never called it, and (counted the same way)
    * the part from starts that did.
    */
-  desktopTools?: { servers: Array<{ name: string; tools: number; tokens: number; starts: number; calledStarts: number; usd: number; unusedUsd: number; calledUsd?: number }>; days: number };
+  desktopTools?: {
+    servers: Array<{ name: string; tools: number; tokens: number; starts: number; calledStarts: number; usd: number; unusedUsd: number; calledUsd?: number }>;
+    days: number;
+    /** The period's compactions and, per compaction, each server called after it with what loading it again would cost (starts.ts; #111915). */
+    compactions?: { total: number; after: Array<Array<{ server: string; usd: number; unpriced?: true }>> };
+  };
   /** CONTEXT_DOCTOR_DEFER_MCP where the user (or fix) set it: applied, never overwritten. */
   desktopToolsSet?: { value: string; where: string };
   /**
@@ -455,7 +468,18 @@ export function planFixes(i: FixInputs): Fix[] {
     const verdict = i.appToolsSeen ? appToolsVerdict(i.appToolsSeen, candidates.map((s) => s.name)) : undefined;
     const pick = verdict ? candidates.filter((s) => verdict.reach.some((r) => r.server === s.name)) : candidates;
     const kept = dt.servers.filter((s) => !pick.includes(s)).map((s) => s.name);
-    const usd = pick.reduce((t, s) => t + s.unusedUsd, 0);
+    const gross = pick.reduce((t, s) => t + s.unusedUsd, 0);
+    // #111915: after a compaction, a tool loaded through tool search is deferred again, so the first call to each
+    // moved server after a compaction loads it once more. Each such load is taken off the figure.
+    const names = new Set(pick.map((s) => s.name));
+    const hit = (dt.compactions?.after ?? []).map((c) => c.filter((r) => names.has(r.server))).filter((c) => c.length);
+    const reloadUsd = hit.reduce((t, c) => t + c.reduce((x, r) => x + r.usd, 0), 0);
+    const reloads = hit.reduce((t, c) => t + c.length, 0);
+    const unpricedReloads = hit.reduce((t, c) => t + c.filter((r) => r.unpriced).length, 0);
+    const usd = gross - reloadUsd;
+    const after = reloads
+      ? `. Less ${money(reloadUsd)}${unpricedReloads ? ` (${unpricedReloads} on a model with no price, not counted)` : ""} for loading them again after compactions: a compaction puts loaded tools back behind tool search, and ${hit.length} of the ${dt.compactions!.total} compactions in those days were followed by a call to one of them (${reloads} load${reloads === 1 ? "" : "s"}, a server once per compaction, each priced as one more request at the context then plus the tool's definition)`
+      : "";
     if (verdict && candidates.length && !pick.length) {
       // Withdrawn before anyone applies it, with the reason the mod saw.
       fixes.push({ id: "desktop-tools-defer", title: "The Desktop app's own tools behind tool search", basis: "", quality: "", change: "", state: "not-here", note: `not offered: ${verdictLines(verdict).join(" ")}` });
@@ -468,8 +492,9 @@ export function planFixes(i: FixInputs): Fix[] {
         id: "desktop-tools-defer",
         title: `Keep the Desktop app's own tools behind tool search (${pick.map((s) => s.name).join(", ")})`,
         savedUsd: usd,
-        basis: `the Desktop app sends these tools' definitions whole into every session and subagent start, and each step re-reads them: ${pick.map((s) => `${s.name} ~${s.tokens < 1000 ? s.tokens : k(s.tokens)} tokens, called in ${s.calledStarts} of ${s.starts} starts`).join("; ")}. The figure is what that cost in the ${i.desktopTools!.days} days' starts that never called them (${money(all)} counting the ones that did${exact ? "" : ", as overhead lists it"}; those would load a tool through tool search instead)`,
-        quality: `Claude loads one of these tools through tool search the first time a conversation needs it: one more step then. Kept in front: ${[...KEEP_APP_SERVERS, ...kept.filter((n) => !KEEP_APP_SERVERS.includes(n))].join(", ")} (called in most sessions). It takes effect in new sessions only, so no running conversation's cache is written again. Not measured here: applied only when named`,
+        basis: `the Desktop app sends these tools' definitions whole into every session and subagent start, and each step re-reads them: ${pick.map((s) => `${s.name} ~${s.tokens < 1000 ? s.tokens : k(s.tokens)} tokens, called in ${s.calledStarts} of ${s.starts} starts`).join("; ")}. The figure is what that cost in the ${i.desktopTools!.days} days' starts that never called them (${money(all)} counting the ones that did${exact ? "" : ", as overhead lists it"}; those would load a tool through tool search instead)${after}`,
+        ...(dt.compactions ? { reloadsAfterCompaction: { reloads, compactions: hit.length, ofCompactions: dt.compactions.total, usd: reloadUsd, ...(unpricedReloads ? { unpriced: unpricedReloads } : {}) } } : {}),
+        quality: `Claude loads one of these tools through tool search the first time a conversation needs it, and again after each compaction (Claude Code issue #111915, reported on 2.1.321 to 2.1.331: a compaction puts loaded tools back behind tool search; those loads are taken off the figure): one more step each time. Kept in front: ${[...KEEP_APP_SERVERS, ...kept.filter((n) => !KEEP_APP_SERVERS.includes(n))].join(", ")} (called in most sessions). It takes effect in new sessions only, so no running conversation's cache is written again. Not measured here: applied only when named`,
         change: `${where}: env.${DEFER_APP_TOOLS_ENV} = "${value}", read by context-doctor's mod (its plugin, Claude Code ${DESKTOP_TOOLS_DEFER_SINCE}+)`,
         state: "available",
         value,

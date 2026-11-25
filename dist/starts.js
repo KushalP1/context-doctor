@@ -21,7 +21,7 @@
 import { readFileSync } from "node:fs";
 import { claudeMcpConfigs } from "./mcpschema.js";
 import { REQUEST_ROWS } from "./coldresume.js";
-import { rowsOf } from "./scan.js";
+import { rowsOf, slimUsage } from "./scan.js";
 import { listSessions, isClaudeSession, replyCounter, textOf } from "./session.js";
 import { subagentFiles, workflowRunOf } from "./subagents.js";
 import { cacheWriteSplit, formatUsd, rateCard, ratesAt, usageCost } from "./pricing.js";
@@ -140,6 +140,103 @@ export function entrypointName(e) {
 export function mcpServerOf(name) {
     const m = /^mcp__(.+?)__/.exec(name);
     return m?.[1];
+}
+/**
+ * What the reload count reads from a transcript: each compaction boundary,
+ * and each assistant row that calls an MCP tool, with the request's usage
+ * (the context at that call). Read once with the other extractors (scan.ts).
+ */
+export const RELOAD_ROWS = {
+    id: "reloads.1",
+    init: () => ({}),
+    line(raw, row, out) {
+        const boundary = raw.includes('"compact_boundary"');
+        if (!boundary && !(raw.includes('"tool_use"') && raw.includes('"name":"mcp__')))
+            return;
+        let e;
+        try {
+            e = row();
+        }
+        catch {
+            return;
+        }
+        if (!e || typeof e !== "object")
+            return;
+        const ts = Date.parse(String(e.timestamp ?? ""));
+        if (!Number.isFinite(ts))
+            return;
+        const sc = e.isSidechain === true ? { sc: 1 } : {};
+        if (e.type === "system" && e.subtype === "compact_boundary") {
+            out.push({ k: "c", ts, ...sc, ...(typeof e.uuid === "string" ? { u: e.uuid.slice(0, 80) } : {}) });
+            return;
+        }
+        const content = e.type === "assistant" ? e.message?.content : undefined;
+        if (!Array.isArray(content))
+            return;
+        const srv = [];
+        for (const b of content) {
+            const s = b?.type === "tool_use" && typeof b.name === "string" ? mcpServerOf(b.name) : undefined;
+            if (s && !srv.includes(s.slice(0, 200)))
+                srv.push(s.slice(0, 200));
+        }
+        if (!srv.length)
+            return;
+        out.push({ k: "t", ts, ...sc, srv, ...(typeof e.message.model === "string" ? { m: e.message.model.slice(0, 80) } : {}), usage: slimUsage(e.message.usage) });
+    },
+};
+/**
+ * A transcript's compactions in the period, each with the servers called
+ * after it (before the next one on the same thread), each server once: its
+ * first call after the compaction is the one that would load it again. A
+ * compaction already seen in another transcript (a fork's copy) is skipped
+ * with the calls after it.
+ */
+function compactionsIn(path, since, seen) {
+    const out = [];
+    const open = new Map();
+    for (const r of rowsOf(path, RELOAD_ROWS)) {
+        const th = r.sc ? "1" : "0";
+        if (r.k === "c") {
+            const copy = r.u !== undefined && seen.has(r.u);
+            if (r.u)
+                seen.add(r.u);
+            if (r.ts < since || copy) {
+                open.set(th, undefined);
+                continue;
+            }
+            const c = { list: [], servers: new Set() };
+            out.push(c.list);
+            open.set(th, c);
+            continue;
+        }
+        const c = open.get(th);
+        if (!c)
+            continue;
+        for (const s of r.srv) {
+            if (c.servers.has(s))
+                continue;
+            c.servers.add(s);
+            c.list.push({ server: s, at: r.ts, ...(r.m ? { model: r.m } : {}), usage: r.usage });
+        }
+    }
+    return out;
+}
+/**
+ * One more request at the call's context: all of it read from the cache, and
+ * the tool's definition (`defTokens`) written, at the call's own write
+ * lifetime and model rates. Undefined when the model has no price.
+ */
+function reloadUsd(r, defTokens) {
+    const u = r.usage ?? {};
+    const prompt = (Number(u.input_tokens) || 0) + (Number(u.cache_read_input_tokens) || 0) + (Number(u.cache_creation_input_tokens) || 0);
+    const card = rateCard(realModel(r.model), u, r.at);
+    if (!card)
+        return undefined;
+    const split = cacheWriteSplit(u);
+    const all = split.fiveMinute + split.oneHour + split.twelveHour;
+    const def = Math.round(defTokens);
+    const oneHour = all > 0 ? Math.round((def * split.oneHour) / all) : 0;
+    return usageCost({ input_tokens: 0, cache_read_input_tokens: prompt, cache_creation_input_tokens: def, cache_creation: { ephemeral_5m_input_tokens: def - oneHour, ephemeral_1h_input_tokens: oneHour } }, ratesAt(card, prompt + def)).promptUsd;
 }
 function quantile(sorted, q) {
     return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))];
@@ -289,6 +386,8 @@ function claudeTranscripts(days) {
  * Every session's and subagent's start in the period, grouped by entrypoint
  * and subagent type, each priced on every request that re-read it.
  * `paths`: the main transcripts (subagents are found beside each).
+ * `compactions`: also count the compactions followed by a call to a server
+ * sent whole (fix's desktop-tools-defer; `overhead` does not ask).
  */
 export function measureStarts(opts = {}) {
     const days = opts.days ?? 30;
@@ -296,6 +395,17 @@ export function measureStarts(opts = {}) {
     const mains = (opts.paths ?? claudeTranscripts(days)).filter((p) => !/[\\/]\.codex[\\/]/.test(p) && !/[\\/]\.gemini[\\/]/.test(p));
     const starts = [];
     const runRows = new Set();
+    // Every compaction of the period (sessions and subagents), each with the servers called after it.
+    const compactions = [];
+    const compactionIds = new Set();
+    const reloadsOf = (file) => {
+        if (!opts.compactions)
+            return;
+        try {
+            compactions.push(...compactionsIn(file, since, compactionIds));
+        }
+        catch { /* unreadable: skipped */ }
+    };
     for (const path of mains) {
         let s;
         try {
@@ -306,6 +416,7 @@ export function measureStarts(opts = {}) {
         }
         if (s)
             starts.push(s);
+        reloadsOf(path);
         let parentEntry = s?.entrypoint;
         if (parentEntry === undefined) {
             try {
@@ -320,6 +431,7 @@ export function measureStarts(opts = {}) {
                     starts.push(sub);
             }
             catch { /* unreadable: skipped */ }
+            reloadsOf(f.file);
         }
     }
     let configured = new Map();
@@ -387,6 +499,17 @@ export function measureStarts(opts = {}) {
         // What the Desktop app's starts cost above a terminal-sized start, each at its own requests' rates.
         const usd = desktop.reduce((sum, s) => sum + s.usd * Math.max(0, s.tokens - t) / s.tokens, 0);
         report.gap = { desktop: d, terminal: t, tokens: d - t, usd };
+    }
+    if (opts.compactions) {
+        // A load brings one tool's definition: the server's whole definitions on a start, over its tools.
+        const perTool = new Map(startServers(report).map((s) => [s.name, s.tools ? s.tokens / s.tools : 0]));
+        const after = compactions
+            .map((c) => c.filter((r) => perTool.has(r.server)).map((r) => {
+            const usd = reloadUsd(r, perTool.get(r.server));
+            return usd === undefined ? { server: r.server, usd: 0, unpriced: true } : { server: r.server, usd };
+        }))
+            .filter((c) => c.length);
+        report.compactions = { total: compactions.length, after };
     }
     return report;
 }

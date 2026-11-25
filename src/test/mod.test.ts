@@ -27,6 +27,7 @@ import { costCheck, costGaps, readCostLines, recordModEvent, recordSessionCost, 
 import { appToolsCheckText, appToolsVerdict, movedSessions, readToolLines, recordToolServers, verdictLines } from "../apptools.js";
 import { appToolsCheck } from "../doctor.js";
 import { sandboxEnv } from "./sandbox.js";
+import { tokensForLength } from "../tokens.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..", "..");
@@ -1070,6 +1071,35 @@ test("desktop-tools-defer end to end: fix prices it from the history, --apply wr
   assert.equal(u.status, 0, u.stdout + u.stderr);
   assert.equal(readFileSync(join(home, ".claude", "settings.json"), "utf8"), before);
   assert.equal(existsSync(join(home, ".claude", ".context-doctor-fixes.json")), false);
+});
+
+test("I3: fix --json carries the tool loads after compactions (#111915) and takes them off desktop-tools-defer's figure", () => {
+  // The same history twice, one more call to ccd_session at the end of the newest session; in the second a compaction comes before it.
+  const plan = (compacted: boolean) => {
+    const home = desktopHome();
+    const file = join(home, ".claude", "projects", "-tmp-desk", "desk1.jsonl");
+    const at = (min: number) => new Date(Date.now() - 864e5 + min * 60_000).toISOString();
+    const rows = [
+      ...(compacted ? [JSON.stringify({ type: "system", subtype: "compact_boundary", uuid: "cb-1", timestamp: at(61), compactMetadata: { trigger: "auto", preTokens: 100_000 } })] : []),
+      JSON.stringify({ type: "assistant", uuid: "a-late", timestamp: at(62), message: { id: "m-late", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "t9", name: "mcp__ccd_session__start_session", input: {} }], usage: { input_tokens: 1, cache_read_input_tokens: 100_000, cache_creation_input_tokens: 0, output_tokens: 5 } } }),
+    ];
+    writeFileSync(file, readFileSync(file, "utf8") + rows.join("\n") + "\n");
+    const r = runCli(home, "fix", "--json");
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout).fixes.find((x: { id: string }) => x.id === "desktop-tools-defer");
+  };
+  const plain = plan(false), compacted = plan(true);
+  assert.deepEqual(plain.reloadsAfterCompaction, { reloads: 0, compactions: 0, ofCompactions: 0, usd: 0 });
+  assert.doesNotMatch(plain.basis, /Less \$/);
+  // By hand: one load of ccd_session, an extra request reading the 100,001-token context ($0.20/M on Opus 5.5) and writing one tool's definition (5 minutes, $5/M).
+  const def = Math.round(tokensForLength(JSON.stringify({ name: "mcp__ccd_session__start_session", description: "d".repeat(20_000), input_schema: { type: "object" } }).length, false, "claude-opus-5"));
+  const usd = (100_001 * 0.2 + def * 5) / 1e6;
+  const rc = compacted.reloadsAfterCompaction;
+  assert.deepEqual({ ...rc, usd: undefined }, { reloads: 1, compactions: 1, ofCompactions: 1, usd: undefined });
+  assert.ok(Math.abs(rc.usd - usd) < 1e-9, `${rc.usd} vs ${usd}`);
+  assert.ok(Math.abs(plain.savedUsd - compacted.savedUsd - usd) < 1e-9, "the net figure is the plain one less the load");
+  assert.match(compacted.basis, /Less \$0\.0\d for loading them again after compactions: a compaction puts loaded tools back behind tool search, and 1 of the 1 compactions in those days were followed by a call to one of them \(1 load,/);
+  assert.match(compacted.quality, /#111915/);
 });
 
 // -- Which servers the app hands the mod (H3: the tools ledger) ---------------------------

@@ -22,7 +22,7 @@
 import { readFileSync } from "node:fs";
 import { claudeMcpConfigs } from "./mcpschema.js";
 import { REQUEST_ROWS } from "./coldresume.js";
-import { rowsOf, type Extractor } from "./scan.js";
+import { rowsOf, slimUsage, type Extractor } from "./scan.js";
 import { listSessions, isClaudeSession, replyCounter, textOf } from "./session.js";
 import { subagentFiles, workflowRunOf } from "./subagents.js";
 import { cacheWriteSplit, formatUsd, rateCard, ratesAt, usageCost } from "./pricing.js";
@@ -204,6 +204,105 @@ export interface StartsReport {
   groups: StartGroup[];
   /** Desktop-app sessions against terminal ones, when both are in the period. */
   gap?: { desktop: number; terminal: number; tokens: number; usd: number };
+  /**
+   * The period's compactions, and the servers whose tools went whole into
+   * some start that each compaction was followed by a call to (#111915: a
+   * tool loaded through tool search is deferred again after a compaction,
+   * so with the server behind tool search each would load once more).
+   * Each load priced as one more request: the context at that call read
+   * from the cache, plus one of the server's tool definitions written.
+   */
+  compactions?: { total: number; after: Array<Array<{ server: string; usd: number; unpriced?: true }>> };
+}
+
+/** A compaction, or an assistant row calling MCP tools: the servers, the request's model and usage (never the call's input). */
+type ReloadRecord =
+  | { k: "c"; ts: number; sc?: 1; u?: string }
+  | { k: "t"; ts: number; sc?: 1; srv: string[]; m?: string; usage?: any };
+
+/**
+ * What the reload count reads from a transcript: each compaction boundary,
+ * and each assistant row that calls an MCP tool, with the request's usage
+ * (the context at that call). Read once with the other extractors (scan.ts).
+ */
+export const RELOAD_ROWS: Extractor<Record<string, never>> = {
+  id: "reloads.1",
+  init: () => ({}),
+  line(raw, row, out) {
+    const boundary = raw.includes('"compact_boundary"');
+    if (!boundary && !(raw.includes('"tool_use"') && raw.includes('"name":"mcp__'))) return;
+    let e: any;
+    try { e = row(); } catch { return; }
+    if (!e || typeof e !== "object") return;
+    const ts = Date.parse(String(e.timestamp ?? ""));
+    if (!Number.isFinite(ts)) return;
+    const sc = e.isSidechain === true ? { sc: 1 as const } : {};
+    if (e.type === "system" && e.subtype === "compact_boundary") {
+      out.push({ k: "c", ts, ...sc, ...(typeof e.uuid === "string" ? { u: e.uuid.slice(0, 80) } : {}) });
+      return;
+    }
+    const content = e.type === "assistant" ? e.message?.content : undefined;
+    if (!Array.isArray(content)) return;
+    const srv: string[] = [];
+    for (const b of content) {
+      const s = b?.type === "tool_use" && typeof b.name === "string" ? mcpServerOf(b.name) : undefined;
+      if (s && !srv.includes(s.slice(0, 200))) srv.push(s.slice(0, 200));
+    }
+    if (!srv.length) return;
+    out.push({ k: "t", ts, ...sc, srv, ...(typeof e.message.model === "string" ? { m: e.message.model.slice(0, 80) } : {}), usage: slimUsage(e.message.usage) });
+  },
+};
+
+/** One load a compaction would have cost: the server, and the call's request (its context, model and time). */
+interface Reload { server: string; at: number; model?: string; usage?: any }
+
+/**
+ * A transcript's compactions in the period, each with the servers called
+ * after it (before the next one on the same thread), each server once: its
+ * first call after the compaction is the one that would load it again. A
+ * compaction already seen in another transcript (a fork's copy) is skipped
+ * with the calls after it.
+ */
+function compactionsIn(path: string, since: number, seen: Set<string>): Reload[][] {
+  const out: Reload[][] = [];
+  const open = new Map<string, { list: Reload[]; servers: Set<string> } | undefined>();
+  for (const r of rowsOf<ReloadRecord>(path, RELOAD_ROWS)) {
+    const th = r.sc ? "1" : "0";
+    if (r.k === "c") {
+      const copy = r.u !== undefined && seen.has(r.u);
+      if (r.u) seen.add(r.u);
+      if (r.ts < since || copy) { open.set(th, undefined); continue; }
+      const c = { list: [] as Reload[], servers: new Set<string>() };
+      out.push(c.list);
+      open.set(th, c);
+      continue;
+    }
+    const c = open.get(th);
+    if (!c) continue;
+    for (const s of r.srv) {
+      if (c.servers.has(s)) continue;
+      c.servers.add(s);
+      c.list.push({ server: s, at: r.ts, ...(r.m ? { model: r.m } : {}), usage: r.usage });
+    }
+  }
+  return out;
+}
+
+/**
+ * One more request at the call's context: all of it read from the cache, and
+ * the tool's definition (`defTokens`) written, at the call's own write
+ * lifetime and model rates. Undefined when the model has no price.
+ */
+function reloadUsd(r: Reload, defTokens: number): number | undefined {
+  const u = r.usage ?? {};
+  const prompt = (Number(u.input_tokens) || 0) + (Number(u.cache_read_input_tokens) || 0) + (Number(u.cache_creation_input_tokens) || 0);
+  const card = rateCard(realModel(r.model), u, r.at);
+  if (!card) return undefined;
+  const split = cacheWriteSplit(u);
+  const all = split.fiveMinute + split.oneHour + split.twelveHour;
+  const def = Math.round(defTokens);
+  const oneHour = all > 0 ? Math.round((def * split.oneHour) / all) : 0;
+  return usageCost({ input_tokens: 0, cache_read_input_tokens: prompt, cache_creation_input_tokens: def, cache_creation: { ephemeral_5m_input_tokens: def - oneHour, ephemeral_1h_input_tokens: oneHour } }, ratesAt(card, prompt + def)).promptUsd;
 }
 
 function quantile(sorted: number[], q: number): number {
@@ -336,17 +435,27 @@ function claudeTranscripts(days: number): string[] {
  * Every session's and subagent's start in the period, grouped by entrypoint
  * and subagent type, each priced on every request that re-read it.
  * `paths`: the main transcripts (subagents are found beside each).
+ * `compactions`: also count the compactions followed by a call to a server
+ * sent whole (fix's desktop-tools-defer; `overhead` does not ask).
  */
-export function measureStarts(opts: { days?: number; paths?: string[]; cwd?: string; home?: string } = {}): StartsReport {
+export function measureStarts(opts: { days?: number; paths?: string[]; cwd?: string; home?: string; compactions?: boolean } = {}): StartsReport {
   const days = opts.days ?? 30;
   const since = Date.now() - days * 86_400_000;
   const mains = (opts.paths ?? claudeTranscripts(days)).filter((p) => !/[\\/]\.codex[\\/]/.test(p) && !/[\\/]\.gemini[\\/]/.test(p));
   const starts: Start[] = [];
   const runRows = new Set<string>();
+  // Every compaction of the period (sessions and subagents), each with the servers called after it.
+  const compactions: Reload[][] = [];
+  const compactionIds = new Set<string>();
+  const reloadsOf = (file: string) => {
+    if (!opts.compactions) return;
+    try { compactions.push(...compactionsIn(file, since, compactionIds)); } catch { /* unreadable: skipped */ }
+  };
   for (const path of mains) {
     let s: Start | undefined;
     try { s = measureStart(path, "session", since, runRows); } catch { continue; }
     if (s) starts.push(s);
+    reloadsOf(path);
     let parentEntry = s?.entrypoint;
     if (parentEntry === undefined) {
       try { parentEntry = rowsOf<StartRecord>(path, START_ROWS).find((r) => r.k === "e")?.v as string | undefined; } catch { /* unreadable */ }
@@ -356,6 +465,7 @@ export function measureStarts(opts: { days?: number; paths?: string[]; cwd?: str
         const sub = measureStart(f.file, "subagent", since, undefined, parentEntry);
         if (sub) starts.push(sub);
       } catch { /* unreadable: skipped */ }
+      reloadsOf(f.file);
     }
   }
   let configured = new Map<string, StartServer["configured"]>();
@@ -416,6 +526,17 @@ export function measureStarts(opts: { days?: number; paths?: string[]; cwd?: str
     // What the Desktop app's starts cost above a terminal-sized start, each at its own requests' rates.
     const usd = desktop.reduce((sum, s) => sum + s.usd * Math.max(0, s.tokens - t) / s.tokens, 0);
     report.gap = { desktop: d, terminal: t, tokens: d - t, usd };
+  }
+  if (opts.compactions) {
+    // A load brings one tool's definition: the server's whole definitions on a start, over its tools.
+    const perTool = new Map(startServers(report).map((s) => [s.name, s.tools ? s.tokens / s.tools : 0]));
+    const after = compactions
+      .map((c) => c.filter((r) => perTool.has(r.server)).map((r) => {
+        const usd = reloadUsd(r, perTool.get(r.server)!);
+        return usd === undefined ? { server: r.server, usd: 0, unpriced: true as const } : { server: r.server, usd };
+      }))
+      .filter((c) => c.length);
+    report.compactions = { total: compactions.length, after };
   }
   return report;
 }
