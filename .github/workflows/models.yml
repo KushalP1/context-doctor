@@ -33,7 +33,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci && npm run build
-      - name: Every model the hosts and price pages name has a price; no dated row ends without a successor
+      - name: Every model the hosts and price pages name has a price, and the pages' prices match ours
         run: >-
           node scripts/check-models.mjs
           --url https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md
@@ -43,7 +43,11 @@ jobs:
           --codex https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json
           --google https://ai.google.dev/gemini-api/docs/pricing.md.txt
           --gemini-cli https://raw.githubusercontent.com/google-gemini/gemini-cli/main/packages/core/src/config/models.ts
-          --dated
+      # Its own step, so a promotion ending without a published successor (red until the
+      # provider says) cannot hide a new unpriced model or a changed price above.
+      - name: No dated row ends without a successor
+        if: always()
+        run: node scripts/check-models.mjs --dated
 
   surface:
     runs-on: ubuntu-latest

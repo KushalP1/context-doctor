@@ -41,8 +41,10 @@ export function verdict(results) {
 export function modelsArgs(workflow) {
   const i = workflow.indexOf("node scripts/check-models.mjs");
   if (i === -1) return [];
-  const end = workflow.indexOf("\n\n", i);
-  return workflow.slice(i, end === -1 ? undefined : end).split(/\s+/).filter(Boolean).slice(2);
+  // The step's folded command ends at a blank line or the next step's first line (a comment or "- ").
+  const rest = workflow.slice(i);
+  const m = rest.match(/\n\s*\n|\n\s*(?:#|- )/);
+  return rest.slice(0, m ? m.index : undefined).split(/\s+/).filter(Boolean).slice(2);
 }
 
 /** "x.y.z" newer than "a.b.c". */
@@ -121,7 +123,7 @@ const CHECKS = [
   ["CI", "ci.yml green on this commit (3 OSes x Node 20/22/24)"],
   ["canary (weekly)", "the newest canary.yml run on main is green"],
   ["model prices (weekly)", "the newest models.yml run on main is green"],
-  ["check-models", "every model the hosts, price pages and Claude Code's model catalog name has a price (models.yml's list, read now)"],
+  ["check-models", "every model the hosts, price pages and Claude Code's model catalog name has a price, and the OpenAI, Anthropic and Google pages' prices match ours (models.yml's list, read now)"],
   ["dated prices", "no row's price ends within 14 days without a successor (a warning)"],
   ["Claude Code surface", "what the newest Claude Code here adds since docs/hosts-reviewed.json (a report)"],
   ["verify-local", "scripts/verify-local.sh: smokes, the published package, Python, real history, the canary, install round trip (skipped by --quick)"],

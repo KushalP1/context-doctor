@@ -37,6 +37,50 @@ export declare function unpriced(ids: string[]): string[];
  * transcription) and the tools table are not models priced by the token.
  */
 export declare function openaiPageIds(markdown: string): string[];
+/** One model's per-1M rates as OpenAI's price page states them: short context, and the long tier where it has one. */
+export interface PagePrice {
+    model: string;
+    short: {
+        input: number;
+        output: number;
+        cached?: number;
+    };
+    long?: {
+        input: number;
+        output: number;
+        cached?: number;
+    };
+}
+/**
+ * The prices in OpenAI's price page's Standard tables (not Batch, Flex, Fast
+ * or Ultrafast): the main table's "Short context …" and "Long context …"
+ * columns, and the specialized tables' "(short context)" / "(long context)"
+ * row pairs. A "-" cell is no price (no cached rate, or no long tier). So
+ * the weekly check can compare what we charge with what the page says, not
+ * only that a model has some price.
+ */
+export declare function openaiPagePrices(markdown: string): PagePrice[];
+/**
+ * The prices in Anthropic's price page's model table (platform.claude.com
+ * pricing.md, "Model | Base input tokens | … | Cache hits and refreshes |
+ * Output tokens"): each "Claude Opus 5.5" row as `claude-opus-5-5`, notes in
+ * parentheses and footnote marks dropped. A model priced in two rows by
+ * prompt size (Haiku 5.5's "for prompts over 100,000 tokens") gets the
+ * second as its long tier. Cache writes are not read: they are 1.25x and 2x
+ * input by rule, which pricing.ts applies.
+ */
+export declare function anthropicPagePrices(markdown: string): PagePrice[];
+/**
+ * The prices in Google's price page (ai.google.dev/gemini-api/docs/pricing,
+ * its .md.txt): in each model's section, the Standard tab's paid-tier cells
+ * for input, output and context caching. A cell's first price is today's
+ * (a later "$4.00 starting December 1" line is the dated row's `then`, which
+ * the dated check covers); "prompts <= 200k" / "prompts > 200k" lines split
+ * a short and a long tier; per-hour storage lines and audio rates after a
+ * text rate are not read. A section whose cells do not read this way is
+ * left out rather than guessed.
+ */
+export declare function googlePagePrices(markdown: string): PagePrice[];
 /**
  * The models Google's price page (ai.google.dev/gemini-api/docs/pricing, its
  * .md.txt) prices: each section's model id line (`*[\`gemini-4-argon\`](...)*`),

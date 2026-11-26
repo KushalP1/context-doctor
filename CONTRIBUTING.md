@@ -85,7 +85,7 @@ It cannot reach the real API. Claude Code gets an environment built from nothing
 
 **The plugin from the marketplace installs nothing.** The marketplace's plugin is this repository's root, so its copy in Claude Code's plugin cache has `package.json` beside `package-lock.json`, and Claude Code runs `npm ci --ignore-scripts` in every copy that has both ([plugin loading](https://code.claude.com/docs/en/plugins/loading), "Node.js package dependencies"), devDependencies included: 80 MB from the registry at the first session for a plugin that runs from `dist/` alone. `"overrides": {}` in package.json makes Claude Code 2.1.286 and later skip it ("No overrides or patches"); npm reads an empty `overrides` as none. Keep it, keep `dependencies` empty, and add no install-time script; `src/test/plugin.test.ts` checks all three.
 
-**Prices and hosts that change under us.** `scripts/check-models.mjs` fails when a model a host or a price page names has no price of its own in `src/pricing.ts` (a family row's estimate, or no price at all):
+**Prices and hosts that change under us.** `scripts/check-models.mjs` fails when a model a host or a price page names has no price of its own in `src/pricing.ts` (a family row's estimate, or no price at all), and when a figure on OpenAI's, Anthropic's or Google's page (standard tier: input, output, cached input, and the long-prompt tier) differs from ours today (`src/pricecheck.ts`). The weekly job runs `--dated` as its own step, so a promotion with no published successor cannot hide a new red:
 
 ```bash
 node scripts/check-models.mjs --binary <claude binary>                        # the models built into a Claude Code binary

@@ -21,8 +21,9 @@
 import { readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { catalogModelIds, claudeModelIds, codexModelIds, datedRows, dueRows, geminiCliIds, googlePageIds, openaiPageIds, unpriced, UNPRICED_ON_PURPOSE } from "../dist/modelids.js";
+import { catalogModelIds, claudeModelIds, codexModelIds, datedRows, dueRows, geminiCliIds, googlePageIds, openaiPageIds, openaiPagePrices, anthropicPagePrices, googlePagePrices, unpriced, UNPRICED_ON_PURPOSE } from "../dist/modelids.js";
 import { priceChange } from "../dist/pricing.js";
+import { pagePriceMismatches } from "../dist/pricecheck.js";
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..");
 const USAGE = "usage: check-models.mjs [--binary <path> | --url <url> | --file <path> | --catalog <url|path> | --openai <url|path> | --codex <url|path> | --google <url|path> | --gemini-cli <url|path>]... [--dated [--today YYYY-MM-DD]]";
@@ -30,11 +31,11 @@ const USAGE = "usage: check-models.mjs [--binary <path> | --url <url> | --file <
 /** What each source flag reads, and the models it names. */
 const READERS = {
   "--binary": { label: "Claude", ids: claudeModelIds },
-  "--url": { label: "Claude", ids: claudeModelIds },
-  "--file": { label: "Claude", ids: claudeModelIds },
+  "--url": { label: "Claude", ids: claudeModelIds, prices: anthropicPagePrices },
+  "--file": { label: "Claude", ids: claudeModelIds, prices: anthropicPagePrices },
   "--catalog": { label: "Claude", ids: (t) => catalogModelIds(t).ids, about: (t) => catalogModelIds(t).about },
-  "--openai": { label: "OpenAI", ids: openaiPageIds },
-  "--google": { label: "Gemini", ids: googlePageIds },
+  "--openai": { label: "OpenAI", ids: openaiPageIds, prices: openaiPagePrices, pricesExpected: true },
+  "--google": { label: "Gemini", ids: googlePageIds, prices: googlePagePrices, pricesExpected: true },
   "--gemini-cli": { label: "Gemini", ids: geminiCliIds },
   "--codex": { label: "Codex", ids: (t) => codexModelIds(t).listed, hidden: (t) => codexModelIds(t).hidden },
 };
@@ -109,6 +110,20 @@ for (const { flag, value } of sources) {
   } else {
     const estimates = ids.filter((id) => id in UNPRICED_ON_PURPOSE);
     console.log(`✓ ${value}${about}: all ${ids.length} ${reader.label} models priced (${ids.join(", ")})${estimates.length ? `; by a family row on purpose, no price of their own on the page: ${estimates.join(", ")}` : ""}`);
+  }
+  // Some price is not the right price: compare each of the page's own figures with ours.
+  if (reader.prices) {
+    const prices = reader.prices(text);
+    const wrong = pagePriceMismatches(prices, Date.parse(`${today}T12:00:00Z`));
+    if (!prices.length) {
+      // A changelog or binary names models but prices none: nothing to compare. A price page
+      // with models and no price this check can read has changed its layout: say so.
+      if (reader.pricesExpected) console.log(`::warning title=check-models::${value} names ${reader.label} models but no price this check can read; its prices were not compared`);
+    } else if (wrong.length) {
+      failed = true;
+      console.log(`✗ ${value}: ${wrong.length} of ${prices.length} ${reader.label} prices differ from src/pricing.ts:`);
+      for (const w of wrong) console.log(`    ${w}`);
+    } else console.log(`✓ ${value}: all ${prices.length} ${reader.label} prices on the page (standard tier) match src/pricing.ts`);
   }
   const hiddenMissing = unpriced(hidden);
   if (hiddenMissing.length) console.log(`  (not in its picker, not checked: ${hiddenMissing.join(", ")})`);

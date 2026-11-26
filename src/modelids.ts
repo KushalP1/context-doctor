@@ -119,6 +119,164 @@ export function openaiPageIds(markdown: string): string[] {
   return [...out].sort();
 }
 
+/** One model's per-1M rates as OpenAI's price page states them: short context, and the long tier where it has one. */
+export interface PagePrice {
+  model: string;
+  short: { input: number; output: number; cached?: number };
+  long?: { input: number; output: number; cached?: number };
+}
+
+/**
+ * The prices in OpenAI's price page's Standard tables (not Batch, Flex, Fast
+ * or Ultrafast): the main table's "Short context …" and "Long context …"
+ * columns, and the specialized tables' "(short context)" / "(long context)"
+ * row pairs. A "-" cell is no price (no cached rate, or no long tier). So
+ * the weekly check can compare what we charge with what the page says, not
+ * only that a model has some price.
+ */
+export function openaiPagePrices(markdown: string): PagePrice[] {
+  const out = new Map<string, PagePrice>();
+  const usd = (c: string | undefined): number | undefined => {
+    const m = c?.match(/^\$([0-9]+(?:\.[0-9]+)?)$/);
+    return m ? Number(m[1]) : undefined;
+  };
+  let speed = "";
+  let header: string[] | undefined;
+  for (const raw of markdown.split("\n")) {
+    const line = raw.trim();
+    if (/^(Standard|Batch|Flex|Fast|Ultrafast|Priority)$/.test(line)) speed = line;
+    if (!line.startsWith("|")) {
+      header = undefined;
+      continue;
+    }
+    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
+    if (!header) {
+      header = cells.map((c) => c.toLowerCase());
+      continue;
+    }
+    if (speed !== "Standard" || cells.every((c) => /^-+$/.test(c))) continue;
+    // A Training column is fine-tuning's table: the price of a fine-tuned model, not the model's own.
+    if (header.includes("modality") || header.includes("use case") || header.includes("training") || header[0] === "tool") continue;
+    const at = header.indexOf("model");
+    if (at === -1) continue;
+    const cell = (cells[at] ?? "").replace(/<[^>]*>/g, "").trim();
+    const name = cell.replace(/\s*\(.*\)\s*$/, "").trim();
+    if (!/^[a-z][a-z0-9.-]*$/.test(name) || NOT_A_TEXT_MODEL.test(name)) continue;
+    const col = (h: string) => usd(cells[header!.indexOf(h)]);
+    const tier = (prefix: string) => {
+      const input = col(`${prefix}input`), output = col(`${prefix}output`);
+      if (input === undefined || output === undefined) return undefined;
+      const cached = col(`${prefix}cached input`);
+      return { input, output, ...(cached !== undefined ? { cached } : {}) };
+    };
+    const entry: PagePrice = out.get(name) ?? { model: name, short: undefined as unknown as PagePrice["short"] };
+    if (header.includes("short context input")) {
+      const short = tier("short context "), long = tier("long context ");
+      if (!short) continue;
+      entry.short = short;
+      if (long) entry.long = long;
+    } else {
+      const t = tier("");
+      if (!t) continue;
+      if (/\(long context\)/i.test(cell)) entry.long = t;
+      else entry.short = t;
+    }
+    out.set(name, entry);
+  }
+  return [...out.values()].filter((e) => e.short).sort((a, b) => a.model.localeCompare(b.model));
+}
+
+/**
+ * The prices in Anthropic's price page's model table (platform.claude.com
+ * pricing.md, "Model | Base input tokens | … | Cache hits and refreshes |
+ * Output tokens"): each "Claude Opus 5.5" row as `claude-opus-5-5`, notes in
+ * parentheses and footnote marks dropped. A model priced in two rows by
+ * prompt size (Haiku 5.5's "for prompts over 100,000 tokens") gets the
+ * second as its long tier. Cache writes are not read: they are 1.25x and 2x
+ * input by rule, which pricing.ts applies.
+ */
+export function anthropicPagePrices(markdown: string): PagePrice[] {
+  const out = new Map<string, PagePrice>();
+  const usd = (c: string | undefined): number | undefined => {
+    const m = c?.replace(/<sup>.*?<\/sup>/g, "").match(/^\$([0-9]+(?:\.[0-9]+)?) \/ MTok$/);
+    return m ? Number(m[1]) : undefined;
+  };
+  let header: string[] | undefined;
+  for (const raw of markdown.split("\n")) {
+    const line = raw.trim();
+    if (!line.startsWith("|")) {
+      header = undefined;
+      continue;
+    }
+    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
+    if (!header) {
+      header = cells.map((c) => c.toLowerCase());
+      continue;
+    }
+    if (cells.every((c) => /^-+$/.test(c))) continue;
+    const [m, i, o, h] = ["model", "base input tokens", "output tokens", "cache hits and refreshes"].map((k) => header!.indexOf(k));
+    if (m === -1 || i === -1 || o === -1 || h === -1) continue;
+    const cell = cells[m] ?? "";
+    const name = cell.replace(/\s*\(.*\)\s*$/, "").trim();
+    if (!/^Claude [A-Za-z]+ [0-9.]+$/.test(name)) continue;
+    const id = "claude-" + name.slice(7).toLowerCase().replace(/[ .]/g, "-");
+    const input = usd(cells[i]), output = usd(cells[o]), cached = usd(cells[h]);
+    if (input === undefined || output === undefined) continue;
+    const tier = { input, output, ...(cached !== undefined ? { cached } : {}) };
+    const prev = out.get(id);
+    if (prev && /prompts over/i.test(cell)) prev.long = tier;
+    else if (!prev) out.set(id, { model: id, short: tier });
+  }
+  return [...out.values()].sort((a, b) => a.model.localeCompare(b.model));
+}
+
+/**
+ * The prices in Google's price page (ai.google.dev/gemini-api/docs/pricing,
+ * its .md.txt): in each model's section, the Standard tab's paid-tier cells
+ * for input, output and context caching. A cell's first price is today's
+ * (a later "$4.00 starting December 1" line is the dated row's `then`, which
+ * the dated check covers); "prompts <= 200k" / "prompts > 200k" lines split
+ * a short and a long tier; per-hour storage lines and audio rates after a
+ * text rate are not read. A section whose cells do not read this way is
+ * left out rather than guessed.
+ */
+export function googlePagePrices(markdown: string): PagePrice[] {
+  const out: PagePrice[] = [];
+  const sections = markdown.split(/^## /m).slice(1);
+  for (const sec of sections) {
+    const id = sec.match(/\{% id="([a-z0-9.-]+)" %\}/)?.[1];
+    if (!id || !/^gemini-/.test(id) || NOT_A_TEXT_MODEL.test(id)) continue;
+    // The Standard tab when the section has tabs, else its first table.
+    const std = sec.indexOf('{% tab title="Standard" %}');
+    const body = std === -1 ? sec : sec.slice(std, sec.indexOf("{% /tab %}", std) >>> 0 || undefined);
+    const rows = body.split(/^\s*---\s*$/m);
+    const cellOf = (label: RegExp): string | undefined => {
+      const row = rows.find((r) => label.test(r.split("\n").find((l) => /^\s*\*\s/.test(l)) ?? ""));
+      if (!row) return undefined;
+      const bullets = row.split(/^\s*\*\s/m).slice(1);
+      return bullets[2];
+    };
+    const tiers = (cell: string | undefined) => {
+      if (!cell) return undefined;
+      let short: number | undefined, long: number | undefined;
+      for (const line of cell.split("\n")) {
+        const m = line.trim().match(/^\$([0-9]+(?:\.[0-9]+)?)\b(.*)$/);
+        if (!m || /starting|per hour|storage/i.test(m[2])) continue;
+        const v = Number(m[1]);
+        if (/prompts\s*>\s*\d/i.test(m[2])) long ??= v;
+        else short ??= v;
+      }
+      return short === undefined ? undefined : { short, long };
+    };
+    const i = tiers(cellOf(/Input price/)), o = tiers(cellOf(/Output price/)), c = tiers(cellOf(/Context caching price/));
+    if (!i || !o) continue;
+    const entry: PagePrice = { model: id, short: { input: i.short, output: o.short, ...(c ? { cached: c.short } : {}) } };
+    if (i.long !== undefined && o.long !== undefined) entry.long = { input: i.long, output: o.long, ...(c?.long !== undefined ? { cached: c.long } : {}) };
+    out.push(entry);
+  }
+  return out.sort((a, b) => a.model.localeCompare(b.model));
+}
+
 /**
  * The models Google's price page (ai.google.dev/gemini-api/docs/pricing, its
  * .md.txt) prices: each section's model id line (`*[\`gemini-4-argon\`](...)*`),

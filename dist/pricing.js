@@ -151,15 +151,24 @@ const PRICING = [
     [openai("gpt-6.2-sol"), ...openaiLong(2, 10, 0.1)],
     [openai("gpt-6-astra"), ...openaiLong(10, 50, 1)],
     // GPT-6 Astra for Law's price is promotional "at least through December
-    // 31, 2026" (read 2026-11-14): no end date to record yet.
-    [openai("gpt-6-astra-law"), rate(10, 50, 1)],
+    // 31, 2026" (read 2026-11-14): no end date to record yet. Its long-context
+    // row ($20 / $75 / $2, read 2026-11-26) is 2x / 1.5x; the row had left it out.
+    [openai("gpt-6-astra-law"), ...openaiLong(10, 50, 1)],
+    // The healthcare configurations (read 2026-11-26) are priced as their base
+    // models, promotional "at least through December 31, 2026" like the Law ones.
+    [openai("gpt-6.2-astra-healthcare"), ...openaiLong(8, 40, 0.4)],
+    [openai("gpt-6.2-sol-healthcare"), ...openaiLong(2, 10, 0.1)],
+    [openai("gpt-6-astra-healthcare"), ...openaiLong(10, 50, 1)],
+    [openai("gpt-6.1-sol-healthcare"), ...openaiLong(2, 10, 0.1)],
     [openai("gpt-6.1-sol"), ...openaiLong(2, 10, 0.1)],
     [openai("gpt-6.1-terra"), ...openaiLong(1, 5, 0.05)],
     [openai("gpt-6-sol"), ...openaiLong(2, 10, 0.2)],
     [openai("gpt-6-luna"), ...openaiLong(0.1, 0.5, 0.01)],
     // gpt-6-cyber's long-context row ($40 / $150 / $4, read 2026-11-14) is 2x / 1.5x.
     [openai("gpt-6-cyber"), ...openaiLong(20, 100, 2)],
-    [openai("gpt-6-rosalind"), ...openaiLong(15, 75, 1.5)],
+    // GPT-6 Rosalind: $10 / $50 / $1 (read 2026-11-26; $15 / $75 / $1.50 when
+    // first read), promotional "at least through December 31, 2026".
+    [openai("gpt-6-rosalind"), ...openaiLong(10, 50, 1)],
     [openai("gpt-rosalind-research"), rate(5, 25, 0.5)],
     [openai("gpt-rosalind-discovery"), rate(5, 25, 0.5)],
     // GPT-5.6 Sol's $4 / $20 is promotional "until November 30, 2026" (read

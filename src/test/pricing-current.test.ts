@@ -84,7 +84,7 @@ test("OpenAI, gpt-6 family: each model by its exact name", () => {
     ["gpt-6.1-terra", [1, 5, 0.05], ["gpt-6-terra"]],
     ["gpt-6-luna", [0.1, 0.5, 0.01], ["gpt-6.1-luna"]],
     ["gpt-6-cyber", [20, 100, 2], []],
-    ["gpt-6-rosalind", [15, 75, 1.5], []],
+    ["gpt-6-rosalind", [10, 50, 1], []],
     ["gpt-rosalind-research", [5, 25, 0.5], []],
     ["gpt-rosalind-discovery", [5, 25, 0.5], []],
   ]);

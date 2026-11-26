@@ -41,8 +41,11 @@ test("the train: Tuesdays, a week apart; something to release; release notes for
 test("check-models' sources are models.yml's: the release reads what the weekly job reads", async () => {
     const { modelsArgs } = await load();
     const args = modelsArgs(readFileSync(join(ROOT, ".github", "workflows", "models.yml"), "utf8"));
-    for (const flag of ["--url", "--catalog", "--openai", "--codex", "--google", "--gemini-cli", "--dated"])
+    for (const flag of ["--url", "--catalog", "--openai", "--codex", "--google", "--gemini-cli"])
         assert.ok(args.includes(flag), flag);
+    // The dated rows are their own step, so a promotion with no published successor cannot hide a new red above it.
+    assert.ok(!args.includes("--dated"), "--dated is its own step");
+    assert.match(readFileSync(join(ROOT, ".github", "workflows", "models.yml"), "utf8"), /if: always\(\)\n\s+run: node scripts\/check-models\.mjs --dated\n/);
     assert.ok(args.includes("https://downloads.claude.ai/model-catalog/v1/catalog.json"), "Claude Code's model catalog (H6)");
     assert.ok(args.includes("https://developers.openai.com/api/docs/pricing.md"));
     assert.ok(args.includes("https://ai.google.dev/gemini-api/docs/pricing.md.txt"));
