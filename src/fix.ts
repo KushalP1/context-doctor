@@ -30,7 +30,10 @@
  *    a file the model opens again is not counted);
  *  - subagent progress summaries: the summaries Claude Code would have
  *    written for the background subagents since (2.1.318+, which read the
- *    variable), estimated as `spend` estimates them (progresssummaries.ts).
+ *    variable), estimated as `spend` estimates them (progresssummaries.ts);
+ *  - prompt suggestions: the turn ends since that one could have followed,
+ *    priced as each would have cost (sidecost.ts), at the share of turn ends
+ *    that sent one in the period before (an estimate).
  *
  * The subagents' model is the one lever with a quality cost `fix` cannot
  * measure from history: its quality line quotes the newest `ab --via
@@ -63,9 +66,14 @@ import { comparisonLine, type AbStoredResult } from "./abstore.js";
 import { movedFromNames, renderSubagentTypes, subagentModelSavedSince, SUBAGENT_CANDIDATE, SUBAGENT_CANDIDATE_NAME, SUBAGENT_MODEL_ENV, type SubagentModelReplay } from "./subagentmodel.js";
 import { BASH_OUTPUT_DEFAULT, BASH_OUTPUT_KEY, BASH_OUTPUT_SINCE, breakEven, renderToolOutputCaps, toolOutputSavedSince, type ToolOutputReplay } from "./tooloutput.js";
 import { disablesSummaries, estimateProgressSummaries, formWords, hostName, PROGRESS_SUMMARIES_ENV, PROGRESS_SUMMARIES_OFF, PROGRESS_SUMMARIES_SINCE, SMALL_FAST_MODEL_NAME, SMALL_NOTES_SINCE, summaryRoute, type ProgressSummaryEstimate, type SummaryRoute } from "./progresssummaries.js";
+import { claudeSpend } from "./spend.js";
+import { claudeUsageFiles, USAGE_ROWS } from "./limits.js";
+import { compareSessions, suggestionsInGap, turnEnds } from "./ccost.js";
+import { SUGGESTION_PROMPT_TOKENS } from "./sidecost.js";
+import { rowsOf } from "./scan.js";
 import { CODEX_COMPACT_KEY, CODEX_COMPACT_LIMIT, codexCompactOverrides, codexCompactSavedSince, codexConfigPath, renderCodexLimits, setTopLevelInt, topLevelValue, type CodexCompactReport } from "./codexcompact.js";
 
-export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model" | "tool-output" | "codex-compact" | "progress-summaries" | "mcp-defer" | "desktop-tools-defer";
+export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model" | "tool-output" | "codex-compact" | "progress-summaries" | "mcp-defer" | "desktop-tools-defer" | "prompt-suggestions";
 
 export interface Fix {
   id: FixId;
@@ -91,7 +99,7 @@ export interface Fix {
   /** Why not here, or what is already applied. */
   note?: string;
   /** The value it writes. */
-  value?: number | string;
+  value?: number | string | boolean;
   /** What would keep it from taking effect (environment, project or managed settings, per-model values). */
   overriddenBy?: string[];
   /** Installed Claude Code versions older than the setting: they ignore it (named, not blocked). */
@@ -197,6 +205,92 @@ export interface FixInputs {
    * write says so, not "run fix again after one" (I4).
    */
   pluginVersion?: string;
+  /** Claude Code's prompt suggestions over the period, counted from its cost-state (measurePromptSuggestions). */
+  promptSuggestions?: PromptSuggestionEstimate;
+  /** promptSuggestionEnabled in the user's settings.json, or CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION off (promptSuggestionsState): never overwritten. */
+  promptSuggestionsSet?: { value: string; where: string; off: boolean };
+}
+
+/**
+ * Prompt suggestions: after a main-thread turn ends, Claude Code asks the
+ * session's model for the grey "what you might type next" line, a request
+ * that re-reads the whole conversation from the cache (sidecost.ts). No
+ * transcript row records one; Claude Code's own cost record (`cost-state`)
+ * counts each, so the count is what its input beyond ours has room for, at
+ * ~506 input tokens apiece (ccost.ts suggestionsInGap): an estimate, and only
+ * on sessions that wrote such a record.
+ *
+ * Read from the 2.1.332 binary (the same in 2.1.311 and 2.1.331, the oldest
+ * and newest others here): `promptSuggestionEnabled: false` in settings.json
+ * turns them off ("When false, prompt suggestions are disabled. When absent
+ * or true, prompt suggestions are enabled"; /config's "Prompt suggestions"
+ * row writes the same key), in a terminal and in the Desktop app and SDK
+ * hosts alike. CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION, read as true or false,
+ * wins over the setting either way. The changelog has the /config toggle from
+ * 2.0.71 and names the settings key from 2.1.325; when the key itself came is
+ * not said, so no version is named as too old for it.
+ */
+export interface PromptSuggestionEstimate {
+  /** Suggestions counted, and their price. */
+  n: number;
+  usd: number;
+  /** Turn ends one could have followed, in the sessions compared. */
+  turnEnds: number;
+  /** Sessions that sent any, and sessions with a cost record compared. */
+  sessions: number;
+  compared: number;
+}
+
+export const PROMPT_SUGGESTION_KEY = "promptSuggestionEnabled";
+export const PROMPT_SUGGESTION_ENV = "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION";
+
+/** An environment value as Claude Code's tri-state parse reads it: on, off, or neither. */
+function triBool(v: unknown): boolean | undefined {
+  const t = String(v ?? "").trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(t)) return true;
+  if (["0", "false", "no", "off"].includes(t)) return false;
+  return undefined;
+}
+
+/** Prompt suggestions over the last `days`, from Claude Code's cost-state against our price of the same sessions (as `doctor` compares them). */
+export function measurePromptSuggestions(days: number, now = Date.now()): PromptSuggestionEstimate {
+  const since = now - days * 86_400_000;
+  const items = claudeSpend(since, now);
+  const tops = [...new Set(claudeUsageFiles(since).filter((f) => !f.subagent).map((f) => f.top))];
+  const sessions = compareSessions(tops, items, since, now);
+  const g = suggestionsInGap(sessions);
+  return { n: g.n, usd: g.usd, turnEnds: g.turnEnds, sessions: g.sessions, compared: sessions.length };
+}
+
+/**
+ * Whether prompt suggestions are already settled by someone: the variable
+ * read as false anywhere Claude Code reads it (off: applied), or the setting
+ * in the user's settings.json (false: applied; true: theirs, left alone). A
+ * project's or managed value, or the variable read as true, is an override
+ * (fixOverrides), not the user's choice here.
+ */
+export function promptSuggestionsState(deps: { home?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {}): { set?: { value: string; where: string; off: boolean } } {
+  const env = deps.env ?? process.env;
+  const sources = settingsSources({ home: deps.home, cwd: deps.cwd, env });
+  const ev = effectiveEnv(PROMPT_SUGGESTION_ENV, sources, env);
+  if (ev && triBool(ev.value) === false) return { set: { value: ev.value, where: ev.where, off: true } };
+  const user = sources.find((s) => s.name === "user");
+  const v = user?.settings?.[PROMPT_SUGGESTION_KEY];
+  if (v !== undefined && v !== null) return { set: { value: JSON.stringify(v), where: `${PROMPT_SUGGESTION_KEY} ${JSON.stringify(v)} in ${tilde(user!.path)}`, off: v === false } };
+  return {};
+}
+
+/** Turn ends since `at` in the main transcripts (`paths`, else those written since), priced as a suggestion after each, at `share` of them (the share that sent one before). */
+export function promptSuggestionsSavedSince(at: number, share: number, paths?: string[]): { turnEnds: number; usd: number } {
+  const targets = paths ?? listSessions(10_000).filter((s) => isClaudeSession(s) && s.modifiedAt.getTime() >= at).map((s) => s.path);
+  let n = 0, usd = 0;
+  for (const p of targets) {
+    try {
+      const e = turnEnds(rowsOf(p, USAGE_ROWS), at, Infinity);
+      n += e.n; usd += e.usd;
+    } catch { /* unreadable */ }
+  }
+  return { turnEnds: n, usd: usd * share };
 }
 
 /**
@@ -460,6 +554,24 @@ export function planFixes(i: FixInputs): Fix[] {
     const n = ps.none.host!;
     fixes.push({ id: "progress-summaries", title: "Subagent progress summaries", basis: "", quality: "", change: "", state: "not-here", note: `your ${n} background subagent${n === 1 ? "" : "s"} ran in ${ps.hosts.map(hostName).join(" and ")}, where Claude Code writes no progress summaries: nothing to turn off` });
   }
+  const sg = i.promptSuggestions;
+  const sgSet = i.promptSuggestionsSet;
+  if (sgSet) {
+    const worth = !sgSet.off && sg && sg.usd >= MIN_USD ? ` (they cost about ${money(sg.usd)} in ${i.days} days, an estimate)` : "";
+    fixes.push({ id: "prompt-suggestions", title: "Prompt suggestions", basis: "set", quality: "", change: PROMPT_SUGGESTION_KEY, state: sgSet.off ? "applied" : "not-here", note: sgSet.off ? `off: ${sgSet.where}` : `${sgSet.where}: left as you set it${worth}`, value: false });
+  } else if (sg && sg.n > 0 && sg.usd >= MIN_USD) {
+    fixes.push({
+      id: "prompt-suggestions",
+      title: "Prompt suggestions off",
+      savedUsd: sg.usd,
+      basis: `about ${sg.n.toLocaleString("en-US")} suggestions in ${sg.sessions} session${sg.sessions === 1 ? "" : "s"}: after a turn, Claude Code sends the conversation again, read from the cache, to write the grey next message. No transcript records them, so an estimate: counted from Claude Code's own cost record by the ${SUGGESTION_PROMPT_TOKENS} input tokens each adds, priced as the turns they followed; only the ${sg.compared} session${sg.compared === 1 ? "" : "s"} with such a record are counted`,
+      quality: "the grey suggested next message goes away; nothing else changes",
+      qualityFree: true,
+      change: `${where}: ${PROMPT_SUGGESTION_KEY} = false`,
+      state: "available",
+      value: false,
+    });
+  }
   const md = i.mcpDefer?.servers.filter((s) => s.scope === "user" || s.scope === "project") ?? [];
   if (md.length) {
     const usd = md.reduce((t, s) => t + s.usd, 0);
@@ -562,6 +674,8 @@ export interface FixRecord {
   cwd?: string;
   /** For mcp-defer: each alwaysLoad key it set in ~/.claude.json, and what was there before. */
   entries?: DeferEntry[];
+  /** For prompt-suggestions: the share of turn ends that sent a suggestion in the period before, the baseline "since" prices at. */
+  suggestedShare?: number;
   /** For subagent-model: the models the moved types' subagents ran on before the change, each one's share of their tokens (Sonnet-or-cheaper ones included): the baseline "since" compares against. */
   modelsBefore?: Record<string, number>;
 }
@@ -641,10 +755,11 @@ const KEY_PATH: Partial<Record<FixId, string[]>> = {
   "tool-output": [BASH_OUTPUT_KEY],
   "progress-summaries": ["env", PROGRESS_SUMMARIES_ENV],
   "desktop-tools-defer": ["env", DEFER_APP_TOOLS_ENV],
+  "prompt-suggestions": [PROMPT_SUGGESTION_KEY],
 };
 
 /** Fixes that never overwrite a value already there: the user set it. */
-const YOURS = new Set<FixId>(["subagent-model", "tool-output", "progress-summaries", "desktop-tools-defer"]);
+const YOURS = new Set<FixId>(["subagent-model", "tool-output", "progress-summaries", "desktop-tools-defer", "prompt-suggestions"]);
 
 /** The environment variable a settings fix writes, when the shell's own value is the user's too. */
 const SHELL_ENV: Partial<Record<FixId, string>> = { "subagent-model": SUBAGENT_MODEL_ENV, "progress-summaries": PROGRESS_SUMMARIES_ENV, "desktop-tools-defer": DEFER_APP_TOOLS_ENV };
@@ -684,6 +799,14 @@ export function fixOverrides(id: FixId, deps: { home?: string; cwd?: string; env
     // A deferred tool is loaded through tool search: with it off, deferring cannot work as the lever says.
     const ts = effectiveEnv("ENABLE_TOOL_SEARCH", sources, env);
     if (ts && /^(false|0|no|off)$/i.test(ts.value.trim())) out.push(`${ts.where} (tool search is off)`);
+    return out;
+  }
+  if (id === "prompt-suggestions") {
+    // The variable, read as true, wins over the setting; a project's, local or managed key is merged over the user's.
+    const out: string[] = [];
+    const ev = effectiveEnv(PROMPT_SUGGESTION_ENV, sources, env);
+    if (ev && triBool(ev.value) === true) out.push(ev.where);
+    for (const s of sources) if (s.name !== "user" && s.settings[PROMPT_SUGGESTION_KEY] !== undefined && s.settings[PROMPT_SUGGESTION_KEY] !== null && s.settings[PROMPT_SUGGESTION_KEY] !== false) out.push(`${PROMPT_SUGGESTION_KEY} ${JSON.stringify(s.settings[PROMPT_SUGGESTION_KEY])} in ${tilde(s.path)}`);
     return out;
   }
   if (id === "tool-output") {
@@ -743,6 +866,7 @@ function applySetting(fix: Fix, home: string | undefined, at: number, extra: Par
       after,
       oneHourShareBefore: old?.oneHourShareBefore ?? extra.oneHourShareBefore,
       modelsBefore: old?.modelsBefore ?? extra.modelsBefore,
+      ...((old?.suggestedShare ?? extra.suggestedShare) !== undefined ? { suggestedShare: old?.suggestedShare ?? extra.suggestedShare } : {}),
     };
     writeFixRecords([...records.filter((r) => r.id !== fix.id), rec], home);
     return [`✓ ${fix.change}`];
@@ -808,7 +932,7 @@ function undoCodexCompact(r: FixRecord, home: string | undefined): string {
 }
 
 /** Apply one fix; record it unless it changed nothing. Refusals (a damaged settings file, a damaged record) change nothing. */
-export async function applyFix(fix: Fix, deps: FixDeps = {}, context: { oneHourShare?: number; prune?: ProjectPlan; modelsBefore?: Record<string, number>; mcpDefer?: FixInputs["mcpDefer"] } = {}): Promise<{ ok: boolean; lines: string[] }> {
+export async function applyFix(fix: Fix, deps: FixDeps = {}, context: { oneHourShare?: number; prune?: ProjectPlan; modelsBefore?: Record<string, number>; mcpDefer?: FixInputs["mcpDefer"]; suggestedShare?: number } = {}): Promise<{ ok: boolean; lines: string[] }> {
   const home = deps.home;
   const at = deps.now ?? Date.now();
   if (fix.state !== "available") return { ok: false, lines: [`${fix.title}: ${fix.note ?? "nothing to apply here"}`] };
@@ -820,7 +944,7 @@ export async function applyFix(fix: Fix, deps: FixDeps = {}, context: { oneHourS
       const name = SHELL_ENV[fix.id];
       const shell = name && shellSet(name, settingsSources({ home: deps.home, cwd: deps.cwd, env }), env, String(fix.value)) ? env[name]! : undefined;
       if (name && shell) return { ok: false, lines: [`✗ ${fix.id}: ${processEnvWhere(name, shell, env)}, a value you set: left as it is. Nothing was changed.`] };
-      const lines = applySetting(fix, home, at, { oneHourShareBefore: context.oneHourShare, modelsBefore: context.modelsBefore });
+      const lines = applySetting(fix, home, at, { oneHourShareBefore: context.oneHourShare, modelsBefore: context.modelsBefore, ...(context.suggestedShare !== undefined ? { suggestedShare: context.suggestedShare } : {}) });
       const over = fixOverrides(fix.id, deps);
       if (over.length) lines.push(`  ⚠ written, but it will not take effect while ${over.join("; ")} ${over.length === 1 ? "overrides" : "override"} it.`);
       return { ok: over.length === 0, lines };
@@ -1101,6 +1225,9 @@ export function savedSince(records: FixRecord[], opts: { paths?: string[]; subag
     } else if (r.id === "progress-summaries") {
       const s = progressSummariesSavedSince(r.at, opts.subagentPaths, false, opts.progressRoute);
       out.push({ id: r.id, at: r.at, savedUsd: s.summarized ? psValue(s) : undefined, detail: s.summarized ? `estimated: ${s.calls.toLocaleString("en-US")} summaries it stopped for ${s.summarized} background subagent${s.summarized === 1 ? "" : "s"} on Claude Code ${PROGRESS_SUMMARIES_SINCE}+, ${s.routes?.length ? psBasis(s) : `as notes${s.smallCalls === s.calls ? ` by ${SMALL_FAST_MODEL_NAME} (${SMALL_NOTES_SINCE}+)` : ` (${money(s.forkUsd)} at the whole context)`}`}` : "no background subagent in a terminal session since" });
+    } else if (r.id === "prompt-suggestions") {
+      const s = r.suggestedShare !== undefined ? promptSuggestionsSavedSince(r.at, r.suggestedShare, opts.paths) : undefined;
+      out.push({ id: r.id, at: r.at, savedUsd: s?.turnEnds ? s.usd : undefined, detail: !s ? "applied; not priced" : s.turnEnds ? `estimated: ${s.turnEnds.toLocaleString("en-US")} turn ends since, ${pct(r.suggestedShare!)} of which sent a suggestion before, each priced as it would have cost` : "no turn ended since" });
     } else if (r.id === "autopilot") {
       const ledger = opts.ledger ?? readLedger();
       const ev = ledger.filter((e) => e.ev === "proxy" && e.ts >= r.at);
@@ -1128,6 +1255,7 @@ const LABEL: Record<FixId, string> = {
   "progress-summaries": "Subagent progress summaries",
   "mcp-defer": "MCP servers sent whole",
   "desktop-tools-defer": "The Desktop app's own tools",
+  "prompt-suggestions": "Prompt suggestions",
 };
 
 /**
@@ -1151,6 +1279,10 @@ const OVERLAPS: Array<[FixId, FixId, string]> = [
   ["mcp-defer", "cache-ttl", "the main conversation's cache lifetime changes what re-reading your servers' tool definitions costs"],
   ["mcp-defer", "cache-ttl-subagents", "the subagents' cache lifetime changes what re-reading your servers' tool definitions costs in their starts"],
   ["mcp-defer", "subagent-model", "your servers' tool definitions in subagent starts are priced at the subagents' model, which subagent-model changes"],
+  ["prompt-suggestions", "compact-window", "each suggestion re-reads the conversation, which compacting earlier keeps smaller"],
+  ["prompt-suggestions", "tool-output", "each suggestion re-reads the conversation, long Bash output included until it goes to a file"],
+  ["prompt-suggestions", "autopilot", "each suggestion re-reads the conversation, the tool output autopilot clears included"],
+  ["prompt-suggestions", "desktop-tools-defer", "each suggestion re-reads the app's tool definitions too"],
 ];
 
 /** The overlap lines for the priced fixes in a plan, "a and b: why;" each. */

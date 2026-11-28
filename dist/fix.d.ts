@@ -30,7 +30,10 @@
  *    a file the model opens again is not counted);
  *  - subagent progress summaries: the summaries Claude Code would have
  *    written for the background subagents since (2.1.318+, which read the
- *    variable), estimated as `spend` estimates them (progresssummaries.ts).
+ *    variable), estimated as `spend` estimates them (progresssummaries.ts);
+ *  - prompt suggestions: the turn ends since that one could have followed,
+ *    priced as each would have cost (sidecost.ts), at the share of turn ends
+ *    that sent one in the period before (an estimate).
  *
  * The subagents' model is the one lever with a quality cost `fix` cannot
  * measure from history: its quality line quotes the newest `ab --via
@@ -50,7 +53,7 @@ import { type SubagentModelReplay } from "./subagentmodel.js";
 import { type ToolOutputReplay } from "./tooloutput.js";
 import { type ProgressSummaryEstimate, type SummaryRoute } from "./progresssummaries.js";
 import { type CodexCompactReport } from "./codexcompact.js";
-export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model" | "tool-output" | "codex-compact" | "progress-summaries" | "mcp-defer" | "desktop-tools-defer";
+export type FixId = "compact-window" | "cache-ttl" | "cache-ttl-subagents" | "autopilot" | "tool-search" | "prune" | "subagent-model" | "tool-output" | "codex-compact" | "progress-summaries" | "mcp-defer" | "desktop-tools-defer" | "prompt-suggestions";
 export interface Fix {
     id: FixId;
     title: string;
@@ -75,7 +78,7 @@ export interface Fix {
     /** Why not here, or what is already applied. */
     note?: string;
     /** The value it writes. */
-    value?: number | string;
+    value?: number | string | boolean;
     /** What would keep it from taking effect (environment, project or managed settings, per-model values). */
     overriddenBy?: string[];
     /** Installed Claude Code versions older than the setting: they ignore it (named, not blocked). */
@@ -251,7 +254,71 @@ export interface FixInputs {
      * write says so, not "run fix again after one" (I4).
      */
     pluginVersion?: string;
+    /** Claude Code's prompt suggestions over the period, counted from its cost-state (measurePromptSuggestions). */
+    promptSuggestions?: PromptSuggestionEstimate;
+    /** promptSuggestionEnabled in the user's settings.json, or CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION off (promptSuggestionsState): never overwritten. */
+    promptSuggestionsSet?: {
+        value: string;
+        where: string;
+        off: boolean;
+    };
 }
+/**
+ * Prompt suggestions: after a main-thread turn ends, Claude Code asks the
+ * session's model for the grey "what you might type next" line, a request
+ * that re-reads the whole conversation from the cache (sidecost.ts). No
+ * transcript row records one; Claude Code's own cost record (`cost-state`)
+ * counts each, so the count is what its input beyond ours has room for, at
+ * ~506 input tokens apiece (ccost.ts suggestionsInGap): an estimate, and only
+ * on sessions that wrote such a record.
+ *
+ * Read from the 2.1.332 binary (the same in 2.1.311 and 2.1.331, the oldest
+ * and newest others here): `promptSuggestionEnabled: false` in settings.json
+ * turns them off ("When false, prompt suggestions are disabled. When absent
+ * or true, prompt suggestions are enabled"; /config's "Prompt suggestions"
+ * row writes the same key), in a terminal and in the Desktop app and SDK
+ * hosts alike. CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION, read as true or false,
+ * wins over the setting either way. The changelog has the /config toggle from
+ * 2.0.71 and names the settings key from 2.1.325; when the key itself came is
+ * not said, so no version is named as too old for it.
+ */
+export interface PromptSuggestionEstimate {
+    /** Suggestions counted, and their price. */
+    n: number;
+    usd: number;
+    /** Turn ends one could have followed, in the sessions compared. */
+    turnEnds: number;
+    /** Sessions that sent any, and sessions with a cost record compared. */
+    sessions: number;
+    compared: number;
+}
+export declare const PROMPT_SUGGESTION_KEY = "promptSuggestionEnabled";
+export declare const PROMPT_SUGGESTION_ENV = "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION";
+/** Prompt suggestions over the last `days`, from Claude Code's cost-state against our price of the same sessions (as `doctor` compares them). */
+export declare function measurePromptSuggestions(days: number, now?: number): PromptSuggestionEstimate;
+/**
+ * Whether prompt suggestions are already settled by someone: the variable
+ * read as false anywhere Claude Code reads it (off: applied), or the setting
+ * in the user's settings.json (false: applied; true: theirs, left alone). A
+ * project's or managed value, or the variable read as true, is an override
+ * (fixOverrides), not the user's choice here.
+ */
+export declare function promptSuggestionsState(deps?: {
+    home?: string;
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+}): {
+    set?: {
+        value: string;
+        where: string;
+        off: boolean;
+    };
+};
+/** Turn ends since `at` in the main transcripts (`paths`, else those written since), priced as a suggestion after each, at `share` of them (the share that sent one before). */
+export declare function promptSuggestionsSavedSince(at: number, share: number, paths?: string[]): {
+    turnEnds: number;
+    usd: number;
+};
 /** The Claude Code version whose `tool.describe` names a tool's MCP server and lets a mod answer `isDeferred`. */
 export declare const DESKTOP_TOOLS_DEFER_SINCE = "2.1.326";
 export declare const money: (n: number) => string;
@@ -280,6 +347,8 @@ export interface FixRecord {
     cwd?: string;
     /** For mcp-defer: each alwaysLoad key it set in ~/.claude.json, and what was there before. */
     entries?: DeferEntry[];
+    /** For prompt-suggestions: the share of turn ends that sent a suggestion in the period before, the baseline "since" prices at. */
+    suggestedShare?: number;
     /** For subagent-model: the models the moved types' subagents ran on before the change, each one's share of their tokens (Sonnet-or-cheaper ones included): the baseline "since" compares against. */
     modelsBefore?: Record<string, number>;
 }
@@ -322,6 +391,7 @@ export declare function applyFix(fix: Fix, deps?: FixDeps, context?: {
     prune?: ProjectPlan;
     modelsBefore?: Record<string, number>;
     mcpDefer?: FixInputs["mcpDefer"];
+    suggestedShare?: number;
 }): Promise<{
     ok: boolean;
     lines: string[];

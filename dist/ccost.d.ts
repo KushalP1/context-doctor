@@ -181,6 +181,20 @@ export declare const MODS_COUNTED_FROM = "2.1.325";
 export declare function versionAtLeast(a: string | undefined, b: string): boolean;
 /** Within this of Claude Code's figure is a match (ROADMAP K2, F1). */
 export declare const CC_GAP_TARGET = 0.02;
+/**
+ * Claude Code's prompt suggestions in the sessions compared: as many as its
+ * input beyond ours on the session's models has room for (each adds its
+ * ~506-token instruction), priced as the turn ends they may follow are on
+ * average (sidecost.ts). An estimate: `doctor` names it as part of the gap,
+ * `fix` prices turning them off with it. `turnEnds` is every turn end one
+ * could have followed; `sessions` those that sent any.
+ */
+export declare function suggestionsInGap(sessions: SessionGap[]): {
+    n: number;
+    usd: number;
+    turnEnds: number;
+    sessions: number;
+};
 /** What the gap is made of, in words, largest part first: what Claude Code's figure holds more (or less) than ours, and why. */
 export declare function gapText(sessions: SessionGap[]): string[];
 /** `spend`'s lines: Claude Code's figure beside ours on the sessions both cover; none when no session has a record in the window. */

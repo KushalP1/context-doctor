@@ -80,7 +80,7 @@ import { currentTranscript, findSession, recall, renderRecall } from "./recall.j
 import { measureSubagentCosts, renderCostMedians, saveSubagentCosts } from "./fanout.js";
 import { applyPrune, canonical, installedSkills, planPrune, renderPrune, undoPrune } from "./prune.js";
 import { lensOverSessions, renderLens, sessionLens, LENS_ROWS } from "./lens.js";
-import { applyFix, fixOverrides, loadFixRecords, parseFixIds, planFixes, progressSummariesState, readFixRecords, renderFixPlan, renderFixShare, savedSince, undoFixes, type Fix, type FixId, type FixInputs } from "./fix.js";
+import { applyFix, fixOverrides, loadFixRecords, measurePromptSuggestions, parseFixIds, planFixes, progressSummariesState, promptSuggestionsState, readFixRecords, renderFixPlan, renderFixShare, savedSince, undoFixes, type Fix, type FixId, type FixInputs } from "./fix.js";
 import { disablesSummaries, estimateProgressSummaries, PROGRESS_ROWS } from "./progresssummaries.js";
 import { firstQuestion, renderFirstScreen, splitFirstFixes } from "./firstfix.js";
 import { claudeMcpConfigs, MCP_ROWS } from "./mcpschema.js";
@@ -519,10 +519,13 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
       : undefined;
   const appToolsSeen = recentToolLines(days);
   const pluginVersion = claudePluginEnabled() ? pluginStage().version : undefined;
+  // Prompt suggestions: counted from Claude Code's own cost record against our price of the same sessions; a value set is yours.
+  const promptSuggestions = measurePromptSuggestions(days);
+  const sgState = promptSuggestionsState({ cwd });
   let recordProblem: string | undefined;
   try { loadFixRecords(); } catch (e) { recordProblem = (e as Error).message; }
   const sessions = report.sessions.length;
-  const ids: FixId[] = ["compact-window", "cache-ttl", "cache-ttl-subagents", "tool-search", "subagent-model", "tool-output", "codex-compact", "progress-summaries", "desktop-tools-defer"];
+  const ids: FixId[] = ["compact-window", "cache-ttl", "cache-ttl-subagents", "tool-search", "subagent-model", "tool-output", "codex-compact", "progress-summaries", "desktop-tools-defer", "prompt-suggestions"];
   const overrides = Object.fromEntries(ids.map((id) => [id, fixOverrides(id, { cwd })]));
   // The mod is what reads the variable: without the plugin, nothing moves.
   if (appTools.length && !claudePluginEnabled()) overrides["desktop-tools-defer"].push("context-doctor's Claude Code plugin is not enabled, and its mod is what reads this (/plugin install context-doctor@context-doctor inside Claude Code)");
@@ -553,6 +556,8 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
       toolOutputSet,
       progressSummaries,
       ...(psState.set ? { progressSummariesSet: psState.set } : {}),
+      promptSuggestions,
+      ...(sgState.set ? { promptSuggestionsSet: sgState.set } : {}),
       ...(codexCompact.requests > 0 ? { codexCompact } : {}),
       ...(cxSet ? { codexCompactSet: { raw: cxSet.raw, where: cxSet.where } } : {}),
       overrides,
@@ -931,7 +936,7 @@ async function applyChosenFixes(chosen: FixId[], fixes: Fix[], inputs: FixInputs
       continue;
     }
     const kind = id === "cache-ttl" ? "main" : id === "cache-ttl-subagents" ? "subagents" : undefined;
-    const r = await applyFix(f, { autopilotOn: () => autopilotOn(port ?? DEFAULT_AUTOPILOT_PORT) }, { oneHourShare: kind ? inputs.ttl?.[kind].oneHourShare : undefined, prune: prunePlan, modelsBefore: inputs.subagentModel ? shares(inputs.subagentModel.before) : undefined, mcpDefer: inputs.mcpDefer });
+    const r = await applyFix(f, { autopilotOn: () => autopilotOn(port ?? DEFAULT_AUTOPILOT_PORT) }, { oneHourShare: kind ? inputs.ttl?.[kind].oneHourShare : undefined, prune: prunePlan, modelsBefore: inputs.subagentModel ? shares(inputs.subagentModel.before) : undefined, mcpDefer: inputs.mcpDefer, suggestedShare: id === "prompt-suggestions" && inputs.promptSuggestions?.turnEnds ? inputs.promptSuggestions.n / inputs.promptSuggestions.turnEnds : undefined });
     results.push({ id, ...r });
   }
   return results;

@@ -314,6 +314,31 @@ const list = (ms) => `${ms.slice(0, 2).join(", ")}${ms.length > 2 ? " and others
 export const CC_GAP_TARGET = 0.02;
 /** Below this, Claude Code's figure for a session is too small for a percentage to mean anything. */
 const MIN_COMPARE_USD = 0.5;
+/**
+ * Claude Code's prompt suggestions in the sessions compared: as many as its
+ * input beyond ours on the session's models has room for (each adds its
+ * ~506-token instruction), priced as the turn ends they may follow are on
+ * average (sidecost.ts). An estimate: `doctor` names it as part of the gap,
+ * `fix` prices turning them off with it. `turnEnds` is every turn end one
+ * could have followed; `sessions` those that sent any.
+ */
+export function suggestionsInGap(sessions) {
+    let n = 0, usd = 0, turnEnds = 0, withAny = 0;
+    for (const s of sessions) {
+        const ends = s.turnEnds;
+        if (!ends?.n)
+            continue;
+        const room = Math.round(s.models.filter((m) => m.ours.requests > 0).reduce((t, m) => t + Math.max(0, m.cc.input - m.ours.input), 0) / SUGGESTION_PROMPT_TOKENS);
+        const k = Math.min(ends.n, room);
+        turnEnds += ends.n;
+        if (k <= 0)
+            continue;
+        n += k;
+        usd += (ends.usd * k) / ends.n;
+        withAny++;
+    }
+    return { n, usd, turnEnds, sessions: withAny };
+}
 /** What the gap is made of, in words, largest part first: what Claude Code's figure holds more (or less) than ours, and why. */
 export function gapText(sessions) {
     const p = gapParts(sessions);
@@ -324,18 +349,7 @@ export function gapText(sessions) {
     if (Math.abs(p.sideUsd) >= 0.005)
         parts.push([p.sideUsd, `Claude Code counts ${more(p.sideUsd)} on ${list(p.sideModels)}, its own side requests${p.sideSearches ? ` (${p.sideSearches} web search${p.sideSearches === 1 ? "" : "es"} among them)` : ""}: no transcript row records them`]);
     // Ours holds the compactions' own requests as estimates (no row records their usage): what its tokens say of them.
-    // Claude Code's prompt suggestions: as many as its input beyond ours on the session's models has room for (each adds its
-    // ~506-token instruction), priced as the turn ends they may follow are on average (sidecost.ts). An estimate of a part of the gap.
-    let nSug = 0, sug = 0;
-    for (const s of sessions) {
-        const ends = s.turnEnds;
-        if (!ends?.n)
-            continue;
-        const room = Math.round(s.models.filter((m) => m.ours.requests > 0).reduce((t, m) => t + Math.max(0, m.cc.input - m.ours.input), 0) / SUGGESTION_PROMPT_TOKENS);
-        const k = Math.min(ends.n, room);
-        nSug += k;
-        sug += (ends.usd * k) / ends.n;
-    }
+    const { n: nSug, usd: sug } = suggestionsInGap(sessions);
     const nUns = sessions.reduce((n, s) => n + (s.unsettled ?? 0), 0), uns = sessions.reduce((n, s) => n + (s.unsettledUsd ?? 0), 0);
     const stalled = sessions.reduce((n, s) => n + (s.stalled ?? 0), 0);
     const ests = [
