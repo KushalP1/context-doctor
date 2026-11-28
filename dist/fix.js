@@ -53,7 +53,8 @@ import { claudeJsonPath, tilde } from "./claudedir.js";
 import { applyPrune, undoPrune } from "./prune.js";
 import { applyMcpDefer, MCP_DEFER_SINCE, undoMcpDefer } from "./mcpdefer.js";
 import { DEFER_APP_TOOLS_ENV, deferredServers, KEEP_APP_SERVERS } from "./mod/logic.js";
-import { appToolsVerdict, movedSessions, verdictLines } from "./apptools.js";
+import { appToolsVerdict, movedSessions, TOOLS_LEDGER_SINCE, verdictLines } from "./apptools.js";
+import { pluginPredates } from "./claudeplugin.js";
 import { fallbackStateDir, readLedger } from "./ledger.js";
 import { claudeDir } from "./claudedir.js";
 import { comparisonLine } from "./abstore.js";
@@ -61,6 +62,18 @@ import { movedFromNames, renderSubagentTypes, subagentModelSavedSince, SUBAGENT_
 import { BASH_OUTPUT_DEFAULT, BASH_OUTPUT_KEY, BASH_OUTPUT_SINCE, breakEven, renderToolOutputCaps, toolOutputSavedSince } from "./tooloutput.js";
 import { disablesSummaries, estimateProgressSummaries, formWords, hostName, PROGRESS_SUMMARIES_ENV, PROGRESS_SUMMARIES_OFF, PROGRESS_SUMMARIES_SINCE, SMALL_FAST_MODEL_NAME, SMALL_NOTES_SINCE, summaryRoute } from "./progresssummaries.js";
 import { CODEX_COMPACT_KEY, CODEX_COMPACT_LIMIT, codexCompactOverrides, codexCompactSavedSince, codexConfigPath, renderCodexLimits, setTopLevelInt, topLevelValue } from "./codexcompact.js";
+/**
+ * desktop-tools-defer before the mod has recorded a Desktop session: why,
+ * and what to do. A plugin older than the tools ledger never records one,
+ * so waiting for a session would not help: the reason is the plugin's
+ * version.
+ */
+function notYetConfirmed(pluginVersion) {
+    const why = pluginPredates(pluginVersion, TOOLS_LEDGER_SINCE);
+    return why
+        ? `Not yet confirmed on this machine: ${why}; then run fix again after a new Desktop session.`
+        : `Not yet confirmed on this machine: context-doctor's mod notes which servers the Desktop app hands it after the first reply of a new Desktop session (Claude Code ${DESKTOP_TOOLS_DEFER_SINCE}+, with the plugin); run fix again after one.`;
+}
 /** The Claude Code version whose `tool.describe` names a tool's MCP server and lets a mod answer `isDeferred`. */
 export const DESKTOP_TOOLS_DEFER_SINCE = "2.1.326";
 /**
@@ -378,7 +391,7 @@ export function planFixes(i) {
                 // Confirmed (or narrowed) by what the mod saw in the newest Desktop session; with none on record, said so.
                 detail: verdict
                     ? verdictLines(verdict)
-                    : [`Not yet confirmed on this machine: context-doctor's mod notes which servers the Desktop app hands it after the first reply of a new Desktop session (Claude Code ${DESKTOP_TOOLS_DEFER_SINCE}+, with the plugin); run fix again after one.`],
+                    : [notYetConfirmed(i.pluginVersion)],
             });
         }
     }

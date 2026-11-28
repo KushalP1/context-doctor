@@ -245,6 +245,12 @@ export interface FixInputs {
      * here, and after applying, the sessions it moved them in.
      */
     appToolsSeen?: ToolsLine[];
+    /**
+     * The context-doctor plugin Claude Code downloaded (installed_plugins.json),
+     * when it is enabled: a lever waiting on a ledger that plugin is too old to
+     * write says so, not "run fix again after one" (I4).
+     */
+    pluginVersion?: string;
 }
 /** The Claude Code version whose `tool.describe` names a tool's MCP server and lets a mod answer `isDeferred`. */
 export declare const DESKTOP_TOOLS_DEFER_SINCE = "2.1.326";

@@ -1161,6 +1161,24 @@ test("desktop-tools-defer with a tools ledger: fix confirms the servers that arr
     assert.match(f.note, new RegExp(`moved behind tool search in 1 session since ${today}$`));
     assert.equal(runCli(home, "fix", "undo", "desktop-tools-defer").status, 0);
 });
+test("I4 desktop-tools-defer with no tools ledger: a plugin older than the ledger is given as the reason, a current one keeps the usual line", () => {
+    const home = desktopHome();
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ enabledPlugins: { "context-doctor@context-doctor": true } }, null, 2));
+    mkdirSync(join(home, ".claude", "plugins"), { recursive: true });
+    const plugin = (version) => writeFileSync(join(home, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "context-doctor@context-doctor": [{ scope: "user", version }] } }));
+    const lever = () => {
+        const r = runCli(home, "fix", "--json");
+        assert.equal(r.status, 0, r.stderr);
+        return JSON.parse(r.stdout).fixes.find((x) => x.id === "desktop-tools-defer");
+    };
+    plugin("0.50.0");
+    let f = lever();
+    assert.equal(f.state, "available");
+    assert.deepEqual(f.detail, ["Not yet confirmed on this machine: your context-doctor plugin is 0.50.0, and it records this from 0.51.0 on: it starts once Claude Code updates the plugin (at its next start, or /plugin update context-doctor); then run fix again after a new Desktop session."]);
+    plugin("0.51.0");
+    f = lever();
+    assert.match(f.detail[0], /^Not yet confirmed on this machine: context-doctor's mod notes which servers .*run fix again after one\.$/);
+});
 // -- The cache's time left, in the usage pane (H5) -------------------------------------------
 test("the usage pane's cache line: warm with its minutes and both prices, expired with the re-write's, at a 1-hour and a 5-minute lifetime, priced by hand", () => {
     // 520k tokens of Opus 5.5 context ($4/M input): a cache read $0.104 (520k x $0.20/M), a 1-hour write $4.16 (520k x $8/M).

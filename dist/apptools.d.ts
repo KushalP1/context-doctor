@@ -37,6 +37,8 @@ export interface ToolsLine {
     surface?: string;
     servers: ToolServerSeen[];
 }
+/** The release whose plugin first writes this ledger (H3): an older plugin never will, so `fix` says why it waits. */
+export declare const TOOLS_LEDGER_SINCE = "0.51.0";
 export declare function toolsLogPath(): string;
 /** The servers as the mod sent them, cleaned: valid names and types only, each once, sorted by name. */
 export declare function cleanServers(list: unknown): ToolServerSeen[];

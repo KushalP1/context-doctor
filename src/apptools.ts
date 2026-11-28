@@ -45,6 +45,9 @@ export interface ToolsLine {
   servers: ToolServerSeen[];
 }
 
+/** The release whose plugin first writes this ledger (H3): an older plugin never will, so `fix` says why it waits. */
+export const TOOLS_LEDGER_SINCE = "0.51.0";
+
 export function toolsLogPath(): string {
   return join(dirname(statePath()), ".context-doctor-tools.jsonl");
 }

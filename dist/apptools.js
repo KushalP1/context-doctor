@@ -21,6 +21,8 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 import { dirname, join } from "node:path";
 import { statePath } from "./ledger.js";
 import { APP_TOOL_SERVERS } from "./mod/logic.js";
+/** The release whose plugin first writes this ledger (H3): an older plugin never will, so `fix` says why it waits. */
+export const TOOLS_LEDGER_SINCE = "0.51.0";
 export function toolsLogPath() {
     return join(dirname(statePath()), ".context-doctor-tools.jsonl");
 }

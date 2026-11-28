@@ -62,7 +62,15 @@ Running install again moves an existing install between routes, so nothing runs 
 ✓ Mod                    recording: last measured 4 min ago (~/.claude/.context-doctor-session-cost.jsonl); limits ledger written 4 min ago
 ```
 
-Before the first session, the route line says the plugin is not fetched yet and the mod line that it has not measured yet. The status line (`--statusline`) is a user setting a plugin cannot carry, so install adds it on either route.
+Before the first session, the route line says the plugin is not fetched yet and the mod line that it has not measured yet.
+
+Claude Code updates the plugin on its own schedule, so for a while after a release the plugin can be a version behind the `context-doctor` you run, and the newer checks do nothing until it catches up. `doctor` compares the two from the files on disk (no network) and says so:
+
+```
+! Plugin version         the plugin is 0.50.0, this release is 0.51.0: the newer checks start once Claude Code updates it (at its next start, or /plugin update context-doctor)
+```
+
+The other way round, a global `context-doctor` (`npm i -g`) the plugin has moved past: `the context-doctor command is 0.49.0, older than the plugin (0.53.0): the commands you type miss the checks and fixes since; update it: npm i -g context-doctor`. Run through npx or from a clone, a command behind the plugin says nothing. Equal versions add no line. The status line (`--statusline`) is a user setting a plugin cannot carry, so install adds it on either route.
 
 `context-doctor autopilot on` is separate and opt-in: it adds the background proxy service and, after the proxy has answered a health check, `env.ANTHROPIC_BASE_URL` to `~/.claude/settings.json`, plus `env.ENABLE_TOOL_SEARCH=auto` unless you set that yourself ([details](./autopilot.md)).
 

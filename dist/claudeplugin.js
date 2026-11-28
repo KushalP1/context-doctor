@@ -140,3 +140,48 @@ export function ago(ms, now = Date.now()) {
         return `${h} h ago`;
     return `${Math.round(h / 24)} days ago`;
 }
+/**
+ * Is this CLI a global npm install (`npm i -g context-doctor`)? Judged from
+ * where its own files sit: <prefix>/lib/node_modules/context-doctor on macOS
+ * and Linux (Homebrew's Node, nvm, the system Node), %APPDATA%\npm\node_modules
+ * on Windows. npx's cache, npm's own cache, a project's node_modules and a
+ * clone of the repository are not.
+ */
+export function isGlobalInstall(modulePath) {
+    if (/[\\/]_npx[\\/]|[\\/]\.npm[\\/]|[\\/]npm-cache[\\/]/i.test(modulePath))
+        return false;
+    return /[\\/]lib[\\/]node_modules[\\/]context-doctor[\\/]/.test(modulePath) || /[\\/]npm[\\/]node_modules[\\/]context-doctor[\\/]/i.test(modulePath);
+}
+/**
+ * The plugin's version against this CLI's (I4), read from disk, no network.
+ * Claude Code updates the plugin on its own schedule (at a start after the
+ * marketplace changed, or /plugin update), and a global CLI only when the
+ * user reinstalls it, so the two drift apart either way:
+ *  - the plugin older: the checks and ledgers this release reads (the tools
+ *    ledger from 0.51.0, apptools.ts) are not written yet, and `fix` could
+ *    only say "not yet confirmed";
+ *  - the command older (a global install the plugin has moved past): the
+ *    commands the user types miss what came since. Said only for a global
+ *    install, the one the user updates by hand; npx and a clone are left be.
+ * Equal, unknown, or no plugin downloaded: nothing to say.
+ */
+export function pluginVersionDrift(plugin, cli, globalCli) {
+    if (!plugin || !cli || !/^\d+\.\d+\.\d+/.test(plugin) || !/^\d+\.\d+\.\d+/.test(cli))
+        return undefined;
+    const d = compareVersions(plugin, cli);
+    if (d < 0)
+        return `the plugin is ${plugin}, this release is ${cli}: the newer checks start once Claude Code updates it (at its next start, or /plugin update context-doctor)`;
+    if (d > 0 && globalCli)
+        return `the context-doctor command is ${cli}, older than the plugin (${plugin}): the commands you type miss the checks and fixes since; update it: npm i -g context-doctor`;
+    return undefined;
+}
+/**
+ * Why a lever that waits on a plugin-written ledger is not yet confirmed,
+ * when the downloaded plugin predates the release that writes it: the
+ * sentence `fix` gives instead of its usual "run fix again after one".
+ */
+export function pluginPredates(plugin, since) {
+    if (!plugin || !/^\d+\.\d+\.\d+/.test(plugin) || compareVersions(plugin, since) >= 0)
+        return undefined;
+    return `your context-doctor plugin is ${plugin}, and it records this from ${since} on: it starts once Claude Code updates the plugin (at its next start, or /plugin update context-doctor)`;
+}

@@ -212,7 +212,7 @@ No setting reaches them, but a mod can: from Claude Code 2.1.326 the mods event 
 
 - servers that arrive whole, with their server named, are offered and said so: `Seen in your Desktop session of 2026-11-24: Claude_Browser (sdk, 12 tools) and ccd_session (sdk, 8 tools) arrive whole as in-process (sdk) servers, and Claude Code tells context-doctor's mod which server each tool is from, so this setting reaches them.`;
 - a server Claude Code already keeps behind tool search, or one the mod was not shown, is dropped from the lever (and from its dollars), with the reason; when that leaves none, the lever is withdrawn: `not offered: Claude Code already keeps Claude_Browser and ccd_session behind tool search (your Desktop session of 2026-11-24): nothing to move there.`;
-- with no Desktop session on record yet, the plan says it is not yet confirmed on this machine, and to run `fix` again after the first reply of a new Desktop session.
+- with no Desktop session on record yet, the plan says it is not yet confirmed on this machine, and to run `fix` again after the first reply of a new Desktop session; when the downloaded plugin predates 0.51.0, the release whose mod first keeps this record, it names that as the reason instead: `your context-doctor plugin is 0.50.0, and it records this from 0.51.0 on: it starts once Claude Code updates the plugin (at its next start, or /plugin update context-doctor)`.
 
 Once applied, the applied line counts the sessions the mod moved them in (`moved behind tool search in 12 sessions since 2026-11-25`), and `context-doctor doctor`'s `Desktop app tools` line names the servers of the newest Desktop session, their type and where each went.
 

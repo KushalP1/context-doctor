@@ -11,12 +11,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sandboxEnv } from "./sandbox.js";
-import { MOD_SINCE, modReadiness, isOurDeclaration } from "../claudeplugin.js";
+import { MOD_SINCE, modReadiness, isGlobalInstall, isOurDeclaration, pluginVersionDrift } from "../claudeplugin.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
 
@@ -283,4 +283,85 @@ test("audit: doctor names the mod's ledger where it is, not always ~/.claude", a
   const line = d.out.split("\n").find((l) => /Mod\s+recording/.test(l)) ?? d.out;
   assert.ok(line.includes(join(state, ".context-doctor-session-cost.jsonl")), line);
   assert.ok(!line.includes("~/.claude/"), line);
+});
+
+// -- I4: the plugin a release behind this CLI, or the global command behind the plugin ----------
+
+const CLI_VERSION = (JSON.parse(readFileSync(join(dirname(cliPath), "..", "package.json"), "utf8")) as { version: string }).version;
+const CLI_RE = CLI_VERSION.replace(/\./g, "\\.");
+
+/** A home with the plugin enabled by install and, when given, downloaded at `version`. */
+async function pluginHome(version?: string): Promise<Home> {
+  const h = home();
+  assert.equal((await run(h.home, ["install"])).code, 0);
+  if (version) {
+    mkdirSync(join(h.home, ".claude", "plugins"), { recursive: true });
+    writeFileSync(join(h.home, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "context-doctor@context-doctor": [{ scope: "user", version }] } }));
+  }
+  return h;
+}
+
+const versionLine = (out: string) => out.split("\n").find((l) => /Plugin version/.test(l));
+
+test("I4 pluginVersionDrift: older plugin, newer plugin behind a global command, equal, unknown", () => {
+  assert.equal(pluginVersionDrift("0.50.0", "0.51.0", false), "the plugin is 0.50.0, this release is 0.51.0: the newer checks start once Claude Code updates it (at its next start, or /plugin update context-doctor)");
+  assert.equal(pluginVersionDrift("0.50.0", "0.51.0", true), pluginVersionDrift("0.50.0", "0.51.0", false), "the plugin's line does not depend on how the CLI was installed");
+  assert.equal(pluginVersionDrift("0.53.0", "0.49.0", true), "the context-doctor command is 0.49.0, older than the plugin (0.53.0): the commands you type miss the checks and fixes since; update it: npm i -g context-doctor");
+  // npx or a clone running behind the plugin: not the user's to update by hand.
+  assert.equal(pluginVersionDrift("0.53.0", "0.49.0", false), undefined);
+  assert.equal(pluginVersionDrift("0.53.0", "0.53.0", true), undefined);
+  assert.equal(pluginVersionDrift("0.10.0", "0.9.0", false), undefined, "compared as numbers: 0.10.0 is newer than 0.9.0");
+  assert.match(pluginVersionDrift("0.9.0", "0.10.0", false)!, /^the plugin is 0\.9\.0, this release is 0\.10\.0/);
+  assert.equal(pluginVersionDrift(undefined, "0.53.0", true), undefined);
+  assert.equal(pluginVersionDrift("unknown", "0.53.0", true), undefined);
+});
+
+test("I4 isGlobalInstall: npm's global folders yes; npx, npm's cache, a project and a clone no", () => {
+  assert.equal(isGlobalInstall("/opt/homebrew/lib/node_modules/context-doctor/dist/doctor.js"), true);
+  assert.equal(isGlobalInstall("/usr/local/lib/node_modules/context-doctor/dist/doctor.js"), true);
+  assert.equal(isGlobalInstall("/home/u/.nvm/versions/node/v22.11.0/lib/node_modules/context-doctor/dist/doctor.js"), true);
+  assert.equal(isGlobalInstall("C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\context-doctor\\dist\\doctor.js"), true);
+  assert.equal(isGlobalInstall("/Users/u/.npm/_npx/1a2b3c/node_modules/context-doctor/dist/doctor.js"), false);
+  assert.equal(isGlobalInstall("C:\\Users\\u\\AppData\\Local\\npm-cache\\_npx\\1a2b\\node_modules\\context-doctor\\dist\\doctor.js"), false);
+  assert.equal(isGlobalInstall("/Users/u/work/app/node_modules/context-doctor/dist/doctor.js"), false);
+  assert.equal(isGlobalInstall("/Users/u/src/context-doctor/dist/doctor.js"), false);
+});
+
+test("I4 doctor: a plugin older than this CLI gets a ! line naming both versions and how it updates", async () => {
+  const h = await pluginHome("0.50.0");
+  const d = await run(h.home, ["doctor"]);
+  assert.match(d.out, /✓ Claude Code route\s+the context-doctor plugin \(enabled by install\), downloaded \(0\.50\.0\)/);
+  const line = versionLine(d.out);
+  assert.ok(line, d.out);
+  assert.match(line, new RegExp(`! Plugin version\\s+the plugin is 0\\.50\\.0, this release is ${CLI_RE}: the newer checks start once Claude Code updates it \\(at its next start, or /plugin update context-doctor\\)$`));
+});
+
+test("I4 doctor: equal versions say nothing new; no plugin downloaded says nothing about versions", async () => {
+  const eq = await run((await pluginHome(CLI_VERSION)).home, ["doctor"]);
+  assert.match(eq.out, new RegExp(`✓ Claude Code route\\s+the context-doctor plugin \\(enabled by install\\), downloaded \\(${CLI_RE}\\)`));
+  assert.equal(versionLine(eq.out), undefined, eq.out);
+  const none = await run((await pluginHome()).home, ["doctor"]);
+  assert.match(none.out, /! Claude Code route\s+the context-doctor plugin \(enabled by install\), not fetched yet/);
+  assert.equal(versionLine(none.out), undefined, none.out);
+});
+
+test("I4 doctor: a plugin newer than this CLI: silent from a clone or npx, a ! line from a global install behind it", async () => {
+  // This build runs from the repository's dist/: not a global install, so a newer plugin is not its business.
+  const ahead = await run((await pluginHome("99.0.0")).home, ["doctor"]);
+  assert.equal(versionLine(ahead.out), undefined, ahead.out);
+
+  // The same build laid out as `npm i -g` lays it out (<prefix>/lib/node_modules/context-doctor), at a version older than the plugin.
+  const dist = dirname(cliPath);
+  const prefix = mkdtempSync(join(tmpdir(), "ctxdoc-i4-global-"));
+  const pkgDir = join(prefix, "lib", "node_modules", "context-doctor");
+  mkdirSync(pkgDir, { recursive: true });
+  cpSync(dist, join(pkgDir, "dist"), { recursive: true, filter: (src) => !/^[\\/]test([\\/]|$)/.test(src.slice(dist.length)) });
+  const pkg = JSON.parse(readFileSync(join(dist, "..", "package.json"), "utf8"));
+  writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ ...pkg, version: "0.49.0" }));
+  const h = await pluginHome(CLI_VERSION);
+  const env: NodeJS.ProcessEnv = { ...sandboxEnv(h.home), CONTEXT_DOCTOR_NO_MANAGED_SETTINGS: "1", CONTEXT_DOCTOR_CLAUDE_CODE_VERSIONS: NEW };
+  const out = await new Promise<string>((resolve) => execFile(process.execPath, [join(pkgDir, "dist", "cli.js"), "doctor"], { env, timeout: 60_000 }, (_e, stdout) => resolve(stdout)));
+  const line = versionLine(out);
+  assert.ok(line, out);
+  assert.match(line, new RegExp(`! Plugin version\\s+the context-doctor command is 0\\.49\\.0, older than the plugin \\(${CLI_RE}\\): the commands you type miss the checks and fixes since; update it: npm i -g context-doctor$`));
 });

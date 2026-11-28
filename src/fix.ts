@@ -55,7 +55,8 @@ import { claudeJsonPath, tilde } from "./claudedir.js";
 import { applyPrune, undoPrune, type ProjectPlan } from "./prune.js";
 import { applyMcpDefer, MCP_DEFER_SINCE, undoMcpDefer, type DeferEntry } from "./mcpdefer.js";
 import { DEFER_APP_TOOLS_ENV, deferredServers, KEEP_APP_SERVERS } from "./mod/logic.js";
-import { appToolsVerdict, movedSessions, verdictLines, type ToolsLine } from "./apptools.js";
+import { appToolsVerdict, movedSessions, TOOLS_LEDGER_SINCE, verdictLines, type ToolsLine } from "./apptools.js";
+import { pluginPredates } from "./claudeplugin.js";
 import { fallbackStateDir, readLedger } from "./ledger.js";
 import { claudeDir } from "./claudedir.js";
 import { comparisonLine, type AbStoredResult } from "./abstore.js";
@@ -190,6 +191,25 @@ export interface FixInputs {
    * here, and after applying, the sessions it moved them in.
    */
   appToolsSeen?: ToolsLine[];
+  /**
+   * The context-doctor plugin Claude Code downloaded (installed_plugins.json),
+   * when it is enabled: a lever waiting on a ledger that plugin is too old to
+   * write says so, not "run fix again after one" (I4).
+   */
+  pluginVersion?: string;
+}
+
+/**
+ * desktop-tools-defer before the mod has recorded a Desktop session: why,
+ * and what to do. A plugin older than the tools ledger never records one,
+ * so waiting for a session would not help: the reason is the plugin's
+ * version.
+ */
+function notYetConfirmed(pluginVersion: string | undefined): string {
+  const why = pluginPredates(pluginVersion, TOOLS_LEDGER_SINCE);
+  return why
+    ? `Not yet confirmed on this machine: ${why}; then run fix again after a new Desktop session.`
+    : `Not yet confirmed on this machine: context-doctor's mod notes which servers the Desktop app hands it after the first reply of a new Desktop session (Claude Code ${DESKTOP_TOOLS_DEFER_SINCE}+, with the plugin); run fix again after one.`;
 }
 
 /** The Claude Code version whose `tool.describe` names a tool's MCP server and lets a mod answer `isDeferred`. */
@@ -501,7 +521,7 @@ export function planFixes(i: FixInputs): Fix[] {
         // Confirmed (or narrowed) by what the mod saw in the newest Desktop session; with none on record, said so.
         detail: verdict
           ? verdictLines(verdict)
-          : [`Not yet confirmed on this machine: context-doctor's mod notes which servers the Desktop app hands it after the first reply of a new Desktop session (Claude Code ${DESKTOP_TOOLS_DEFER_SINCE}+, with the plugin); run fix again after one.`],
+          : [notYetConfirmed(i.pluginVersion)],
       });
     }
   }

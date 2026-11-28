@@ -15,7 +15,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ledgerPath, readLedger, statePath } from "./ledger.js";
 import { costCheck } from "./modmeasure.js";
-import { ago, MOD_SINCE, modActivity, modReadiness, PLUGIN_KEY, pluginStage, readPluginMarker } from "./claudeplugin.js";
+import { ago, isGlobalInstall, MOD_SINCE, modActivity, modReadiness, PLUGIN_KEY, pluginStage, pluginVersionDrift, readPluginMarker } from "./claudeplugin.js";
 import { loadConfig } from "./config.js";
 import { codexRouting } from "./codexroute.js";
 import { CURSOR_HOOK_EVENTS } from "./install.js";
@@ -41,6 +41,7 @@ import { hasKnownPrice, isUnbilledModel, priceChangedText } from "./pricing.js";
 import { managedSourcesLine, orgRatesLine } from "./orgrates.js";
 import { uncachedCheck } from "./cachemisses.js";
 import { appToolsCheckText, recentToolLines } from "./apptools.js";
+import { PROXY_VERSION } from "./proxy.js";
 
 function claudeDesktopConfigPath(): string {
   switch (platform()) {
@@ -281,6 +282,10 @@ function claudeRouteChecks(layers: Array<Record<string, any>>, plugin: boolean, 
           status: "warn",
           detail: `the context-doctor plugin (${by}), ${st.stage === "registered" ? "its marketplace fetched but the plugin not downloaded yet" : "not fetched yet"}: Claude Code does that in the background at its next start and loads it from the session after (or at once: /reload-plugins)`,
         };
+  // The plugin a release behind this CLI, or a global command behind the plugin (I4): from the files on disk, no network.
+  const self = fileURLToPath(import.meta.url);
+  const drift = st.stage === "installed" ? pluginVersionDrift(st.version, installedVersion(self) ?? PROXY_VERSION, isGlobalInstall(self)) : undefined;
+  const version: Check[] = drift ? [{ label: "Plugin version", status: "warn", detail: drift }] : [];
   let mod: Check;
   const act = modActivity();
   const limits = act.limits ? `; limits ledger written ${ago(act.limits, now)}` : "; no limit reading yet (Claude Code hands them over on Pro, Max and Ultra plans)";
@@ -295,7 +300,7 @@ function claudeRouteChecks(layers: Array<Record<string, any>>, plugin: boolean, 
     const old = readiness.old.length > 0 ? `; ${describeInstalls(readiness.old)} predates mods and never will` : "";
     mod = { label: "Mod", status: "warn", detail: `has not measured yet: it records after each turn of a session that loaded the plugin (Claude Code ${MOD_SINCE}+ in the Desktop app, 2.1.287+ in a terminal)${old}` };
   }
-  return [route, mod];
+  return [route, ...version, mod];
 }
 
 /** "headroom (pid 4242)", or "another program". */

@@ -21,6 +21,7 @@ import { renderProfile } from "./report.js";
 import { formatTokens } from "./tokens.js";
 import { startProxy } from "./proxy.js";
 import { claudeCodeInstallsFromEnv, claudePluginEnabled, runInstall, runUninstall } from "./install.js";
+import { pluginStage } from "./claudeplugin.js";
 import { listSessions, parseSessionFile, pickCurrentSession, isClaudeSession } from "./session.js";
 import { runHook } from "./hook.js";
 import { abCommand } from "./ab.js";
@@ -517,6 +518,7 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
       ? { value: process.env[DEFER_APP_TOOLS_ENV]!, where: "the environment" }
       : undefined;
   const appToolsSeen = recentToolLines(days);
+  const pluginVersion = claudePluginEnabled() ? pluginStage().version : undefined;
   let recordProblem: string | undefined;
   try { loadFixRecords(); } catch (e) { recordProblem = (e as Error).message; }
   const sessions = report.sessions.length;
@@ -541,6 +543,8 @@ async function measureFixInputs(days: number): Promise<{ inputs: FixInputs; prun
       ...(desktopToolsSet ? { desktopToolsSet } : {}),
       // What context-doctor's mod saw Claude Code hand over (apptools.ts): proof the lever reaches the app, or why not.
       ...(appToolsSeen.length ? { appToolsSeen } : {}),
+      // The plugin's version: a lever waiting on a ledger it is too old to write names it as the reason (I4).
+      ...(pluginVersion ? { pluginVersion } : {}),
       subagentModel,
       subagentModelSet,
       // The newest ab --via claude-code comparison of Sonnet 5.5 with another model: the subagent-model line quotes it.

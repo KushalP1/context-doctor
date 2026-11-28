@@ -95,3 +95,31 @@ export declare function modActivity(): {
 };
 /** "3 h ago", "2 days ago". */
 export declare function ago(ms: number, now?: number): string;
+/**
+ * Is this CLI a global npm install (`npm i -g context-doctor`)? Judged from
+ * where its own files sit: <prefix>/lib/node_modules/context-doctor on macOS
+ * and Linux (Homebrew's Node, nvm, the system Node), %APPDATA%\npm\node_modules
+ * on Windows. npx's cache, npm's own cache, a project's node_modules and a
+ * clone of the repository are not.
+ */
+export declare function isGlobalInstall(modulePath: string): boolean;
+/**
+ * The plugin's version against this CLI's (I4), read from disk, no network.
+ * Claude Code updates the plugin on its own schedule (at a start after the
+ * marketplace changed, or /plugin update), and a global CLI only when the
+ * user reinstalls it, so the two drift apart either way:
+ *  - the plugin older: the checks and ledgers this release reads (the tools
+ *    ledger from 0.51.0, apptools.ts) are not written yet, and `fix` could
+ *    only say "not yet confirmed";
+ *  - the command older (a global install the plugin has moved past): the
+ *    commands the user types miss what came since. Said only for a global
+ *    install, the one the user updates by hand; npx and a clone are left be.
+ * Equal, unknown, or no plugin downloaded: nothing to say.
+ */
+export declare function pluginVersionDrift(plugin: string | undefined, cli: string | undefined, globalCli: boolean): string | undefined;
+/**
+ * Why a lever that waits on a plugin-written ledger is not yet confirmed,
+ * when the downloaded plugin predates the release that writes it: the
+ * sentence `fix` gives instead of its usual "run fix again after one".
+ */
+export declare function pluginPredates(plugin: string | undefined, since: string): string | undefined;
