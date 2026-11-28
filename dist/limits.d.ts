@@ -294,6 +294,8 @@ export interface WindowStatus {
     beforeReset?: boolean;
     readings: number;
     plan?: string;
+    /** The weekly window stopped being read while the 5-hour one went on rising (silentMeters): no pace or run-out from its old reading. */
+    silent?: SilentMeter;
 }
 export declare function windowLabel(window: string, windowMs?: number): string;
 /**
@@ -302,6 +304,8 @@ export declare function windowLabel(window: string, windowMs?: number): string;
  * (two Claude Code windows, two Codex sessions) still holding an older
  * figure. Within a period usage only grows, so it is dropped, never read as
  * a new period or a fall in the pace. Logs written before 0.38 hold them.
+ * One fall is kept: the proxy's, of GIVE_BACK_PTS or more (usage the server
+ * gave back); readings after it are weighed against it.
  */
 export declare function cleanReadings(readings: LimitReading[]): LimitReading[];
 /** 0.1 when any reading has a fraction (Claude), else 1 (Codex's whole percents). */
@@ -435,6 +439,8 @@ export interface ResetWindow {
     byModel: UsageShare[];
     /** Claude Code versions its requests were made with, oldest first. */
     versions: string[];
+    /** Its readings stopped while the 5-hour window went on rising (silentMeters): `pctUsed` is where they stopped, not where the window ended. */
+    silent?: SilentMeter;
 }
 /** A move in what 1% costs. */
 export interface SlopeChange {
@@ -588,6 +594,48 @@ export declare function exchangeOf(short: LimitReading[], long: LimitReading[], 
     label: string;
     now?: number;
 }): Exchange | undefined;
+/**
+ * The weekly window's last reading, when the 5-hour window went on being
+ * read, and rising, for hours after it. Both windows come from the same
+ * reply (the mod after each turn, the proxy on each reply), so a weekly that
+ * stops while the 5-hour goes on is a weekly the recorders did not write:
+ * on Nov 27, 2026 the weekly last read 73% at 07:38 UTC, and for the 27
+ * hours to its reset the 5-hour window rose 148 points with no weekly line
+ * beside them. `limits` said "73% used" and projected the pace from it.
+ */
+export interface SilentMeter {
+    /** The weekly window's last reading: when, and its %. */
+    at: number;
+    pct: number;
+    /** When that weekly period resets, ms. */
+    resetsAt: number;
+    /** The last 5-hour reading in the same weekly period, and the points the 5-hour window rose after the weekly's last reading. */
+    fiveLast: number;
+    fiveRise: number;
+    /** Still running at the report's time: the estimate is for now, not for the reset. */
+    current: boolean;
+    /** The weekly %, estimated from the 5-hour rise and the exchange (exchangeOf): at the reset, or now while it runs. With its error in points. */
+    estimate?: number;
+    err?: number;
+}
+/**
+ * Each weekly period whose readings stop over 2 hours before the 5-hour
+ * window's do, with the 5-hour window rising after: where the weekly
+ * stopped, how far the 5-hour rose after it (each 5-hour period from the
+ * reading standing at that moment, or from 0 for a period that began
+ * after), and, with an exchange worth quoting, the weekly that rise
+ * amounts to. Claude only: Codex writes both windows on every event.
+ */
+export declare function silentMeters(five: LimitReading[], week: LimitReading[], exchange: Exchange | undefined, now?: number): SilentMeter[];
+/** A weekly window's status with its silence, when its current period has one: stale, so no pace is projected from the old reading. */
+export declare function silence(s: WindowStatus, list: SilentMeter[]): WindowStatus;
+/**
+ * A silent meter in one line. In the per-window rows (UTC): "No weekly
+ * reading after Nov 27 07:38 UTC (73%); the 5-hour meter rose 148 points
+ * after it: about 96% (±1) by the reset, from the 5-hour exchange; an
+ * estimate." Under the current window (local clock), the estimate is for now.
+ */
+export declare function silentLine(m: SilentMeter, now: number, local?: boolean): string;
 export interface LimitsReport {
     days: number;
     now: number;

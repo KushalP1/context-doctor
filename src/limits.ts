@@ -116,6 +116,19 @@ const LOG_ROTATE_AT = 2 * 1024 * 1024;
 const LOG_KEEP_BYTES = 1536 * 1024;
 /** Two reset times this close name the same window period (Claude Code rounds; Codex re-reports). */
 const SAME_RESET_MS = 10 * MIN;
+/**
+ * A fall of this many points within one period, read from a live reply's
+ * headers (the proxy), is usage the server gave back, not a stale figure:
+ * two replies racing each other differ by a fraction of a point.
+ */
+const GIVE_BACK_PTS = 5;
+
+/** Two readings with reset times naming the same period. */
+const sameReset = (a: LimitReading, b: LimitReading): boolean =>
+  a.resetsAt !== undefined && b.resetsAt !== undefined && Math.abs(a.resetsAt - b.resetsAt) <= SAME_RESET_MS;
+
+/** `b` falls GIVE_BACK_PTS or more below `a` in the same period: usage given back (cleanReadings keeps only the proxy's). */
+const gaveBack = (a: LimitReading, b: LimitReading): boolean => sameReset(a, b) && b.pct <= a.pct - GIVE_BACK_PTS && !(a.resetsAt !== undefined && b.ts > a.resetsAt);
 
 interface LogLine {
   ts: number;
@@ -190,9 +203,13 @@ export function recordLimits(rateLimits: unknown, now = Date.now(), path = limit
       const sameReset = p.reset !== undefined && l.reset !== undefined ? Math.abs(p.reset - l.reset) * 1000 <= SAME_RESET_MS : p.reset === l.reset;
       if (!sameReset) return true;
       // Lower than the last reading of the same window period: another Claude
-      // Code session's status line still holding an older figure. Usage within
-      // a period never goes down, so it is never logged.
-      if (l.pct < p.pct) return false;
+      // Code session's status line still holding an older figure, never
+      // logged. Except a fall of GIVE_BACK_PTS or more read by the proxy,
+      // from the reply that just came in: the server gave usage back (a
+      // reset grant can return the week's usage without moving the reset
+      // time). Dropping those silenced the weekly window for 27 hours on
+      // Nov 27-28, 2026 (ROADMAP J2).
+      if (l.pct < p.pct) return source === "proxy" && p.pct - l.pct >= GIVE_BACK_PTS;
       if (l.pct === p.pct) return now - p.ts >= KEEPALIVE_MS;
       return now - p.ts >= THROTTLE_MS;
     });
@@ -888,6 +905,8 @@ export interface WindowStatus {
   beforeReset?: boolean;
   readings: number;
   plan?: string;
+  /** The weekly window stopped being read while the 5-hour one went on rising (silentMeters): no pace or run-out from its old reading. */
+  silent?: SilentMeter;
 }
 
 export function windowLabel(window: string, windowMs?: number): string {
@@ -916,15 +935,19 @@ function samePeriod(a: LimitReading, b: LimitReading, resolution: number): boole
  * (two Claude Code windows, two Codex sessions) still holding an older
  * figure. Within a period usage only grows, so it is dropped, never read as
  * a new period or a fall in the pace. Logs written before 0.38 hold them.
+ * One fall is kept: the proxy's, of GIVE_BACK_PTS or more (usage the server
+ * gave back); readings after it are weighed against it.
  */
 export function cleanReadings(readings: LimitReading[]): LimitReading[] {
   const sorted = [...readings].sort((a, b) => a.ts - b.ts);
   const out: LimitReading[] = [];
   let top: LimitReading | undefined;
   for (const r of sorted) {
-    if (top && r.resetsAt !== undefined && top.resetsAt !== undefined && Math.abs(r.resetsAt - top.resetsAt) <= SAME_RESET_MS && !(top.resetsAt !== undefined && r.ts > top.resetsAt) && r.pct < top.pct) continue;
+    const fell = !!top && sameReset(top, r) && !(top.resetsAt !== undefined && r.ts > top.resetsAt) && r.pct < top.pct;
+    const given = fell && r.source === "proxy" && gaveBack(top!, r);
+    if (fell && !given) continue;
     out.push(r);
-    top = !top || !samePeriod(top, r, 0.1) || r.pct >= top.pct ? r : top;
+    top = given || !top || !samePeriod(top, r, 0.1) || r.pct >= top.pct ? r : top;
   }
   return out;
 }
@@ -952,7 +975,7 @@ export function windowStatus(readings: LimitReading[], now = Date.now()): Window
   if (status.resetSince) return status;
   // The current period: back from the newest reading while the period holds.
   let first = readings.length - 1;
-  while (first > 0 && samePeriod(readings[first - 1], readings[first], res)) first--;
+  while (first > 0 && samePeriod(readings[first - 1], readings[first], res) && !gaveBack(readings[first - 1], readings[first])) first--;
   const period = readings.slice(first);
   const lookback = last.windowMs && last.windowMs <= 5 * HOUR ? HOUR : DAY;
   const recent = period.filter((r) => r.ts >= last.ts - lookback);
@@ -1050,7 +1073,8 @@ export function segmentsOf(readings: LimitReading[], usage: UsagePoint[], stretc
       continue;
     }
     const prev = readings[i - 1];
-    if (!samePeriod(prev, r, res)) {
+    // A new period, or usage given back inside one (no stretch spans the fall).
+    if (!samePeriod(prev, r, res) || gaveBack(prev, r)) {
       close(prev);
       start = r;
       continue;
@@ -1351,6 +1375,8 @@ export interface ResetWindow {
   byModel: UsageShare[];
   /** Claude Code versions its requests were made with, oldest first. */
   versions: string[];
+  /** Its readings stopped while the 5-hour window went on rising (silentMeters): `pctUsed` is where they stopped, not where the window ended. */
+  silent?: SilentMeter;
 }
 
 /** A move in what 1% costs. */
@@ -1985,7 +2011,9 @@ function exchangeSamples(short: LimitReading[], long: LimitReading[]): Array<Exc
     for (const r of period) {
       const e = at(r.ts);
       if (!e) continue;
-      if (e.week !== week) {
+      const prev = run[run.length - 1];
+      // A new weekly period, or either meter giving usage back: a new run.
+      if (e.week !== week || (prev && (e.r.pct <= prev.w - GIVE_BACK_PTS || r.pct <= prev.f - GIVE_BACK_PTS))) {
         flush();
         week = e.week;
       }
@@ -2084,6 +2112,105 @@ function codexExchanges(readings: LimitReading[], now: number): Exchange[] {
 }
 
 // ---------------------------------------------------------------------------
+// A weekly meter that went silent (J2)
+// ---------------------------------------------------------------------------
+
+/**
+ * The weekly window's last reading, when the 5-hour window went on being
+ * read, and rising, for hours after it. Both windows come from the same
+ * reply (the mod after each turn, the proxy on each reply), so a weekly that
+ * stops while the 5-hour goes on is a weekly the recorders did not write:
+ * on Nov 27, 2026 the weekly last read 73% at 07:38 UTC, and for the 27
+ * hours to its reset the 5-hour window rose 148 points with no weekly line
+ * beside them. `limits` said "73% used" and projected the pace from it.
+ */
+export interface SilentMeter {
+  /** The weekly window's last reading: when, and its %. */
+  at: number;
+  pct: number;
+  /** When that weekly period resets, ms. */
+  resetsAt: number;
+  /** The last 5-hour reading in the same weekly period, and the points the 5-hour window rose after the weekly's last reading. */
+  fiveLast: number;
+  fiveRise: number;
+  /** Still running at the report's time: the estimate is for now, not for the reset. */
+  current: boolean;
+  /** The weekly %, estimated from the 5-hour rise and the exchange (exchangeOf): at the reset, or now while it runs. With its error in points. */
+  estimate?: number;
+  err?: number;
+}
+
+/** The weekly is silent once its last reading is this much older than the last 5-hour one (the recorders write an unchanged window every 15 minutes). */
+const SILENT_MS = 2 * HOUR;
+/** ...and the 5-hour window rose at least this much after it. */
+const SILENT_MIN_RISE = 1;
+
+/**
+ * Each weekly period whose readings stop over 2 hours before the 5-hour
+ * window's do, with the 5-hour window rising after: where the weekly
+ * stopped, how far the 5-hour rose after it (each 5-hour period from the
+ * reading standing at that moment, or from 0 for a period that began
+ * after), and, with an exchange worth quoting, the weekly that rise
+ * amounts to. Claude only: Codex writes both windows on every event.
+ */
+export function silentMeters(five: LimitReading[], week: LimitReading[], exchange: Exchange | undefined, now = Date.now()): SilentMeter[] {
+  if (!five.length || !week.length) return [];
+  const fivePeriods = periodsOf(five);
+  const quoted = exchange && exchange.pct !== undefined && exchange.err !== undefined && !exchange.why ? exchange : undefined;
+  const out: SilentMeter[] = [];
+  for (const period of periodsOf(week)) {
+    const last = period[period.length - 1];
+    const resetsAt = last.resetsAt ?? period[0].ts + (last.windowMs ?? 7 * DAY);
+    const end = Math.min(resetsAt, now);
+    let fiveLast = 0, fiveRise = 0;
+    for (const fp of fivePeriods) {
+      const after = fp.filter((r) => r.ts > last.ts && r.ts < end);
+      if (!after.length) continue;
+      fiveLast = Math.max(fiveLast, after[after.length - 1].ts);
+      const before = fp.filter((r) => r.ts <= last.ts);
+      const fpLast = fp[fp.length - 1];
+      const began = fpLast.resetsAt !== undefined && fpLast.windowMs ? fpLast.resetsAt - fpLast.windowMs : undefined;
+      const base = before.length ? before[before.length - 1].pct : began !== undefined && began >= last.ts ? 0 : after[0].pct;
+      fiveRise += Math.max(0, Math.max(...after.map((r) => r.pct)) - base);
+    }
+    if (fiveLast - last.ts <= SILENT_MS || fiveRise < SILENT_MIN_RISE) continue;
+    const m: SilentMeter = { at: last.ts, pct: last.pct, resetsAt, fiveLast, fiveRise, current: resetsAt > now };
+    if (quoted) {
+      m.estimate = last.pct + (fiveRise * quoted.pct!) / 100;
+      m.err = (fiveRise * quoted.err!) / 100;
+    }
+    out.push(m);
+  }
+  return out;
+}
+
+/** The silent meter of the weekly period that resets at `resetsAt`, if any. */
+const silentAt = (list: SilentMeter[], resetsAt: number | undefined): SilentMeter | undefined =>
+  resetsAt === undefined ? undefined : list.find((m) => Math.abs(m.resetsAt - resetsAt) <= SAME_RESET_MS);
+
+/** A weekly window's status with its silence, when its current period has one: stale, so no pace is projected from the old reading. */
+export function silence(s: WindowStatus, list: SilentMeter[]): WindowStatus {
+  const m = s.resetSince ? undefined : silentAt(list, s.resetsAt);
+  if (!m || !m.current) return s;
+  const { runsOutAt: _r, beforeReset: _b, ...rest } = s;
+  return { ...rest, stale: true, silent: m };
+}
+
+/**
+ * A silent meter in one line. In the per-window rows (UTC): "No weekly
+ * reading after Nov 27 07:38 UTC (73%); the 5-hour meter rose 148 points
+ * after it: about 96% (±1) by the reset, from the 5-hour exchange; an
+ * estimate." Under the current window (local clock), the estimate is for now.
+ */
+export function silentLine(m: SilentMeter, now: number, local = false): string {
+  const when = local ? clock(m.at, now) : `${monthDay(m.at)} ${new Date(m.at).toISOString().slice(11, 16)} UTC`;
+  const head = `No weekly reading ${local ? "since" : "after"} ${when} (${pts(m.pct)}%); the 5-hour meter rose ${pts(m.fiveRise)} points after it`;
+  if (m.estimate === undefined || m.err === undefined) return `${head}, so the weekly is higher than its last reading says.`;
+  if (m.estimate >= 100) return `${head}: ${m.current ? "it has likely reached" : "it likely reached"} 100% before the reset, from the 5-hour exchange; an estimate.`;
+  return `${head}: about ${Math.round(m.estimate)}% (±${Math.max(1, Math.round(m.err))}) ${m.current ? "now" : "by the reset"}, from the 5-hour exchange; an estimate.`;
+}
+
+// ---------------------------------------------------------------------------
 // The report
 // ---------------------------------------------------------------------------
 
@@ -2147,9 +2274,15 @@ export function limitsReport(days = 30, opts: LimitsOptions = {}): LimitsReport 
   const exchange = [...(claudeExchange ? [claudeExchange] : []), ...codexExchanges(codex.readings, now)];
   const claudeSources: Record<string, number> = {};
   for (const r of claude) claudeSources[r.source ?? "earlier"] = (claudeSources[r.source ?? "earlier"] ?? 0) + 1;
-  for (const [, rs] of byWindow(claude)) {
+  const silent = silentMeters(claudeByWindow.get("five_hour") ?? [], claudeByWindow.get("seven_day") ?? [], claudeExchange, now);
+  for (const w of claudeReset.resets) if (w.window === "seven_day") {
+    const m = silentAt(silent, w.resetsAt);
+    if (m) w.silent = m;
+  }
+  for (const [, rs] of claudeByWindow) {
     const s = windowStatus(rs, now);
-    if (s) windows.push(s);
+    if (s) windows.push(s.window === "seven_day" ? silence(s, silent) : s);
+    // The fit runs reading to reading, so it stops at a silent weekly's last reading by construction.
     const f = fitWindow(rs, claudeUse);
     if (f) fits.push(f);
   }
@@ -2379,7 +2512,8 @@ export function renderLimits(r: LimitsReport, pastLimit: string[] = [], ahead?: 
       continue;
     }
     if (s.resetsAt) out.push(`  Resets ${clock(s.resetsAt, r.now)} (in ${hm(s.resetsAt - r.now)}).`);
-    if (s.stale) out.push(`  The newest reading is ${hm(age)} old: no pace or run-out time from it until a new one comes in.`);
+    if (s.silent) out.push(`  ${silentLine(s.silent, r.now, true)} No pace or run-out time from the old reading.`);
+    else if (s.stale) out.push(`  The newest reading is ${hm(age)} old: no pace or run-out time from it until a new one comes in.`);
     else if (s.recentPerHour === undefined) out.push("  Pace: not enough recent readings.");
     else if (s.recentPerHour === 0) out.push("  Pace: no rise over the recent readings.");
     else {
@@ -2407,6 +2541,7 @@ export function renderLimits(r: LimitsReport, pastLimit: string[] = [], ahead?: 
       const head = `${w.label}, ${utcDay(w.start)} to ${utcDay(w.resetsAt)}${w.current ? " (now)" : ""}: ${pts(w.pctUsed)}% used`;
       if (w.usdPerPct !== undefined && !w.why) out.push(`${head}; ${dollars(w.usdPerPct)} per 1%${plusMinus(w.relSe)}, ${tokenCount(w.tokensPerPct ?? 0)} tokens per 1%`);
       else out.push(`${head}; no figure: ${w.why}`);
+      if (w.silent) out.push(`  ${silentLine(w.silent, r.now)}`);
       if (w.pctElsewhere > 0) out.push(`  ${pts(w.pctElsewhere)} points rose with no usage here (used elsewhere), left out.`);
       if (w.byEntrypoint.length) out.push(`  By entrypoint (share of dollars): ${sharesLine(w.byEntrypoint)}`);
       const ep = splitLine(w.byEntrypoint);
@@ -2493,6 +2628,8 @@ export function renderLimitsReport(r: LimitsReport): string {
       return lines;
     });
     if (splits.length) out.push("", "**Per entrypoint and model** (each one's own $ per 1%, where the stretches tell them apart):", ...splits);
+    const silent = r.resets.filter((w) => w.silent);
+    if (silent.length) out.push("", ...silent.map((w) => `- ${utcDay(w.start)} to ${utcDay(w.resetsAt)}: ${silentLine(w.silent!, r.now)}`));
     const thin = r.resets.filter((w) => w.why);
     if (thin.length) out.push("", ...thin.map((w) => `- No figure for ${utcDay(w.start)} to ${utcDay(w.resetsAt)}: ${w.why}.`));
   } else {
