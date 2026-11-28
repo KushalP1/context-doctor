@@ -296,6 +296,8 @@ export interface WindowStatus {
     plan?: string;
     /** The weekly window stopped being read while the 5-hour one went on rising (silentMeters): no pace or run-out from its old reading. */
     silent?: SilentMeter;
+    /** Both paces replayed on this window's last closed weekly periods (paceCheck): the run-out uses the one that missed less. */
+    paceCheck?: PaceCheck;
 }
 export declare function windowLabel(window: string, windowMs?: number): string;
 /**
@@ -629,6 +631,42 @@ export interface SilentMeter {
 export declare function silentMeters(five: LimitReading[], week: LimitReading[], exchange: Exchange | undefined, now?: number): SilentMeter[];
 /** A weekly window's status with its silence, when its current period has one: stale, so no pace is projected from the old reading. */
 export declare function silence(s: WindowStatus, list: SilentMeter[]): WindowStatus;
+/**
+ * Which pace to forecast a weekly window's run-out with, from how each
+ * would have done on this person's own closed weeks. The last 24 hours'
+ * pace follows a change quickly but, read over the readings of the last
+ * day, takes a day's burst for the week's: on the author's Nov 21-28 week
+ * it put the end between 68% and 160% (a median ~22 points off the 96% it
+ * reached), the window's average pace ~9 off.
+ */
+export interface PaceCheck {
+    /** Closed weekly periods replayed (each with one moment or more), and the 12-hourly moments in all. */
+    windows: number;
+    checks: number;
+    /** The median miss, in points of the limit, of where each pace put the window's end: the last 24 hours' and the window's average. */
+    recentMiss: number;
+    averageMiss: number;
+    /** The one that missed less (the last 24 hours' on a tie, as before): the run-out uses it. */
+    pace: "recent" | "average";
+}
+/**
+ * Replay each of one window's last closed weekly periods every 12 hours:
+ * at each moment, the status the report would have shown then
+ * (windowStatus on the readings up to it), and where each pace puts the
+ * window's end (the % then, plus the pace times the hours to the reset);
+ * the miss is the distance to where the window really ended (its last
+ * reading, or `endOf`, a silent meter's estimate). Undefined with fewer
+ * than two closed periods replayed.
+ */
+export declare function paceCheck(readings: LimitReading[], now: number, endOf?: (resetsAt: number) => number | undefined): PaceCheck | undefined;
+/** A weekly window's status with its pace check: when the window's average missed less, the run-out is at the average pace. */
+export declare function withPace(s: WindowStatus, check: PaceCheck | undefined): WindowStatus;
+/** "the window's average pace", "the last 24 hours' pace". */
+export declare const paceName: (p: "recent" | "average") => string;
+/** "Replayed every 12 hours on your last 2 weekly windows, the window's average pace missed where the week ended by a median 9.2 points, the last 24 hours' by 22: the run-out uses the average." */
+export declare function paceCheckLine(c: PaceCheck): string;
+/** Claude's weekly window from its readings (30 days of them for the pace check), as `limits` shows it: for the credits line outside `limits`. */
+export declare function claudeWeeklyStatus(claude: LimitReading[], now: number): WindowStatus | undefined;
 /**
  * A silent meter in one line. In the per-window rows (UTC): "No weekly
  * reading after Nov 27 07:38 UTC (73%); the 5-hour meter rose 148 points

@@ -134,6 +134,14 @@ export interface CreditsAhead {
     /** The window's average pace (% an hour), and whether the limit lasts to the reset at it. */
     averagePerHour?: number;
     averageLasts?: boolean;
+    /**
+     * With both paces checked on past weeks (limits.ts paceCheck): the one the
+     * run-out uses, and the dollars at each of the two, low and high (0 for
+     * one that lasts to the reset).
+     */
+    pace?: "recent" | "average";
+    usdLow?: number;
+    usdHigh?: number;
 }
 /** Extra usage on, and nothing in `~/.claude.json` saying credits are not paying now. */
 export declare function extraUsageOn(x: ExtraUsage | undefined): boolean;

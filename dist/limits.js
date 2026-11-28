@@ -1883,6 +1883,91 @@ export function silence(s, list) {
     const { runsOutAt: _r, beforeReset: _b, ...rest } = s;
     return { ...rest, stale: true, silent: m };
 }
+const PACE_CHECK_EVERY = 12 * HOUR;
+/** Two closed weeks make a choice; the last four are replayed. */
+const MIN_PACE_WINDOWS = 2;
+const PACE_WINDOWS = 4;
+const median = (xs) => {
+    const s = [...xs].sort((a, b) => a - b);
+    const m = s.length >> 1;
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+/**
+ * Replay each of one window's last closed weekly periods every 12 hours:
+ * at each moment, the status the report would have shown then
+ * (windowStatus on the readings up to it), and where each pace puts the
+ * window's end (the % then, plus the pace times the hours to the reset);
+ * the miss is the distance to where the window really ended (its last
+ * reading, or `endOf`, a silent meter's estimate). Undefined with fewer
+ * than two closed periods replayed.
+ */
+export function paceCheck(readings, now, endOf) {
+    const closed = periodsOf(readings).filter((p) => {
+        const l = p[p.length - 1];
+        return l.resetsAt !== undefined && l.resetsAt <= now && (l.windowMs ?? 0) >= PER_RESET_MIN_MS;
+    }).slice(-PACE_WINDOWS);
+    const recent = [], average = [];
+    let windows = 0;
+    for (const p of closed) {
+        const last = p[p.length - 1];
+        const resetsAt = last.resetsAt, start = resetsAt - last.windowMs;
+        const end = endOf?.(resetsAt) ?? last.pct;
+        let n = 0;
+        for (let t = start + PACE_CHECK_EVERY; t < resetsAt && t <= last.ts; t += PACE_CHECK_EVERY) {
+            const upTo = p.filter((r) => r.ts <= t);
+            const s = upTo.length ? windowStatus(upTo, t) : undefined;
+            if (!s || s.stale || s.resetSince || s.recentPerHour === undefined || s.averagePerHour === undefined)
+                continue;
+            const hours = (resetsAt - s.at) / HOUR;
+            recent.push(Math.abs(s.pct + s.recentPerHour * hours - end));
+            average.push(Math.abs(s.pct + s.averagePerHour * hours - end));
+            n++;
+        }
+        if (n)
+            windows++;
+    }
+    if (windows < MIN_PACE_WINDOWS)
+        return undefined;
+    const recentMiss = median(recent), averageMiss = median(average);
+    return { windows, checks: recent.length, recentMiss, averageMiss, pace: averageMiss < recentMiss ? "average" : "recent" };
+}
+/** A weekly window's status with its pace check: when the window's average missed less, the run-out is at the average pace. */
+export function withPace(s, check) {
+    if (!check || s.resetSince)
+        return s;
+    const out = { ...s, paceCheck: check };
+    if (check.pace === "average" && !s.stale) {
+        delete out.runsOutAt;
+        delete out.beforeReset;
+        if (s.averagePerHour !== undefined && s.averagePerHour > 0 && s.pct < 100) {
+            out.runsOutAt = s.at + ((100 - s.pct) / s.averagePerHour) * HOUR;
+            out.beforeReset = s.resetsAt === undefined || out.runsOutAt < s.resetsAt;
+        }
+    }
+    return out;
+}
+/** "the window's average pace", "the last 24 hours' pace". */
+export const paceName = (p) => (p === "average" ? "the window's average pace" : "the last 24 hours' pace");
+/** "Replayed every 12 hours on your last 2 weekly windows, the window's average pace missed where the week ended by a median 9.2 points, the last 24 hours' by 22: the run-out uses the average." */
+export function paceCheckLine(c) {
+    const [won, lost] = c.pace === "average" ? [c.averageMiss, c.recentMiss] : [c.recentMiss, c.averageMiss];
+    const other = c.pace === "average" ? "the last 24 hours'" : "the window's average";
+    return `Replayed every 12 hours on your last ${c.windows} weekly windows, ${paceName(c.pace)} missed where the week ended by a median ${pts(won)} points, ${other} by ${pts(lost)}: the run-out uses ${c.pace === "average" ? "the average" : "the last 24 hours'"}.`;
+}
+/** The weekly window's status as `limits` and `budget` show it: its pace checked, then its silence (which wins: no run-out from a silent meter). */
+function weeklyStatus(s, week, silent, now) {
+    return silence(withPace(s, paceCheck(week, now, (resetsAt) => silentAt(silent, resetsAt)?.estimate)), silent);
+}
+/** Claude's weekly window from its readings (30 days of them for the pace check), as `limits` shows it: for the credits line outside `limits`. */
+export function claudeWeeklyStatus(claude, now) {
+    const by = byWindow(claude);
+    const five = by.get("five_hour") ?? [], week = by.get("seven_day") ?? [];
+    const s = windowStatus(week, now);
+    if (!s)
+        return undefined;
+    const silent = silentMeters(five, week, exchangeOf(five, week, { app: "claude", label: "Claude", now }), now);
+    return weeklyStatus(s, week, silent, now);
+}
 /**
  * A silent meter in one line. In the per-window rows (UTC): "No weekly
  * reading after Nov 27 07:38 UTC (73%); the 5-hour meter rose 148 points
@@ -1940,7 +2025,7 @@ export function limitsReport(days = 30, opts = {}) {
     for (const [, rs] of claudeByWindow) {
         const s = windowStatus(rs, now);
         if (s)
-            windows.push(s.window === "seven_day" ? silence(s, silent) : s);
+            windows.push(s.window === "seven_day" ? weeklyStatus(s, rs, silent, now) : s);
         // The fit runs reading to reading, so it stops at a silent weekly's last reading by construction.
         const f = fitWindow(rs, claudeUse);
         if (f)
@@ -1949,7 +2034,7 @@ export function limitsReport(days = 30, opts = {}) {
     for (const [, rs] of byWindow(codex.readings)) {
         const s = windowStatus(rs, now);
         if (s)
-            windows.push(s);
+            windows.push((rs[rs.length - 1].windowMs ?? 0) >= PER_RESET_MIN_MS ? withPace(s, paceCheck(rs, now)) : s);
         const f = fitWindow(rs, codex.usage);
         if (f)
             fits.push(f);
@@ -2158,6 +2243,18 @@ export function renderLimits(r, pastLimit = [], ahead) {
             out.push(`  The newest reading is ${hm(age)} old: no pace or run-out time from it until a new one comes in.`);
         else if (s.recentPerHour === undefined)
             out.push("  Pace: not enough recent readings.");
+        else if (s.paceCheck && s.averagePerHour !== undefined) {
+            // Both paces checked on past weeks: name the one the run-out uses.
+            out.push(`  Pace: ${s.recentPerHour ? `${pts(s.recentPerHour)}% of the limit an hour lately` : "no rise over the recent readings"}; ${pts(s.averagePerHour)}% an hour on average this window.`);
+            out.push(`  ${paceCheckLine(s.paceCheck)}`);
+            const at = `At ${paceName(s.paceCheck.pace)}`;
+            if (s.runsOutAt !== undefined && s.beforeReset)
+                out.push(`  ${at} it runs out ${clock(s.runsOutAt, r.now)} (in ${hm(s.runsOutAt - r.now)}), before the reset.`);
+            else if (s.pct < 100)
+                out.push(`  ${at} it lasts until the reset.`);
+            if (ahead && s.beforeReset && s.app === "claude" && s.window === "seven_day")
+                out.push(`  ${ahead}`);
+        }
         else if (s.recentPerHour === 0)
             out.push("  Pace: no rise over the recent readings.");
         else {

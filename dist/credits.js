@@ -25,7 +25,7 @@
  * budget's hook at a threshold it already speaks at: nothing is drawn or sent.
  */
 import { readExtraUsage } from "./claudedir.js";
-import { claudeUsage, cleanReadings, CLAUDE_WINDOWS, limitsLogPath, modelLabel, readClaudeReadings, readOverageReadings, windowStatus } from "./limits.js";
+import { claudeUsage, claudeWeeklyStatus, cleanReadings, CLAUDE_WINDOWS, limitsLogPath, modelLabel, paceName, readClaudeReadings, readOverageReadings } from "./limits.js";
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
@@ -241,6 +241,16 @@ export function creditsAhead(status, extra, usage, now) {
         out.averagePerHour = status.averagePerHour;
         out.averageLasts = status.at + ((100 - status.pct) / status.averagePerHour) * HOUR >= status.resetsAt;
     }
+    if (status.paceCheck) {
+        // The run-out is at the pace that missed less (limits.ts withPace); the range is the two paces' dollars.
+        const resetsAt = status.resetsAt;
+        const at = (perHour) => (perHour !== undefined && perHour > 0 ? status.at + ((100 - status.pct) / perHour) * HOUR : undefined);
+        const usd = (runsOut) => (runsOut === undefined ? 0 : (Math.max(0, resetsAt - Math.max(runsOut, now)) / HOUR) * usdPerHour);
+        const both = [usd(at(status.recentPerHour)), usd(at(status.averagePerHour))];
+        out.pace = status.paceCheck.pace;
+        out.usdLow = Math.min(...both);
+        out.usdHigh = Math.max(...both);
+    }
     return out;
 }
 /**
@@ -254,7 +264,8 @@ export function creditsAheadNow(opts = {}) {
         const extra = opts.extraUsage === null ? undefined : opts.extraUsage ?? readExtraUsage(opts.home);
         if (!extraUsageOn(extra))
             return undefined;
-        const status = opts.status ?? windowStatus(cleanReadings(readClaudeReadings(now - 8 * DAY, opts.logPath ?? limitsLogPath()).filter((r) => r.window === "seven_day")), now);
+        // 30 days: the pace check replays the last closed weekly windows (limits.ts claudeWeeklyStatus), as `limits` does.
+        const status = opts.status ?? claudeWeeklyStatus(readClaudeReadings(now - 30 * DAY, opts.logPath ?? limitsLogPath()), now);
         if (!status?.beforeReset || status.runsOutAt === undefined || status.stale)
             return undefined;
         return creditsAhead(status, extra, claudeUsage(now - AHEAD_LOOKBACK_MS, now, opts.claudePaths), now);
@@ -273,6 +284,10 @@ export function creditsAheadNow(opts = {}) {
 export function creditsAheadLine(a, now) {
     const hours = a.hours >= 10 ? Math.round(a.hours) : Math.round(a.hours * 10) / 10;
     const mostly = a.model ? `, mostly ${modelLabel(a.model)}` : "";
+    if (a.pace && a.usdLow !== undefined && a.usdHigh !== undefined) {
+        // The pace that missed less on past weeks, and the range between the two.
+        return `Extra usage is on: at ${paceName(a.pace)} (the one that missed less on your past weeks) your weekly limit runs out ${whenText(a.runsOutAt, now)}, ${hours} hour${hours === 1 ? "" : "s"} before it resets, and Claude Code would keep working on usage credits until then: about ${dollars(a.usd)} ${AT_LIST_PRICES}, ${dollars(a.usdLow)} to ${dollars(a.usdHigh)} between the two paces, at your last 24 hours' ${dollars(a.usdPerHour)} an hour${mostly}.`;
+    }
     const avg = a.averagePerHour === undefined ? ""
         : a.averageLasts ? ` At this week's average pace (${pace(a.averagePerHour)}% an hour) it lasts until the reset.`
             : ` At this week's average pace (${pace(a.averagePerHour)}% an hour) it runs out before the reset too.`;
